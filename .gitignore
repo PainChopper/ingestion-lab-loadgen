@@ -1,0 +1,28 @@
+# Test files that should not be tracked
+trace_test.go
+*_test.go
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go dependency directories
+vendor/
+
+# Go workspace files
+go.work
