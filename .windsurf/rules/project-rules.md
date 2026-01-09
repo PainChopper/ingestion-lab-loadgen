@@ -1,26 +1,11 @@
+﻿---
+trigger: always_on
+---
+
 # Go Project Specific Rules
 
-## Project Context
-Load generator (loadgen) for testing ingestion pipelines.
-
-MVP goals:
-- controllable load (rate / pulse / burst modes)
-- observability (basic metrics + logs; later: Prometheus / OpenTelemetry)
-- clean cancellation and shutdown (context)
-
-Planned data workflow:
-- download a large external dataset once
-- preprocess and normalize it locally
-- split data into deterministic batches
-- reuse batches for repeatable and controlled load tests
-- project must work offline after initial data preparation
-
-Future extensions (only after MVP is stable):
-- payload builders (e.g. ISO 20022 subsets)
-- sinks (HTTP / S3 / Kafka)
-
 ## Language Rules
-- All dialogue in Russian
+- Все диалоги на русском языке
 - Code comments and docstrings in English
 
 ## Git Commit Message Rules
@@ -40,9 +25,15 @@ Future extensions (only after MVP is stable):
   1) intent
   2) minimal conceptual change
   3) expected observable result
-- Third-party libraries may be suggested only with clear justification. 
-  Prefer the standard library unless a concrete limitation is explained.
+- Third-party libraries may be suggested only with clear justification
 
+## Project Context
+Load generator (loadgen) for testing ingestion pipelines.
+
+MVP goals:
+- controllable load (rate / pulse / burst modes)
+- observability (basic metrics + logs; later: Prometheus / OpenTelemetry)
+- clean cancellation and shutdown (context)
 
 ## Engineering Priorities
 - correctness and clarity

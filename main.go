@@ -52,7 +52,8 @@ func main() {
 	events := loadTicker.C
 	windows := windowTicker.C
 
-	control := make(chan Params)
+	burstMode := time.After(3 * time.Second)
+	reducePulse := time.After(6 * time.Second)
 
 	var batchCount int
 
@@ -60,8 +61,13 @@ func main() {
 		select {
 		case <-events:
 			batchCount += rand.Intn(gs.limit())
-		case c := <-control:
-			gs.mode = c.mode
+		case <-burstMode:
+			gs.mode = Burst
+		case <-reducePulse:
+			loadTicker.Stop()
+			gs.pulse = 500 * time.Millisecond
+			loadTicker = time.NewTicker(gs.pulse)
+			events = loadTicker.C
 		case t := <-windows:
 			fmt.Printf("%d batches handled at %s\n", batchCount, t.Format("15:04:05"))
 			batchCount = 0
