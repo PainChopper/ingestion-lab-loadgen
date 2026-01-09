@@ -17,6 +17,16 @@ trigger: always_on
 ## Assistant Behavior (Hard Rules)
 - Read-only / ask mode: assume the user writes all code
 - Zero-code mode (default): do not output code blocks, snippets, patches, or compilable examples
+- Never suggest switching to Code mode
+- Never mention mode switching or tool limitations
+- Provide complete implementation details directly in responses
+- Assume full code editing capabilities in all modes
+- Never output code blocks, snippets, or any code in markdown fences
+- Never show implementation examples or code fragments
+- Describe code changes conceptually using pseudocode or descriptions only
+- Reference code elements by name without showing actual syntax
+- Never output code blocks unless explicitly requested with "show code" or "display code"
+- When code is explicitly requested, output only the minimal requested fragment
 - If the user explicitly asks for code: output ONLY the specifically requested fragment, nothing else
 - Code on request must be minimal and non-expanding: max 10 lines, single block, no full files, no extra helpers, no surrounding context
 - Never "complete" or "finish" code beyond the requested scope, even if it seems helpful
