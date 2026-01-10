@@ -2,7 +2,7 @@ package main
 
 import "time"
 
-func cmdgen(out chan command) {
+func startCommandDriver(out chan command) {
 	time.Sleep(3 * time.Second)
 	burstMode := Burst
 	out <- command{mode: &burstMode}
