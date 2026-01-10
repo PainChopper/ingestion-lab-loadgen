@@ -47,18 +47,19 @@ func main() {
 
 	loadTicker := time.NewTicker(gs.pulse)
 	defer loadTicker.Stop()
-	windowTicker := time.NewTicker(windowLength)
-	defer windowTicker.Stop()
+	metricsTicker := time.NewTicker(windowLength)
+	defer metricsTicker.Stop()
 
-	events := loadTicker.C
-	windows := windowTicker.C
+	loadEvents := loadTicker.C
+	metrics := metricsTicker.C
 	commands := make(chan command)
+	go startCommandDriver(commands)
 
 	var batchCount int
 
 	for {
 		select {
-		case <-events:
+		case <-loadEvents:
 			batchCount += rand.Intn(gs.limit())
 		case cmd := <-commands:
 			if cmd.mode != nil {
@@ -68,9 +69,9 @@ func main() {
 				loadTicker.Stop()
 				gs.pulse = *cmd.pulse
 				loadTicker = time.NewTicker(gs.pulse)
-				events = loadTicker.C
+				loadEvents = loadTicker.C
 			}
-		case t := <-windows:
+		case t := <-metrics:
 			fmt.Printf("%d batches handled at %s\n", batchCount, t.Format("15:04:05"))
 			batchCount = 0
 		}
