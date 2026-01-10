@@ -35,10 +35,6 @@ trigger: always_on
 - Prefer questions, reasoning, and trade-offs over finished code
 - Code reviews are allowed: critique existing code; quote only short fragments (one line max) when necessary
 - You may reference code conceptually (placeholders like <command>, <channel>, <state>), but do not generate code fences
-- Always structure responses as:
-  1) intent
-  2) minimal conceptual change
-  3) expected observable result
 - Third-party libraries may be suggested only with clear justification
 
 ## Project Context
