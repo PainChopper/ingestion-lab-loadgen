@@ -46,8 +46,8 @@ func main() {
 
 	loadEvents := loadTicker.C
 	metrics := metricsTicker.C
-	commands := make(chan command)
-	go startCommandDriver(commands)
+	commands := make(chan command, 10)
+	go startHttpServer(commands)
 
 	var batchCount int
 
@@ -64,9 +64,22 @@ func main() {
 				gs.pulse = cmd.pulse
 				loadTicker = time.NewTicker(gs.pulse)
 				loadEvents = loadTicker.C
+			case getStatus:
+				modeName := "normal"
+				if gs.mode == burst {
+					modeName = "burst"
+				}
+				snapshot := statusSnapshot{
+					Mode:  modeName,
+					Pulse: gs.pulse.String(),
+					Limit: fmt.Sprintf("%d", gs.tickLimit()),
+				}
+				cmd.reply <- snapshot
+			case quit:
+				return
 			}
 		case t := <-metrics:
-			fmt.Printf("%d batches handled at %s\n", batchCount, t.Format("15:04:05"))
+			fmt.Printf("%d batches handled at %s [mode=%d pulse=%s] \n", batchCount, t.Format("15:04:05"), gs.mode, gs.pulse)
 			batchCount = 0
 		}
 	}
