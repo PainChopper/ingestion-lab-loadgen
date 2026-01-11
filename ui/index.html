@@ -1,44 +1,93 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Loadgen Control</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>loadgen</title>
     <style>
-        body { font-family: monospace; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #333; }
-        .card { border: 1px solid #ccc; padding: 1.5rem; background: #fff; }
-        .row { margin-bottom: 1.5rem; }
-        label { display: block; font-weight: bold; margin-bottom: 0.5rem; }
-        .status-line { margin-top: 1rem; border-top: 1px dashed #ccc; padding-top: 0.5rem; color: #555; white-space: pre-wrap; }
-        input[type="range"] { width: 100%; }
-        button { cursor: pointer; padding: 0.5rem 1rem; border: 1px solid #999; background: #eee; }
-        button:hover { background: #ddd; }
-        .radio-label { display: inline-block; margin-right: 1.5rem; font-weight: normal; }
+        body {
+            font-family: monospace;
+            max-width: 680px;
+            margin: 24px auto;
+            padding: 0 16px;
+            color: #222;
+        }
+
+        .card {
+            border: 1px solid #ccc;
+            padding: 16px;
+            background: #fff;
+        }
+
+        .row {
+            margin-bottom: 16px;
+        }
+
+        .row label {
+            display: block;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .radio {
+            display: inline-block;
+            margin-right: 16px;
+            font-weight: 400;
+        }
+
+        input[type="range"] {
+            width: 100%;
+        }
+
+        .status {
+            margin-top: 12px;
+            border-top: 1px dashed #ccc;
+            padding-top: 10px;
+            white-space: pre-wrap;
+        }
+
+        button {
+            cursor: pointer;
+            padding: 8px 12px;
+            border: 1px solid #999;
+            background: #eee;
+        }
+
+        button:hover {
+            background: #ddd;
+        }
+
+        .muted {
+            color: #666;
+        }
+
+        .err {
+            color: #b00020;
+        }
     </style>
 </head>
+
 <body>
     <div class="card">
-        <h1>Loadgen Control</h1>
-        
         <div class="row">
             <label>Mode</label>
-            <div>
-                <label class="radio-label"><input type="radio" name="mode" value="normal"> Normal</label>
-                <label class="radio-label"><input type="radio" name="mode" value="burst"> Burst</label>
-            </div>
+            <label class="radio"><input type="radio" name="mode" value="normal"> normal</label>
+            <label class="radio"><input type="radio" name="mode" value="burst"> burst</label>
         </div>
 
         <div class="row">
-            <label>Pulse Interval: <span id="pulse-display">...</span></label>
-            <input type="range" id="pulse-slider" min="50" max="2000" step="50">
+            <label>Pulse: <span id="pulse-display" class="muted">—</span></label>
+            <input type="range" id="pulse-slider" min="50" max="2000" step="50" value="100">
         </div>
 
         <div class="row">
-            <button id="quit-btn">Stop Server</button>
+            <button id="quit-btn" type="button">quit</button>
         </div>
 
-        <div id="status-area" class="status-line">Connecting...</div>
+        <div id="status-area" class="status muted">connecting...</div>
     </div>
+
     <script src="app.js"></script>
 </body>
+
 </html>
