@@ -60,7 +60,7 @@ func startHttpServer(out chan command) {
 			out <- command{kind: setMode, mode: newMode}
 		case "pulse":
 			pulse, err := time.ParseDuration(req.Value)
-			if err != nil {
+			if err != nil || pulse <= 0 {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -89,6 +89,9 @@ func startHttpServer(out chan command) {
 
 	mux.HandleFunc("/control", controlHandler)
 	mux.HandleFunc("/status", statusHandler)
+
+	fileServer := http.FileServer(http.Dir("./ui"))
+	mux.Handle("/", fileServer)
 
 	server := &http.Server{
 		Addr:    ":8080",
