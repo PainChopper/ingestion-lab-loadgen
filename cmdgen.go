@@ -22,14 +22,53 @@ type command struct {
 	reply chan statusSnapshot
 }
 
+type controlRequest struct {
+	Action string `json:"action"` // "mode", "pulse", "quit"
+	Value  string `json:"value"`  // "normal"/"burst" или "100ms"
+}
+
 type statusSnapshot struct {
-	Mode  string
-	Pulse string
-	Limit string
+	Mode  string `json:"mode"`
+	Pulse string `json:"pulse"`
+	Limit string `json:"limit"`
 }
 
 func startHttpServer(out chan command) {
 	mux := http.NewServeMux()
+
+	controlHandler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		req := controlRequest{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		switch req.Action {
+		case "mode":
+			if req.Value != "normal" && req.Value != "burst" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			newMode := mode(normal)
+			if req.Value == "burst" {
+				newMode = mode(burst)
+			}
+			out <- command{kind: setMode, mode: newMode}
+		case "pulse":
+			if req.Value == "100ms" {
+				out <- command{kind: setPulse, pulse: 100 * time.Millisecond}
+			}
+		case "quit":
+			out <- command{kind: quit}
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+	}
 
 	statusHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -55,44 +94,3 @@ func startHttpServer(out chan command) {
 
 	server.ListenAndServe()
 }
-
-func controlHandler(w http.ResponseWriter, r *http.Request) {
-	err := r.ParseForm()
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-}
-
-// func startStdInReader(out chan command) {
-// 	scanner := bufio.NewScanner(os.Stdin)
-// 	for scanner.Scan() {
-// 		line := strings.TrimSpace(scanner.Text())
-// 		if len(line) == 0 {
-// 			continue
-// 		}
-// 		words := strings.Fields(line)
-
-// 		switch words[0] {
-// 		case "mode":
-// 		case "pulse":
-// 		case "status":
-// 		case "quit":
-// 		default:
-// 			fmt.Printf("Unknown command: %s\n", words[0])
-// 		}
-// 	if err := scanner.Err(); err != nil {
-
-// 	}
-// }
-
-// func startCommandDriver(out chan command) {
-// 	time.Sleep(3 * time.Second)
-// 	out <- command{kind: setMode, mode: burst}
-// 	time.Sleep(3 * time.Second)
-// 	out <- command{kind: setPulse, pulse: 500 * time.Millisecond}
-// 	time.Sleep(3 * time.Second)
-// 	out <- command{kind: getStatus}
-// 	time.Sleep(3 * time.Second)
-// 	out <- command{kind: quit}
-// }
