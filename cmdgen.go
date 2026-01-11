@@ -59,9 +59,12 @@ func startHttpServer(out chan command) {
 			}
 			out <- command{kind: setMode, mode: newMode}
 		case "pulse":
-			if req.Value == "100ms" {
-				out <- command{kind: setPulse, pulse: 100 * time.Millisecond}
+			pulse, err := time.ParseDuration(req.Value)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
 			}
+			out <- command{kind: setPulse, pulse: pulse}
 		case "quit":
 			out <- command{kind: quit}
 		default:
