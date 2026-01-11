@@ -14,23 +14,6 @@ const (
 	burstLimit  = 500
 )
 
-type command struct {
-	mode  *Mode
-	pulse *time.Duration
-}
-
-type state struct {
-	mode  Mode
-	pulse time.Duration
-}
-
-func (g state) limit() int {
-	if g.mode == Normal {
-		return normalLimit
-	}
-	return burstLimit
-}
-
 type Mode int
 
 const (
@@ -38,9 +21,20 @@ const (
 	Burst
 )
 
-func main() {
+type generatorState struct {
+	mode  Mode
+	pulse time.Duration
+}
 
-	gs := state{
+func (g generatorState) tickLimit() int {
+	if g.mode == Normal {
+		return normalLimit
+	}
+	return burstLimit
+}
+
+func main() {
+	gs := generatorState{
 		mode:  Normal,
 		pulse: pulse,
 	}
@@ -60,14 +54,14 @@ func main() {
 	for {
 		select {
 		case <-loadEvents:
-			batchCount += rand.Intn(gs.limit())
+			batchCount += rand.Intn(gs.tickLimit())
 		case cmd := <-commands:
-			if cmd.mode != nil {
-				gs.mode = *cmd.mode
-			}
-			if cmd.pulse != nil && *cmd.pulse != gs.pulse {
+			switch cmd.kind {
+			case setMode:
+				gs.mode = cmd.mode
+			case setPulse:
 				loadTicker.Stop()
-				gs.pulse = *cmd.pulse
+				gs.pulse = cmd.pulse
 				loadTicker = time.NewTicker(gs.pulse)
 				loadEvents = loadTicker.C
 			}
