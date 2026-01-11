@@ -14,20 +14,20 @@ const (
 	burstLimit  = 500
 )
 
-type Mode int
+type mode int
 
 const (
-	Normal Mode = iota
-	Burst
+	normal mode = iota
+	burst
 )
 
 type generatorState struct {
-	mode  Mode
+	mode  mode
 	pulse time.Duration
 }
 
 func (g generatorState) tickLimit() int {
-	if g.mode == Normal {
+	if g.mode == normal {
 		return normalLimit
 	}
 	return burstLimit
@@ -35,7 +35,7 @@ func (g generatorState) tickLimit() int {
 
 func main() {
 	gs := generatorState{
-		mode:  Normal,
+		mode:  normal,
 		pulse: pulse,
 	}
 
