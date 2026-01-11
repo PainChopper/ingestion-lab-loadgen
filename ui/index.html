@@ -5,113 +5,40 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Loadgen Control</title>
     <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 600px;
-            margin: 40px auto;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        h1 {
-            color: #333;
-            margin-bottom: 30px;
-        }
-        .control-group {
-            margin-bottom: 25px;
-        }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-            color: #555;
-        }
-        .radio-group {
-            display: flex;
-            gap: 20px;
-        }
-        .radio-option {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        input[type="radio"] {
-            margin: 0;
-        }
-        input[type="range"] {
-            width: 100%;
-            margin: 10px 0;
-        }
-        .pulse-value {
-            font-family: monospace;
-            color: #0066cc;
-            font-weight: bold;
-        }
-        .quit-btn {
-            background-color: #dc3545;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        .quit-btn:hover {
-            background-color: #c82333;
-        }
-        .status {
-            margin-top: 20px;
-            padding: 10px;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-        .status.error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        .status.success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
+        body { font-family: monospace; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #333; }
+        .card { border: 1px solid #ccc; padding: 1.5rem; background: #fff; }
+        .row { margin-bottom: 1.5rem; }
+        label { display: block; font-weight: bold; margin-bottom: 0.5rem; }
+        .status-line { margin-top: 1rem; border-top: 1px dashed #ccc; padding-top: 0.5rem; color: #555; white-space: pre-wrap; }
+        input[type="range"] { width: 100%; }
+        button { cursor: pointer; padding: 0.5rem 1rem; border: 1px solid #999; background: #eee; }
+        button:hover { background: #ddd; }
+        .radio-label { display: inline-block; margin-right: 1.5rem; font-weight: normal; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Loadgen Control Panel</h1>
+    <div class="card">
+        <h1>Loadgen Control</h1>
         
-        <div class="control-group">
+        <div class="row">
             <label>Mode</label>
-            <div class="radio-group">
-                <div class="radio-option">
-                    <input type="radio" id="normal" name="mode" value="normal">
-                    <label for="normal">Normal</label>
-                </div>
-                <div class="radio-option">
-                    <input type="radio" id="burst" name="mode" value="burst">
-                    <label for="burst">Burst</label>
-                </div>
+            <div>
+                <label class="radio-label"><input type="radio" name="mode" value="normal"> Normal</label>
+                <label class="radio-label"><input type="radio" name="mode" value="burst"> Burst</label>
             </div>
         </div>
-        
-        <div class="control-group">
-            <label for="pulse">Pulse Interval: <span class="pulse-value" id="pulseValue">100ms</span></label>
-            <input type="range" id="pulse" min="0" max="200" step="10" value="100">
+
+        <div class="row">
+            <label>Pulse Interval: <span id="pulse-display">...</span></label>
+            <input type="range" id="pulse-slider" min="50" max="2000" step="50">
         </div>
-        
-        <div class="control-group">
-            <button class="quit-btn" id="quitBtn">Quit</button>
+
+        <div class="row">
+            <button id="quit-btn">Stop Server</button>
         </div>
-        
-        <div id="status" class="status" style="display: none;"></div>
+
+        <div id="status-area" class="status-line">Connecting...</div>
     </div>
-    
     <script src="app.js"></script>
 </body>
 </html>

@@ -64,6 +64,8 @@ func main() {
 				gs.pulse = cmd.pulse
 				loadTicker = time.NewTicker(gs.pulse)
 				loadEvents = loadTicker.C
+			case quit:
+				return
 			case getStatus:
 				modeName := "normal"
 				if gs.mode == burst {
@@ -75,8 +77,6 @@ func main() {
 					Limit: fmt.Sprintf("%d", gs.tickLimit()),
 				}
 				cmd.reply <- snapshot
-			case quit:
-				return
 			}
 		case t := <-metrics:
 			fmt.Printf("%d batches handled at %s [mode=%d pulse=%s] \n", batchCount, t.Format("15:04:05"), gs.mode, gs.pulse)
