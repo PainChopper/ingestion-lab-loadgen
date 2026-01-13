@@ -2,7 +2,8 @@ package main
 
 import (
 	"time"
-	//  "github.com/segmentio/parquet-go"
+
+	"github.com/segmentio/parquet-go"
 )
 
 type TrxEvent struct {
@@ -27,8 +28,12 @@ type TrxEvent struct {
 	ISOCurrencyCode string `json:"iso_currency_code,omitempty"`
 }
 
-type ParquetReader interface {
+type TrxReader interface {
 	Next() (*TrxEvent, error)
 	Close() error
-	EOF() error
+}
+
+type parquetTrxReader struct {
+	file   *parquet.File
+	reader *parquet.RowReader
 }
