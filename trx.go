@@ -1,9 +1,10 @@
 package main
 
 import (
+	"database/sql"
 	"time"
 
-	"github.com/segmentio/parquet-go"
+	_ "github.com/marcboeker/go-duckdb" // DuckDB driver
 )
 
 type TrxEvent struct {
@@ -33,7 +34,16 @@ type TrxReader interface {
 	Close() error
 }
 
-type parquetTrxReader struct {
-	file   *parquet.File
-	reader *parquet.RowReader
+type duckdbTrxReader struct {
+	db   *sql.DB
+	rows *sql.Rows
 }
+
+// func NewParquetReader(filename string) (TrxReader, error) {
+// 	file, err := os.Open(filename)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	return &parquetTrxReader{file, file.ro}, nil
+// }
