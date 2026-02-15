@@ -3,37 +3,33 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"time"
+	"strconv"
 )
 
 type cmdType int
 
 const (
-	setMode cmdType = iota
-	setPulse
+	setTPS cmdType = iota
 	getStatus
 	quit
 )
 
 type command struct {
-	kind  cmdType
-	mode  mode
-	pulse time.Duration
-	reply chan statusSnapshot
+	kind      cmdType
+	targetTPS int
+	reply     chan statusSnapshot
 }
 
 type controlRequest struct {
-	Action string `json:"action"` // "mode", "pulse", "quit"
-	Value  string `json:"value"`  // "normal"/"burst" или "100ms"
+	Action string `json:"action"` // "targetTPS", "quit"
+	Value  string `json:"value"`  // "100" - transactions per second (TPS)
 }
 
 type statusSnapshot struct {
-	Mode  string `json:"mode"`
-	Pulse string `json:"pulse"`
-	Limit string `json:"limit"`
+	TargetTPS string `json:"targetTPS"`
 }
 
-func startHttpServer(out chan command) {
+func startHttpServer(out chan command) *http.Server {
 	mux := http.NewServeMux()
 
 	controlHandler := func(w http.ResponseWriter, r *http.Request) {
@@ -43,32 +39,22 @@ func startHttpServer(out chan command) {
 		}
 		req := controlRequest{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
 
 		switch req.Action {
-		case "mode":
-			if req.Value != "normal" && req.Value != "burst" {
-				w.WriteHeader(http.StatusBadRequest)
+		case "targetTPS":
+			tps, err := strconv.Atoi(req.Value)
+			if err != nil {
+				http.Error(w, "Invalid TPS format", http.StatusBadRequest)
 				return
 			}
-			newMode := mode(normal)
-			if req.Value == "burst" {
-				newMode = mode(burst)
-			}
-			out <- command{kind: setMode, mode: newMode}
-		case "pulse":
-			pulse, err := time.ParseDuration(req.Value)
-			if err != nil || pulse <= 0 {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			out <- command{kind: setPulse, pulse: pulse}
+			out <- command{kind: setTPS, targetTPS: tps}
 		case "quit":
 			out <- command{kind: quit}
 		default:
-			w.WriteHeader(http.StatusBadRequest)
+			http.Error(w, "Unknown command", http.StatusBadRequest)
 			return
 		}
 	}
@@ -94,9 +80,10 @@ func startHttpServer(out chan command) {
 	mux.Handle("/", fileServer)
 
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    "127.0.0.1:8080",
 		Handler: mux,
 	}
 
-	server.ListenAndServe()
+	go server.ListenAndServe()
+	return server
 }

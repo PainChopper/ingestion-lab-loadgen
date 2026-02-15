@@ -1,42 +1,49 @@
 (() => {
     const DEBOUNCE_MS = 750;
 
-    const els = {
-        radios: Array.from(document.getElementsByName("mode")),
-        slider: document.getElementById("pulse-slider"),
-        display: document.getElementById("pulse-display"),
-        quitBtn: document.getElementById("quit-btn"),
-        status: document.getElementById("status-area"),
-    };
-
-    let pulseTimer = null;
-    let suppressSliderSync = false;
-
-    function clampInt(v, min, max) {
-        if (!Number.isFinite(v)) return min;
-        return Math.min(max, Math.max(min, v | 0));
+    function requireEl(id) {
+        const el = document.getElementById(id);
+        if (!el) throw new Error(`Missing element #${id}`);
+        return el;
     }
 
-    function parsePulseToMs(pulseStr) {
-        if (!pulseStr) return 0;
+    const els = {
+        slider: requireEl("tps-slider"),
+        display: requireEl("tps-display"),
+        quitBtn: requireEl("quit-btn"),
+        status: requireEl("status-area"),
+    };
 
-        const s = String(pulseStr).trim();
+    let tpsTimer = null;
+    let suppressSliderSync = false;
+    let statusInFlight = false;
 
-        // "123ms"
-        let m = s.match(/^(\d+)\s*ms$/i);
+    function clampInt(v, min, max) {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return min;
+        const i = Math.trunc(n);
+        return Math.min(max, Math.max(min, i));
+    }
+
+    function parseTpsToValue(tpsStr) {
+        if (!tpsStr) return 0;
+
+        const s = String(tpsStr).trim();
+
+        // "123tps"
+        let m = s.match(/^(\d+)\s*tps$/i);
         if (m) return parseInt(m[1], 10);
 
-        // "1s" or "0.5s"
-        m = s.match(/^(\d+(?:\.\d+)?)\s*s$/i);
-        if (m) return Math.round(parseFloat(m[1]) * 1000);
-
-        // fallback: try parse integer as ms
+        // fallback: try parse integer
         const n = parseInt(s, 10);
         return Number.isNaN(n) ? 0 : n;
     }
 
-    function sliderMin() { return parseInt(els.slider.min, 10) || 1; }
-    function sliderMax() { return parseInt(els.slider.max, 10) || 2000; }
+    const SLIDER_MIN = parseInt(els.slider.min, 10) || 0;
+    const SLIDER_MAX = parseInt(els.slider.max, 10) || 100000;
+
+    function sliderMin() { return SLIDER_MIN; }
+    function sliderMax() { return SLIDER_MAX; }
 
     function setStatus(text, isError = false) {
         els.status.textContent = text;
@@ -54,73 +61,71 @@
     }
 
     async function loadStatus() {
+        if (statusInFlight) return;
+        statusInFlight = true;
         try {
             const res = await fetch("/status");
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error(`HTTP ${res.status}: ${text}`);
+            }
             const data = await res.json();
+            console.log('Server response:', data); // Debug
 
-            // Mode radios
-            for (const r of els.radios) {
-                r.checked = (r.value === data.mode);
-            }
-
-            // Pulse slider (do not fight the user while dragging)
+            // TPS slider (do not fight the user while dragging)
             if (!suppressSliderSync) {
-                const msRaw = parsePulseToMs(data.pulse);
-                const ms = clampInt(msRaw, sliderMin(), sliderMax());
-                els.slider.value = String(ms);
-                els.display.textContent = `${ms}ms`;
+                const tpsRaw = parseTpsToValue(data.targetTPS);
+                const tps = clampInt(tpsRaw, sliderMin(), sliderMax());
+                els.slider.value = String(tps);
+                els.display.textContent = `${tps} TPS`;
             }
 
-            setStatus(`ok\nmode:  ${data.mode}\npulse: ${data.pulse}\nlimit: ${data.limit}`);
+            setStatus(`ok - tps: ${data.targetTPS}`);
         } catch (e) {
             setStatus(`connection error: ${e.message}`, true);
+        } finally {
+            statusInFlight = false;
         }
     }
 
-    // Mode change -> immediate POST
-    for (const r of els.radios) {
-        r.addEventListener("change", async (e) => {
-            if (!e.target.checked) return;
-            try {
-                await postControl("mode", e.target.value);
-                await loadStatus();
-            } catch (err) {
-                setStatus(`mode error: ${err.message}`, true);
-            }
-        });
-    }
-
-    // Pulse slider -> debounce POST
+    
+    // TPS slider -> debounce POST
     els.slider.addEventListener("input", () => {
         suppressSliderSync = true;
 
-        const ms = clampInt(parseInt(els.slider.value, 10), sliderMin(), sliderMax());
-        els.display.textContent = `${ms}ms`;
+        const tps = clampInt(parseInt(els.slider.value, 10), sliderMin(), sliderMax());
+        els.display.textContent = `${tps} TPS`;
 
-        if (pulseTimer) clearTimeout(pulseTimer);
+        if (tpsTimer) clearTimeout(tpsTimer);
 
-        pulseTimer = setTimeout(async () => {
-            pulseTimer = null;
+        tpsTimer = setTimeout(async () => {
+            tpsTimer = null;
             suppressSliderSync = false;
 
-            const ms2 = clampInt(parseInt(els.slider.value, 10), sliderMin(), sliderMax());
+            if (els.slider.disabled) return; // Don't send if quit was pressed
+
+            const tps2 = clampInt(parseInt(els.slider.value, 10), sliderMin(), sliderMax());
             try {
-                await postControl("pulse", `${ms2}ms`);
+                await postControl("targetTPS", `${tps2}`);
                 await loadStatus();
             } catch (err) {
-                setStatus(`pulse error: ${err.message}`, true);
+                setStatus(`tps error: ${err.message}`, true);
             }
         }, DEBOUNCE_MS);
     });
 
     // Quit
     els.quitBtn.addEventListener("click", async () => {
+        // Clear any pending slider updates
+        if (tpsTimer) {
+            clearTimeout(tpsTimer);
+            tpsTimer = null;
+        }
+        
         try {
             await postControl("quit", "");
             setStatus("quit sent");
             els.slider.disabled = true;
-            for (const r of els.radios) r.disabled = true;
             els.quitBtn.disabled = true;
         } catch (err) {
             setStatus(`quit error: ${err.message}`, true);

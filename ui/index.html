@@ -7,15 +7,13 @@
     <style>
         body {
             font-family: monospace;
-            max-width: 680px;
-            margin: 24px auto;
-            padding: 0 16px;
+            margin: 24px 16px;
             color: #222;
         }
 
         .card {
             border: 1px solid #ccc;
-            padding: 16px;
+            padding: 8px;
             background: #fff;
         }
 
@@ -29,14 +27,49 @@
             margin-bottom: 8px;
         }
 
+        .radio-group {
+            margin-top: 8px;
+        }
+
         .radio {
             display: inline-block;
             margin-right: 16px;
             font-weight: 400;
         }
 
+        h3 {
+            margin: 0 0 8px 0;
+            font-size: 16px;
+            color: #222;
+        }
+
+        h2 {
+            margin: 0 0 16px 0;
+            font-size: 20px;
+            color: #222;
+            text-align: center;
+        }
+
         input[type="range"] {
             width: 100%;
+            margin-bottom: 5px;
+        }
+
+        .slider-container {
+            position: relative;
+        }
+
+        .slider-marks {
+            display: flex;
+            justify-content: space-between;
+            width: calc(100% - 20px);
+            margin-left: 10px;
+            font-size: 11px;
+            color: #666;
+        }
+
+        .slider-marks .mark {
+            position: static;
         }
 
         .status {
@@ -69,15 +102,26 @@
 
 <body>
     <div class="card">
+        <h2>Load Generator Control</h2>
+        
         <div class="row">
-            <label>Mode</label>
-            <label class="radio"><input type="radio" name="mode" value="normal"> normal</label>
-            <label class="radio"><input type="radio" name="mode" value="burst"> burst</label>
-        </div>
-
-        <div class="row">
-            <label>Pulse: <span id="pulse-display" class="muted">—</span></label>
-            <input type="range" id="pulse-slider" min="50" max="2000" step="50" value="100">
+            <label>Transactions Per Second: <span id="tps-display" class="muted">—</span></label>
+            <div class="slider-container">
+                <input type="range" id="tps-slider" min="0" max="100000" step="100" value="1000">
+                <div class="slider-marks">
+                    <span class="mark">0</span>
+                    <span class="mark">10K</span>
+                    <span class="mark">20K</span>
+                    <span class="mark">30K</span>
+                    <span class="mark">40K</span>
+                    <span class="mark">50K</span>
+                    <span class="mark">60K</span>
+                    <span class="mark">70K</span>
+                    <span class="mark">80K</span>
+                    <span class="mark">90K</span>
+                    <span class="mark">100K</span>
+                </div>
+            </div>
         </div>
 
         <div class="row">
