@@ -59,12 +59,39 @@ func NewTransactionReader(dataPath string) (TransactionReader, error) {
 	}, nil
 }
 
+func produceTransactions(dataPath string) <-chan *Transaction {
+	c := make(chan *Transaction, 10)
+
+	go func() {
+		defer close(c)
+		reader, err := NewTransactionReader(dataPath)
+		if err != nil {
+			panic(err)
+		}
+		defer reader.Close()
+
+		for {
+			tran, err := reader.Next()
+			if err != nil {
+				panic(err)
+			}
+			if tran == nil {
+				break
+			}
+			c <- tran
+		}
+
+	}()
+
+	return c
+}
+
 func (r *parquetTransactionReader) Next() (*Transaction, error) {
 	for {
 		// Load current file if not loaded
 		if len(r.rows) == 0 {
 			if r.current >= len(r.files) {
-				return nil, fmt.Errorf("EOF")
+				return nil, nil
 			}
 
 			// Read all rows from file using parquet.ReadFile
@@ -86,15 +113,15 @@ func (r *parquetTransactionReader) Next() (*Transaction, error) {
 			continue
 		}
 
-		// Get current event
-		event := r.rows[r.rowPos]
+		// Get current transaction
+		transaction := r.rows[r.rowPos]
 		r.rowPos++
 
 		// Compute AcctId from ClientID hash
-		hash := sha256.Sum256([]byte(event.ClientID))
-		event.AcctId = hex.EncodeToString(hash[:])[:16] // first 16 chars as stable ID
+		hash := sha256.Sum256([]byte(transaction.ClientID))
+		transaction.AcctId = hex.EncodeToString(hash[:])[:16] // first 16 chars as stable ID
 
-		return &event, nil
+		return &transaction, nil
 	}
 }
 
