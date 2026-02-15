@@ -53,6 +53,8 @@ MVP goals:
 
 ## Go Guidance (Practical)
 - Prefer the standard library
+- Use Go 1.26+ features
+- Use MCP Context 7 documentation
 - Keep state owned by a single event loop / goroutine where possible
 - Use context for cancellation and timeouts
 - Avoid premature abstractions (layers / DTO / mapping)

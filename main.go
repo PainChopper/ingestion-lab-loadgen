@@ -44,16 +44,21 @@ func main() {
 	metricsTicker := time.NewTicker(windowLength)
 	defer metricsTicker.Stop()
 
-	loadEvents := loadTicker.C
 	metrics := metricsTicker.C
 	commands := make(chan command, 10)
 	go startHttpServer(commands)
 
 	var batchCount int
 
+	transactions := produceTransactions("./data/MBD-mini/trx/**/*.parquet")
+
 	for {
 		select {
-		case <-loadEvents:
+		case tran, ok := <-transactions:
+			if !ok {
+				return
+			}
+			fmt.Printf("%s: %s\n", tran.ClientID, tran.Amount)
 			batchCount += rand.Intn(gs.tickLimit())
 		case cmd := <-commands:
 			switch cmd.kind {
@@ -63,7 +68,6 @@ func main() {
 				loadTicker.Stop()
 				gs.pulse = cmd.pulse
 				loadTicker = time.NewTicker(gs.pulse)
-				loadEvents = loadTicker.C
 			case quit:
 				return
 			case getStatus:
