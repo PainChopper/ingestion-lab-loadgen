@@ -2,89 +2,73 @@ package main
 
 import (
 	"fmt"
-	"math/rand"
+	"strconv"
+
 	"time"
 )
 
 const (
-	windowLength = 1 * time.Second
-	pulse        = 100 * time.Millisecond
-
-	normalLimit = 5
-	burstLimit  = 500
-)
-
-type mode int
-
-const (
-	normal mode = iota
-	burst
+	windowLength     = time.Second
+	startTPS     int = 100
 )
 
 type generatorState struct {
-	mode  mode
-	pulse time.Duration
-}
-
-func (g generatorState) tickLimit() int {
-	if g.mode == normal {
-		return normalLimit
-	}
-	return burstLimit
+	targetTPS         int
+	actualTPS         int
+	totalTransactions int
 }
 
 func main() {
-	gs := generatorState{
-		mode:  normal,
-		pulse: pulse,
-	}
-
-	loadTicker := time.NewTicker(gs.pulse)
-	defer loadTicker.Stop()
-	metricsTicker := time.NewTicker(windowLength)
-	defer metricsTicker.Stop()
-
-	metrics := metricsTicker.C
-	commands := make(chan command, 10)
-	go startHttpServer(commands)
-
-	var batchCount int
+	gs := generatorState{}
+	gs.targetTPS = startTPS
 
 	transactions := produceTransactions("./data/MBD-mini/trx/**/*.parquet")
 
+	rateLimiter := time.NewTicker(time.Second / time.Duration(gs.targetTPS))
+	defer rateLimiter.Stop()
+	rateLimit := rateLimiter.C
+
+	commands := make(chan command, 10)
+
+	metricsTicker := time.NewTicker(windowLength)
+	defer metricsTicker.Stop()
+	metrics := metricsTicker.C
+
+	server := startHttpServer(commands)
+
 	for {
 		select {
-		case tran, ok := <-transactions:
-			if !ok {
-				return
+		case <-rateLimit:
+			select {
+			case tran, ok := <-transactions:
+				if !ok {
+					return
+				}
+				fmt.Printf("%s: %s\n", tran.ClientID, tran.Amount)
+				gs.actualTPS++
+			default:
 			}
-			fmt.Printf("%s: %s\n", tran.ClientID, tran.Amount)
-			batchCount += rand.Intn(gs.tickLimit())
 		case cmd := <-commands:
 			switch cmd.kind {
-			case setMode:
-				gs.mode = cmd.mode
-			case setPulse:
-				loadTicker.Stop()
-				gs.pulse = cmd.pulse
-				loadTicker = time.NewTicker(gs.pulse)
+			case setTPS:
+				gs.targetTPS = cmd.targetTPS
+				rateLimiter.Stop()
+				if gs.targetTPS == 0 {
+					rateLimit = nil
+				} else {
+					rateLimiter = time.NewTicker(time.Second / time.Duration(gs.targetTPS))
+					rateLimit = rateLimiter.C
+				}
 			case quit:
+				server.Close()
 				return
 			case getStatus:
-				modeName := "normal"
-				if gs.mode == burst {
-					modeName = "burst"
-				}
 				snapshot := statusSnapshot{
-					Mode:  modeName,
-					Pulse: gs.pulse.String(),
-					Limit: fmt.Sprintf("%d", gs.tickLimit()),
+					TargetTPS: strconv.Itoa(gs.targetTPS),
 				}
 				cmd.reply <- snapshot
 			}
-		case t := <-metrics:
-			fmt.Printf("%d batches handled at %s [mode=%d pulse=%s] \n", batchCount, t.Format("15:04:05"), gs.mode, gs.pulse)
-			batchCount = 0
+		case <-metrics:
 		}
 	}
 }
