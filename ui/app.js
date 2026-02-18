@@ -1,5 +1,6 @@
 (() => {
     const DEBOUNCE_MS = 750;
+    const STATUS_UPDATE_MS = 1000; 
 
     function requireEl(id) {
         const el = document.getElementById(id);
@@ -10,6 +11,9 @@
     const els = {
         slider: requireEl("tps-slider"),
         display: requireEl("tps-display"),
+        actualSlider: requireEl("actual-tps-slider"),
+        actualDisplay: requireEl("actual-tps-display"),
+        totalMetric: requireEl("total-metric"),
         quitBtn: requireEl("quit-btn"),
         status: requireEl("status-area"),
     };
@@ -17,6 +21,7 @@
     let tpsTimer = null;
     let suppressSliderSync = false;
     let statusInFlight = false;
+    let statusUpdateTimer = null;
 
     function clampInt(v, min, max) {
         const n = Number(v);
@@ -72,7 +77,7 @@
             const data = await res.json();
             console.log('Server response:', data); // Debug
 
-            // TPS slider (do not fight the user while dragging)
+            // Target TPS slider (do not fight the user while dragging)
             if (!suppressSliderSync) {
                 const tpsRaw = parseTpsToValue(data.targetTPS);
                 const tps = clampInt(tpsRaw, sliderMin(), sliderMax());
@@ -80,7 +85,16 @@
                 els.display.textContent = `${tps} TPS`;
             }
 
-            setStatus(`ok - tps: ${data.targetTPS}`);
+            // Actual TPS slider (always update from server)
+            const actualTpsRaw = parseTpsToValue(data.actualTPS);
+            const actualTps = clampInt(actualTpsRaw, sliderMin(), sliderMax());
+            els.actualSlider.value = String(actualTps);
+            els.actualDisplay.textContent = `${actualTps} TPS`;
+
+            // Update total transactions metric
+            els.totalMetric.textContent = data.totalTransactions;
+
+            setStatus("ok");
         } catch (e) {
             setStatus(`connection error: ${e.message}`, true);
         } finally {
@@ -89,7 +103,7 @@
     }
 
     
-    // TPS slider -> debounce POST
+    // Target TPS slider -> debounce POST
     els.slider.addEventListener("input", () => {
         suppressSliderSync = true;
 
@@ -116,7 +130,7 @@
 
     // Quit
     els.quitBtn.addEventListener("click", async () => {
-        // Clear any pending slider updates
+        // Clear any pending Target TPS slider updates
         if (tpsTimer) {
             clearTimeout(tpsTimer);
             tpsTimer = null;
@@ -126,12 +140,29 @@
             await postControl("quit", "");
             setStatus("quit sent");
             els.slider.disabled = true;
+            els.actualSlider.disabled = true;
             els.quitBtn.disabled = true;
+            stopStatusUpdates(); // Stop periodic updates when quitting
         } catch (err) {
             setStatus(`quit error: ${err.message}`, true);
         }
     });
 
-    // Init: run immediately (script is loaded after DOM)
+    // Start periodic status updates
+    function startStatusUpdates() {
+        if (statusUpdateTimer) clearInterval(statusUpdateTimer);
+        statusUpdateTimer = setInterval(loadStatus, STATUS_UPDATE_MS);
+    }
+
+    // Stop periodic status updates
+    function stopStatusUpdates() {
+        if (statusUpdateTimer) {
+            clearInterval(statusUpdateTimer);
+            statusUpdateTimer = null;
+        }
+    }
+
+    // Init: run immediately and start periodic updates
     loadStatus();
+    startStatusUpdates();
 })();

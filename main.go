@@ -1,19 +1,19 @@
 package main
 
 import (
-	"fmt"
 	"strconv"
-
 	"time"
 )
 
 const (
 	windowLength     = time.Second
-	startTPS     int = 100
+	startTPS     int = 10000
 )
 
 type generatorState struct {
-	targetTPS         int
+	targetTPS int
+
+	currentSecondTPS  int
 	actualTPS         int
 	totalTransactions int
 }
@@ -36,16 +36,19 @@ func main() {
 
 	server := startHttpServer(commands)
 
+	_ = rateLimit
+
 	for {
 		select {
 		case <-rateLimit:
 			select {
-			case tran, ok := <-transactions:
+			case _, ok := <-transactions:
 				if !ok {
 					return
 				}
-				fmt.Printf("%s: %s\n", tran.ClientID, tran.Amount)
-				gs.actualTPS++
+				// fmt.Printf("%s: %s\n", tran.ClientID, tran.Amount)
+				gs.currentSecondTPS++
+				gs.totalTransactions++
 			default:
 			}
 		case cmd := <-commands:
@@ -64,11 +67,15 @@ func main() {
 				return
 			case getStatus:
 				snapshot := statusSnapshot{
-					TargetTPS: strconv.Itoa(gs.targetTPS),
+					TargetTPS:         strconv.Itoa(gs.targetTPS),
+					ActualTPS:         strconv.Itoa(gs.actualTPS),
+					TotalTransactions: strconv.Itoa(gs.totalTransactions),
 				}
 				cmd.reply <- snapshot
 			}
 		case <-metrics:
+			gs.actualTPS = gs.currentSecondTPS
+			gs.currentSecondTPS = 0
 		}
 	}
 }

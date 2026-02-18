@@ -105,7 +105,7 @@
         <h2>Load Generator Control</h2>
         
         <div class="row">
-            <label>Transactions Per Second: <span id="tps-display" class="muted">—</span></label>
+            <label>Target TPS: <span id="tps-display" class="muted">—</span></label>
             <div class="slider-container">
                 <input type="range" id="tps-slider" min="0" max="100000" step="100" value="1000">
                 <div class="slider-marks">
@@ -125,7 +125,31 @@
         </div>
 
         <div class="row">
+            <label>Actual TPS: <span id="actual-tps-display" class="muted">—</span></label>
+            <div class="slider-container">
+                <input type="range" id="actual-tps-slider" min="0" max="100000" step="100" value="0" disabled>
+                <div class="slider-marks">
+                    <span class="mark">0</span>
+                    <span class="mark">10K</span>
+                    <span class="mark">20K</span>
+                    <span class="mark">30K</span>
+                    <span class="mark">40K</span>
+                    <span class="mark">50K</span>
+                    <span class="mark">60K</span>
+                    <span class="mark">70K</span>
+                    <span class="mark">80K</span>
+                    <span class="mark">90K</span>
+                    <span class="mark">100K</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
             <button id="quit-btn" type="button">quit</button>
+        </div>
+
+        <div class="row metrics">
+            <div>Total Transactions: <span id="total-metric" class="muted">—</span></div>
         </div>
 
         <div id="status-area" class="status muted">connecting...</div>

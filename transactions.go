@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -60,7 +58,7 @@ func NewTransactionReader(dataPath string) (TransactionReader, error) {
 }
 
 func produceTransactions(dataPath string) <-chan *Transaction {
-	c := make(chan *Transaction, 10)
+	c := make(chan *Transaction, 1000)
 
 	go func() {
 		defer close(c)
@@ -118,8 +116,8 @@ func (r *parquetTransactionReader) Next() (*Transaction, error) {
 		r.rowPos++
 
 		// Compute AcctId from ClientID hash
-		hash := sha256.Sum256([]byte(transaction.ClientID))
-		transaction.AcctId = hex.EncodeToString(hash[:])[:16] // first 16 chars as stable ID
+		// hash := sha256.Sum256([]byte(transaction.ClientID))
+		// transaction.AcctId = hex.EncodeToString(hash[:])[:16] // first 16 chars as stable ID
 
 		return &transaction, nil
 	}
