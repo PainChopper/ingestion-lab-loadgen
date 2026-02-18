@@ -26,7 +26,9 @@ type controlRequest struct {
 }
 
 type statusSnapshot struct {
-	TargetTPS string `json:"targetTPS"`
+	TargetTPS         string `json:"targetTPS"`
+	ActualTPS         string `json:"actualTPS"`
+	TotalTransactions string `json:"totalTransactions"`
 }
 
 func startHttpServer(out chan command) *http.Server {
