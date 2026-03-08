@@ -6,6 +6,8 @@ trigger: always_on
 
 ## Language Rules
 - Все диалоги на русском языке
+- Обращайся на "ты"
+- Меня зовут Виталёс.
 - Code comments and docstrings in English
 
 ## Git Commit Message Rules

@@ -1,6 +1,5 @@
 (() => {
-    const DEBOUNCE_MS = 750;
-    const STATUS_UPDATE_MS = 1000; 
+    const STATUS_UPDATE_MS = 250;
 
     function requireEl(id) {
         const el = document.getElementById(id);
@@ -18,7 +17,6 @@
         status: requireEl("status-area"),
     };
 
-    let tpsTimer = null;
     let suppressSliderSync = false;
     let statusInFlight = false;
     let statusUpdateTimer = null;
@@ -75,7 +73,6 @@
                 throw new Error(`HTTP ${res.status}: ${text}`);
             }
             const data = await res.json();
-            console.log('Server response:', data); // Debug
 
             // Target TPS slider (do not fight the user while dragging)
             if (!suppressSliderSync) {
@@ -102,59 +99,49 @@
         }
     }
 
-    
-    // Target TPS slider -> debounce POST
+    // Target TPS slider: update label while dragging
     els.slider.addEventListener("input", () => {
         suppressSliderSync = true;
 
         const tps = clampInt(parseInt(els.slider.value, 10), sliderMin(), sliderMax());
         els.display.textContent = `${tps} TPS`;
+    });
 
-        if (tpsTimer) clearTimeout(tpsTimer);
+    // Apply Target TPS immediately when the user finishes the change
+    els.slider.addEventListener("change", async () => {
+        if (els.slider.disabled) return;
 
-        tpsTimer = setTimeout(async () => {
-            tpsTimer = null;
+        const tps = clampInt(parseInt(els.slider.value, 10), sliderMin(), sliderMax());
+
+        try {
+            await postControl("targetTPS", `${tps}`);
             suppressSliderSync = false;
-
-            if (els.slider.disabled) return; // Don't send if quit was pressed
-
-            const tps2 = clampInt(parseInt(els.slider.value, 10), sliderMin(), sliderMax());
-            try {
-                await postControl("targetTPS", `${tps2}`);
-                await loadStatus();
-            } catch (err) {
-                setStatus(`tps error: ${err.message}`, true);
-            }
-        }, DEBOUNCE_MS);
+            await loadStatus();
+        } catch (err) {
+            suppressSliderSync = false;
+            setStatus(`tps error: ${err.message}`, true);
+        }
     });
 
     // Quit
     els.quitBtn.addEventListener("click", async () => {
-        // Clear any pending Target TPS slider updates
-        if (tpsTimer) {
-            clearTimeout(tpsTimer);
-            tpsTimer = null;
-        }
-        
         try {
             await postControl("quit", "");
             setStatus("quit sent");
             els.slider.disabled = true;
             els.actualSlider.disabled = true;
             els.quitBtn.disabled = true;
-            stopStatusUpdates(); // Stop periodic updates when quitting
+            stopStatusUpdates();
         } catch (err) {
             setStatus(`quit error: ${err.message}`, true);
         }
     });
 
-    // Start periodic status updates
     function startStatusUpdates() {
         if (statusUpdateTimer) clearInterval(statusUpdateTimer);
         statusUpdateTimer = setInterval(loadStatus, STATUS_UPDATE_MS);
     }
 
-    // Stop periodic status updates
     function stopStatusUpdates() {
         if (statusUpdateTimer) {
             clearInterval(statusUpdateTimer);
@@ -162,7 +149,6 @@
         }
     }
 
-    // Init: run immediately and start periodic updates
     loadStatus();
     startStatusUpdates();
 })();

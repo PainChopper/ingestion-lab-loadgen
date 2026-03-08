@@ -32,7 +32,6 @@ type Transaction struct {
 
 type TransactionReader interface {
 	Next() (*Transaction, error)
-	Close() error
 }
 
 type parquetTransactionReader struct {
@@ -57,73 +56,49 @@ func NewTransactionReader(dataPath string) (TransactionReader, error) {
 	}, nil
 }
 
-func produceTransactions(dataPath string) <-chan *Transaction {
-	c := make(chan *Transaction, 1000)
-
+func produceTransactions(dataPath string) (<-chan *Transaction, error) {
+	reader, err := NewTransactionReader(dataPath)
+	if err != nil {
+		return nil, err
+	}
+	c := make(chan *Transaction, 1000000)
 	go func() {
 		defer close(c)
-		reader, err := NewTransactionReader(dataPath)
-		if err != nil {
-			panic(err)
-		}
-		defer reader.Close()
-
 		for {
 			tran, err := reader.Next()
 			if err != nil {
-				panic(err)
+				panic(fmt.Sprintf("produceTransactions failed: %v", err))
 			}
 			if tran == nil {
 				break
 			}
 			c <- tran
 		}
-
 	}()
-
-	return c
+	return c, nil
 }
 
 func (r *parquetTransactionReader) Next() (*Transaction, error) {
 	for {
-		// Load current file if not loaded
 		if len(r.rows) == 0 {
 			if r.current >= len(r.files) {
 				return nil, nil
 			}
-
-			// Read all rows from file using parquet.ReadFile
 			rows, err := parquet.ReadFile[Transaction](r.files[r.current])
 			if err != nil {
 				return nil, fmt.Errorf("failed to read parquet file %s: %w", r.files[r.current], err)
 			}
-
 			r.rows = rows
 			r.rowPos = 0
 		}
-
-		// Check if we have more rows in current file
 		if r.rowPos >= len(r.rows) {
-			// Move to next file
 			r.rows = nil
 			r.rowPos = 0
 			r.current++
 			continue
 		}
-
-		// Get current transaction
 		transaction := r.rows[r.rowPos]
 		r.rowPos++
-
-		// Compute AcctId from ClientID hash
-		// hash := sha256.Sum256([]byte(transaction.ClientID))
-		// transaction.AcctId = hex.EncodeToString(hash[:])[:16] // first 16 chars as stable ID
-
 		return &transaction, nil
 	}
-}
-
-func (r *parquetTransactionReader) Close() error {
-	// No resources to clean up with parquet.ReadFile approach
-	return nil
 }
