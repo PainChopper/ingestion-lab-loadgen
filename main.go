@@ -1,18 +1,19 @@
 package main
 
 import (
+	"log"
 	"strconv"
 	"time"
 )
 
 const (
-	windowLength     = time.Second
-	startTPS     int = 10000
+	windowLength       = time.Second / 10
+	startTPS           = 10000
+	bucketBurstPercent = 10
+	dataPath           = "./data/MBD-mini/trx/**/*.parquet"
 )
 
 type generatorState struct {
-	targetTPS int
-
 	currentSecondTPS  int
 	actualTPS         int
 	totalTransactions int
@@ -20,13 +21,13 @@ type generatorState struct {
 
 func main() {
 	gs := generatorState{}
-	gs.targetTPS = startTPS
 
-	transactions := produceTransactions("./data/MBD-mini/trx/**/*.parquet")
-
-	rateLimiter := time.NewTicker(time.Second / time.Duration(gs.targetTPS))
-	defer rateLimiter.Stop()
-	rateLimit := rateLimiter.C
+	throttler := NewTransactionsThrottler(startTPS, bucketBurstPercent)
+	rawTransactions, err := produceTransactions(dataPath)
+	if err != nil {
+		log.Fatalf("Cannot start load generator: %v", err)
+	}
+	transactions := throttler.Throttle(rawTransactions)
 
 	commands := make(chan command, 10)
 
@@ -36,46 +37,37 @@ func main() {
 
 	server := startHttpServer(commands)
 
-	_ = rateLimit
-
 	for {
 		select {
-		case <-rateLimit:
-			select {
-			case _, ok := <-transactions:
-				if !ok {
-					return
-				}
-				// fmt.Printf("%s: %s\n", tran.ClientID, tran.Amount)
-				gs.currentSecondTPS++
-				gs.totalTransactions++
-			default:
+		case tran, ok := <-transactions:
+			if !ok {
+				return
 			}
+			consumeTransaction(tran)
+			gs.currentSecondTPS++
+			gs.totalTransactions++
 		case cmd := <-commands:
 			switch cmd.kind {
 			case setTPS:
-				gs.targetTPS = cmd.targetTPS
-				rateLimiter.Stop()
-				if gs.targetTPS == 0 {
-					rateLimit = nil
-				} else {
-					rateLimiter = time.NewTicker(time.Second / time.Duration(gs.targetTPS))
-					rateLimit = rateLimiter.C
-				}
+				throttler.setTPS(cmd.targetTPS)
 			case quit:
 				server.Close()
 				return
 			case getStatus:
 				snapshot := statusSnapshot{
-					TargetTPS:         strconv.Itoa(gs.targetTPS),
+					TargetTPS:         strconv.Itoa(throttler.GetTPS()),
 					ActualTPS:         strconv.Itoa(gs.actualTPS),
 					TotalTransactions: strconv.Itoa(gs.totalTransactions),
 				}
 				cmd.reply <- snapshot
 			}
 		case <-metrics:
-			gs.actualTPS = gs.currentSecondTPS
+			gs.actualTPS = gs.currentSecondTPS * int(time.Second/windowLength)
 			gs.currentSecondTPS = 0
 		}
 	}
+}
+
+func consumeTransaction(tran *Transaction) {
+	// TODO: implement transaction consumption
 }
