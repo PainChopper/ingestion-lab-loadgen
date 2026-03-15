@@ -61,7 +61,7 @@ func produceTransactions(dataPath string) (<-chan *Transaction, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := make(chan *Transaction, 1000000)
+	c := make(chan *Transaction, 100_000)
 	go func() {
 		defer close(c)
 		for {
