@@ -1,4 +1,5 @@
 <!doctype html>
+<html lang="en">
 
 <head>
     <meta charset="utf-8" />
@@ -27,22 +28,6 @@
             margin-bottom: 8px;
         }
 
-        .radio-group {
-            margin-top: 8px;
-        }
-
-        .radio {
-            display: inline-block;
-            margin-right: 16px;
-            font-weight: 400;
-        }
-
-        h3 {
-            margin: 0 0 8px 0;
-            font-size: 16px;
-            color: #222;
-        }
-
         h2 {
             margin: 0 0 16px 0;
             font-size: 20px;
@@ -50,26 +35,107 @@
             text-align: center;
         }
 
-        input[type="range"] {
-            width: 100%;
-            margin-bottom: 5px;
-        }
-
         .slider-container {
+            --track-pad: 10px;
             position: relative;
         }
 
+        input[type="range"] {
+            width: 100%;
+            margin: 0;
+            position: relative;
+            z-index: 3;
+        }
+
+        .slider-ticks {
+            position: absolute;
+            left: var(--track-pad);
+            right: var(--track-pad);
+            top: 12px;
+            height: 12px;
+            pointer-events: none;
+            z-index: 2;
+            overflow: hidden;
+        }
+
+        .slider-ticks .tick {
+            position: absolute;
+            bottom: 0;
+            transform: translateX(-50%);
+        }
+
+        .slider-ticks .tick.major {
+            width: 1px;
+            height: 12px;
+            background: #7a7a7a;
+            opacity: 0.95;
+        }
+
+        .slider-ticks .tick.minor {
+            width: 1px;
+            height: 4px;
+            background: #9a9a9a;
+            opacity: 0.85;
+        }
+
         .slider-marks {
-            display: flex;
-            justify-content: space-between;
-            width: calc(100% - 20px);
-            margin-left: 10px;
+            width: calc(100% - (var(--track-pad) * 2));
+            margin: 3px 0 0 var(--track-pad);
+            height: 14px;
             font-size: 11px;
             color: #666;
+            position: relative;
+            user-select: none;
         }
 
         .slider-marks .mark {
-            position: static;
+            position: absolute;
+            transform: translateX(-50%);
+            white-space: nowrap;
+        }
+
+        .slider-marks .mark:nth-child(1) {
+            left: 0%;
+        }
+
+        .slider-marks .mark:nth-child(2) {
+            left: 10%;
+        }
+
+        .slider-marks .mark:nth-child(3) {
+            left: 20%;
+        }
+
+        .slider-marks .mark:nth-child(4) {
+            left: 30%;
+        }
+
+        .slider-marks .mark:nth-child(5) {
+            left: 40%;
+        }
+
+        .slider-marks .mark:nth-child(6) {
+            left: 50%;
+        }
+
+        .slider-marks .mark:nth-child(7) {
+            left: 65.1%;
+        }
+
+        .slider-marks .mark:nth-child(8) {
+            left: 73.9%;
+        }
+
+        .slider-marks .mark:nth-child(9) {
+            left: 84.9%;
+        }
+
+        .slider-marks .mark:nth-child(10) {
+            left: 92.3%;
+        }
+
+        .slider-marks .mark:nth-child(11) {
+            left: 100%;
         }
 
         .status {
@@ -103,11 +169,12 @@
 <body>
     <div class="card">
         <h2>Load Generator Control</h2>
-        
+
         <div class="row">
             <label>Target TPS: <span id="tps-display" class="muted">—</span></label>
             <div class="slider-container">
                 <input type="range" id="tps-slider" min="0" max="100000" step="100" value="1000">
+                <div class="slider-ticks" aria-hidden="true"></div>
                 <div class="slider-marks">
                     <span class="mark">1</span>
                     <span class="mark">10</span>
@@ -115,6 +182,10 @@
                     <span class="mark">1K</span>
                     <span class="mark">10K</span>
                     <span class="mark">100K</span>
+                    <span class="mark">200K</span>
+                    <span class="mark">300K</span>
+                    <span class="mark">500K</span>
+                    <span class="mark">700K</span>
                     <span class="mark">1M</span>
                 </div>
             </div>
@@ -124,6 +195,7 @@
             <label>Actual TPS: <span id="actual-tps-display" class="muted">—</span></label>
             <div class="slider-container">
                 <input type="range" id="actual-tps-slider" min="0" max="100000" step="100" value="0" disabled>
+                <div class="slider-ticks" aria-hidden="true"></div>
                 <div class="slider-marks">
                     <span class="mark">1</span>
                     <span class="mark">10</span>
@@ -131,6 +203,10 @@
                     <span class="mark">1K</span>
                     <span class="mark">10K</span>
                     <span class="mark">100K</span>
+                    <span class="mark">200K</span>
+                    <span class="mark">300K</span>
+                    <span class="mark">500K</span>
+                    <span class="mark">700K</span>
                     <span class="mark">1M</span>
                 </div>
             </div>
