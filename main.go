@@ -35,7 +35,9 @@ func main() {
 	defer metricsTicker.Stop()
 	metrics := metricsTicker.C
 
-	server := startHttpServer(commands)
+	promMetrics := NewMetrics()
+	promMetrics.targetTPS.Set(float64(startTPS))
+	server := startHttpServer(commands, promMetrics)
 
 	for {
 		select {
@@ -46,10 +48,12 @@ func main() {
 			consumeTransaction(tran)
 			gs.currentSecondTPS++
 			gs.totalTransactions++
+			promMetrics.transactionsTotal.Inc()
 		case cmd := <-commands:
 			switch cmd.kind {
 			case setTPS:
 				throttler.setTPS(cmd.targetTPS)
+				promMetrics.targetTPS.Set(float64(cmd.targetTPS))
 			case quit:
 				server.Close()
 				return
@@ -64,6 +68,7 @@ func main() {
 		case <-metrics:
 			gs.actualTPS = gs.currentSecondTPS * int(time.Second/windowLength)
 			gs.currentSecondTPS = 0
+			promMetrics.actualTPS.Set(float64(gs.actualTPS))
 		}
 	}
 }
