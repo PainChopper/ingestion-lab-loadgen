@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type cmdType int
@@ -31,7 +33,7 @@ type statusSnapshot struct {
 	TotalTransactions string `json:"totalTransactions"`
 }
 
-func startHttpServer(out chan command) *http.Server {
+func startHttpServer(out chan command, metrics *Metrics) *http.Server {
 	mux := http.NewServeMux()
 
 	controlHandler := func(w http.ResponseWriter, r *http.Request) {
@@ -78,14 +80,21 @@ func startHttpServer(out chan command) *http.Server {
 	mux.HandleFunc("/control", controlHandler)
 	mux.HandleFunc("/status", statusHandler)
 
+	if metrics != nil {
+		mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))
+	}
+
 	fileServer := http.FileServer(http.Dir("./ui"))
 	mux.Handle("/", fileServer)
 
 	server := &http.Server{
-		Addr:    "127.0.0.1:8080",
+		Addr:    ":8080",
 		Handler: mux,
 	}
 
-	go server.ListenAndServe()
+	go func() {
+		_ = server.ListenAndServe()
+	}()
+
 	return server
 }
