@@ -8,7 +8,7 @@ import (
 
 const (
 	windowLength       = time.Second / 10
-	startTPS           = 10000
+	startTPS           = 100_000
 	bucketBurstPercent = 10
 	dataPath           = "./data/MBD-mini/trx/**/*.parquet"
 )
@@ -28,6 +28,7 @@ func main() {
 		log.Fatalf("Cannot start load generator: %v", err)
 	}
 	transactions := throttler.Throttle(rawTransactions)
+	// transactions := rawTransactions
 
 	commands := make(chan command, 10)
 

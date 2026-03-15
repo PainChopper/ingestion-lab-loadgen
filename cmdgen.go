@@ -88,7 +88,7 @@ func startHttpServer(out chan command, metrics *Metrics) *http.Server {
 	mux.Handle("/", fileServer)
 
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    "127.0.0.1:8080",
 		Handler: mux,
 	}
 
