@@ -1,8 +1,4 @@
-﻿---
-trigger: always_on
----
-
-# Go Project Specific Rules
+﻿# Go Project Specific Rules
 
 ## Language Rules
 - Все диалоги на русском языке
