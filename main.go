@@ -27,8 +27,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Cannot start load generator: %v", err)
 	}
-	transactions := throttler.Throttle(rawTransactions)
-	// transactions := rawTransactions
+	//transactions := throttler.Throttle(rawTransactions)
+	transactions := rawTransactions
 
 	commands := make(chan command, 10)
 
