@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/pprof"
 	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -83,6 +84,12 @@ func startHttpServer(out chan command, metrics *Metrics) *http.Server {
 	if metrics != nil {
 		mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))
 	}
+
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 	fileServer := http.FileServer(http.Dir("./ui"))
 	mux.Handle("/", fileServer)
