@@ -15,7 +15,7 @@
     const LOG_BREAK_LN = Math.log(LOG_BREAK_TPS);
 
     // Tick styling / density.
-    // Left side stays relatively sparse, right side becomes much denser.
+    // The left side stays relatively sparse, the right side becomes much denser.
     const MAJOR_CLEARANCE_PX = 7;
     const SEGMENT_GAP_START_PX = 100;
     const SEGMENT_GAP_END_PX = 7;
