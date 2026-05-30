@@ -14,9 +14,10 @@ const (
 )
 
 type generatorState struct {
-	currentSecondTPS  int
-	actualTPS         int
-	totalTransactions int
+	currentSecondTPS            int
+	actualTPS                   int
+	totalTransactions           int
+	prometheusTransactionsCount int
 }
 
 func main() {
@@ -50,14 +51,17 @@ func main() {
 			consumeTransaction(tran)
 			gs.currentSecondTPS++
 			gs.totalTransactions++
-			promMetrics.transactionsTotal.Inc()
+			gs.prometheusTransactionsCount++
 		case cmd := <-commands:
 			switch cmd.kind {
 			case setTPS:
 				throttler.setTPS(cmd.targetTPS)
 				promMetrics.targetTPS.Set(float64(cmd.targetTPS))
 			case quit:
-				server.Close()
+				err := server.Close()
+				if err != nil {
+					return
+				}
 				return
 			case getStatus:
 				snapshot := statusSnapshot{
@@ -71,6 +75,8 @@ func main() {
 			gs.actualTPS = gs.currentSecondTPS * int(time.Second/windowLength)
 			gs.currentSecondTPS = 0
 			promMetrics.actualTPS.Set(float64(gs.actualTPS))
+			promMetrics.transactionsTotal.Add(float64(gs.prometheusTransactionsCount))
+			gs.prometheusTransactionsCount = 0
 		}
 	}
 }
