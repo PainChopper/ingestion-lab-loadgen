@@ -48,8 +48,8 @@ func (r *parquetTransactionReader) Next() (*Transaction, error) {
 			r.current++
 			continue
 		}
-		transaction := r.rows[r.rowPos]
+		tran := &r.rows[r.rowPos]
 		r.rowPos++
-		return &transaction, nil
+		return tran, nil
 	}
 }
