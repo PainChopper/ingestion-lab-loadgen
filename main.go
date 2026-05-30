@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -12,6 +13,8 @@ const (
 	bucketBurstPercent = 10
 	dataPath           = "./data/MBD-mini/trx/**/*.parquet"
 )
+
+var blackHole uint64
 
 type generatorState struct {
 	currentSecondTPS            int
@@ -82,5 +85,11 @@ func main() {
 }
 
 func consumeTransaction(tran *Transaction) {
-	// TODO: implement transaction consumption
+	blackHole = uint64(tran.Fold)
+	blackHole ^= uint64(tran.EventType) * 1099511628211
+	blackHole ^= uint64(tran.EventSubtype) * 1469598103934665603
+	blackHole ^= uint64(tran.Currency) * 7809847782465536322
+	blackHole ^= uint64(len(tran.ClientID)) << 32
+	blackHole ^= uint64(len(tran.Amount))
+	runtime.KeepAlive(blackHole)
 }
