@@ -7,14 +7,14 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-type parquetTransactionReader struct {
+type lazyFileReader struct {
 	files   []string
 	current int
 	rows    []Transaction
 	rowPos  int
 }
 
-func NewParquetTransactionReader(dataPath string) (TransactionIterator, error) {
+func NewLazyFileReader(dataPath string) (TransactionIterator, error) {
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to glob path: %w", err)
@@ -23,13 +23,13 @@ func NewParquetTransactionReader(dataPath string) (TransactionIterator, error) {
 		return nil, fmt.Errorf("no files found matching pattern: %s", dataPath)
 	}
 
-	return &parquetTransactionReader{
+	return &lazyFileReader{
 		files:   files,
 		current: 0,
 	}, nil
 }
 
-func (r *parquetTransactionReader) Next() (*Transaction, error) {
+func (r *lazyFileReader) Next() (*Transaction, error) {
 	for {
 		if len(r.rows) == 0 {
 			if r.current >= len(r.files) {

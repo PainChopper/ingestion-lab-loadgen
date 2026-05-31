@@ -3,7 +3,7 @@ package main
 import "fmt"
 
 func produceTransactions(dataPath string) (<-chan *Transaction, error) {
-	reader, err := NewParquetTransactionReader(dataPath)
+	reader, err := NewLazyFileReader(dataPath)
 	if err != nil {
 		return nil, err
 	}
