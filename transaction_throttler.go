@@ -11,21 +11,21 @@ import (
 type throttlerParams struct {
 	tps int
 }
-type transactionsThrottler struct {
+type transactionThrottler struct {
 	tps          atomic.Int32
 	burstPercent atomic.Int32
 	limiter      atomic.Pointer[rate.Limiter]
 }
 
-func NewTransactionsThrottler(tps, burstPercent int) *transactionsThrottler {
-	t := &transactionsThrottler{}
+func NewTransactionsThrottler(tps, burstPercent int) *transactionThrottler {
+	t := &transactionThrottler{}
 	t.tps.Store(int32(tps))
 	t.burstPercent.Store(int32(burstPercent))
 	t.resetLimiter()
 	return t
 }
 
-func (t *transactionsThrottler) Throttle(trans <-chan *Transaction) <-chan *Transaction {
+func (t *transactionThrottler) Throttle(trans <-chan *Transaction) <-chan *Transaction {
 	c := make(chan *Transaction, 1000)
 	go func() {
 		defer close(c)
@@ -40,16 +40,16 @@ func (t *transactionsThrottler) Throttle(trans <-chan *Transaction) <-chan *Tran
 	return c
 }
 
-func (t *transactionsThrottler) GetTPS() int {
+func (t *transactionThrottler) GetTPS() int {
 	return int(t.tps.Load())
 }
 
-func (t *transactionsThrottler) setTPS(tps int) {
+func (t *transactionThrottler) setTPS(tps int) {
 	t.tps.Store(int32(tps))
 	t.resetLimiter()
 }
 
-func (t *transactionsThrottler) resetLimiter() {
+func (t *transactionThrottler) resetLimiter() {
 	newLimiter := rate.NewLimiter(rate.Limit(t.tps.Load()), int(t.tps.Load()*t.burstPercent.Load()/100))
 	t.limiter.Store(newLimiter)
 }
