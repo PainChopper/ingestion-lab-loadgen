@@ -53,6 +53,7 @@ MVP goals:
 - Prefer the standard library
 - Use Go 1.26+ features
 - Use MCP Context 7 documentation
+- Go error/log messages: start with lowercase and avoid trailing punctuation, following Go error string style.
 - Keep state owned by a single event loop / goroutine where possible
 - Use context for cancellation and timeouts
 - Avoid premature abstractions (layers / DTO / mapping)
