@@ -8,6 +8,8 @@ import (
 )
 
 func produceBatches(dataPath string) (<-chan TransactionBatch, error) {
+	const batchReadAheadCapacity = 2
+
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to glob path: %w", err)
@@ -16,7 +18,7 @@ func produceBatches(dataPath string) (<-chan TransactionBatch, error) {
 		return nil, fmt.Errorf("no files found matching pattern: %s", dataPath)
 	}
 
-	batches := make(chan TransactionBatch, 4)
+	batches := make(chan TransactionBatch, batchReadAheadCapacity)
 
 	go func(files []string, batches chan<- TransactionBatch) {
 		defer close(batches)

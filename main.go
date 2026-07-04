@@ -4,11 +4,12 @@ import (
 	"log"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
 const (
-	windowLength       = time.Second / 10
+	windowLength       = time.Second / 1
 	startTPS           = 100_000
 	bucketBurstPercent = 10
 	dataPath           = "./data/MBD-mini/trx/**/*.parquet"
@@ -17,15 +18,13 @@ const (
 var blackHole uint64
 
 type generatorState struct {
-	currentSecondTPS            int
-	actualTPS                   int
-	totalTransactions           int
-	prometheusTransactionsCount int
+	actualTPS         int64
+	totalTransactions int64
 }
 
 func main() {
 	gs := generatorState{}
-
+	var consumedSinceTick atomic.Int64
 	throttler := NewTransactionsThrottler(startTPS, bucketBurstPercent)
 
 	commands := make(chan command, 10)
@@ -45,7 +44,7 @@ func main() {
 	consumerDone := make(chan struct{})
 	go func() {
 		defer close(consumerDone)
-		consumeBatches(batches)
+		consumeBatches(batches, &consumedSinceTick)
 	}()
 
 	for {
@@ -66,17 +65,17 @@ func main() {
 			case getStatus:
 				snapshot := statusSnapshot{
 					TargetTPS:         strconv.Itoa(throttler.GetTPS()),
-					ActualTPS:         strconv.Itoa(gs.actualTPS),
-					TotalTransactions: strconv.Itoa(gs.totalTransactions),
+					ActualTPS:         strconv.Itoa(int(gs.actualTPS)),
+					TotalTransactions: strconv.Itoa(int(gs.totalTransactions)),
 				}
 				cmd.reply <- snapshot
 			}
 		case <-metrics:
-			gs.actualTPS = gs.currentSecondTPS * int(time.Second/windowLength)
-			gs.currentSecondTPS = 0
+			delta := consumedSinceTick.Swap(0)
+			gs.actualTPS = delta * int64(time.Second/windowLength)
+			gs.totalTransactions += delta
 			promMetrics.actualTPS.Set(float64(gs.actualTPS))
-			promMetrics.transactionsTotal.Add(float64(gs.prometheusTransactionsCount))
-			gs.prometheusTransactionsCount = 0
+			promMetrics.transactionsTotal.Add(float64(delta))
 		}
 	}
 }
