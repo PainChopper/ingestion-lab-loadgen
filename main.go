@@ -27,15 +27,12 @@ func main() {
 	gs := generatorState{}
 
 	throttler := NewTransactionsThrottler(startTPS, bucketBurstPercent)
-	rawTransactions, err := produceTransactions(dataPath)
-	if err != nil {
-		log.Fatalf("Cannot start load generator: %v", err)
-	}
-
-	//transactions := throttler.Throttle(rawTransactions)
-	transactions := rawTransactions
 
 	commands := make(chan command, 10)
+	batches, err := produceBatches(dataPath)
+	if err != nil {
+		log.Fatalf("cannot start load generator: %v", err)
+	}
 
 	metricsTicker := time.NewTicker(windowLength)
 	defer metricsTicker.Stop()
@@ -45,16 +42,16 @@ func main() {
 	promMetrics.targetTPS.Set(float64(startTPS))
 	server := startHttpServer(commands, promMetrics)
 
+	consumerDone := make(chan struct{})
+	go func() {
+		defer close(consumerDone)
+		consumeBatches(batches)
+	}()
+
 	for {
 		select {
-		case tran, ok := <-transactions:
-			if !ok {
-				return
-			}
-			consumeTransaction(tran)
-			gs.currentSecondTPS++
-			gs.totalTransactions++
-			gs.prometheusTransactionsCount++
+		case <-consumerDone:
+			return
 		case cmd := <-commands:
 			switch cmd.kind {
 			case setTPS:
