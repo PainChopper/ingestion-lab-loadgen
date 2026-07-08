@@ -86,6 +86,6 @@ func consumeTransaction(tran *Transaction) {
 	blackHole ^= uint64(tran.EventSubtype) * 1469598103934665603
 	blackHole ^= uint64(tran.Currency) * 7809847782465536322
 	blackHole ^= uint64(len(tran.ClientID)) << 32
-	blackHole ^= uint64(len(tran.Amount))
+	blackHole ^= uint64(tran.Amount)
 	runtime.KeepAlive(blackHole)
 }
