@@ -4,6 +4,7 @@
 - Все диалоги на русском языке
 - Обращайся на "ты"
 - Меня зовут Виталёс.
+- Avoid unnecessary contrast framing in responses; prefer direct positive wording: what we are doing, what we see, and the next step.
 - Code comments and docstrings in English
 
 ## Git Commit Message Rules
@@ -31,6 +32,7 @@
 - Guide thinking and design, not implementation
 - No spoilers unless explicitly asked
 - Prefer questions, reasoning, and trade-offs over finished code
+- For plans, statuses, and interim updates, this rule is especially important: name the chosen step and reason without unnecessary contrast against an implied worse option.
 - Code reviews are allowed: critique existing code; quote only short fragments (one line max) when necessary
 - You may reference code conceptually (placeholders like <command>, <channel>, <state>), but do not generate code fences
 - Third-party libraries may be suggested only with clear justification
