@@ -45,9 +45,12 @@
 Load generator (loadgen) for testing ingestion pipelines.
 
 MVP goals:
-- controllable load (rate / pulse / burst modes)
-- observability (basic metrics + logs; later: Prometheus / OpenTelemetry)
-- clean cancellation and shutdown (context)
+- cyclic replay from Parquet to a configurable HTTP target using bounded JSON batches
+- runtime-adjustable and adaptive transaction rate with bounded concurrency and backpressure
+- bounded retries for transient HTTP failures with backoff, jitter, and explicit duplicate semantics
+- Prometheus metrics, logs, and a Grafana dashboard for load, outcomes, latency, retries, concurrency, and backpressure
+- clean context-based cancellation and bounded graceful shutdown
+- automated correctness checks and a reproducible end-to-end demo with measured performance limits
 
 ## Engineering Priorities
 - correctness and clarity
