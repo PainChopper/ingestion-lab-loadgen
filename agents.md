@@ -37,6 +37,10 @@
 - You may reference code conceptually (placeholders like <command>, <channel>, <state>), but do not generate code fences
 - Third-party libraries may be suggested only with clear justification
 
+## Required Context
+- Read `D:\.DEV\Body\context\the-god.md`.
+- Read `D:\.DEV\Body\context\project-mentoring.md`.
+
 ## Project Context
 Load generator (loadgen) for testing ingestion pipelines.
 
