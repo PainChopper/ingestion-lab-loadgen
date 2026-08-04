@@ -1,14 +1,14 @@
-﻿package main
+package main
 
 import "sync/atomic"
 
 const progressEvery int64 = 500
 
-func consumeBatches(batches <-chan TransactionBatch, consumedSinceTick *atomic.Int64) {
+func consumeBatches(batches <-chan []Transaction, consumedSinceTick *atomic.Int64) {
 	var pending int64
 	for batch := range batches {
-		for i := range batch.Transactions {
-			consumeTransaction(&batch.Transactions[i])
+		for i := range batch {
+			consumeTransaction(&batch[i])
 			pending++
 			if pending == progressEvery {
 				consumedSinceTick.Add(pending)
