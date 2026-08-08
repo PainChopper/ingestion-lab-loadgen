@@ -334,8 +334,30 @@
   opacity: 0.58;
 }
 
+.pipeline-queue-handle--preview {
+  color: var(--cyan);
+}
+
+.pipeline-queue-handle--pending {
+  color: var(--yellow);
+}
+
 .pipeline-queue-metric {
   fill: currentColor;
+}
+
+.pipeline-queue-capacity-status {
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pipeline-queue-capacity-status--preview {
+  fill: var(--cyan);
+}
+
+.pipeline-queue-capacity-status--pending {
+  fill: var(--yellow);
 }
 
 @keyframes pipeline-queue-marker-travel {

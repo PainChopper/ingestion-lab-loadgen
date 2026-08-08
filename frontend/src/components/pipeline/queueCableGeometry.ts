@@ -15,6 +15,14 @@ export interface CapacityTick {
   readonly major: boolean
 }
 
+export type QueueCapacityRequestState = 'preview' | 'pending' | null
+
+export interface QueueCapacityPresentation {
+  readonly applied: number
+  readonly candidate: number
+  readonly requestState: QueueCapacityRequestState
+}
+
 export const QUEUE_CABLE_MAX_MARKERS = 12
 
 function decimalPlaces(value: number): number {
@@ -44,6 +52,31 @@ export function normalizeCapacity(
   return Number(
     Math.min(range.max, Math.max(range.min, stepped)).toFixed(precision),
   )
+}
+
+export function getQueueCapacityPresentation(
+  control: NumericControlSnapshot,
+  localPreview: number | null = null,
+): QueueCapacityPresentation {
+  const applied = normalizeCapacity(control.applied ?? control.min, control)
+  const candidateSource =
+    localPreview ?? control.preview ?? control.pending ?? applied
+  const candidate = normalizeCapacity(candidateSource, control)
+
+  if (candidate === applied) {
+    return { applied, candidate, requestState: null }
+  }
+
+  const pendingMatchesCandidate =
+    control.pending !== null &&
+    normalizeCapacity(control.pending, control) === candidate
+
+  return {
+    applied,
+    candidate,
+    requestState:
+      localPreview === null && pendingMatchesCandidate ? 'pending' : 'preview',
+  }
 }
 
 export function capacityToCableY(

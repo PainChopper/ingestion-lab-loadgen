@@ -1,16 +1,32 @@
 import { describe, expect, it } from 'vitest'
+import type { NumericControlSnapshot } from '../../model/loadgen'
 import {
   buildQueueCablePath,
   cableYToCapacity,
   capacityFromVerticalDrag,
   capacityToCableY,
   getCapacityTicks,
+  getQueueCapacityPresentation,
   getQueueMarkerCount,
   normalizeCapacity,
 } from './queueCableGeometry'
 
 const smallRange = { min: 0, max: 12, step: 1 }
 const largeRange = { min: 0, max: 160, step: 10 }
+
+function capacityControl(
+  applied: number,
+  pending: number | null = null,
+): NumericControlSnapshot {
+  return {
+    applied,
+    preview: pending,
+    pending,
+    ...smallRange,
+    unit: 'batches',
+    applyMode: 'immediate',
+  }
+}
 
 describe('queue cable capacity geometry', () => {
   it('clamps and snaps capacities to the configured range', () => {
@@ -38,6 +54,79 @@ describe('queue cable capacity geometry', () => {
   it('clamps vertical drag results to the configured range', () => {
     expect(capacityFromVerticalDrag(6, -500, smallRange, 240)).toBe(12)
     expect(capacityFromVerticalDrag(6, 500, smallRange, 240)).toBe(0)
+  })
+
+  it.each([
+    {
+      name: 'keeps applied 4 while a decrease to 0 is pending at depth 4',
+      control: capacityControl(4, 0),
+      depth: 4,
+      expectedApplied: 4,
+      expectedCandidate: 0,
+      expectedState: 'pending',
+      expectedY: 335,
+      expectedMarkers: 12,
+    },
+    {
+      name: 'keeps applied 12 while a decrease to 4 is pending at depth 12',
+      control: capacityControl(12, 4),
+      depth: 12,
+      expectedApplied: 12,
+      expectedCandidate: 4,
+      expectedState: 'pending',
+      expectedY: 175,
+      expectedMarkers: 12,
+    },
+    {
+      name: 'shows an increase from 4 to 12 as immediately applied',
+      control: capacityControl(12),
+      depth: 4,
+      expectedApplied: 12,
+      expectedCandidate: 12,
+      expectedState: null,
+      expectedY: 175,
+      expectedMarkers: 4,
+    },
+    {
+      name: 'keeps applied zero as a flat unbuffered queue',
+      control: capacityControl(0),
+      depth: 0,
+      expectedApplied: 0,
+      expectedCandidate: 0,
+      expectedState: null,
+      expectedY: 415,
+      expectedMarkers: 0,
+    },
+  ])('$name', ({
+    control,
+    depth,
+    expectedApplied,
+    expectedCandidate,
+    expectedState,
+    expectedY,
+    expectedMarkers,
+  }) => {
+    const presentation = getQueueCapacityPresentation(control)
+
+    expect(presentation).toEqual({
+      applied: expectedApplied,
+      candidate: expectedCandidate,
+      requestState: expectedState,
+    })
+    expect(capacityToCableY(presentation.applied, control, 415, 240)).toBe(
+      expectedY,
+    )
+    expect(
+      getQueueMarkerCount(depth, presentation.applied, 0, 'normal'),
+    ).toBe(expectedMarkers)
+  })
+
+  it('keeps a local drag as preview while preserving applied geometry', () => {
+    expect(getQueueCapacityPresentation(capacityControl(4), 0)).toEqual({
+      applied: 4,
+      candidate: 0,
+      requestState: 'preview',
+    })
   })
 
   it('keeps zero capacity flat and non-zero capacity continuous', () => {
