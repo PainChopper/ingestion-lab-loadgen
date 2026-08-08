@@ -4,10 +4,9 @@ export const FIXED_STEP_MS = 10
 export const SNAPSHOT_INTERVAL_MS = 100
 
 const RATE_WINDOW_STEPS = 100
-const BACKPRESSURE_ONSET_MS = 300
 const BACKPRESSURE_RELEASE_MS = 200
+const NEAR_LIMIT_OCCUPANCY_RATIO = 0.8
 const READER_TRANSACTIONS_PER_WORKER_SECOND = 50_000
-const REQUEST_SLOTS_PER_SENDER_WORKER = 2
 
 export interface SimulationConfig {
   readerWorkers: number
@@ -208,19 +207,31 @@ class StatefulQueue {
     activity.handoffBatches += 1
   }
 
-  observeBlocked(blocked: boolean): void {
+  observeBlocked(blocked: boolean, senderProgressed: boolean): void {
     this.blockedSenders = blocked ? 1 : 0
     if (blocked) {
-      this.blockedForMs += FIXED_STEP_MS
+      this.blockedForMs = senderProgressed
+        ? FIXED_STEP_MS
+        : this.blockedForMs + FIXED_STEP_MS
       this.blockedMsTotal += FIXED_STEP_MS
+    } else {
+      this.blockedForMs = 0
+    }
+
+    if (this.appliedCapacity === 0) {
+      this.backpressure = false
       this.clearForMs = 0
-      if (this.blockedForMs >= BACKPRESSURE_ONSET_MS) {
-        this.backpressure = true
-      }
       return
     }
 
-    this.blockedForMs = 0
+    const full =
+      this.appliedCapacity > 0 && this.depthBatches >= this.appliedCapacity
+    if (blocked || full) {
+      this.backpressure = true
+      this.clearForMs = 0
+      return
+    }
+
     if (!this.backpressure) {
       this.clearForMs = 0
       return
@@ -244,13 +255,24 @@ class StatefulQueue {
         : inputTransactionsPerSecond < outputTransactionsPerSecond
           ? 'falling'
           : 'steady'
+    const full =
+      this.appliedCapacity > 0 && this.depthBatches >= this.appliedCapacity
+    const nearLimit =
+      this.appliedCapacity > 0 &&
+      this.depthBatches < this.appliedCapacity &&
+      this.depthBatches >=
+        Math.ceil(this.appliedCapacity * NEAR_LIMIT_OCCUPANCY_RATIO)
     const flowState: QueueFlowState = !running
       ? 'stopped'
-      : this.backpressure
-        ? 'backpressure'
-        : this.appliedCapacity > 0 && this.depthBatches >= this.appliedCapacity
-          ? 'near-limit'
+      : this.appliedCapacity === 0
+        ? this.blockedSenders > 0
+          ? 'backpressure'
           : 'normal'
+        : this.blockedSenders > 0 || full || this.backpressure
+          ? 'backpressure'
+          : nearLimit
+            ? 'near-limit'
+            : 'normal'
 
     return {
       capacity: this.capacity,
@@ -362,8 +384,14 @@ export class FixedStepSimulation {
     this.receiveQueue1(activity)
     const queue1Blocked = this.produceReaderBatches(activity)
 
-    this.queue1.observeBlocked(queue1Blocked)
-    this.queue2.observeBlocked(queue2Blocked)
+    this.queue1.observeBlocked(
+      queue1Blocked,
+      activity.queue1.inputBatches > 0 || activity.queue1.handoffBatches > 0,
+    )
+    this.queue2.observeBlocked(
+      queue2Blocked,
+      activity.queue2.inputBatches > 0 || activity.queue2.handoffBatches > 0,
+    )
     if (
       this.config.requestedTps > this.readerCapacityTps ||
       queue1Blocked ||
@@ -591,8 +619,7 @@ export class FixedStepSimulation {
   private get availableRequestSlots(): number {
     return Math.max(
       0,
-      this.config.senderWorkers * REQUEST_SLOTS_PER_SENDER_WORKER -
-        this.inFlight.length,
+      this.config.senderWorkers - this.inFlight.length,
     )
   }
 

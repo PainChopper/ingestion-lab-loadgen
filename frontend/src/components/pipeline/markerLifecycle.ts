@@ -5,17 +5,17 @@ import {
 } from './queueCableGeometry'
 
 export const MAX_OCCUPANCY_MARKERS = QUEUE_CABLE_MAX_MARKERS
-export const MAX_FLOW_MARKERS = 3
-export const MAX_HANDOFF_MARKERS = 3
+export const MAX_FLOW_MARKERS = 12
 export const MAX_HTTP_ATTEMPT_MARKERS = 3
 
 const QUEUE_MARKER_SPEED = 190
+const FLOW_MARKER_SCALE_TPS = 250_000
 const HTTP_MARKER_SPEED = 100
 const HTTP_OUTCOME_PULSE_MS = 520
 const HTTP_ARRIVAL_PHASE = 0.94
 const MAX_RETIRING_OCCUPANCY_MARKERS = 2
 
-export type QueueMarkerKind = 'occupancy' | 'flow' | 'handoff'
+export type QueueMarkerKind = 'occupancy' | 'flow'
 export type MarkerSlotState = 'inactive' | 'active' | 'retiring'
 export type HttpOutcome = 'success' | 'error'
 
@@ -51,14 +51,12 @@ export interface QueueMarkerTelemetry {
   readonly id: QueueId
   readonly depthBatches: number | null
   readonly appliedCapacity: number
+  readonly throughputTps: number | null
   readonly flowActive: boolean
-  readonly handoffBatches: number
-  readonly handoffBatchesTotal: number
   readonly enqueuedBatchesTotal: number
   readonly dequeuedBatchesTotal: number
   readonly occupancyTravelLength: number
   readonly flowTravelLength: number
-  readonly handoffTravelLength: number
 }
 
 export interface HttpMarkerTelemetry {
@@ -97,8 +95,6 @@ interface MutableQueuePool {
   flowActive: boolean
   occupancyTravelLength: number
   flowTravelLength: number
-  handoffTravelLength: number
-  previousHandoffTotal: number
   previousEnqueuedTotal: number
   previousDequeuedTotal: number
 }
@@ -132,6 +128,17 @@ export function getOccupancyMarkerTarget(
   )
 }
 
+export function getFlowMarkerTarget(throughputTps: number | null): number {
+  if (throughputTps === null || !Number.isFinite(throughputTps)) return 0
+  if (throughputTps <= 0) return 0
+
+  return clamp(
+    Math.ceil((throughputTps / FLOW_MARKER_SCALE_TPS) * MAX_FLOW_MARKERS),
+    1,
+    MAX_FLOW_MARKERS,
+  )
+}
+
 function createQueueSlots(
   queueId: QueueId,
   kind: QueueMarkerKind,
@@ -154,15 +161,12 @@ function createQueuePool(id: QueueId): MutableQueuePool {
     slots: [
       ...createQueueSlots(id, 'occupancy', MAX_OCCUPANCY_MARKERS),
       ...createQueueSlots(id, 'flow', MAX_FLOW_MARKERS),
-      ...createQueueSlots(id, 'handoff', MAX_HANDOFF_MARKERS),
     ],
     initialized: false,
     familySequence: 0,
     flowActive: false,
     occupancyTravelLength: 1,
     flowTravelLength: 1,
-    handoffTravelLength: 1,
-    previousHandoffTotal: 0,
     previousEnqueuedTotal: 0,
     previousDequeuedTotal: 0,
   }
@@ -227,7 +231,6 @@ function resetQueuePool(pool: MutableQueuePool): void {
   pool.slots.forEach(deactivateQueueSlot)
   pool.initialized = false
   pool.flowActive = false
-  pool.previousHandoffTotal = 0
   pool.previousEnqueuedTotal = 0
   pool.previousDequeuedTotal = 0
 }
@@ -310,11 +313,24 @@ function reconcileOccupancy(
 
 function reconcileFlow(pool: MutableQueuePool, desiredCount: number): void {
   const current = activeSlots(pool, 'flow')
+  if (current.length === desiredCount) return
+
   if (current.length < desiredCount) {
-    for (let index = current.length; index < desiredCount; index += 1) {
-      activateQueueSlot(pool, 'flow', 0, (index - current.length) * 480)
+    const retiring = visibleSlots(pool, 'flow')
+      .filter((slot) => slot.state === 'retiring')
+    const reviveCount = Math.min(desiredCount - current.length, retiring.length)
+    for (let index = 0; index < reviveCount; index += 1) {
+      retiring[index].state = 'active'
+      retiring[index].launchDelayMs = 0
     }
-    return
+
+    for (
+      let index = current.length + reviveCount;
+      index < desiredCount;
+      index += 1
+    ) {
+      activateQueueSlot(pool, 'flow', 0)
+    }
   }
 
   if (current.length > desiredCount) {
@@ -325,23 +341,13 @@ function reconcileFlow(pool: MutableQueuePool, desiredCount: number): void {
         slot.launchDelayMs = 0
       })
   }
-}
 
-function spawnHandoffMarkers(
-  pool: MutableQueuePool,
-  count: number,
-): void {
-  const transientVisible = pool.slots.filter(
-    (slot) => slot.kind !== 'occupancy' && slot.state !== 'inactive',
-  ).length
-  const available = Math.min(
-    1 - visibleSlots(pool, 'handoff').length,
-    2 - transientVisible,
-  )
-  const spawnCount = Math.min(Math.max(0, available), positiveInteger(count))
-  for (let index = 0; index < spawnCount; index += 1) {
-    const slot = activateQueueSlot(pool, 'handoff', 0.16 + index * 0.04)
-    if (slot !== null) slot.state = 'retiring'
+  const active = activeSlots(pool, 'flow')
+  if (active.length === 0) return
+
+  const anchorPhase = current[0]?.phase ?? 0
+  for (let index = 0; index < active.length; index += 1) {
+    active[index].phase = (anchorPhase + index / active.length) % 1
   }
 }
 
@@ -350,8 +356,7 @@ function queueTotalsReset(
   telemetry: QueueMarkerTelemetry,
 ): boolean {
   return telemetry.enqueuedBatchesTotal < pool.previousEnqueuedTotal ||
-    telemetry.dequeuedBatchesTotal < pool.previousDequeuedTotal ||
-    telemetry.handoffBatchesTotal < pool.previousHandoffTotal
+    telemetry.dequeuedBatchesTotal < pool.previousDequeuedTotal
 }
 
 function queueSnapshot(pool: MutableQueuePool): readonly QueueMarkerSlotSnapshot[] {
@@ -435,7 +440,6 @@ export class MarkerLifecycleController {
 
     pool.occupancyTravelLength = Math.max(1, telemetry.occupancyTravelLength)
     pool.flowTravelLength = Math.max(1, telemetry.flowTravelLength)
-    pool.handoffTravelLength = Math.max(1, telemetry.handoffTravelLength)
     const occupancyTarget = getOccupancyMarkerTarget(
       telemetry.depthBatches,
       telemetry.appliedCapacity,
@@ -444,22 +448,12 @@ export class MarkerLifecycleController {
 
     if (this.runState !== 'paused') {
       pool.flowActive = this.runState === 'running' && telemetry.flowActive
-      const desiredFlowCount = pool.flowActive ? 1 : 0
+      const desiredFlowCount = pool.flowActive
+        ? getFlowMarkerTarget(telemetry.throughputTps)
+        : 0
       reconcileFlow(pool, desiredFlowCount)
-
-      const handoffDelta = Math.max(
-        0,
-        telemetry.handoffBatchesTotal - pool.previousHandoffTotal,
-      )
-      if (pool.flowActive && telemetry.appliedCapacity === 0) {
-        const visibleHandoffs = visibleSlots(pool, 'handoff').length
-        spawnHandoffMarkers(pool, Math.max(handoffDelta, visibleHandoffs === 0 ? 1 : 0))
-      } else if (handoffDelta > 0 || telemetry.handoffBatches > 0) {
-        spawnHandoffMarkers(pool, Math.max(1, handoffDelta))
-      }
     }
 
-    pool.previousHandoffTotal = telemetry.handoffBatchesTotal
     pool.previousEnqueuedTotal = telemetry.enqueuedBatchesTotal
     pool.previousDequeuedTotal = telemetry.dequeuedBatchesTotal
   }
@@ -485,14 +479,12 @@ export class MarkerLifecycleController {
 
       const travelLength = slot.kind === 'occupancy'
         ? pool.occupancyTravelLength
-        : slot.kind === 'flow'
-          ? pool.flowTravelLength
-          : pool.handoffTravelLength
+        : pool.flowTravelLength
       slot.phase += (QUEUE_MARKER_SPEED * movingMs) / (travelLength * 1000)
       changed = true
       if (slot.phase < 1) continue
 
-      if (slot.state === 'retiring' || slot.kind === 'handoff') {
+      if (slot.state === 'retiring') {
         deactivateQueueSlot(slot)
       } else {
         slot.phase %= 1

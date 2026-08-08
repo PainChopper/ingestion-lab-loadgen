@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { NumericControlSnapshot } from '../../model/loadgen'
-import { getQueueMarkerPathGeometry } from './markerPaths'
+import {
+  FLOW_HANDLE_GAP,
+  FLOW_MARKER_RADIUS,
+  getQueueMarkerPathGeometry,
+  QUEUE_HANDLE_HALF_HEIGHT,
+} from './markerPaths'
 
 function capacityControl(applied: number): NumericControlSnapshot {
   return {
@@ -27,17 +32,30 @@ describe('marker paths', () => {
     expect(geometry.occupancyPath).not.toContain('384 394')
   })
 
-  it('uses a distinct offset actor path and separates flow from handoff', () => {
+  it('uses one actor-to-actor flow path across the full raised cable', () => {
     const geometry = getQueueMarkerPathGeometry(
       'throttler-to-sender',
       capacityControl(100),
     )
 
-    expect(geometry.transientPath).not.toBe(geometry.occupancyPath)
-    expect(geometry.transientPath).toContain('M432 394')
-    expect(geometry.transientPath).toContain('L505 403')
-    expect(geometry.flowEndRatio).toBeLessThan(geometry.handoffStartRatio)
+    expect(geometry.flowPath).not.toBe(geometry.occupancyPath)
+    expect(geometry.flowPath).toContain('M432 394')
+    expect(geometry.flowPath).toContain('L790 394')
+    expect(geometry.flowPath.match(/V/g)).toHaveLength(2)
     expect(geometry.flowLength).toBeGreaterThan(0)
-    expect(geometry.handoffLength).toBeGreaterThan(0)
+  })
+
+  it('keeps the flow marker visibly clear of the capacity handle center', () => {
+    const geometry = getQueueMarkerPathGeometry(
+      'reader-to-throttler',
+      {
+        ...capacityControl(40),
+        pending: 120,
+      },
+    )
+    const markerBottomY = geometry.flowTopY + FLOW_MARKER_RADIUS
+    const handleTopY = geometry.handleCenterY - QUEUE_HANDLE_HALF_HEIGHT
+
+    expect(handleTopY - markerBottomY).toBeGreaterThanOrEqual(FLOW_HANDLE_GAP)
   })
 })

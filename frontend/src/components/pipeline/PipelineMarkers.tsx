@@ -10,6 +10,7 @@ import type {
   QueueMarkerSlotSnapshot,
 } from './markerLifecycle'
 import {
+  FLOW_MARKER_RADIUS,
   getHttpTraversalPath,
   getQueueMarkerPathGeometry,
   HTTP_TRAVERSAL_POINTS,
@@ -29,13 +30,11 @@ function markerRadius(marker: QueueMarkerSlotSnapshot): number {
     case 'occupancy':
       return 4.5
     case 'flow':
-      return 3.5
-    case 'handoff':
-      return 4
+      return FLOW_MARKER_RADIUS
   }
 }
 
-function QueueTransientMarkerPool({
+function QueueFlowMarkerPool({
   markers,
   queue,
 }: {
@@ -46,14 +45,10 @@ function QueueTransientMarkerPool({
 
   return (
     <g className={`pipeline-marker-family ${stateClass(queue.flowState)}`}>
-      {markers.filter((marker) => marker.kind !== 'occupancy').map((marker) => {
-        const distanceRatio = marker.kind === 'flow'
-          ? marker.phase * geometry.flowEndRatio
-          : geometry.handoffStartRatio +
-            marker.phase * (1 - geometry.handoffStartRatio)
+      {markers.filter((marker) => marker.kind === 'flow').map((marker) => {
         const markerStyle = {
-          offsetPath: `path("${geometry.transientPath}")`,
-          offsetDistance: `${distanceRatio * 100}%`,
+          offsetPath: `path("${geometry.flowPath}")`,
+          offsetDistance: `${marker.phase * 100}%`,
         } satisfies CSSProperties
         return (
           <circle
@@ -143,8 +138,8 @@ export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
       data-run-state={snapshot.runState}
     >
       <ActorProcessingSlots />
-      <QueueTransientMarkerPool markers={markers.queue1} queue={snapshot.queue1} />
-      <QueueTransientMarkerPool markers={markers.queue2} queue={snapshot.queue2} />
+      <QueueFlowMarkerPool markers={markers.queue1} queue={snapshot.queue1} />
+      <QueueFlowMarkerPool markers={markers.queue2} queue={snapshot.queue2} />
       <HttpMarkerPool markers={markers.http} />
     </g>
   )

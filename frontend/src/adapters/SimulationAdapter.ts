@@ -21,7 +21,8 @@ import type {
 const TARGET_ENDPOINT = 'http://target:8080/ingest'
 
 const CONTROL_RANGES = Object.freeze({
-  workers: Object.freeze({ min: 1, max: 7, step: 1 }),
+  readerWorkers: Object.freeze({ min: 1, max: 7, step: 1 }),
+  senderWorkers: Object.freeze({ min: 1, max: 32, step: 1 }),
   requestedTps: Object.freeze({ min: 0, max: 250_000, step: 5_000 }),
   queue1Capacity: Object.freeze({ min: 0, max: 12, step: 1 }),
   queue2Capacity: Object.freeze({ min: 0, max: 160, step: 10 }),
@@ -136,7 +137,11 @@ function freezeSnapshot(
     totalTransactions: telemetry.totalTransactions,
     reader: Object.freeze({
       id: 'reader',
-      workers: numericControl(config.readerWorkers, CONTROL_RANGES.workers, 'workers'),
+      workers: numericControl(
+        config.readerWorkers,
+        CONTROL_RANGES.readerWorkers,
+        'workers',
+      ),
       readBatchSize: numericControl(
         config.readBatchSize,
         CONTROL_RANGES.readBatchSize,
@@ -172,7 +177,11 @@ function freezeSnapshot(
     }),
     sender: Object.freeze({
       id: 'sender',
-      workers: numericControl(config.senderWorkers, CONTROL_RANGES.workers, 'workers'),
+      workers: numericControl(
+        config.senderWorkers,
+        CONTROL_RANGES.senderWorkers,
+        'workers',
+      ),
       httpBatchSize: numericControl(
         config.httpBatchSize,
         CONTROL_RANGES.httpBatchSize,
@@ -315,9 +324,12 @@ export class SimulationAdapter implements LoadgenAdapter {
         if (!Number.isFinite(command.value)) {
           return this.rejectInvalidNumber(commandId, command, 'worker count')
         }
+        const workerRange = command.actor === 'reader'
+          ? CONTROL_RANGES.readerWorkers
+          : CONTROL_RANGES.senderWorkers
         changed = this.updateConfig(
           command.actor === 'reader' ? 'readerWorkers' : 'senderWorkers',
-          normalizeNumericValue(command.value, CONTROL_RANGES.workers),
+          normalizeNumericValue(command.value, workerRange),
         )
         break
       case 'set-queue-capacity': {

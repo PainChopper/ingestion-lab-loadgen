@@ -18,16 +18,19 @@ interface QueueTraversalGeometry {
 
 export interface QueueMarkerPathGeometry {
   readonly occupancyPath: string
-  readonly transientPath: string
+  readonly flowPath: string
   readonly occupancyLength: number
   readonly flowLength: number
-  readonly handoffLength: number
-  readonly flowEndRatio: number
-  readonly handoffStartRatio: number
+  readonly flowTopY: number
+  readonly handleCenterY: number
 }
 
-const TRANSIENT_OFFSET_Y = 12
-const HANDLE_CLEARANCE = 30
+export const FLOW_MARKER_RADIUS = 3.5
+export const QUEUE_HANDLE_HALF_HEIGHT = 12
+export const FLOW_HANDLE_GAP = 4
+
+const FLOW_OFFSET_Y =
+  QUEUE_HANDLE_HALF_HEIGHT + FLOW_MARKER_RADIUS + FLOW_HANDLE_GAP
 
 const QUEUE_TRAVERSALS: Readonly<Record<QueueId, QueueTraversalGeometry>> = {
   'reader-to-throttler': {
@@ -77,8 +80,11 @@ function polylineLength(points: readonly Point[]): number {
   return length
 }
 
-function appliedTopY(control: NumericControlSnapshot, baseline: number): number {
-  const capacity = getQueueCapacityPresentation(control).applied
+function capacityY(
+  capacity: number,
+  control: NumericControlSnapshot,
+  baseline: number,
+): number {
   return capacityToCableY(
     capacity,
     control,
@@ -92,30 +98,33 @@ export function getQueueMarkerPathGeometry(
   control: NumericControlSnapshot,
 ): QueueMarkerPathGeometry {
   const geometry = QUEUE_TRAVERSALS[queueId]
-  const occupancyTopY = appliedTopY(control, geometry.start.y)
+  const capacity = getQueueCapacityPresentation(control)
+  const occupancyTopY = capacityY(
+    capacity.applied,
+    control,
+    geometry.start.y,
+  )
+  const handleCenterY = capacityY(
+    capacity.candidate,
+    control,
+    geometry.start.y,
+  )
   const occupancyLength = geometry.end.x - geometry.start.x +
     2 * Math.max(0, geometry.start.y - occupancyTopY)
-  const transientStart = {
+  const flowStart = {
     x: geometry.start.x,
-    y: geometry.start.y - TRANSIENT_OFFSET_Y,
+    y: geometry.start.y - FLOW_OFFSET_Y,
   }
-  const transientEnd = {
+  const flowEnd = {
     x: geometry.end.x,
-    y: geometry.end.y - TRANSIENT_OFFSET_Y,
+    y: geometry.end.y - FLOW_OFFSET_Y,
   }
-  const transientTopY = occupancyTopY - TRANSIENT_OFFSET_Y
-  const transientCableLength = transientEnd.x - transientStart.x +
-    2 * Math.max(0, transientStart.y - transientTopY)
-  const prefixLength = polylineLength([...geometry.upstream, transientStart])
-  const suffixLength = polylineLength([transientEnd, ...geometry.downstream])
-  const totalLength = prefixLength + transientCableLength + suffixLength
-  const handleCenterDistance = prefixLength + transientCableLength / 2
-  const flowLength = Math.max(1, handleCenterDistance - HANDLE_CLEARANCE)
-  const handoffStartDistance = Math.min(
-    totalLength - 1,
-    handleCenterDistance + HANDLE_CLEARANCE,
-  )
-  const handoffLength = Math.max(1, totalLength - handoffStartDistance)
+  const flowTopY = Math.min(occupancyTopY, handleCenterY) - FLOW_OFFSET_Y
+  const flowCableLength = flowEnd.x - flowStart.x +
+    2 * Math.max(0, flowStart.y - flowTopY)
+  const prefixLength = polylineLength([...geometry.upstream, flowStart])
+  const suffixLength = polylineLength([flowEnd, ...geometry.downstream])
+  const flowLength = prefixLength + flowCableLength + suffixLength
 
   return {
     occupancyPath: buildQueueCablePath(
@@ -123,18 +132,17 @@ export function getQueueMarkerPathGeometry(
       geometry.end,
       occupancyTopY,
     ),
-    transientPath: buildQueueTraversalPath(
+    flowPath: buildQueueTraversalPath(
       geometry.upstream,
-      transientStart,
-      transientEnd,
-      transientTopY,
+      flowStart,
+      flowEnd,
+      flowTopY,
       geometry.downstream,
     ),
     occupancyLength,
     flowLength,
-    handoffLength,
-    flowEndRatio: flowLength / totalLength,
-    handoffStartRatio: handoffStartDistance / totalLength,
+    flowTopY,
+    handleCenterY,
   }
 }
 

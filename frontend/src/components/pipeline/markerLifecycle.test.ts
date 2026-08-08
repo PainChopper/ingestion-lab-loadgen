@@ -3,9 +3,9 @@ import type { QueueId, RunState } from '../../model/loadgen'
 import {
   MarkerLifecycleController,
   MAX_FLOW_MARKERS,
-  MAX_HANDOFF_MARKERS,
   MAX_HTTP_ATTEMPT_MARKERS,
   MAX_OCCUPANCY_MARKERS,
+  getFlowMarkerTarget,
   getOccupancyMarkerTarget,
 } from './markerLifecycle'
 import type {
@@ -21,14 +21,12 @@ function queueTelemetry(
     id,
     depthBatches: 2,
     appliedCapacity: 4,
+    throughputTps: 50_000,
     flowActive: true,
-    handoffBatches: 0,
-    handoffBatchesTotal: 0,
     enqueuedBatchesTotal: 10,
     dequeuedBatchesTotal: 8,
     occupancyTravelLength: 400,
     flowTravelLength: 180,
-    handoffTravelLength: 180,
     ...overrides,
   }
 }
@@ -76,7 +74,7 @@ describe('MarkerLifecycleController', () => {
     controller.reconcile(initial)
     const same = controller.getSnapshot().queue1
     expect(same).toHaveLength(
-      MAX_OCCUPANCY_MARKERS + MAX_FLOW_MARKERS + MAX_HANDOFF_MARKERS,
+      MAX_OCCUPANCY_MARKERS + MAX_FLOW_MARKERS,
     )
     expect(same.map((slot) => slot.slotId)).toEqual(before.map((slot) => slot.slotId))
     expect(
@@ -89,7 +87,6 @@ describe('MarkerLifecycleController', () => {
         depthBatches: 4,
         occupancyTravelLength: 720,
         flowTravelLength: 260,
-        handoffTravelLength: 260,
       },
     }))
     const grown = controller.getSnapshot().queue1
@@ -103,7 +100,6 @@ describe('MarkerLifecycleController', () => {
         depthBatches: 1,
         occupancyTravelLength: 280,
         flowTravelLength: 140,
-        handoffTravelLength: 140,
       },
     }))
     const reduced = controller.getSnapshot().queue1
@@ -142,11 +138,12 @@ describe('MarkerLifecycleController', () => {
     ).toHaveLength(0)
   })
 
-  it('shows flow and handoff markers for active capacity zero queues', () => {
+  it('shows many continuous flow markers at 250K TPS with zero capacity', () => {
     const controller = new MarkerLifecycleController(telemetry({
       queue1: {
         depthBatches: 0,
         appliedCapacity: 0,
+        throughputTps: 250_000,
         flowActive: true,
       },
     }))
@@ -155,12 +152,7 @@ describe('MarkerLifecycleController', () => {
     expect(queue.filter((slot) => slot.kind === 'occupancy' && slot.state !== 'inactive'))
       .toHaveLength(0)
     expect(queue.filter((slot) => slot.kind === 'flow' && slot.state !== 'inactive').length)
-      .toBeGreaterThanOrEqual(1)
-    expect(queue.filter((slot) => slot.kind === 'handoff' && slot.state !== 'inactive').length)
-      .toBeGreaterThanOrEqual(1)
-    expect(queue.filter(
-      (slot) => slot.kind !== 'occupancy' && slot.state !== 'inactive',
-    ).length).toBeLessThanOrEqual(2)
+      .toBe(MAX_FLOW_MARKERS)
   })
 
   it('freezes exact phases while paused and continues them on resume', () => {
@@ -208,25 +200,26 @@ describe('MarkerLifecycleController', () => {
       .toHaveLength(getOccupancyMarkerTarget(2, 4))
   })
 
-  it('carries handoff and next-stage markers in the same snapshot', () => {
-    const controller = new MarkerLifecycleController(telemetry())
-    controller.reconcile(telemetry({
-      queue1: {
-        handoffBatchesTotal: 1,
-        dequeuedBatchesTotal: 9,
-      },
-      queue2: {
-        enqueuedBatchesTotal: 11,
-      },
+  it('keeps the same flow slot active as it loops across the full path', () => {
+    const controller = new MarkerLifecycleController(telemetry({
+      queue1: { throughputTps: 1, flowTravelLength: 190 },
     }))
-    const snapshot = controller.getSnapshot()
+    const before = controller.getSnapshot().queue1.find(
+      (slot) => slot.kind === 'flow' && slot.state === 'active',
+    )
 
-    expect(snapshot.queue1.some(
-      (slot) => slot.kind === 'handoff' && slot.state !== 'inactive',
-    )).toBe(true)
-    expect(snapshot.queue2.some(
-      (slot) => slot.kind === 'flow' && slot.state !== 'inactive',
-    )).toBe(true)
+    controller.advance(900)
+    const nearEnd = controller.getSnapshot().queue1.find(
+      (slot) => slot.slotId === before?.slotId,
+    )
+    controller.advance(200)
+    const looped = controller.getSnapshot().queue1.find(
+      (slot) => slot.slotId === before?.slotId,
+    )
+
+    expect(nearEnd?.phase).toBeGreaterThan(0.8)
+    expect(looped).toMatchObject({ slotId: before?.slotId, state: 'active' })
+    expect(looped?.phase).toBeLessThan(nearEnd?.phase ?? 0)
   })
 
   it('scales occupancy monotonically by depth and applied capacity', () => {
@@ -237,6 +230,16 @@ describe('MarkerLifecycleController', () => {
     expect(getOccupancyMarkerTarget(50, 100)).toBe(12)
     expect(getOccupancyMarkerTarget(100, 100)).toBe(MAX_OCCUPANCY_MARKERS)
     expect(getOccupancyMarkerTarget(4, 0)).toBe(0)
+  })
+
+  it('scales flow density monotonically from measured throughput', () => {
+    expect(getFlowMarkerTarget(null)).toBe(0)
+    expect(getFlowMarkerTarget(0)).toBe(0)
+    expect(getFlowMarkerTarget(5_000)).toBe(1)
+    expect(getFlowMarkerTarget(50_000)).toBe(3)
+    expect(getFlowMarkerTarget(125_000)).toBe(6)
+    expect(getFlowMarkerTarget(250_000)).toBe(MAX_FLOW_MARKERS)
+    expect(getFlowMarkerTarget(500_000)).toBe(MAX_FLOW_MARKERS)
   })
 
   it('bounds retiring occupancy and revives its identities on growth', () => {
@@ -270,25 +273,41 @@ describe('MarkerLifecycleController', () => {
     )).toHaveLength(getOccupancyMarkerTarget(50, 100))
   })
 
-  it('limits concurrent flow and handoff representatives to two per queue', () => {
+  it('scales flow count by throughput with stable ids and even phases', () => {
     const controller = new MarkerLifecycleController(telemetry({
-      queue1: { appliedCapacity: 0, depthBatches: 0 },
+      queue1: {
+        appliedCapacity: 0,
+        depthBatches: 0,
+        throughputTps: 250_000,
+      },
     }))
+    const high = controller.getSnapshot().queue1.filter(
+      (slot) => slot.kind === 'flow' && slot.state === 'active',
+    )
 
-    for (let total = 1; total <= 8; total += 1) {
-      controller.reconcile(telemetry({
-        queue1: {
-          appliedCapacity: 0,
-          depthBatches: 0,
-          handoffBatches: 4,
-          handoffBatchesTotal: total,
-          enqueuedBatchesTotal: 10 + total,
-          dequeuedBatchesTotal: 8 + total,
-        },
-      }))
-      expect(controller.getSnapshot().queue1.filter(
-        (slot) => slot.kind !== 'occupancy' && slot.state !== 'inactive',
-      ).length).toBeLessThanOrEqual(2)
+    expect(high).toHaveLength(MAX_FLOW_MARKERS)
+    expect(high.map((slot) => slot.phase)).toEqual(
+      high.map((_, index) => index / MAX_FLOW_MARKERS),
+    )
+
+    controller.reconcile(telemetry({
+      queue1: {
+        appliedCapacity: 0,
+        depthBatches: 0,
+        throughputTps: 50_000,
+      },
+    }))
+    const low = controller.getSnapshot().queue1.filter(
+      (slot) => slot.kind === 'flow' && slot.state === 'active',
+    )
+
+    expect(low).toHaveLength(getFlowMarkerTarget(50_000))
+    expect(low.map((slot) => slot.slotId)).toEqual(
+      high.slice(0, low.length).map((slot) => slot.slotId),
+    )
+    for (let index = 1; index < low.length; index += 1) {
+      expect(low[index].phase - low[index - 1].phase)
+        .toBeCloseTo(1 / low.length)
     }
   })
 
