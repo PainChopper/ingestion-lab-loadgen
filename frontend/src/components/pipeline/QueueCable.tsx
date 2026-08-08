@@ -11,14 +11,15 @@ import type {
 } from '../../model/loadgen'
 import { formatInteger, formatRate } from './formatters'
 import type { Point } from './geometry'
+import type { QueueMarkerSlotSnapshot } from './markerLifecycle'
 import {
   buildQueueCablePath,
   capacityFromVerticalDrag,
   capacityToCableY,
   getCapacityTicks,
   getQueueCapacityPresentation,
-  getQueueMarkerCount,
   normalizeCapacity,
+  QUEUE_CABLE_MAX_LIFT,
 } from './queueCableGeometry'
 
 interface QueueCableProps {
@@ -26,12 +27,10 @@ interface QueueCableProps {
   start: Point
   end: Point
   selected: boolean
+  markers: readonly QueueMarkerSlotSnapshot[]
   onSelect: (id: SelectableId) => void
   onCapacityChange: (queue: QueueId, value: number) => void
 }
-
-const MAX_CABLE_LIFT = 240
-const MARKER_SPEED = 28
 
 interface DragSession {
   readonly pointerId: number
@@ -61,6 +60,7 @@ export function QueueCable({
   start,
   end,
   selected,
+  markers,
   onSelect,
   onCapacityChange,
 }: QueueCableProps) {
@@ -72,31 +72,17 @@ export function QueueCable({
     capacity.applied,
     control,
     start.y,
-    MAX_CABLE_LIFT,
+    QUEUE_CABLE_MAX_LIFT,
   )
   const candidateTopY = capacityToCableY(
     capacity.candidate,
     control,
     start.y,
-    MAX_CABLE_LIFT,
+    QUEUE_CABLE_MAX_LIFT,
   )
   const path = buildQueueCablePath(start, end, appliedTopY)
-  const pathLength = end.x - start.x + 2 * (start.y - appliedTopY)
-  const markerDurationSeconds = pathLength / MARKER_SPEED
   const centerX = (start.x + end.x) / 2
-  const ticks = getCapacityTicks(control, start.y, MAX_CABLE_LIFT)
-  const disconnected = snapshot.flowState === 'connection-error'
-  const markerCount = getQueueMarkerCount(
-    snapshot.depthBatches,
-    capacity.applied,
-    snapshot.throughputTps,
-    snapshot.flowState,
-  )
-  const moving =
-    snapshot.throughputTps !== null &&
-    snapshot.throughputTps > 0 &&
-    snapshot.flowState !== 'stopped' &&
-    !disconnected
+  const ticks = getCapacityTicks(control, start.y, QUEUE_CABLE_MAX_LIFT)
   const disabled = control.applyMode === 'unavailable'
   const depth = formatInteger(snapshot.depthBatches)
 
@@ -108,7 +94,7 @@ export function QueueCable({
       session.capacity,
       pointerYInSvg(event) - session.pointerY,
       control,
-      MAX_CABLE_LIFT,
+      QUEUE_CABLE_MAX_LIFT,
     )
 
   const handlePointerDown = (event: PointerEvent<SVGGElement>) => {
@@ -205,7 +191,7 @@ export function QueueCable({
       <g className="pipeline-queue-scale" aria-hidden="true">
         <line
           x1={centerX}
-          y1={start.y - MAX_CABLE_LIFT}
+          y1={start.y - QUEUE_CABLE_MAX_LIFT}
           x2={centerX}
           y2={start.y}
           className="pipeline-queue-scale__line"
@@ -235,23 +221,29 @@ export function QueueCable({
       <path d={path} className="pipeline-link-hit-area" aria-hidden="true" />
       <path d={path} className="pipeline-queue-cable" />
 
-      <g aria-hidden="true">
-        {Array.from({ length: markerCount }, (_, index) => {
-          const markerStyle = {
-            offsetPath: `path("${path}")`,
-            animationDuration: `${markerDurationSeconds}s`,
-            animationDelay: `${(-index * markerDurationSeconds) / markerCount}s`,
-          } satisfies CSSProperties
-
-          return (
-            <circle
-              key={index}
-              r="4.5"
-              className={`pipeline-queue-marker pipeline-queue-marker--${moving ? 'moving' : 'frozen'}`}
-              style={markerStyle}
-            />
-          )
-        })}
+      <g className="pipeline-queue-occupancy" aria-hidden="true">
+        {markers
+          .filter((marker) => marker.kind === 'occupancy')
+          .map((marker) => {
+            const markerStyle = {
+              offsetPath: `path("${path}")`,
+              offsetDistance: `${marker.phase * 100}%`,
+            } satisfies CSSProperties
+            return (
+              <circle
+                key={marker.slotId}
+                r="4.5"
+                visibility={marker.state === 'inactive' ? 'hidden' : 'visible'}
+                className={`pipeline-marker pipeline-marker--occupancy pipeline-marker--${marker.state}${marker.queued ? ' pipeline-marker--queued' : ''}`}
+                style={markerStyle}
+                data-marker-id={marker.slotId}
+                data-family-id={marker.familyId ?? ''}
+                data-marker-kind={marker.kind}
+                data-marker-state={marker.state}
+                data-marker-phase={marker.phase.toFixed(4)}
+              />
+            )
+          })}
       </g>
 
       <g

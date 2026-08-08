@@ -4,6 +4,7 @@ import type {
   SelectableId,
 } from '../../model/loadgen'
 import { HttpLink } from './HttpLink'
+import { PipelineMarkers } from './PipelineMarkers'
 import { PIPELINE_VIEW_BOX_VALUE } from './geometry'
 import { ACTOR_GEOMETRY } from './geometry'
 import { QueueCable } from './QueueCable'
@@ -11,6 +12,7 @@ import { ReaderActor } from './ReaderActor'
 import { SenderActor } from './SenderActor'
 import { TargetActor } from './TargetActor'
 import { ThrottlerActor } from './ThrottlerActor'
+import { usePipelineMarkerLifecycle } from './usePipelineMarkerLifecycle'
 import type { WorkerActorId } from './WorkerActor'
 import './PipelineSvg.css'
 
@@ -29,6 +31,8 @@ export function PipelineSvg({
   onWorkerCountChange,
   onQueueCapacityChange,
 }: PipelineSvgProps) {
+  const markers = usePipelineMarkerLifecycle(snapshot)
+
   return (
     <svg
       className="pipeline-svg"
@@ -37,11 +41,18 @@ export function PipelineSvg({
       role="group"
       aria-label="Reader to target load generation pipeline"
     >
+      <HttpLink
+        snapshot={snapshot.http}
+        selected={selectedId === snapshot.http.id}
+        onSelect={onSelect}
+      />
+      <PipelineMarkers snapshot={snapshot} markers={markers} />
       <QueueCable
         snapshot={snapshot.queue1}
         start={ACTOR_GEOMETRY.reader.ports.output}
         end={ACTOR_GEOMETRY.throttler.ports.input}
         selected={selectedId === snapshot.queue1.id}
+        markers={markers.queue1}
         onSelect={onSelect}
         onCapacityChange={onQueueCapacityChange}
       />
@@ -50,6 +61,7 @@ export function PipelineSvg({
         start={ACTOR_GEOMETRY.throttler.ports.output}
         end={ACTOR_GEOMETRY.sender.ports.input}
         selected={selectedId === snapshot.queue2.id}
+        markers={markers.queue2}
         onSelect={onSelect}
         onCapacityChange={onQueueCapacityChange}
       />
@@ -69,11 +81,6 @@ export function PipelineSvg({
         selected={selectedId === snapshot.sender.id}
         onSelect={onSelect}
         onWorkerCountChange={onWorkerCountChange}
-      />
-      <HttpLink
-        snapshot={snapshot.http}
-        selected={selectedId === snapshot.http.id}
-        onSelect={onSelect}
       />
       <TargetActor
         snapshot={snapshot.target}

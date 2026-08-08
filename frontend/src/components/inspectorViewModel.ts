@@ -67,7 +67,18 @@ function queueViewModel(queue: QueueSnapshot): InspectorViewModel {
       },
       ...capacityChange,
       { label: 'Queued tx', value: formatInteger(queue.queuedTransactions) },
-      { label: 'Blocked time', value: formatMilliseconds(queue.blockedMs) },
+      {
+        label: 'Current blocked senders',
+        value: formatInteger(queue.blockedSenders),
+      },
+      {
+        label: 'Oldest current block',
+        value: formatMilliseconds(queue.oldestBlockedSenderMs),
+      },
+      {
+        label: 'Total blocked time',
+        value: formatMilliseconds(queue.blockedMs),
+      },
       { label: 'Trend', value: formatStateLabel(queue.trend) },
       { label: 'Flow state', value: formatStateLabel(queue.flowState) },
     ],

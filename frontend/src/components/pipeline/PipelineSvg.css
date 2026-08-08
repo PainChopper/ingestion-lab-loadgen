@@ -284,21 +284,108 @@
   font-variant-numeric: tabular-nums;
 }
 
-.pipeline-queue-marker {
+.pipeline-marker-layer {
+  pointer-events: none;
+}
+
+.pipeline-marker-family {
+  color: var(--green);
+}
+
+.pipeline-marker-family--near-limit {
+  color: var(--yellow);
+}
+
+.pipeline-marker-family--backpressure,
+.pipeline-marker-family--connection-error {
+  color: var(--red);
+}
+
+.pipeline-marker-family--stopped {
+  color: var(--muted);
+}
+
+.pipeline-marker,
+.pipeline-http-marker {
   fill: currentColor;
   stroke: var(--navy-950);
   stroke-width: 1.5;
   offset-rotate: 0deg;
-  animation: pipeline-queue-marker-travel 12s linear infinite;
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-marker--moving {
-  animation-play-state: running;
+.pipeline-marker--occupancy {
+  opacity: 0.92;
 }
 
-.pipeline-queue-marker--frozen {
-  animation-play-state: paused;
+.pipeline-marker--flow {
+  filter: drop-shadow(0 0 2px currentColor);
+}
+
+.pipeline-marker--handoff {
+  fill: var(--navy-850);
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.pipeline-marker--queued {
+  opacity: 0.58;
+  stroke: currentColor;
+}
+
+.pipeline-marker--retiring {
+  opacity: 0.76;
+}
+
+.pipeline-http-marker {
+  color: var(--green);
+  filter: drop-shadow(0 0 2px currentColor);
+}
+
+.pipeline-http-marker--success {
+  color: var(--green);
+}
+
+.pipeline-http-marker--error {
+  color: var(--red);
+}
+
+.pipeline-target-outcome {
+  fill: none;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-target-outcome--success {
+  stroke: var(--green);
+}
+
+.pipeline-target-outcome--error {
+  stroke: var(--red);
+}
+
+.pipeline-processing-slot {
+  fill: rgba(6, 21, 34, 0.88);
+  stroke-width: 1.4;
+  opacity: 0.82;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-processing-slot--reader {
+  stroke: var(--cyan);
+}
+
+.pipeline-processing-slot--throttler,
+.pipeline-processing-slot--sender {
+  stroke: var(--yellow);
+}
+
+.pipeline-processing-slot--target {
+  stroke: var(--purple);
+}
+
+.pipeline-marker-layer[data-run-state='running'] .pipeline-processing-slot--reader {
+  animation: pipeline-processing-pulse 1.8s ease-in-out infinite;
 }
 
 .pipeline-queue-handle {
@@ -360,13 +447,14 @@
   fill: var(--yellow);
 }
 
-@keyframes pipeline-queue-marker-travel {
-  from {
-    offset-distance: 0%;
+@keyframes pipeline-processing-pulse {
+  0%,
+  100% {
+    opacity: 0.52;
   }
 
-  to {
-    offset-distance: 100%;
+  50% {
+    opacity: 1;
   }
 }
 
@@ -375,7 +463,7 @@
     transition: none;
   }
 
-  .pipeline-queue-marker {
-    animation-play-state: paused;
+  .pipeline-processing-slot--reader {
+    animation: none !important;
   }
 }

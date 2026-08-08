@@ -65,7 +65,7 @@ describe('queue cable capacity geometry', () => {
       expectedCandidate: 0,
       expectedState: 'pending',
       expectedY: 335,
-      expectedMarkers: 12,
+      expectedMarkers: 4,
     },
     {
       name: 'keeps applied 12 while a decrease to 4 is pending at depth 12',
@@ -117,7 +117,7 @@ describe('queue cable capacity geometry', () => {
       expectedY,
     )
     expect(
-      getQueueMarkerCount(depth, presentation.applied, 0, 'normal'),
+      getQueueMarkerCount(depth, presentation.applied),
     ).toBe(expectedMarkers)
   })
 
@@ -152,22 +152,35 @@ describe('queue cable capacity geometry', () => {
     expect(largeTicks).toHaveLength(17)
   })
 
-  it('shows one marker for active unbuffered handoff', () => {
-    expect(getQueueMarkerCount(0, 0, 500, 'normal')).toBe(1)
-  })
-
-  it('shows no marker for an idle empty queue', () => {
-    expect(getQueueMarkerCount(0, 0, 0, 'normal')).toBe(0)
+  it('keeps unbuffered occupancy empty because handoff markers are separate', () => {
+    expect(getQueueMarkerCount(4, 0)).toBe(0)
+    expect(getQueueMarkerCount(0, 0)).toBe(0)
   })
 
   it('bounds buffered occupancy markers by queue fill ratio', () => {
-    expect(getQueueMarkerCount(1, 4, 0, 'normal')).toBe(3)
-    expect(getQueueMarkerCount(3, 4, 0, 'normal')).toBe(9)
-    expect(getQueueMarkerCount(100, 100, 0, 'normal')).toBe(12)
+    expect(getQueueMarkerCount(4, 4)).toBe(4)
+    expect(getQueueMarkerCount(4, 12)).toBe(4)
+    expect(getQueueMarkerCount(4, 100)).toBe(1)
+    expect(getQueueMarkerCount(15, 100)).toBe(4)
+    expect(getQueueMarkerCount(50, 100)).toBe(12)
+    expect(getQueueMarkerCount(100, 100)).toBe(24)
   })
 
-  it('keeps queued markers when the queue is stopped', () => {
-    expect(getQueueMarkerCount(3, 4, 0, 'stopped')).toBe(9)
-    expect(getQueueMarkerCount(3, 0, 0, 'stopped')).toBe(12)
+  it('never increases occupancy when capacity grows at fixed depth', () => {
+    const capacities = [1, 2, 3, 4, 5, 8, 12, 16, 24, 50, 100, 250]
+
+    for (const depth of [1, 4, 8, 15, 24, 50, 100]) {
+      const targets = capacities.map((capacity) =>
+        getQueueMarkerCount(depth, capacity),
+      )
+
+      for (const [index, target] of targets.entries()) {
+        expect(target).toBeLessThanOrEqual(depth)
+        expect(target).toBeLessThanOrEqual(24)
+        if (index > 0) {
+          expect(target).toBeLessThanOrEqual(targets[index - 1])
+        }
+      }
+    }
   })
 })

@@ -17,11 +17,7 @@ export function ThrottlerActor({
 }: ThrottlerActorProps) {
   const geometry = ACTOR_GEOMETRY.throttler
   const requestedTps = snapshot.requestedTps.applied
-  const barrierAngle = getBarrierAngle(
-    requestedTps,
-    snapshot.admittedTps,
-    snapshot.state,
-  )
+  const barrierAngle = getBarrierAngle(snapshot.requestedTps)
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
