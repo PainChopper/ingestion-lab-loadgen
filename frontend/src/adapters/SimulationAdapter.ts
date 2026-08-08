@@ -1,0 +1,510 @@
+import type { LoadgenAdapter, LoadgenSnapshotListener } from './LoadgenAdapter'
+import type {
+  AdapterError,
+  CommandReceipt,
+  LoadgenCommand,
+  LoadgenSnapshot,
+  NumericControlSnapshot,
+  RunState,
+} from '../model/loadgen'
+import {
+  FIXED_STEP_MS,
+  FixedStepSimulation,
+  SNAPSHOT_INTERVAL_MS,
+} from '../model/simulation'
+import type {
+  CapacityTelemetry,
+  QueueTelemetry,
+  SimulationTelemetry,
+} from '../model/simulation'
+
+const TARGET_ENDPOINT = 'http://target:8080/ingest'
+
+const CONTROL_RANGES = Object.freeze({
+  workers: Object.freeze({ min: 1, max: 7, step: 1 }),
+  requestedTps: Object.freeze({ min: 0, max: 250_000, step: 5_000 }),
+  queue1Capacity: Object.freeze({ min: 0, max: 12, step: 1 }),
+  queue2Capacity: Object.freeze({ min: 0, max: 160, step: 10 }),
+  readBatchSize: Object.freeze({ min: 1_000, max: 100_000, step: 1_000 }),
+  httpBatchSize: Object.freeze({ min: 100, max: 10_000, step: 100 }),
+  httpTimeoutMs: Object.freeze({ min: 10, max: 5_000, step: 10 }),
+  targetDelayMs: Object.freeze({ min: 0, max: 2_000, step: 10 }),
+  targetErrorRatePercent: Object.freeze({ min: 0, max: 100, step: 1 }),
+})
+
+interface NumericRange {
+  readonly min: number
+  readonly max: number
+  readonly step: number
+}
+
+interface AdapterState {
+  revision: number
+  runState: RunState
+}
+
+function numericControl(
+  applied: number,
+  range: NumericRange,
+  unit: string,
+  preview: number | null = null,
+  pending: number | null = null,
+): NumericControlSnapshot {
+  return Object.freeze({
+    applied,
+    preview,
+    pending,
+    min: range.min,
+    max: range.max,
+    step: range.step,
+    unit,
+    applyMode: 'immediate',
+  })
+}
+
+function capacityControl(
+  capacity: CapacityTelemetry,
+  range: NumericRange,
+): NumericControlSnapshot {
+  return numericControl(
+    capacity.applied,
+    range,
+    'batches',
+    capacity.preview,
+    capacity.pending,
+  )
+}
+
+function normalizeNumericValue(value: number, range: NumericRange): number {
+  const bounded = Math.min(range.max, Math.max(range.min, value))
+  const stepped =
+    range.min + Math.round((bounded - range.min) / range.step) * range.step
+  return Math.min(range.max, Math.max(range.min, stepped))
+}
+
+function freezeQueueSnapshot(
+  queue: QueueTelemetry,
+  identity: {
+    readonly id: 'reader-to-throttler' | 'throttler-to-sender'
+    readonly from: 'reader' | 'throttler'
+    readonly to: 'throttler' | 'sender'
+    readonly range: NumericRange
+  },
+) {
+  return Object.freeze({
+    id: identity.id,
+    from: identity.from,
+    to: identity.to,
+    capacity: capacityControl(queue.capacity, identity.range),
+    enqueuedBatchesTotal: queue.enqueuedBatchesTotal,
+    enqueuedTransactionsTotal: queue.enqueuedTransactionsTotal,
+    dequeuedBatchesTotal: queue.dequeuedBatchesTotal,
+    dequeuedTransactionsTotal: queue.dequeuedTransactionsTotal,
+    depthBatches: queue.depthBatches,
+    queuedTransactions: queue.queuedTransactions,
+    handoffBatches: queue.handoffBatches,
+    handoffBatchesTotal: queue.handoffBatchesTotal,
+    blockedSenders: queue.blockedSenders,
+    oldestBlockedSenderMs: queue.oldestBlockedSenderMs,
+    inputBatchesPerSecond: Math.round(queue.inputBatchesPerSecond),
+    outputBatchesPerSecond: Math.round(queue.outputBatchesPerSecond),
+    inputTransactionsPerSecond: Math.round(queue.inputTransactionsPerSecond),
+    outputTransactionsPerSecond: Math.round(queue.outputTransactionsPerSecond),
+    inputTps: Math.round(queue.inputTransactionsPerSecond),
+    outputTps: Math.round(queue.outputTransactionsPerSecond),
+    throughputTps: Math.round(queue.outputTransactionsPerSecond),
+    blockedMs: Math.floor(queue.blockedMsTotal),
+    trend: queue.trend,
+    flowState: queue.flowState,
+  })
+}
+
+function freezeSnapshot(
+  state: AdapterState,
+  simulation: FixedStepSimulation,
+): LoadgenSnapshot {
+  const running = state.runState === 'running'
+  const telemetry: SimulationTelemetry = simulation.telemetry(running)
+  const config = simulation.config
+
+  return Object.freeze({
+    revision: state.revision,
+    adapterKind: 'simulation',
+    connectionState: 'connected',
+    runState: state.runState,
+    elapsedMs: telemetry.elapsedMs,
+    totalTransactions: telemetry.totalTransactions,
+    reader: Object.freeze({
+      id: 'reader',
+      workers: numericControl(config.readerWorkers, CONTROL_RANGES.workers, 'workers'),
+      readBatchSize: numericControl(
+        config.readBatchSize,
+        CONTROL_RANGES.readBatchSize,
+        'tx',
+      ),
+      readTps: Math.round(telemetry.readerTransactionsPerSecond),
+      rowsRead: telemetry.queue1.enqueuedTransactionsTotal,
+      source: 'events.parquet',
+      state: state.runState,
+    }),
+    throttler: Object.freeze({
+      id: 'throttler',
+      requestedTps: numericControl(
+        config.requestedTps,
+        CONTROL_RANGES.requestedTps,
+        'tx/s',
+      ),
+      admittedTps: Math.round(telemetry.admittedTransactionsPerSecond),
+      limitedMs: Math.floor(telemetry.limitedMs),
+      state: state.runState,
+    }),
+    queue1: freezeQueueSnapshot(telemetry.queue1, {
+      id: 'reader-to-throttler',
+      from: 'reader',
+      to: 'throttler',
+      range: CONTROL_RANGES.queue1Capacity,
+    }),
+    queue2: freezeQueueSnapshot(telemetry.queue2, {
+      id: 'throttler-to-sender',
+      from: 'throttler',
+      to: 'sender',
+      range: CONTROL_RANGES.queue2Capacity,
+    }),
+    sender: Object.freeze({
+      id: 'sender',
+      workers: numericControl(config.senderWorkers, CONTROL_RANGES.workers, 'workers'),
+      httpBatchSize: numericControl(
+        config.httpBatchSize,
+        CONTROL_RANGES.httpBatchSize,
+        'tx',
+      ),
+      timeoutMs: numericControl(
+        config.httpTimeoutMs,
+        CONTROL_RANGES.httpTimeoutMs,
+        'ms',
+      ),
+      attemptedTps: Math.round(telemetry.attemptedTransactionsPerSecond),
+      inFlightRequests: telemetry.http.inFlightRequests,
+      successfulResponses: telemetry.http.requestsSucceededTotal,
+      failedResponses: telemetry.http.requestsFailedTotal,
+      retries: 0,
+      state: state.runState,
+    }),
+    http: Object.freeze({
+      id: 'http',
+      connectionState: 'connected',
+      statusCode: running ? telemetry.http.latestStatusCode : null,
+      throughputTps: Math.round(telemetry.http.startedTransactionsPerSecond),
+      inFlightRequests: telemetry.http.inFlightRequests,
+      requestsStartedTotal: telemetry.http.requestsStartedTotal,
+      requestsCompletedTotal: telemetry.http.requestsCompletedTotal,
+      requestsSucceededTotal: telemetry.http.requestsSucceededTotal,
+      requestsFailedTotal: telemetry.http.requestsFailedTotal,
+      latencyP95Ms: running
+        ? Math.min(config.targetDelayMs + 5, config.httpTimeoutMs)
+        : 0,
+    }),
+    target: Object.freeze({
+      id: 'target',
+      endpoint: TARGET_ENDPOINT,
+      artificialDelayMs: numericControl(
+        config.targetDelayMs,
+        CONTROL_RANGES.targetDelayMs,
+        'ms',
+      ),
+      errorRatePercent: numericControl(
+        config.targetErrorRatePercent,
+        CONTROL_RANGES.targetErrorRatePercent,
+        '%',
+      ),
+      acceptedTps: Math.round(telemetry.acceptedTransactionsPerSecond),
+      latencyP95Ms: running ? config.targetDelayMs + 5 : 0,
+      http200Responses: telemetry.http.requestsSucceededTotal,
+      http503Responses:
+        telemetry.http.requestsFailedTotal - telemetry.http.requestsTimedOutTotal,
+      connectionState: 'connected',
+    }),
+  })
+}
+
+export class SimulationAdapter implements LoadgenAdapter {
+  readonly kind = 'simulation' as const
+
+  private readonly listeners = new Set<LoadgenSnapshotListener>()
+  private readonly state: AdapterState = { revision: 0, runState: 'idle' }
+  private readonly simulation = new FixedStepSimulation(
+    {
+      readerWorkers: 4,
+      senderWorkers: 3,
+      requestedTps: 120_000,
+      readBatchSize: 25_000,
+      httpBatchSize: 1_000,
+      httpTimeoutMs: 500,
+      targetDelayMs: 40,
+      targetErrorRatePercent: 2,
+    },
+    4,
+    100,
+  )
+  private snapshot: LoadgenSnapshot
+  private timer: ReturnType<typeof setInterval> | null
+  private lastTickMs: number
+  private pendingStepMs = 0
+  private commandSequence = 0
+  private disposed = false
+
+  constructor() {
+    this.snapshot = freezeSnapshot(this.state, this.simulation)
+    this.lastTickMs = Date.now()
+    this.timer = setInterval(this.tick, SNAPSHOT_INTERVAL_MS)
+  }
+
+  getSnapshot = (): LoadgenSnapshot => this.snapshot
+
+  subscribe = (listener: LoadgenSnapshotListener): (() => void) => {
+    this.listeners.add(listener)
+    listener(this.snapshot)
+    return () => this.listeners.delete(listener)
+  }
+
+  dispatch = async (command: LoadgenCommand): Promise<CommandReceipt> => {
+    const commandId = `simulation-${++this.commandSequence}`
+
+    if (this.disposed) {
+      return this.reject(commandId, command, {
+        code: 'disposed',
+        message: 'simulation adapter is disposed',
+        retryable: false,
+        details: null,
+      })
+    }
+
+    let changed = false
+
+    switch (command.type) {
+      case 'run':
+        if (this.state.runState === 'running') {
+          changed = this.advanceToNow()
+        } else {
+          this.state.runState = 'running'
+          this.simulation.clearInstantaneousTelemetry()
+          this.lastTickMs = Date.now()
+          changed = true
+        }
+        break
+      case 'pause':
+        changed = this.advanceToNow()
+        if (this.state.runState !== 'paused') {
+          this.state.runState = 'paused'
+          changed = true
+        }
+        break
+      case 'reset':
+        changed = this.resetRunState()
+        break
+      case 'set-requested-tps':
+        if (!Number.isFinite(command.value)) {
+          return this.rejectInvalidNumber(commandId, command, 'requested tps')
+        }
+        changed = this.updateConfig(
+          'requestedTps',
+          normalizeNumericValue(command.value, CONTROL_RANGES.requestedTps),
+        )
+        break
+      case 'set-worker-count':
+        if (!Number.isFinite(command.value)) {
+          return this.rejectInvalidNumber(commandId, command, 'worker count')
+        }
+        changed = this.updateConfig(
+          command.actor === 'reader' ? 'readerWorkers' : 'senderWorkers',
+          normalizeNumericValue(command.value, CONTROL_RANGES.workers),
+        )
+        break
+      case 'set-queue-capacity': {
+        if (!Number.isFinite(command.value)) {
+          return this.rejectInvalidNumber(commandId, command, 'queue capacity')
+        }
+        changed = this.advanceToNow()
+        const queue = command.queue === 'reader-to-throttler' ? 1 : 2
+        const range = queue === 1
+          ? CONTROL_RANGES.queue1Capacity
+          : CONTROL_RANGES.queue2Capacity
+        changed =
+          this.simulation.requestQueueCapacity(
+            queue,
+            normalizeNumericValue(command.value, range),
+          ) || changed
+        break
+      }
+      case 'set-read-batch-size':
+        if (!Number.isFinite(command.value)) {
+          return this.rejectInvalidNumber(commandId, command, 'read batch size')
+        }
+        changed = this.updateConfig(
+          'readBatchSize',
+          normalizeNumericValue(command.value, CONTROL_RANGES.readBatchSize),
+        )
+        break
+      case 'set-http-batch-size':
+        if (!Number.isFinite(command.value)) {
+          return this.rejectInvalidNumber(commandId, command, 'http batch size')
+        }
+        changed = this.updateConfig(
+          'httpBatchSize',
+          normalizeNumericValue(command.value, CONTROL_RANGES.httpBatchSize),
+        )
+        break
+      case 'set-http-timeout':
+        if (!Number.isFinite(command.valueMs)) {
+          return this.rejectInvalidNumber(commandId, command, 'http timeout')
+        }
+        changed = this.updateConfig(
+          'httpTimeoutMs',
+          normalizeNumericValue(command.valueMs, CONTROL_RANGES.httpTimeoutMs),
+        )
+        break
+      case 'set-target-delay':
+        if (!Number.isFinite(command.valueMs)) {
+          return this.rejectInvalidNumber(commandId, command, 'target delay')
+        }
+        changed = this.updateConfig(
+          'targetDelayMs',
+          normalizeNumericValue(command.valueMs, CONTROL_RANGES.targetDelayMs),
+        )
+        break
+      case 'set-target-error-rate':
+        if (!Number.isFinite(command.valuePercent)) {
+          return this.rejectInvalidNumber(commandId, command, 'target error rate')
+        }
+        changed = this.updateConfig(
+          'targetErrorRatePercent',
+          normalizeNumericValue(
+            command.valuePercent,
+            CONTROL_RANGES.targetErrorRatePercent,
+          ),
+        )
+        break
+      default:
+        return this.reject(commandId, command, {
+          code: 'unavailable',
+          message: 'command is not available in the simulation adapter',
+          retryable: false,
+          details: null,
+        })
+    }
+
+    if (changed) this.publish()
+
+    return Object.freeze({
+      commandId,
+      commandType: command.type,
+      accepted: true,
+      applyMode: 'immediate',
+      appliedAtMs: Date.now(),
+      snapshotRevision: this.snapshot.revision,
+      error: null,
+    })
+  }
+
+  dispose = (): void => {
+    if (this.disposed) return
+    this.disposed = true
+    if (this.timer !== null) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+    this.listeners.clear()
+  }
+
+  private tick = (): void => {
+    if (this.disposed || this.state.runState !== 'running') {
+      this.lastTickMs = Date.now()
+      return
+    }
+    if (this.advanceToNow()) this.publish()
+  }
+
+  private advanceToNow(): boolean {
+    const now = Date.now()
+    const deltaMs = Math.max(0, now - this.lastTickMs)
+    this.lastTickMs = now
+    if (this.state.runState !== 'running' || deltaMs === 0) return false
+
+    this.pendingStepMs += deltaMs
+    const steps = Math.floor(this.pendingStepMs / FIXED_STEP_MS)
+    for (let index = 0; index < steps; index += 1) {
+      this.simulation.advanceStep()
+    }
+    this.pendingStepMs -= steps * FIXED_STEP_MS
+    return steps > 0
+  }
+
+  private updateConfig(
+    key: keyof FixedStepSimulation['config'],
+    value: number,
+  ): boolean {
+    const advanced = this.advanceToNow()
+    if (this.simulation.config[key] === value) return advanced
+    this.simulation.updateConfig({ [key]: value })
+    return true
+  }
+
+  private resetRunState(): boolean {
+    const telemetry = this.simulation.telemetry(false)
+    const changed =
+      this.state.runState !== 'idle' ||
+      telemetry.elapsedMs !== 0 ||
+      telemetry.queue1.enqueuedBatchesTotal !== 0 ||
+      telemetry.queue2.enqueuedBatchesTotal !== 0 ||
+      telemetry.http.requestsStartedTotal !== 0 ||
+      telemetry.queue1.capacity.pending !== null ||
+      telemetry.queue2.capacity.pending !== null
+
+    this.state.runState = 'idle'
+    this.simulation.reset()
+    this.pendingStepMs = 0
+    this.lastTickMs = Date.now()
+    return changed
+  }
+
+  private rejectInvalidNumber(
+    commandId: string,
+    command: LoadgenCommand,
+    field: string,
+  ): CommandReceipt {
+    return this.reject(commandId, command, {
+      code: 'invalid-command',
+      message: `${field} must be a finite number`,
+      retryable: false,
+      details: null,
+    })
+  }
+
+  private publish(): void {
+    this.state.revision += 1
+    this.snapshot = freezeSnapshot(this.state, this.simulation)
+    this.listeners.forEach((listener) => listener(this.snapshot))
+  }
+
+  private reject(
+    commandId: string,
+    command: LoadgenCommand,
+    error: AdapterError,
+  ): CommandReceipt {
+    return Object.freeze({
+      commandId,
+      commandType: command.type,
+      accepted: false,
+      applyMode: 'unavailable',
+      appliedAtMs: null,
+      snapshotRevision: this.snapshot.revision,
+      error: Object.freeze({
+        ...error,
+        details:
+          error.details === null
+            ? null
+            : Object.freeze({ ...error.details }),
+      }),
+    })
+  }
+}

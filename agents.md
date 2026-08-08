@@ -46,7 +46,7 @@ Load generator (loadgen) for testing ingestion pipelines.
 
 MVP goals:
 - cyclic replay from Parquet to a configurable HTTP target using bounded JSON batches
-- runtime-adjustable and adaptive transaction rate with bounded concurrency and backpressure
+- runtime-adjustable transaction rate with bounded concurrency and backpressure
 - bounded retries for transient HTTP failures with backoff, jitter, and explicit duplicate semantics
 - Prometheus metrics, logs, and a Grafana dashboard for load, outcomes, latency, retries, concurrency, and backpressure
 - clean context-based cancellation and bounded graceful shutdown
