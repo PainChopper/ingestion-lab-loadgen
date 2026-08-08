@@ -55,14 +55,13 @@ export function getQueueCablePresentation(
 
   return {
     capacity,
-    handleCapacity:
-      dragPreview === null ? capacity.applied : capacity.candidate,
-    handleState: dragPreview === null ? null : capacity.requestState,
-    target:
-      dragPreview === null && capacity.requestState !== null
+    handleCapacity: capacity.candidate,
+    handleState: capacity.requestState,
+    dragStartCapacity: capacity.candidate,
+    appliedMarker:
+      capacity.requestState !== null
         ? {
-            capacity: capacity.candidate,
-            state: capacity.requestState,
+            capacity: capacity.applied,
           }
         : null,
     depth: `Depth ${formatInteger(snapshot.depthBatches)} / ${formatInteger(capacity.applied)} batches`,
@@ -115,15 +114,6 @@ export function QueueCable({
     start.y,
     QUEUE_CABLE_MAX_LIFT,
   )
-  const targetTopY =
-    presentation.target === null
-      ? null
-      : capacityToCableY(
-          presentation.target.capacity,
-          control,
-          start.y,
-          QUEUE_CABLE_MAX_LIFT,
-        )
   const path = buildQueueCablePath(start, end, appliedTopY)
   const centerX = (start.x + end.x) / 2
   const ticks = getCapacityTicks(control, start.y, QUEUE_CABLE_MAX_LIFT)
@@ -146,7 +136,7 @@ export function QueueCable({
     dragSession.current = {
       pointerId: event.pointerId,
       pointerY: pointerYInSvg(event),
-      capacity: capacity.candidate,
+      capacity: presentation.dragStartCapacity,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -289,18 +279,17 @@ export function QueueCable({
           })}
       </g>
 
-      {presentation.target !== null && targetTopY !== null && (
+      {presentation.appliedMarker !== null && (
         <g
-          className={`pipeline-queue-capacity-target pipeline-queue-capacity-target--${presentation.target.state}`}
-          transform={`translate(${centerX - 50} ${targetTopY})`}
+          className="pipeline-queue-capacity-applied"
+          transform={`translate(${centerX - 50} ${appliedTopY})`}
           aria-hidden="true"
-          data-capacity-state={presentation.target.state}
+          data-capacity={presentation.appliedMarker.capacity}
         >
           <line x1="30" x2="50" />
           <rect x="-30" y="-9" width="60" height="18" rx="3" />
           <text y="3" textAnchor="middle">
-            {presentation.target.state === 'pending' ? 'Pending' : 'Preview'}{' '}
-            {formatInteger(presentation.target.capacity)}
+            Applied {formatInteger(presentation.appliedMarker.capacity)}
           </text>
         </g>
       )}

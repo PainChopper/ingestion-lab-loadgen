@@ -429,23 +429,19 @@
   color: var(--yellow);
 }
 
-.pipeline-queue-capacity-target {
-  color: var(--cyan);
+.pipeline-queue-capacity-applied {
+  color: currentColor;
   pointer-events: none;
 }
 
-.pipeline-queue-capacity-target--pending {
-  color: var(--yellow);
-}
-
-.pipeline-queue-capacity-target line {
+.pipeline-queue-capacity-applied line {
   stroke: currentColor;
   stroke-dasharray: 3 2;
   stroke-width: 1.2;
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-capacity-target rect {
+.pipeline-queue-capacity-applied rect {
   fill: var(--navy-950);
   stroke: currentColor;
   stroke-dasharray: 3 2;
@@ -453,7 +449,7 @@
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-capacity-target text {
+.pipeline-queue-capacity-applied text {
   fill: currentColor;
   font-size: 9px;
   font-variant-numeric: tabular-nums;
