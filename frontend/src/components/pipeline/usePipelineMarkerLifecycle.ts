@@ -56,14 +56,12 @@ function queueTelemetry(snapshot: QueueSnapshot): QueueMarkerTelemetry {
     id: snapshot.id,
     depthBatches: snapshot.depthBatches,
     appliedCapacity: getQueueCapacityPresentation(snapshot.capacity).applied,
+    throughputTps: snapshot.throughputTps,
     flowActive: queueFlowActive(snapshot),
-    handoffBatches: snapshot.handoffBatches,
-    handoffBatchesTotal: snapshot.handoffBatchesTotal,
     enqueuedBatchesTotal: snapshot.enqueuedBatchesTotal,
     dequeuedBatchesTotal: snapshot.dequeuedBatchesTotal,
     occupancyTravelLength: paths.occupancyLength,
     flowTravelLength: paths.flowLength,
-    handoffTravelLength: paths.handoffLength,
   }
 }
 

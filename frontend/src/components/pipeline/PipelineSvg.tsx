@@ -46,7 +46,6 @@ export function PipelineSvg({
         selected={selectedId === snapshot.http.id}
         onSelect={onSelect}
       />
-      <PipelineMarkers snapshot={snapshot} markers={markers} />
       <QueueCable
         snapshot={snapshot.queue1}
         start={ACTOR_GEOMETRY.reader.ports.output}
@@ -65,6 +64,7 @@ export function PipelineSvg({
         onSelect={onSelect}
         onCapacityChange={onQueueCapacityChange}
       />
+      <PipelineMarkers snapshot={snapshot} markers={markers} />
       <ReaderActor
         snapshot={snapshot.reader}
         selected={selectedId === snapshot.reader.id}
