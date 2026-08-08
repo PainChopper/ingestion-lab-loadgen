@@ -3,10 +3,10 @@ import type { QueueFlowState, QueueTrend } from './loadgen'
 export const FIXED_STEP_MS = 10
 export const SNAPSHOT_INTERVAL_MS = 100
 
-const RATE_WINDOW_STEPS = 20
+const RATE_WINDOW_STEPS = 100
 const BACKPRESSURE_ONSET_MS = 300
 const BACKPRESSURE_RELEASE_MS = 200
-const READER_BATCHES_PER_WORKER_SECOND = 2
+const READER_TRANSACTIONS_PER_WORKER_SECOND = 50_000
 const REQUEST_SLOTS_PER_SENDER_WORKER = 2
 
 export interface SimulationConfig {
@@ -326,7 +326,7 @@ export class FixedStepSimulation {
   private readonly queue2: StatefulQueue
   private readonly activities: StepActivity[] = []
   private readonly inFlight: InFlightRequest[] = []
-  private readerBatchCredit = 0
+  private readerTransactionCredit = 0
   private throttlerTokens = 0
   private throttlerBufferedTransactions = 0
   private failureCredit = 0
@@ -360,7 +360,7 @@ export class FixedStepSimulation {
     this.drainQueue2(activity)
     const queue2Blocked = this.flushThrottlerBuffer(activity)
     this.receiveQueue1(activity)
-    const queue1Blocked = this.produceReaderBatch(activity)
+    const queue1Blocked = this.produceReaderBatches(activity)
 
     this.queue1.observeBlocked(queue1Blocked)
     this.queue2.observeBlocked(queue2Blocked)
@@ -378,6 +378,10 @@ export class FixedStepSimulation {
 
   updateConfig(values: Partial<SimulationConfig>): void {
     Object.assign(this.config, values)
+    this.readerTransactionCredit = Math.min(
+      this.readerTransactionCredit,
+      this.config.readerWorkers * this.config.readBatchSize,
+    )
   }
 
   requestQueueCapacity(queue: 1 | 2, capacity: number): boolean {
@@ -393,7 +397,7 @@ export class FixedStepSimulation {
     this.queue2.resetRuntime()
     this.activities.length = 0
     this.inFlight.length = 0
-    this.readerBatchCredit = 0
+    this.readerTransactionCredit = 0
     this.throttlerTokens = 0
     this.throttlerBufferedTransactions = 0
     this.failureCredit = 0
@@ -411,7 +415,7 @@ export class FixedStepSimulation {
 
   telemetry(running: boolean): SimulationTelemetry {
     const aggregate = this.aggregateActivity()
-    const rateSeconds = this.activities.length * FIXED_STEP_MS / 1_000
+    const rateSeconds = RATE_WINDOW_STEPS * FIXED_STEP_MS / 1_000
     const queue1 = this.queue1.telemetry(aggregate.queue1, rateSeconds, running)
     const queue2 = this.queue2.telemetry(aggregate.queue2, rateSeconds, running)
     const divisor = rateSeconds === 0 ? 1 : rateSeconds
@@ -453,11 +457,7 @@ export class FixedStepSimulation {
   }
 
   private get readerCapacityTps(): number {
-    return (
-      this.config.readerWorkers *
-      READER_BATCHES_PER_WORKER_SECOND *
-      this.config.readBatchSize
-    )
+    return this.config.readerWorkers * READER_TRANSACTIONS_PER_WORKER_SECOND
   }
 
   private completeRequests(activity: StepActivity): void {
@@ -533,31 +533,34 @@ export class FixedStepSimulation {
     this.throttlerBufferedTransactions += received
   }
 
-  private produceReaderBatch(activity: StepActivity): boolean {
-    this.readerBatchCredit +=
-      this.config.readerWorkers *
-      READER_BATCHES_PER_WORKER_SECOND *
-      FIXED_STEP_MS /
-      1_000
-    if (this.readerBatchCredit < 1) return false
-
+  private produceReaderBatches(activity: StepActivity): boolean {
     const transactions = this.config.readBatchSize
-    if (this.queue1.capacity.applied === 0) {
-      if (
-        this.throttlerBufferedTransactions !== 0 ||
-        this.throttlerTokens < transactions
-      ) {
+    this.readerTransactionCredit = Math.min(
+      this.config.readerWorkers * transactions,
+      this.readerTransactionCredit +
+        this.readerCapacityTps * FIXED_STEP_MS / 1_000,
+    )
+    if (this.readerTransactionCredit < transactions) return false
+
+    while (this.readerTransactionCredit >= transactions) {
+      if (this.queue1.capacity.applied === 0) {
+        if (
+          this.throttlerBufferedTransactions !== 0 ||
+          this.throttlerTokens < transactions
+        ) {
+          return true
+        }
+        this.queue1.handoff(transactions, activity.queue1)
+        this.throttlerTokens -= transactions
+        this.throttlerBufferedTransactions += transactions
+      } else if (!this.queue1.enqueue(transactions, activity.queue1)) {
         return true
       }
-      this.queue1.handoff(transactions, activity.queue1)
-      this.throttlerTokens -= transactions
-      this.throttlerBufferedTransactions += transactions
-    } else if (!this.queue1.enqueue(transactions, activity.queue1)) {
-      return true
+
+      this.readerTransactionCredit -= transactions
     }
 
-    this.readerBatchCredit -= 1
-    return this.readerBatchCredit >= 1
+    return false
   }
 
   private startRequest(transactions: number, activity: StepActivity): void {
