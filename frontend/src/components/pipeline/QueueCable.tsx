@@ -9,7 +9,11 @@ import type {
   QueueSnapshot,
   SelectableId,
 } from '../../model/loadgen'
-import { formatInteger, formatRate } from './formatters'
+import {
+  formatInteger,
+  formatMilliseconds,
+  formatRate,
+} from './formatters'
 import type { Point } from './geometry'
 import type { QueueMarkerSlotSnapshot } from './markerLifecycle'
 import {
@@ -36,6 +40,36 @@ interface DragSession {
   readonly pointerId: number
   readonly pointerY: number
   readonly capacity: number
+}
+
+// oxlint-disable-next-line react/only-export-components -- Directly tested UI presentation.
+export function getQueueCablePresentation(
+  snapshot: QueueSnapshot,
+  dragPreview: number | null = null,
+) {
+  const capacity = getQueueCapacityPresentation(snapshot.capacity, dragPreview)
+  const waitingUpstream =
+    snapshot.blockedSenders > 0
+      ? `Waiting upstream ${formatInteger(snapshot.blockedSenders)}, oldest ${formatMilliseconds(snapshot.oldestBlockedSenderMs)}`
+      : null
+
+  return {
+    capacity,
+    handleCapacity:
+      dragPreview === null ? capacity.applied : capacity.candidate,
+    handleState: dragPreview === null ? null : capacity.requestState,
+    target:
+      dragPreview === null && capacity.requestState !== null
+        ? {
+            capacity: capacity.candidate,
+            state: capacity.requestState,
+          }
+        : null,
+    depth: `Depth ${formatInteger(snapshot.depthBatches)} / ${formatInteger(capacity.applied)} batches`,
+    waitingUpstream,
+    waitingUpstreamY: 548,
+    capacityStatusY: waitingUpstream === null ? 548 : 566,
+  }
 }
 
 function pointerYInSvg(event: PointerEvent<SVGGElement>): number {
@@ -67,24 +101,33 @@ export function QueueCable({
   const [dragPreview, setDragPreview] = useState<number | null>(null)
   const dragSession = useRef<DragSession | null>(null)
   const control = snapshot.capacity
-  const capacity = getQueueCapacityPresentation(control, dragPreview)
+  const presentation = getQueueCablePresentation(snapshot, dragPreview)
+  const { capacity } = presentation
   const appliedTopY = capacityToCableY(
     capacity.applied,
     control,
     start.y,
     QUEUE_CABLE_MAX_LIFT,
   )
-  const candidateTopY = capacityToCableY(
-    capacity.candidate,
+  const handleTopY = capacityToCableY(
+    presentation.handleCapacity,
     control,
     start.y,
     QUEUE_CABLE_MAX_LIFT,
   )
+  const targetTopY =
+    presentation.target === null
+      ? null
+      : capacityToCableY(
+          presentation.target.capacity,
+          control,
+          start.y,
+          QUEUE_CABLE_MAX_LIFT,
+        )
   const path = buildQueueCablePath(start, end, appliedTopY)
   const centerX = (start.x + end.x) / 2
   const ticks = getCapacityTicks(control, start.y, QUEUE_CABLE_MAX_LIFT)
   const disabled = control.applyMode === 'unavailable'
-  const depth = formatInteger(snapshot.depthBatches)
 
   const capacityFromDrag = (
     event: PointerEvent<SVGGElement>,
@@ -246,8 +289,24 @@ export function QueueCable({
           })}
       </g>
 
+      {presentation.target !== null && targetTopY !== null && (
+        <g
+          className={`pipeline-queue-capacity-target pipeline-queue-capacity-target--${presentation.target.state}`}
+          transform={`translate(${centerX - 50} ${targetTopY})`}
+          aria-hidden="true"
+          data-capacity-state={presentation.target.state}
+        >
+          <line x1="30" x2="50" />
+          <rect x="-30" y="-9" width="60" height="18" rx="3" />
+          <text y="3" textAnchor="middle">
+            {presentation.target.state === 'pending' ? 'Pending' : 'Preview'}{' '}
+            {formatInteger(presentation.target.capacity)}
+          </text>
+        </g>
+      )}
+
       <g
-        className={`pipeline-queue-handle${capacity.requestState === null ? '' : ` pipeline-queue-handle--${capacity.requestState}`}${disabled ? ' pipeline-queue-handle--disabled' : ''}`}
+        className={`pipeline-queue-handle${presentation.handleState === null ? '' : ` pipeline-queue-handle--${presentation.handleState}`}${disabled ? ' pipeline-queue-handle--disabled' : ''}`}
         role="slider"
         aria-orientation="vertical"
         tabIndex={disabled ? -1 : 0}
@@ -261,7 +320,7 @@ export function QueueCable({
             : `${capacity.requestState === 'pending' ? 'Pending' : 'Preview'} ${formatInteger(capacity.candidate)} batches; ${formatInteger(capacity.applied)} batches applied`
         }
         aria-disabled={disabled}
-        transform={`translate(${centerX} ${candidateTopY})`}
+        transform={`translate(${centerX} ${handleTopY})`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -271,7 +330,7 @@ export function QueueCable({
       >
         <rect x="-18" y="-12" width="36" height="24" rx="4" />
         <text y="4" textAnchor="middle">
-          {formatInteger(capacity.candidate)}
+          {formatInteger(presentation.handleCapacity)}
         </text>
       </g>
 
@@ -289,12 +348,22 @@ export function QueueCable({
         textAnchor="middle"
         className="pipeline-small pipeline-queue-metric"
       >
-        Depth {depth} / {formatInteger(capacity.applied)} batches
+        {presentation.depth}
       </text>
+      {presentation.waitingUpstream !== null && (
+        <text
+          x={centerX}
+          y={presentation.waitingUpstreamY}
+          textAnchor="middle"
+          className="pipeline-queue-wait-status"
+        >
+          {presentation.waitingUpstream}
+        </text>
+      )}
       {capacity.requestState !== null && (
         <text
           x={centerX}
-          y="548"
+          y={presentation.capacityStatusY}
           textAnchor="middle"
           className={`pipeline-queue-capacity-status pipeline-queue-capacity-status--${capacity.requestState}`}
         >

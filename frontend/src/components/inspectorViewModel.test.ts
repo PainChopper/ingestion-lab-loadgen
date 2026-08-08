@@ -96,15 +96,15 @@ describe('inspector view model', () => {
     const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
 
     expect(model?.rows).toContainEqual({
-      label: 'Current blocked senders',
+      label: 'Waiting upstream now',
       value: '0',
     })
     expect(model?.rows).toContainEqual({
-      label: 'Oldest current block',
-      value: '0 ms',
+      label: 'Oldest current wait',
+      value: '—',
     })
     expect(model?.rows).toContainEqual({
-      label: 'Total blocked time',
+      label: 'Accumulated blocked time',
       value: '1,250 ms',
     })
     expect(model?.rows.some((row) => row.label === 'Blocked time')).toBe(false)
@@ -117,15 +117,15 @@ describe('inspector view model', () => {
     const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
 
     expect(model?.rows).toContainEqual({
-      label: 'Current blocked senders',
+      label: 'Waiting upstream now',
       value: '1',
     })
     expect(model?.rows).toContainEqual({
-      label: 'Oldest current block',
+      label: 'Oldest current wait',
       value: '450 ms',
     })
     expect(model?.rows).toContainEqual({
-      label: 'Total blocked time',
+      label: 'Accumulated blocked time',
       value: '1,600 ms',
     })
     adapter.dispose()

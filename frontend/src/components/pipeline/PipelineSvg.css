@@ -429,11 +429,49 @@
   color: var(--yellow);
 }
 
+.pipeline-queue-capacity-target {
+  color: var(--cyan);
+  pointer-events: none;
+}
+
+.pipeline-queue-capacity-target--pending {
+  color: var(--yellow);
+}
+
+.pipeline-queue-capacity-target line {
+  stroke: currentColor;
+  stroke-dasharray: 3 2;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-queue-capacity-target rect {
+  fill: var(--navy-950);
+  stroke: currentColor;
+  stroke-dasharray: 3 2;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-queue-capacity-target text {
+  fill: currentColor;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
 .pipeline-queue-metric {
   fill: currentColor;
 }
 
 .pipeline-queue-capacity-status {
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pipeline-queue-wait-status {
+  fill: currentColor;
   font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;

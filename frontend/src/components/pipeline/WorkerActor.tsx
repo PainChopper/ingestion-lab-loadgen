@@ -6,6 +6,10 @@ import type {
 } from '../../model/loadgen'
 import type { Point, WorkerActorBounds } from './geometry'
 import type { KeyboardEvent } from 'react'
+import {
+  getWorkerActorLayout,
+  type WorkerChipLayout,
+} from './workerActorLayout'
 
 export type WorkerActorId = 'reader' | 'sender'
 
@@ -32,22 +36,24 @@ interface WorkerActorProps {
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
 }
 
-const WORKER_MIN = 1
-const WORKER_MAX = 7
-
-function normalizedWorkerCount(workers: NumericControlSnapshot): number {
-  const value = workers.applied ?? workers.min
-  return Math.min(WORKER_MAX, Math.max(WORKER_MIN, Math.round(value)))
-}
-
-function WorkerChip({ x, y, active }: Point & { active: boolean }) {
+function WorkerChip({
+  x,
+  y,
+  scale,
+  active,
+}: WorkerChipLayout & { active: boolean }) {
   const pinOffsets = [6, 13, 20, 27]
+  const chipX = 4
+  const chipY = 4
 
   return (
-    <g className={active ? undefined : 'pipeline-worker--inactive'}>
+    <g
+      className={active ? undefined : 'pipeline-worker--inactive'}
+      transform={`translate(${x} ${y}) scale(${scale})`}
+    >
       <rect
-        x={x}
-        y={y}
+        x={chipX}
+        y={chipY}
         width="31"
         height="31"
         rx="3"
@@ -55,29 +61,39 @@ function WorkerChip({ x, y, active }: Point & { active: boolean }) {
       />
       {pinOffsets.map((offset) => (
         <g key={offset} className="pipeline-worker-chip-pin">
-          <line x1={x + offset} y1={y - 4} x2={x + offset} y2={y} />
           <line
-            x1={x + offset}
-            y1={y + 31}
-            x2={x + offset}
-            y2={y + 35}
+            x1={chipX + offset}
+            y1={chipY - 4}
+            x2={chipX + offset}
+            y2={chipY}
           />
-          <line x1={x - 4} y1={y + offset} x2={x} y2={y + offset} />
           <line
-            x1={x + 31}
-            y1={y + offset}
-            x2={x + 35}
-            y2={y + offset}
+            x1={chipX + offset}
+            y1={chipY + 31}
+            x2={chipX + offset}
+            y2={chipY + 35}
+          />
+          <line
+            x1={chipX - 4}
+            y1={chipY + offset}
+            x2={chipX}
+            y2={chipY + offset}
+          />
+          <line
+            x1={chipX + 31}
+            y1={chipY + offset}
+            x2={chipX + 35}
+            y2={chipY + offset}
           />
         </g>
       ))}
       <polyline
-        points={`${x + 5},${y + 17} ${x + 10},${y + 17} ${x + 14},${y + 10} ${x + 18},${y + 23} ${x + 22},${y + 15} ${x + 27},${y + 15}`}
+        points={`${chipX + 5},${chipY + 17} ${chipX + 10},${chipY + 17} ${chipX + 14},${chipY + 10} ${chipX + 18},${chipY + 23} ${chipX + 22},${chipY + 15} ${chipX + 27},${chipY + 15}`}
         className="pipeline-worker-wave"
       />
       <circle
-        cx={x + 57}
-        cy={y + 15.5}
+        cx={chipX + 57}
+        cy={chipY + 15.5}
         r="5.5"
         className="pipeline-worker-led"
       />
@@ -102,9 +118,10 @@ export function WorkerActor({
   onSelect,
   onWorkerCountChange,
 }: WorkerActorProps) {
-  const workerCount = normalizedWorkerCount(workers)
-  const height = workerCount * bounds.rowHeight + bounds.padding * 2
-  const top = bounds.bottom - height
+  const layout = getWorkerActorLayout(actor, bounds, workers)
+  const workerMin = Math.round(workers.min)
+  const workerMax = Math.round(workers.max)
+  const workerStep = Math.max(1, Math.round(workers.step))
   const centerX = bounds.x + bounds.width / 2
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -136,21 +153,31 @@ export function WorkerActor({
           <button
             id={`${actor}-minus`}
             type="button"
-            onClick={() => onWorkerCountChange(actor, workerCount - 1)}
-            disabled={workerCount <= WORKER_MIN}
+            onClick={() =>
+              onWorkerCountChange(
+                actor,
+                Math.max(workerMin, layout.workerCount - workerStep),
+              )
+            }
+            disabled={layout.workerCount <= workerMin}
             title={`Remove ${actor} worker`}
             aria-label={`Remove ${actor} worker`}
           >
             <Minus aria-hidden="true" />
           </button>
           <output id={`${actor}-count`} aria-label={`${title} worker count`}>
-            {workerCount}
+            {layout.workerCount}
           </output>
           <button
             id={`${actor}-plus`}
             type="button"
-            onClick={() => onWorkerCountChange(actor, workerCount + 1)}
-            disabled={workerCount >= WORKER_MAX}
+            onClick={() =>
+              onWorkerCountChange(
+                actor,
+                Math.min(workerMax, layout.workerCount + workerStep),
+              )
+            }
+            disabled={layout.workerCount >= workerMax}
             title={`Add ${actor} worker`}
             aria-label={`Add ${actor} worker`}
           >
@@ -165,22 +192,23 @@ export function WorkerActor({
         tabIndex={0}
         aria-label={`Inspect ${actor}`}
         aria-pressed={selected}
+        data-worker-count={layout.workerCount}
+        data-worker-layout={layout.mode}
         onClick={() => onSelect(actor)}
         onKeyDown={handleKeyDown}
       >
         <rect
           x={bounds.x}
-          y={top}
+          y={layout.top}
           width={bounds.width}
-          height={height}
+          height={layout.height}
           rx="5"
           className="pipeline-actor-box"
         />
-        {Array.from({ length: workerCount }, (_, index) => (
+        {layout.chips.map((chip, index) => (
           <WorkerChip
             key={index}
-            x={bounds.x + 24}
-            y={top + bounds.padding + index * bounds.rowHeight}
+            {...chip}
             active={runState === 'running'}
           />
         ))}
