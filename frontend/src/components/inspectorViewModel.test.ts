@@ -27,6 +27,23 @@ function withQueueCapacity(
   }
 }
 
+function withQueueBlocking(
+  snapshot: LoadgenSnapshot,
+  blockedSenders: number,
+  oldestBlockedSenderMs: number,
+  blockedMs: number,
+): LoadgenSnapshot {
+  return {
+    ...snapshot,
+    queue1: {
+      ...snapshot.queue1,
+      blockedSenders,
+      oldestBlockedSenderMs,
+      blockedMs,
+    },
+  }
+}
+
 describe('inspector view model', () => {
   it('builds a distinct model for every selectable pipeline object', () => {
     const adapter = new SimulationAdapter()
@@ -70,6 +87,47 @@ describe('inspector view model', () => {
     })
     expect(model?.rows).toContainEqual({ label: 'Flow state', value: 'Stopped' })
     expect(model?.rows).toContainEqual({ label: 'Throughput', value: '0 tx/s' })
+    adapter.dispose()
+  })
+
+  it('separates historical blocked time from an unblocked current state', () => {
+    const adapter = new SimulationAdapter()
+    const snapshot = withQueueBlocking(adapter.getSnapshot(), 0, 0, 1_250)
+    const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
+
+    expect(model?.rows).toContainEqual({
+      label: 'Current blocked senders',
+      value: '0',
+    })
+    expect(model?.rows).toContainEqual({
+      label: 'Oldest current block',
+      value: '0 ms',
+    })
+    expect(model?.rows).toContainEqual({
+      label: 'Total blocked time',
+      value: '1,250 ms',
+    })
+    expect(model?.rows.some((row) => row.label === 'Blocked time')).toBe(false)
+    adapter.dispose()
+  })
+
+  it('shows current blocked senders and the oldest active block', () => {
+    const adapter = new SimulationAdapter()
+    const snapshot = withQueueBlocking(adapter.getSnapshot(), 1, 450, 1_600)
+    const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
+
+    expect(model?.rows).toContainEqual({
+      label: 'Current blocked senders',
+      value: '1',
+    })
+    expect(model?.rows).toContainEqual({
+      label: 'Oldest current block',
+      value: '450 ms',
+    })
+    expect(model?.rows).toContainEqual({
+      label: 'Total blocked time',
+      value: '1,600 ms',
+    })
     adapter.dispose()
   })
 

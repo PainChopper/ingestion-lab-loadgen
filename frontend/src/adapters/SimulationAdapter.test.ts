@@ -227,6 +227,80 @@ describe('SimulationAdapter', () => {
     adapter.dispose()
   })
 
+  it('keeps q1 queued behind a zero throttle while q2 and HTTP drain', async () => {
+    const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
+    await adapter.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(3_000)
+
+    const saturated = adapter.getSnapshot()
+    expect(saturated.queue1.depthBatches).toBe(4)
+    expect(saturated.queue2.depthBatches).toBeGreaterThan(0)
+
+    await adapter.dispatch({ type: 'set-requested-tps', value: 0 })
+    const closed = adapter.getSnapshot()
+    const q1DequeuedAtClose = closed.queue1.dequeuedBatchesTotal
+    await vi.advanceTimersByTimeAsync(12_000)
+
+    const drained = adapter.getSnapshot()
+    expect(drained.throttler.admittedTps).toBe(0)
+    expect(drained.queue1.depthBatches).toBe(4)
+    expect(drained.queue1.dequeuedBatchesTotal).toBe(q1DequeuedAtClose)
+    expect(drained.queue2.depthBatches).toBe(0)
+    expect(drained.http.inFlightRequests).toBe(0)
+    adapter.dispose()
+  })
+
+  it('keeps recovered q2 backlog stable when service matches input', async () => {
+    const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
+    await adapter.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(adapter.getSnapshot().queue2.depthBatches).toBeGreaterThan(80)
+
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
+    await vi.advanceTimersByTimeAsync(2_000)
+    const settled = adapter.getSnapshot()
+    await vi.advanceTimersByTimeAsync(4_000)
+    const stable = adapter.getSnapshot()
+
+    expect(stable.queue2.depthBatches).toBeGreaterThan(80)
+    expect(Math.abs(
+      (stable.queue2.depthBatches ?? 0) - (settled.queue2.depthBatches ?? 0),
+    )).toBeLessThanOrEqual(6)
+    expect(Math.abs(
+      stable.queue2.inputTransactionsPerSecond -
+        stable.queue2.outputTransactionsPerSecond,
+    )).toBeLessThanOrEqual(10_000)
+    adapter.dispose()
+  })
+
+  it('drains recovered q2 and releases backpressure when service exceeds input', async () => {
+    const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
+    await adapter.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(3_000)
+    const saturated = adapter.getSnapshot()
+    expect(saturated.queue2.depthBatches).toBeGreaterThan(80)
+
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
+    await adapter.dispatch({
+      type: 'set-worker-count',
+      actor: 'sender',
+      value: 4,
+    })
+    await vi.advanceTimersByTimeAsync(4_000)
+
+    const recovered = adapter.getSnapshot()
+    expect(recovered.queue2.depthBatches).toBeLessThan(
+      saturated.queue2.depthBatches ?? 0,
+    )
+    expect(recovered.queue2.depthBatches).toBe(0)
+    expect(recovered.queue2.blockedSenders).toBe(0)
+    expect(recovered.queue2.flowState).not.toBe('backpressure')
+    adapter.dispose()
+  })
+
   it('does not lose elapsed time when run is dispatched repeatedly', async () => {
     const adapter = new SimulationAdapter()
 

@@ -378,6 +378,7 @@ export class FixedStepSimulation {
 
   updateConfig(values: Partial<SimulationConfig>): void {
     Object.assign(this.config, values)
+    if (values.requestedTps === 0) this.throttlerTokens = 0
     this.readerTransactionCredit = Math.min(
       this.readerTransactionCredit,
       this.config.readerWorkers * this.config.readBatchSize,

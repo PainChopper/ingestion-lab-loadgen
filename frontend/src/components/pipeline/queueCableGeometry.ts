@@ -1,6 +1,5 @@
 import type {
   NumericControlSnapshot,
-  QueueFlowState,
 } from '../../model/loadgen'
 import type { Point } from './geometry'
 
@@ -23,7 +22,8 @@ export interface QueueCapacityPresentation {
   readonly requestState: QueueCapacityRequestState
 }
 
-export const QUEUE_CABLE_MAX_MARKERS = 12
+export const QUEUE_CABLE_MAX_MARKERS = 24
+export const QUEUE_CABLE_MAX_LIFT = 240
 
 function decimalPlaces(value: number): number {
   const [, fraction = ''] = String(value).split('.')
@@ -125,10 +125,18 @@ export function buildQueueCablePath(
   end: Point,
   topY: number,
 ): string {
+  return `M${formatCoordinate(start.x)} ${formatCoordinate(start.y)} ${buildQueueCableCommands(start, end, topY)}`
+}
+
+function buildQueueCableCommands(
+  start: Point,
+  end: Point,
+  topY: number,
+): string {
   const baseline = start.y
   const lift = Math.max(0, baseline - topY)
   if (lift < 0.5) {
-    return `M${formatCoordinate(start.x)} ${formatCoordinate(baseline)} H${formatCoordinate(end.x)}`
+    return `H${formatCoordinate(end.x)}`
   }
 
   const width = end.x - start.x
@@ -139,7 +147,6 @@ export function buildQueueCablePath(
   const f = formatCoordinate
 
   return [
-    `M${f(start.x)} ${f(baseline)}`,
     `H${f(leftX - radius)}`,
     `Q${f(leftX)} ${f(baseline)} ${f(leftX)} ${f(baseline - radius)}`,
     `V${f(topY + radius)}`,
@@ -150,6 +157,29 @@ export function buildQueueCablePath(
     `Q${f(rightX)} ${f(baseline)} ${f(rightX + radius)} ${f(baseline)}`,
     `H${f(end.x)}`,
   ].join(' ')
+}
+
+export function buildQueueTraversalPath(
+  upstreamPoints: readonly Point[],
+  start: Point,
+  end: Point,
+  topY: number,
+  downstreamPoints: readonly Point[],
+): string {
+  const first = upstreamPoints[0] ?? start
+  const upstream = [...upstreamPoints.slice(1), start]
+    .map((point) => `L${formatCoordinate(point.x)} ${formatCoordinate(point.y)}`)
+    .join(' ')
+  const downstream = downstreamPoints
+    .map((point) => `L${formatCoordinate(point.x)} ${formatCoordinate(point.y)}`)
+    .join(' ')
+
+  return [
+    `M${formatCoordinate(first.x)} ${formatCoordinate(first.y)}`,
+    upstream,
+    buildQueueCableCommands(start, end, topY),
+    downstream,
+  ].filter(Boolean).join(' ')
 }
 
 export function getCapacityTicks(
@@ -183,17 +213,15 @@ export function getCapacityTicks(
 export function getQueueMarkerCount(
   depthBatches: number | null,
   capacity: number,
-  throughputTps: number | null,
-  flowState: QueueFlowState,
 ): number {
-  if (flowState === 'connection-error') return 0
+  if (depthBatches === null || depthBatches <= 0 || capacity <= 0) return 0
 
-  if (depthBatches !== null && depthBatches > 0) {
-    const fillRatio = capacity > 0 ? Math.min(1, depthBatches / capacity) : 1
-    return Math.max(1, Math.ceil(fillRatio * QUEUE_CABLE_MAX_MARKERS))
-  }
+  const depth = Math.max(0, Math.floor(depthBatches))
+  if (depth === 0) return 0
 
-  return flowState !== 'stopped' && throughputTps !== null && throughputTps > 0
-    ? 1
-    : 0
+  const density = Math.max(
+    1,
+    Math.ceil((depth / capacity) * QUEUE_CABLE_MAX_MARKERS),
+  )
+  return Math.min(depth, density, QUEUE_CABLE_MAX_MARKERS)
 }
