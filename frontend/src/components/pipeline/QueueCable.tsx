@@ -1,0 +1,301 @@
+import { useRef, useState } from 'react'
+import type {
+  CSSProperties,
+  KeyboardEvent,
+  PointerEvent,
+} from 'react'
+import type {
+  QueueId,
+  QueueSnapshot,
+  SelectableId,
+} from '../../model/loadgen'
+import { formatInteger, formatRate } from './formatters'
+import type { Point } from './geometry'
+import {
+  buildQueueCablePath,
+  capacityFromVerticalDrag,
+  capacityToCableY,
+  getCapacityTicks,
+  getQueueMarkerCount,
+  normalizeCapacity,
+} from './queueCableGeometry'
+
+interface QueueCableProps {
+  snapshot: QueueSnapshot
+  start: Point
+  end: Point
+  selected: boolean
+  onSelect: (id: SelectableId) => void
+  onCapacityChange: (queue: QueueId, value: number) => void
+}
+
+const MAX_CABLE_LIFT = 240
+const MARKER_SPEED = 28
+
+interface DragSession {
+  readonly pointerId: number
+  readonly pointerY: number
+  readonly capacity: number
+}
+
+function pointerYInSvg(event: PointerEvent<SVGGElement>): number {
+  const svg = event.currentTarget.ownerSVGElement
+  if (svg === null) return event.clientY
+
+  const matrix = svg.getScreenCTM()
+  if (matrix !== null) {
+    const point = svg.createSVGPoint()
+    point.x = event.clientX
+    point.y = event.clientY
+    return point.matrixTransform(matrix.inverse()).y
+  }
+
+  const bounds = svg.getBoundingClientRect()
+  const viewBox = svg.viewBox.baseVal
+  return viewBox.y + ((event.clientY - bounds.top) / bounds.height) * viewBox.height
+}
+
+function displayCapacity(snapshot: QueueSnapshot): number {
+  const control = snapshot.capacity
+  return normalizeCapacity(
+    control.preview ?? control.pending ?? control.applied ?? control.min,
+    control,
+  )
+}
+
+export function QueueCable({
+  snapshot,
+  start,
+  end,
+  selected,
+  onSelect,
+  onCapacityChange,
+}: QueueCableProps) {
+  const [dragPreview, setDragPreview] = useState<number | null>(null)
+  const dragSession = useRef<DragSession | null>(null)
+  const control = snapshot.capacity
+  const capacity = dragPreview ?? displayCapacity(snapshot)
+  const topY = capacityToCableY(
+    capacity,
+    control,
+    start.y,
+    MAX_CABLE_LIFT,
+  )
+  const path = buildQueueCablePath(start, end, topY)
+  const pathLength = end.x - start.x + 2 * (start.y - topY)
+  const markerDurationSeconds = pathLength / MARKER_SPEED
+  const centerX = (start.x + end.x) / 2
+  const ticks = getCapacityTicks(control, start.y, MAX_CABLE_LIFT)
+  const disconnected = snapshot.flowState === 'connection-error'
+  const markerCount = getQueueMarkerCount(
+    snapshot.depthBatches,
+    capacity,
+    snapshot.throughputTps,
+    snapshot.flowState,
+  )
+  const moving =
+    snapshot.throughputTps !== null &&
+    snapshot.throughputTps > 0 &&
+    snapshot.flowState !== 'stopped' &&
+    !disconnected
+  const disabled = control.applyMode === 'unavailable'
+  const depth = formatInteger(snapshot.depthBatches)
+
+  const capacityFromDrag = (
+    event: PointerEvent<SVGGElement>,
+    session: DragSession,
+  ) =>
+    capacityFromVerticalDrag(
+      session.capacity,
+      pointerYInSvg(event) - session.pointerY,
+      control,
+      MAX_CABLE_LIFT,
+    )
+
+  const handlePointerDown = (event: PointerEvent<SVGGElement>) => {
+    if (disabled || event.button !== 0 || dragSession.current !== null) return
+
+    dragSession.current = {
+      pointerId: event.pointerId,
+      pointerY: pointerYInSvg(event),
+      capacity,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handlePointerMove = (event: PointerEvent<SVGGElement>) => {
+    const session = dragSession.current
+    if (session?.pointerId !== event.pointerId) return
+    setDragPreview(capacityFromDrag(event, session))
+  }
+
+  const handlePointerUp = (event: PointerEvent<SVGGElement>) => {
+    const session = dragSession.current
+    if (session?.pointerId !== event.pointerId) return
+
+    const nextCapacity = capacityFromDrag(event, session)
+    dragSession.current = null
+    setDragPreview(null)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (nextCapacity !== session.capacity) {
+      onCapacityChange(snapshot.id, nextCapacity)
+    }
+  }
+
+  const handlePointerCancel = (event: PointerEvent<SVGGElement>) => {
+    if (dragSession.current?.pointerId !== event.pointerId) return
+    dragSession.current = null
+    setDragPreview(null)
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
+    if (disabled) return
+
+    let nextCapacity: number | null = null
+    switch (event.key) {
+      case 'ArrowUp':
+      case 'ArrowRight':
+        nextCapacity = capacity + control.step
+        break
+      case 'ArrowDown':
+      case 'ArrowLeft':
+        nextCapacity = capacity - control.step
+        break
+      case 'PageUp':
+        nextCapacity = capacity + control.step * 5
+        break
+      case 'PageDown':
+        nextCapacity = capacity - control.step * 5
+        break
+      case 'Home':
+        nextCapacity = control.min
+        break
+      case 'End':
+        nextCapacity = control.max
+        break
+      default:
+        return
+    }
+
+    event.preventDefault()
+    const normalized = normalizeCapacity(nextCapacity, control)
+    if (normalized !== control.applied) {
+      onCapacityChange(snapshot.id, normalized)
+    }
+  }
+
+  const handleSelectionKeyDown = (event: KeyboardEvent<SVGGElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onSelect(snapshot.id)
+  }
+
+  return (
+    <g
+      id={`queue-${snapshot.id}`}
+      className={`pipeline-queue pipeline-selectable pipeline-queue--${snapshot.flowState}${selected ? ' pipeline-selectable--selected' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label={`Inspect ${snapshot.from} to ${snapshot.to} queue`}
+      aria-pressed={selected}
+      onClick={() => onSelect(snapshot.id)}
+      onKeyDown={handleSelectionKeyDown}
+    >
+      <g className="pipeline-queue-scale" aria-hidden="true">
+        <line
+          x1={centerX}
+          y1={start.y - MAX_CABLE_LIFT}
+          x2={centerX}
+          y2={start.y}
+          className="pipeline-queue-scale__line"
+        />
+        {ticks.map((tick) => (
+          <g key={tick.value}>
+            <line
+              x1={centerX - (tick.major ? 5 : 3)}
+              y1={tick.y}
+              x2={centerX + (tick.major ? 5 : 3)}
+              y2={tick.y}
+              className="pipeline-queue-scale__tick"
+            />
+            {tick.major && (
+              <text
+                x={centerX + 10}
+                y={tick.y + 4}
+                className="pipeline-queue-scale__label"
+              >
+                {formatInteger(tick.value)}
+              </text>
+            )}
+          </g>
+        ))}
+      </g>
+
+      <path d={path} className="pipeline-link-hit-area" aria-hidden="true" />
+      <path d={path} className="pipeline-queue-cable" />
+
+      <g aria-hidden="true">
+        {Array.from({ length: markerCount }, (_, index) => {
+          const markerStyle = {
+            offsetPath: `path("${path}")`,
+            animationDuration: `${markerDurationSeconds}s`,
+            animationDelay: `${(-index * markerDurationSeconds) / markerCount}s`,
+          } satisfies CSSProperties
+
+          return (
+            <circle
+              key={index}
+              r="4.5"
+              className={`pipeline-queue-marker pipeline-queue-marker--${moving ? 'moving' : 'frozen'}`}
+              style={markerStyle}
+            />
+          )
+        })}
+      </g>
+
+      <g
+        className={`pipeline-queue-handle${disabled ? ' pipeline-queue-handle--disabled' : ''}`}
+        role="slider"
+        aria-orientation="vertical"
+        tabIndex={disabled ? -1 : 0}
+        aria-label={`${snapshot.from} to ${snapshot.to} queue capacity`}
+        aria-valuemin={control.min}
+        aria-valuemax={control.max}
+        aria-valuenow={capacity}
+        aria-valuetext={`${formatInteger(capacity)} batches`}
+        aria-disabled={disabled}
+        transform={`translate(${centerX} ${topY})`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onLostPointerCapture={handlePointerCancel}
+        onKeyDown={handleKeyDown}
+      >
+        <rect x="-18" y="-12" width="36" height="24" rx="4" />
+        <text y="4" textAnchor="middle">
+          {formatInteger(capacity)}
+        </text>
+      </g>
+
+      <text
+        x={centerX}
+        y="507"
+        textAnchor="middle"
+        className="pipeline-small-strong pipeline-queue-metric"
+      >
+        {formatRate(snapshot.throughputTps)}
+      </text>
+      <text
+        x={centerX}
+        y="528"
+        textAnchor="middle"
+        className="pipeline-small pipeline-queue-metric"
+      >
+        Depth {depth} / {formatInteger(capacity)} batches
+      </text>
+    </g>
+  )
+}
