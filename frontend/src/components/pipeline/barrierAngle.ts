@@ -1,20 +1,16 @@
-import type { RunState } from '../../model/loadgen'
+import type { NumericControlSnapshot } from '../../model/loadgen'
 
 export function getBarrierAngle(
-  requestedTps: number | null,
-  admittedTps: number | null,
-  runState: RunState,
+  requestedTps: Pick<NumericControlSnapshot, 'applied' | 'min' | 'max'>,
 ): number {
-  if (
-    runState !== 'running' ||
-    requestedTps === null ||
-    admittedTps === null ||
-    requestedTps <= 0 ||
-    admittedTps <= 0
-  ) {
-    return 0
-  }
+  const span = requestedTps.max - requestedTps.min
+  if (requestedTps.applied === null || span <= 0) return 0
 
-  const admittedRatio = Math.min(1, Math.max(0, admittedTps / requestedTps))
-  return -90 * admittedRatio
+  const ratio = Math.min(
+    1,
+    Math.max(0, (requestedTps.applied - requestedTps.min) / span),
+  )
+  if (ratio === 0) return 0
+
+  return -90 * ratio
 }
