@@ -16,6 +16,7 @@ import {
   capacityFromVerticalDrag,
   capacityToCableY,
   getCapacityTicks,
+  getQueueCapacityPresentation,
   getQueueMarkerCount,
   normalizeCapacity,
 } from './queueCableGeometry'
@@ -55,14 +56,6 @@ function pointerYInSvg(event: PointerEvent<SVGGElement>): number {
   return viewBox.y + ((event.clientY - bounds.top) / bounds.height) * viewBox.height
 }
 
-function displayCapacity(snapshot: QueueSnapshot): number {
-  const control = snapshot.capacity
-  return normalizeCapacity(
-    control.preview ?? control.pending ?? control.applied ?? control.min,
-    control,
-  )
-}
-
 export function QueueCable({
   snapshot,
   start,
@@ -74,22 +67,28 @@ export function QueueCable({
   const [dragPreview, setDragPreview] = useState<number | null>(null)
   const dragSession = useRef<DragSession | null>(null)
   const control = snapshot.capacity
-  const capacity = dragPreview ?? displayCapacity(snapshot)
-  const topY = capacityToCableY(
-    capacity,
+  const capacity = getQueueCapacityPresentation(control, dragPreview)
+  const appliedTopY = capacityToCableY(
+    capacity.applied,
     control,
     start.y,
     MAX_CABLE_LIFT,
   )
-  const path = buildQueueCablePath(start, end, topY)
-  const pathLength = end.x - start.x + 2 * (start.y - topY)
+  const candidateTopY = capacityToCableY(
+    capacity.candidate,
+    control,
+    start.y,
+    MAX_CABLE_LIFT,
+  )
+  const path = buildQueueCablePath(start, end, appliedTopY)
+  const pathLength = end.x - start.x + 2 * (start.y - appliedTopY)
   const markerDurationSeconds = pathLength / MARKER_SPEED
   const centerX = (start.x + end.x) / 2
   const ticks = getCapacityTicks(control, start.y, MAX_CABLE_LIFT)
   const disconnected = snapshot.flowState === 'connection-error'
   const markerCount = getQueueMarkerCount(
     snapshot.depthBatches,
-    capacity,
+    capacity.applied,
     snapshot.throughputTps,
     snapshot.flowState,
   )
@@ -118,7 +117,7 @@ export function QueueCable({
     dragSession.current = {
       pointerId: event.pointerId,
       pointerY: pointerYInSvg(event),
-      capacity,
+      capacity: capacity.candidate,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -157,17 +156,17 @@ export function QueueCable({
     switch (event.key) {
       case 'ArrowUp':
       case 'ArrowRight':
-        nextCapacity = capacity + control.step
+        nextCapacity = capacity.candidate + control.step
         break
       case 'ArrowDown':
       case 'ArrowLeft':
-        nextCapacity = capacity - control.step
+        nextCapacity = capacity.candidate - control.step
         break
       case 'PageUp':
-        nextCapacity = capacity + control.step * 5
+        nextCapacity = capacity.candidate + control.step * 5
         break
       case 'PageDown':
-        nextCapacity = capacity - control.step * 5
+        nextCapacity = capacity.candidate - control.step * 5
         break
       case 'Home':
         nextCapacity = control.min
@@ -181,7 +180,7 @@ export function QueueCable({
 
     event.preventDefault()
     const normalized = normalizeCapacity(nextCapacity, control)
-    if (normalized !== control.applied) {
+    if (normalized !== capacity.candidate) {
       onCapacityChange(snapshot.id, normalized)
     }
   }
@@ -256,17 +255,21 @@ export function QueueCable({
       </g>
 
       <g
-        className={`pipeline-queue-handle${disabled ? ' pipeline-queue-handle--disabled' : ''}`}
+        className={`pipeline-queue-handle${capacity.requestState === null ? '' : ` pipeline-queue-handle--${capacity.requestState}`}${disabled ? ' pipeline-queue-handle--disabled' : ''}`}
         role="slider"
         aria-orientation="vertical"
         tabIndex={disabled ? -1 : 0}
         aria-label={`${snapshot.from} to ${snapshot.to} queue capacity`}
         aria-valuemin={control.min}
         aria-valuemax={control.max}
-        aria-valuenow={capacity}
-        aria-valuetext={`${formatInteger(capacity)} batches`}
+        aria-valuenow={capacity.candidate}
+        aria-valuetext={
+          capacity.requestState === null
+            ? `${formatInteger(capacity.applied)} batches applied`
+            : `${capacity.requestState === 'pending' ? 'Pending' : 'Preview'} ${formatInteger(capacity.candidate)} batches; ${formatInteger(capacity.applied)} batches applied`
+        }
         aria-disabled={disabled}
-        transform={`translate(${centerX} ${topY})`}
+        transform={`translate(${centerX} ${candidateTopY})`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -276,7 +279,7 @@ export function QueueCable({
       >
         <rect x="-18" y="-12" width="36" height="24" rx="4" />
         <text y="4" textAnchor="middle">
-          {formatInteger(capacity)}
+          {formatInteger(capacity.candidate)}
         </text>
       </g>
 
@@ -294,8 +297,19 @@ export function QueueCable({
         textAnchor="middle"
         className="pipeline-small pipeline-queue-metric"
       >
-        Depth {depth} / {formatInteger(capacity)} batches
+        Depth {depth} / {formatInteger(capacity.applied)} batches
       </text>
+      {capacity.requestState !== null && (
+        <text
+          x={centerX}
+          y="548"
+          textAnchor="middle"
+          className={`pipeline-queue-capacity-status pipeline-queue-capacity-status--${capacity.requestState}`}
+        >
+          {capacity.requestState === 'pending' ? 'Pending' : 'Preview'}{' '}
+          {formatInteger(capacity.candidate)} batches
+        </text>
+      )}
     </g>
   )
 }

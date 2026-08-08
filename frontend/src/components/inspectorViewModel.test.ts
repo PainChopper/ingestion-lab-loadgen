@@ -1,10 +1,31 @@
 import { describe, expect, it } from 'vitest'
 import { SimulationAdapter } from '../adapters/SimulationAdapter'
-import type { SelectableId } from '../model/loadgen'
+import type { LoadgenSnapshot, SelectableId } from '../model/loadgen'
 import {
   formatStateLabel,
   getInspectorViewModel,
 } from './inspectorViewModel'
+
+function withQueueCapacity(
+  snapshot: LoadgenSnapshot,
+  applied: number,
+  depthBatches: number,
+  pending: number | null = null,
+): LoadgenSnapshot {
+  return {
+    ...snapshot,
+    queue1: {
+      ...snapshot.queue1,
+      depthBatches,
+      capacity: {
+        ...snapshot.queue1.capacity,
+        applied,
+        preview: pending,
+        pending,
+      },
+    },
+  }
+}
 
 describe('inspector view model', () => {
   it('builds a distinct model for every selectable pipeline object', () => {
@@ -49,6 +70,66 @@ describe('inspector view model', () => {
     })
     expect(model?.rows).toContainEqual({ label: 'Flow state', value: 'Stopped' })
     expect(model?.rows).toContainEqual({ label: 'Throughput', value: '0 tx/s' })
+    adapter.dispose()
+  })
+
+  it.each([
+    {
+      name: 'applied 4, depth 4, pending 0',
+      applied: 4,
+      depth: 4,
+      pending: 0,
+      expectedDepth: '4 / 4 batches',
+      expectedChange: 'Pending 0 batches',
+    },
+    {
+      name: 'applied 12, depth 12, pending 4',
+      applied: 12,
+      depth: 12,
+      pending: 4,
+      expectedDepth: '12 / 12 batches',
+      expectedChange: 'Pending 4 batches',
+    },
+    {
+      name: 'increase from 4 to 12 applied immediately',
+      applied: 12,
+      depth: 4,
+      pending: null,
+      expectedDepth: '4 / 12 batches',
+      expectedChange: null,
+    },
+    {
+      name: 'zero capacity applied',
+      applied: 0,
+      depth: 0,
+      pending: null,
+      expectedDepth: '0 / 0 batches',
+      expectedChange: null,
+    },
+  ])('keeps queue presentation truthful for $name', ({
+    applied,
+    depth,
+    pending,
+    expectedDepth,
+    expectedChange,
+  }) => {
+    const adapter = new SimulationAdapter()
+    const snapshot = withQueueCapacity(
+      adapter.getSnapshot(),
+      applied,
+      depth,
+      pending,
+    )
+    const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
+    const depthRow = model?.rows.find(
+      (row) => row.label === 'Depth / capacity',
+    )
+    const changeRow = model?.rows.find(
+      (row) => row.label === 'Capacity change',
+    )
+
+    expect(depthRow?.value).toBe(expectedDepth)
+    expect(changeRow?.value ?? null).toBe(expectedChange)
     adapter.dispose()
   })
 })

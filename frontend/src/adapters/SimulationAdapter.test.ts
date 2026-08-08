@@ -271,7 +271,6 @@ describe('SimulationAdapter', () => {
   it('reports a newly full queue as near-limit while no sender is blocked', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 1 })
-    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 0 })
     await adapter.dispatch({
       type: 'set-queue-capacity',
@@ -286,6 +285,84 @@ describe('SimulationAdapter', () => {
     expect(snapshot.queue1.blockedSenders).toBe(0)
     expect(snapshot.queue1.oldestBlockedSenderMs).toBe(0)
     expect(snapshot.queue1.flowState).toBe('near-limit')
+    adapter.dispose()
+  })
+
+  it('keeps reader worker capacity independent of read batch size', async () => {
+    const fourWorkers = new SimulationAdapter()
+    await fourWorkers.dispatch({ type: 'set-read-batch-size', value: 50_000 })
+    await fourWorkers.dispatch({ type: 'set-requested-tps', value: 250_000 })
+    await fourWorkers.dispatch({
+      type: 'set-queue-capacity',
+      queue: 'reader-to-throttler',
+      value: 12,
+    })
+    await fourWorkers.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(fourWorkers.getSnapshot().reader.readTps).toBe(200_000)
+    fourWorkers.dispose()
+
+    const sevenWorkers = new SimulationAdapter()
+    await sevenWorkers.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
+    await sevenWorkers.dispatch({ type: 'set-requested-tps', value: 250_000 })
+    await sevenWorkers.dispatch({
+      type: 'set-queue-capacity',
+      queue: 'reader-to-throttler',
+      value: 12,
+    })
+    await sevenWorkers.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(sevenWorkers.getSnapshot().reader.readTps).toBe(350_000)
+    sevenWorkers.dispose()
+  })
+
+  it('drains a full reader queue after reducing workers from four to one', async () => {
+    const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    const saturated = adapter.getSnapshot()
+    expect(saturated.reader.workers.applied).toBe(4)
+    expect(saturated.throttler.requestedTps.applied).toBe(120_000)
+    expect(saturated.queue1.capacity.applied).toBe(4)
+    expect(saturated.queue1.depthBatches).toBe(4)
+    expect(saturated.queue1.blockedSenders).toBe(1)
+    expect(saturated.queue1.flowState).toBe('backpressure')
+
+    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 1 })
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    const recovered = adapter.getSnapshot()
+    expect(recovered.reader.readTps).toBe(50_000)
+    expect(recovered.queue1.depthBatches).not.toBeNull()
+    expect(saturated.queue1.depthBatches).not.toBeNull()
+    expect(recovered.queue1.depthBatches!).toBeLessThan(
+      saturated.queue1.depthBatches!,
+    )
+    expect(recovered.queue1.blockedSenders).toBe(0)
+    expect(recovered.queue1.flowState).not.toBe('backpressure')
+    adapter.dispose()
+  })
+
+  it('does not systematically admit above the requested transaction rate', async () => {
+    const adapter = new SimulationAdapter()
+    await adapter.dispatch({
+      type: 'set-queue-capacity',
+      queue: 'reader-to-throttler',
+      value: 12,
+    })
+    await adapter.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(2_000)
+    const before = adapter.getSnapshot()
+
+    await vi.advanceTimersByTimeAsync(4_000)
+    const after = adapter.getSnapshot()
+    const averageAdmittedTps =
+      (after.totalTransactions - before.totalTransactions) /
+      ((after.elapsedMs - before.elapsedMs) / 1_000)
+
+    expect(averageAdmittedTps).toBeLessThanOrEqual(120_000)
+    expect(averageAdmittedTps).toBeGreaterThanOrEqual(115_000)
     adapter.dispose()
   })
 

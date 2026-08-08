@@ -9,6 +9,7 @@ import {
   formatMilliseconds,
   formatRate,
 } from './pipeline/formatters'
+import { getQueueCapacityPresentation } from './pipeline/queueCableGeometry'
 
 export interface InspectorRow {
   readonly label: string
@@ -38,8 +39,19 @@ export function formatStateLabel(value: string): string {
 }
 
 function queueViewModel(queue: QueueSnapshot): InspectorViewModel {
-  const capacity = formatControl(queue.capacity)
+  const capacity = getQueueCapacityPresentation(queue.capacity)
+  const appliedCapacity = formatControl({
+    ...queue.capacity,
+    applied: capacity.applied,
+  })
   const depth = formatInteger(queue.depthBatches)
+  const capacityChange =
+    capacity.requestState === null
+      ? []
+      : [{
+          label: 'Capacity change',
+          value: `${capacity.requestState === 'pending' ? 'Pending' : 'Preview'} ${formatInteger(capacity.candidate)} ${queue.capacity.unit}`,
+        }]
 
   return {
     id: queue.id,
@@ -51,8 +63,9 @@ function queueViewModel(queue: QueueSnapshot): InspectorViewModel {
       { label: 'Output rate', value: formatRate(queue.outputTps) },
       {
         label: 'Depth / capacity',
-        value: `${depth} / ${capacity}`,
+        value: `${depth} / ${appliedCapacity}`,
       },
+      ...capacityChange,
       { label: 'Queued tx', value: formatInteger(queue.queuedTransactions) },
       { label: 'Blocked time', value: formatMilliseconds(queue.blockedMs) },
       { label: 'Trend', value: formatStateLabel(queue.trend) },
