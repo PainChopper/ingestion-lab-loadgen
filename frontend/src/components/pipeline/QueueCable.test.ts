@@ -1,7 +1,27 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server.browser'
 import { describe, expect, it } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
-import { capacityToCableY, QUEUE_CABLE_MAX_LIFT } from './queueCableGeometry'
-import { getQueueCablePresentation } from './QueueCable'
+import {
+  buildQueueCablePath,
+  capacityFromVerticalDrag,
+  capacityToCableY,
+  QUEUE_CABLE_MAX_LIFT,
+} from './queueCableGeometry'
+import { getQueueCablePresentation, QueueCable } from './QueueCable'
+
+function elementWithClass(
+  markup: string,
+  tagName: 'g' | 'path',
+  className: string,
+): string {
+  const element = markup.match(
+    new RegExp(`<${tagName}[^>]*class="${className}(?: [^"]*)?"[^>]*>`),
+  )?.[0]
+
+  expect(element).toBeDefined()
+  return element ?? ''
+}
 
 describe('QueueCable presentation', () => {
   it('keeps zero depth visible while showing the current upstream wait', () => {
@@ -41,7 +61,7 @@ describe('QueueCable presentation', () => {
     adapter.dispose()
   })
 
-  it('keeps the handle on applied 12 and marks pending 8 separately', () => {
+  it('keeps the handle and drag origin on pending 6 while applied stays 12', () => {
     const adapter = new SimulationAdapter()
     const queue = adapter.getSnapshot().queue1
     const snapshot = {
@@ -50,17 +70,19 @@ describe('QueueCable presentation', () => {
       capacity: {
         ...queue.capacity,
         applied: 12,
-        preview: 8,
-        pending: 8,
+        preview: 6,
+        pending: 6,
       },
     }
     const presentation = getQueueCablePresentation(snapshot)
 
-    expect(presentation.handleCapacity).toBe(12)
-    expect(presentation.target).toEqual({ capacity: 8, state: 'pending' })
+    expect(presentation.handleCapacity).toBe(6)
+    expect(presentation.handleState).toBe('pending')
+    expect(presentation.dragStartCapacity).toBe(6)
+    expect(presentation.appliedMarker).toEqual({ capacity: 12 })
     expect(
       capacityToCableY(
-        presentation.handleCapacity,
+        presentation.appliedMarker?.capacity ?? 0,
         snapshot.capacity,
         415,
         QUEUE_CABLE_MAX_LIFT,
@@ -68,12 +90,20 @@ describe('QueueCable presentation', () => {
     ).toBe(175)
     expect(
       capacityToCableY(
-        presentation.target?.capacity ?? 0,
+        presentation.handleCapacity,
         snapshot.capacity,
         415,
         QUEUE_CABLE_MAX_LIFT,
       ),
-    ).toBe(255)
+    ).toBe(295)
+    expect(
+      capacityFromVerticalDrag(
+        presentation.dragStartCapacity,
+        -20,
+        snapshot.capacity,
+        QUEUE_CABLE_MAX_LIFT,
+      ),
+    ).toBe(7)
     adapter.dispose()
   })
 
@@ -95,7 +125,76 @@ describe('QueueCable presentation', () => {
 
     expect(presentation.handleCapacity).toBe(7)
     expect(presentation.handleState).toBe('preview')
-    expect(presentation.target).toBeNull()
+    expect(presentation.appliedMarker).toEqual({ capacity: 12 })
     adapter.dispose()
   })
+
+  it.each([
+    {
+      queueKey: 'queue1',
+      applied: 12,
+      pending: 6,
+      appliedY: 175,
+      pendingY: 295,
+    },
+    {
+      queueKey: 'queue2',
+      applied: 160,
+      pending: 20,
+      appliedY: 175,
+      pendingY: 385,
+    },
+  ] as const)(
+    'renders $queueKey cable at applied $applied and slider at pending $pending',
+    ({ queueKey, applied, pending, appliedY, pendingY }) => {
+      const adapter = new SimulationAdapter()
+      const queue = adapter.getSnapshot()[queueKey]
+      const snapshot = {
+        ...queue,
+        depthBatches: applied,
+        capacity: {
+          ...queue.capacity,
+          applied,
+          preview: pending,
+          pending,
+        },
+      }
+      const start = { x: 150, y: 415 }
+      const end = { x: 355, y: 415 }
+      const presentation = getQueueCablePresentation(snapshot)
+      const markup = renderToStaticMarkup(
+        createElement(QueueCable, {
+          snapshot,
+          start,
+          end,
+          selected: false,
+          markers: [],
+          onSelect: () => undefined,
+          onCapacityChange: () => undefined,
+        }),
+      )
+
+      const cable = elementWithClass(markup, 'path', 'pipeline-queue-cable')
+      const slider = elementWithClass(markup, 'g', 'pipeline-queue-handle')
+      const appliedMarker = elementWithClass(
+        markup,
+        'g',
+        'pipeline-queue-capacity-applied',
+      )
+
+      expect(cable).toContain(
+        `d="${buildQueueCablePath(start, end, appliedY)}"`,
+      )
+      expect(slider).toContain('role="slider"')
+      expect(slider).toContain(`aria-valuenow="${pending}"`)
+      expect(slider).toContain(`transform="translate(252.5 ${pendingY})"`)
+      expect(presentation.dragStartCapacity).toBe(pending)
+      expect(appliedMarker).toContain(
+        `transform="translate(202.5 ${appliedY})"`,
+      )
+      expect(markup).toContain(`>Applied ${applied}</text>`)
+      expect(markup).not.toContain('pipeline-queue-capacity-target')
+      adapter.dispose()
+    },
+  )
 })
