@@ -191,11 +191,11 @@ describe('MarkerLifecycleController', () => {
       (slot) => slot.kind === 'flow' && slot.state === 'active',
     )
 
-    controller.advance(900)
+    controller.advance(2_500)
     const nearEnd = controller.getSnapshot().queue1.find(
       (slot) => slot.slotId === before?.slotId,
     )
-    controller.advance(200)
+    controller.advance(300)
     const looped = controller.getSnapshot().queue1.find(
       (slot) => slot.slotId === before?.slotId,
     )
