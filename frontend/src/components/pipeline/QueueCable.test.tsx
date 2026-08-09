@@ -223,13 +223,13 @@ describe('QueueCable mounted behavior', () => {
     const snapshot = derivedSnapshot(adapter)
     const cases = [
       {
-        queue: queueSnapshot(snapshot.queue1, 12, 5),
+        queue: queueSnapshot(snapshot.queue1, 5),
         pointerId: 11,
         releaseY: 240,
         expected: 8,
       },
       {
-        queue: queueSnapshot(snapshot.queue2, 100, 30),
+        queue: queueSnapshot(snapshot.queue2, 30),
         pointerId: 12,
         releaseY: 285,
         expected: 40,
@@ -311,7 +311,7 @@ describe('QueueCable mounted behavior', () => {
       fireEvent.pointerUp(document.body, { pointerId: 13, clientY: 285 })
       expect(onCapacityChange).not.toHaveBeenCalled()
       expect(slider.classList).not.toContain('pipeline-queue-handle--preview')
-      expect(slider.getAttribute('aria-valuenow')).toBe('30')
+      expect(slider.getAttribute('aria-valuenow')).toBe('100')
     }
     adapter.dispose()
   })
@@ -384,12 +384,6 @@ describe('QueueCable mounted behavior', () => {
         endpoints.start.y,
         QUEUE_CABLE_MAX_LIFT,
       )
-      const candidateY = capacityToCableY(
-        testCase.candidate,
-        snapshot.capacity,
-        endpoints.start.y,
-        QUEUE_CABLE_MAX_LIFT,
-      )
       const appliedPath = buildQueueCablePath(
         endpoints.start,
         endpoints.end,
@@ -416,14 +410,14 @@ describe('QueueCable mounted behavior', () => {
       expect(Number.parseFloat(cableStyle.strokeWidth)).toBeGreaterThan(0)
       expect(handleStyle.getPropertyValue(
         '--pipeline-queue-handle-state-color',
-      )).toBe('var(--yellow)')
+      )).toBe('currentColor')
       expect(getComputedStyle(handleBody).stroke).toBe(
         'var(--pipeline-queue-handle-state-color)',
       )
       expect(getComputedStyle(handleValue).fill).toBe(
         'var(--pipeline-queue-handle-state-color)',
       )
-      expect(translatedY(slider)).toBe(candidateY)
+      expect(translatedY(slider)).toBe(appliedY)
       expect(markers.map((item) => item.style.offsetPath)).toEqual([
         `path("${appliedPath}")`,
         `path("${appliedPath}")`,
@@ -438,7 +432,7 @@ describe('QueueCable mounted behavior', () => {
       )
       expect(appliedLabel.textContent).toContain(`Applied ${testCase.applied}`)
       expect(slider.getAttribute('transform')).toBe(
-        `translate(${(endpoints.start.x + endpoints.end.x) / 2} ${candidateY})`,
+        `translate(${(endpoints.start.x + endpoints.end.x) / 2} ${appliedY})`,
       )
       expect(children.indexOf(cable)).toBeLessThan(children.indexOf(markerGroup))
       expect(children.indexOf(markerGroup)).toBeLessThan(children.indexOf(appliedLabel))
