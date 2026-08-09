@@ -5,8 +5,10 @@ import type {
 } from '../../model/loadgen'
 import { HttpLink } from './HttpLink'
 import { PipelineMarkers } from './PipelineMarkers'
-import { PIPELINE_VIEW_BOX_VALUE } from './geometry'
-import { ACTOR_GEOMETRY } from './geometry'
+import {
+  PIPELINE_VIEW_BOX_VALUE,
+  QUEUE_CABLE_ENDPOINTS,
+} from './geometry'
 import { QueueCable } from './QueueCable'
 import { ReaderActor } from './ReaderActor'
 import { SenderActor } from './SenderActor'
@@ -32,6 +34,8 @@ export function PipelineSvg({
   onQueueCapacityChange,
 }: PipelineSvgProps) {
   const markers = usePipelineMarkerLifecycle(snapshot)
+  const queue1Endpoints = QUEUE_CABLE_ENDPOINTS[snapshot.queue1.id]
+  const queue2Endpoints = QUEUE_CABLE_ENDPOINTS[snapshot.queue2.id]
 
   return (
     <svg
@@ -48,8 +52,8 @@ export function PipelineSvg({
       />
       <QueueCable
         snapshot={snapshot.queue1}
-        start={ACTOR_GEOMETRY.reader.ports.output}
-        end={ACTOR_GEOMETRY.throttler.ports.input}
+        start={queue1Endpoints.start}
+        end={queue1Endpoints.end}
         selected={selectedId === snapshot.queue1.id}
         markers={markers.queue1}
         onSelect={onSelect}
@@ -57,8 +61,8 @@ export function PipelineSvg({
       />
       <QueueCable
         snapshot={snapshot.queue2}
-        start={ACTOR_GEOMETRY.throttler.ports.output}
-        end={ACTOR_GEOMETRY.sender.ports.input}
+        start={queue2Endpoints.start}
+        end={queue2Endpoints.end}
         selected={selectedId === snapshot.queue2.id}
         markers={markers.queue2}
         onSelect={onSelect}

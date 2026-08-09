@@ -54,7 +54,7 @@ export interface ThrottlerSnapshot {
   readonly state: RunState
 }
 
-export interface QueueSnapshot {
+export interface QueueTelemetrySnapshot {
   readonly id: QueueId
   readonly from: ActorId
   readonly to: ActorId
@@ -78,6 +78,10 @@ export interface QueueSnapshot {
   readonly throughputTps: number | null
   readonly blockedMs: number | null
   readonly trend: QueueTrend
+}
+
+export interface QueueSnapshot extends QueueTelemetrySnapshot {
+  readonly displayedPressure: number
   readonly flowState: QueueFlowState
 }
 
@@ -119,7 +123,7 @@ export interface TargetSnapshot {
   readonly connectionState: ConnectionState
 }
 
-export interface LoadgenSnapshot {
+export interface LoadgenTelemetrySnapshot {
   readonly revision: number
   readonly adapterKind: AdapterKind
   readonly connectionState: ConnectionState
@@ -128,11 +132,19 @@ export interface LoadgenSnapshot {
   readonly totalTransactions: number
   readonly reader: ReaderSnapshot
   readonly throttler: ThrottlerSnapshot
-  readonly queue1: QueueSnapshot
-  readonly queue2: QueueSnapshot
+  readonly queue1: QueueTelemetrySnapshot
+  readonly queue2: QueueTelemetrySnapshot
   readonly sender: SenderSnapshot
   readonly http: HttpSnapshot
   readonly target: TargetSnapshot
+}
+
+export interface LoadgenSnapshot extends Omit<
+  LoadgenTelemetrySnapshot,
+  'queue1' | 'queue2'
+> {
+  readonly queue1: QueueSnapshot
+  readonly queue2: QueueSnapshot
 }
 
 export type LoadgenCommand =

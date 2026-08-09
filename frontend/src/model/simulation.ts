@@ -1,11 +1,9 @@
-import type { QueueFlowState, QueueTrend } from './loadgen'
+import type { QueueTrend } from './loadgen'
 
 export const FIXED_STEP_MS = 10
 export const SNAPSHOT_INTERVAL_MS = 100
 
 const RATE_WINDOW_STEPS = 100
-const BACKPRESSURE_RELEASE_MS = 200
-const NEAR_LIMIT_OCCUPANCY_RATIO = 0.8
 const READER_TRANSACTIONS_PER_WORKER_SECOND = 50_000
 
 export interface SimulationConfig {
@@ -43,7 +41,6 @@ export interface QueueTelemetry {
   readonly inputTransactionsPerSecond: number
   readonly outputTransactionsPerSecond: number
   readonly trend: QueueTrend
-  readonly flowState: QueueFlowState
 }
 
 export interface HttpTelemetry {
@@ -123,8 +120,6 @@ class StatefulQueue {
   private previewCapacity: number | null = null
   private pendingCapacity: number | null = null
   private blockedForMs = 0
-  private clearForMs = 0
-  private backpressure = false
 
   enqueuedBatchesTotal = 0
   enqueuedTransactionsTotal = 0
@@ -218,29 +213,6 @@ class StatefulQueue {
       this.blockedForMs = 0
     }
 
-    if (this.appliedCapacity === 0) {
-      this.backpressure = false
-      this.clearForMs = 0
-      return
-    }
-
-    const full =
-      this.appliedCapacity > 0 && this.depthBatches >= this.appliedCapacity
-    if (blocked || full) {
-      this.backpressure = true
-      this.clearForMs = 0
-      return
-    }
-
-    if (!this.backpressure) {
-      this.clearForMs = 0
-      return
-    }
-    this.clearForMs += FIXED_STEP_MS
-    if (this.clearForMs >= BACKPRESSURE_RELEASE_MS) {
-      this.backpressure = false
-      this.clearForMs = 0
-    }
   }
 
   telemetry(activity: QueueActivity, rateSeconds: number, running: boolean): QueueTelemetry {
@@ -255,25 +227,6 @@ class StatefulQueue {
         : inputTransactionsPerSecond < outputTransactionsPerSecond
           ? 'falling'
           : 'steady'
-    const full =
-      this.appliedCapacity > 0 && this.depthBatches >= this.appliedCapacity
-    const nearLimit =
-      this.appliedCapacity > 0 &&
-      this.depthBatches < this.appliedCapacity &&
-      this.depthBatches >=
-        Math.ceil(this.appliedCapacity * NEAR_LIMIT_OCCUPANCY_RATIO)
-    const flowState: QueueFlowState = !running
-      ? 'stopped'
-      : this.appliedCapacity === 0
-        ? this.blockedSenders > 0
-          ? 'backpressure'
-          : 'normal'
-        : this.blockedSenders > 0 || full || this.backpressure
-          ? 'backpressure'
-          : nearLimit
-            ? 'near-limit'
-            : 'normal'
-
     return {
       capacity: this.capacity,
       enqueuedBatchesTotal: this.enqueuedBatchesTotal,
@@ -292,7 +245,6 @@ class StatefulQueue {
       inputTransactionsPerSecond: running ? inputTransactionsPerSecond : 0,
       outputTransactionsPerSecond: running ? outputTransactionsPerSecond : 0,
       trend,
-      flowState,
     }
   }
 
@@ -304,8 +256,6 @@ class StatefulQueue {
     this.previewCapacity = null
     this.pendingCapacity = null
     this.blockedForMs = 0
-    this.clearForMs = 0
-    this.backpressure = false
     this.enqueuedBatchesTotal = 0
     this.enqueuedTransactionsTotal = 0
     this.dequeuedBatchesTotal = 0

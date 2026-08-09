@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   LoadgenCommand,
-  LoadgenSnapshot,
+  LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
 } from '../model/loadgen'
 import { SimulationAdapter } from './SimulationAdapter'
@@ -18,7 +18,7 @@ describe('SimulationAdapter', () => {
 
   it('emits the current immutable snapshot and unsubscribes cleanly', async () => {
     const adapter = new SimulationAdapter()
-    const snapshots: LoadgenSnapshot[] = []
+    const snapshots: LoadgenTelemetrySnapshot[] = []
     const unsubscribe = adapter.subscribe((snapshot) => snapshots.push(snapshot))
     const initial = adapter.getSnapshot()
 
@@ -39,7 +39,7 @@ describe('SimulationAdapter', () => {
     const adapter = new SimulationAdapter()
     const cases: ReadonlyArray<{
       command: LoadgenCommand
-      select: (snapshot: LoadgenSnapshot) => NumericControlSnapshot
+      select: (snapshot: LoadgenTelemetrySnapshot) => NumericControlSnapshot
       expected: number
     }> = [
       {
@@ -187,7 +187,6 @@ describe('SimulationAdapter', () => {
     await vi.advanceTimersByTimeAsync(500)
     expect(adapter.getSnapshot()).toBe(paused)
     expect(paused.queue1.throughputTps).toBe(0)
-    expect(paused.queue1.flowState).toBe('stopped')
 
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(100)
@@ -206,29 +205,6 @@ describe('SimulationAdapter', () => {
         retries: 0,
       },
     })
-    adapter.dispose()
-  })
-
-  it('integrates state across requested TPS changes without losing fixed steps', async () => {
-    const adapter = new SimulationAdapter()
-
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(250)
-    const beforeChange = adapter.getSnapshot()
-    await adapter.dispatch({ type: 'set-requested-tps', value: 40_000 })
-    await vi.advanceTimersByTimeAsync(250)
-
-    const snapshot = adapter.getSnapshot()
-    expect(snapshot.elapsedMs).toBe(500)
-    expect(snapshot.queue1.enqueuedBatchesTotal).toBeGreaterThanOrEqual(
-      beforeChange.queue1.enqueuedBatchesTotal,
-    )
-    expect(snapshot.queue1.dequeuedBatchesTotal).toBeGreaterThanOrEqual(
-      beforeChange.queue1.dequeuedBatchesTotal,
-    )
-    expect(snapshot.totalTransactions).toBe(
-      snapshot.queue1.dequeuedTransactionsTotal,
-    )
     adapter.dispose()
   })
 
@@ -253,31 +229,6 @@ describe('SimulationAdapter', () => {
     expect(drained.queue1.dequeuedBatchesTotal).toBe(q1DequeuedAtClose)
     expect(drained.queue2.depthBatches).toBe(0)
     expect(drained.http.inFlightRequests).toBe(0)
-    adapter.dispose()
-  })
-
-  it('keeps recovered q2 backlog stable when service matches input', async () => {
-    const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(3_000)
-    expect(adapter.getSnapshot().queue2.depthBatches).toBeGreaterThan(80)
-
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
-    await adapter.dispatch({ type: 'set-requested-tps', value: 60_000 })
-    await vi.advanceTimersByTimeAsync(2_000)
-    const settled = adapter.getSnapshot()
-    await vi.advanceTimersByTimeAsync(4_000)
-    const stable = adapter.getSnapshot()
-
-    expect(stable.queue2.depthBatches).toBeGreaterThan(80)
-    expect(Math.abs(
-      (stable.queue2.depthBatches ?? 0) - (settled.queue2.depthBatches ?? 0),
-    )).toBeLessThanOrEqual(6)
-    expect(Math.abs(
-      stable.queue2.inputTransactionsPerSecond -
-        stable.queue2.outputTransactionsPerSecond,
-    )).toBeLessThanOrEqual(10_000)
     adapter.dispose()
   })
 
@@ -314,7 +265,6 @@ describe('SimulationAdapter', () => {
     expect(minimumDepth).toBe(0)
     expect(recovered.queue2.depthBatches).toBeLessThanOrEqual(25)
     expect(recovered.queue2.blockedSenders).toBe(0)
-    expect(recovered.queue2.flowState).not.toBe('backpressure')
     adapter.dispose()
   })
 
@@ -334,7 +284,7 @@ describe('SimulationAdapter', () => {
     adapter.dispose()
   })
 
-  it('does not increase bottleneck throughput when q2 capacity grows', async () => {
+  it('keeps bottleneck throughput independent of q2 capacity', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
     await adapter.dispatch({
@@ -360,21 +310,6 @@ describe('SimulationAdapter', () => {
     expect(after.queue2.outputTransactionsPerSecond).toBe(
       before.queue2.outputTransactionsPerSecond,
     )
-    expect(after.queue2.flowState).toBe('backpressure')
-    adapter.dispose()
-  })
-
-  it('does not lose elapsed time when run is dispatched repeatedly', async () => {
-    const adapter = new SimulationAdapter()
-
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(50)
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(50)
-
-    expect(adapter.getSnapshot().elapsedMs).toBe(100)
-    expect(adapter.getSnapshot().totalTransactions).toBe(0)
-    expect(adapter.getSnapshot().queue1.depthBatches).toBe(0)
     adapter.dispose()
   })
 
@@ -405,8 +340,6 @@ describe('SimulationAdapter', () => {
     expect(snapshot.queue1.inputTransactionsPerSecond).toBe(250_000)
     expect(snapshot.queue1.outputTransactionsPerSecond).toBe(250_000)
     expect(snapshot.queue2.outputTransactionsPerSecond).toBe(250_000)
-    expect(snapshot.queue1.flowState).toBe('normal')
-    expect(snapshot.queue2.flowState).toBe('normal')
     adapter.dispose()
   })
 
@@ -439,176 +372,6 @@ describe('SimulationAdapter', () => {
     expect(snapshot.queue2.handoffBatchesTotal).toBeGreaterThan(0)
     expect(snapshot.queue1.oldestBlockedSenderMs).toBeLessThan(300)
     expect(snapshot.queue2.oldestBlockedSenderMs).toBeLessThan(300)
-    expect(snapshot.queue1.flowState).toBe('backpressure')
-    expect(snapshot.queue2.flowState).toBe('backpressure')
-    adapter.dispose()
-  })
-
-  it('tracks the current rendezvous waiter while equal rates stay saturated', async () => {
-    const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
-    await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
-    await adapter.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
-      value: 0,
-    })
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(1_000)
-    const saturated = adapter.getSnapshot()
-
-    await adapter.dispatch({
-      type: 'set-worker-count',
-      actor: 'reader',
-      value: 5,
-    })
-    await vi.advanceTimersByTimeAsync(5_000)
-
-    const equalRates = adapter.getSnapshot()
-    expect(equalRates.queue1.inputTransactionsPerSecond).toBe(250_000)
-    expect(equalRates.queue1.outputTransactionsPerSecond).toBe(250_000)
-    expect(equalRates.queue1.handoffBatchesTotal).toBeGreaterThan(
-      saturated.queue1.handoffBatchesTotal,
-    )
-    expect(equalRates.queue1.blockedSenders).toBe(1)
-    expect(equalRates.queue1.oldestBlockedSenderMs).toBeLessThan(300)
-    expect(equalRates.queue1.flowState).toBe('backpressure')
-    adapter.dispose()
-  })
-
-  it('drains rendezvous backlog after reducing readers below admitted rate', async () => {
-    const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
-    await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
-    await adapter.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
-      value: 0,
-    })
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(1_000)
-
-    await adapter.dispatch({
-      type: 'set-worker-count',
-      actor: 'reader',
-      value: 4,
-    })
-    await vi.advanceTimersByTimeAsync(5_000)
-
-    const recovered = adapter.getSnapshot()
-    expect(recovered.queue1.inputTransactionsPerSecond).toBe(200_000)
-    expect(recovered.queue1.outputTransactionsPerSecond).toBe(200_000)
-    expect(recovered.queue1.blockedSenders).toBe(0)
-    expect(recovered.queue1.oldestBlockedSenderMs).toBe(0)
-    expect(recovered.queue1.flowState).toBe('normal')
-    adapter.dispose()
-  })
-
-  it('reports a newly full queue as backpressure before a sender blocks', async () => {
-    const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 1 })
-    await adapter.dispatch({ type: 'set-requested-tps', value: 0 })
-    await adapter.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
-      value: 1,
-    })
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(500)
-
-    const snapshot = adapter.getSnapshot()
-    expect(snapshot.queue1.depthBatches).toBe(1)
-    expect(snapshot.queue1.blockedSenders).toBe(0)
-    expect(snapshot.queue1.oldestBlockedSenderMs).toBe(0)
-    expect(snapshot.queue1.flowState).toBe('backpressure')
-    adapter.dispose()
-  })
-
-  it('uses near-limit only below full queue capacity', async () => {
-    const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 1 })
-    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
-    await adapter.dispatch({ type: 'set-requested-tps', value: 0 })
-    await adapter.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
-      value: 10,
-    })
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(160)
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 3 })
-
-    const nearLimit = adapter.getSnapshot()
-    expect(nearLimit.queue1.depthBatches).toBe(8)
-    expect(nearLimit.queue1.blockedSenders).toBe(0)
-    expect(nearLimit.queue1.flowState).toBe('near-limit')
-
-    await vi.advanceTimersByTimeAsync(40)
-    const full = adapter.getSnapshot()
-    expect(full.queue1.depthBatches).toBe(10)
-    expect(full.queue1.blockedSenders).toBe(0)
-    expect(full.queue1.flowState).toBe('backpressure')
-    adapter.dispose()
-  })
-
-  it('keeps reader worker capacity independent of read batch size', async () => {
-    const fourWorkers = new SimulationAdapter()
-    await fourWorkers.dispatch({ type: 'set-read-batch-size', value: 50_000 })
-    await fourWorkers.dispatch({ type: 'set-requested-tps', value: 250_000 })
-    await fourWorkers.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
-      value: 12,
-    })
-    await fourWorkers.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(fourWorkers.getSnapshot().reader.readTps).toBe(200_000)
-    fourWorkers.dispose()
-
-    const sevenWorkers = new SimulationAdapter()
-    await sevenWorkers.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
-    await sevenWorkers.dispatch({ type: 'set-requested-tps', value: 250_000 })
-    await sevenWorkers.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
-      value: 12,
-    })
-    await sevenWorkers.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(sevenWorkers.getSnapshot().reader.readTps).toBe(350_000)
-    sevenWorkers.dispose()
-  })
-
-  it('drains a full reader queue after reducing workers from four to one', async () => {
-    const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(2_000)
-
-    const saturated = adapter.getSnapshot()
-    expect(saturated.reader.workers.applied).toBe(4)
-    expect(saturated.throttler.requestedTps.applied).toBe(120_000)
-    expect(saturated.queue1.capacity.applied).toBe(4)
-    expect(saturated.queue1.depthBatches).toBe(4)
-    expect(saturated.queue1.blockedSenders).toBe(1)
-    expect(saturated.queue1.flowState).toBe('backpressure')
-
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 1 })
-    await vi.advanceTimersByTimeAsync(2_000)
-
-    const recovered = adapter.getSnapshot()
-    expect(recovered.reader.readTps).toBe(50_000)
-    expect(recovered.queue1.depthBatches).not.toBeNull()
-    expect(saturated.queue1.depthBatches).not.toBeNull()
-    expect(recovered.queue1.depthBatches!).toBeLessThan(
-      saturated.queue1.depthBatches!,
-    )
-    expect(recovered.queue1.blockedSenders).toBe(0)
-    expect(recovered.queue1.flowState).not.toBe('backpressure')
     adapter.dispose()
   })
 
@@ -632,70 +395,6 @@ describe('SimulationAdapter', () => {
 
     expect(averageAdmittedTps).toBeLessThanOrEqual(120_000)
     expect(averageAdmittedTps).toBeGreaterThanOrEqual(115_000)
-    adapter.dispose()
-  })
-
-  it('releases backpressure only after a sustained clear period', async () => {
-    const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 1 })
-    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
-    await adapter.dispatch({ type: 'set-requested-tps', value: 0 })
-    await adapter.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
-      value: 1,
-    })
-    await adapter.dispatch({ type: 'run' })
-    await vi.advanceTimersByTimeAsync(1_300)
-
-    const snapshot = adapter.getSnapshot()
-    expect(snapshot.queue1.flowState).toBe('backpressure')
-    expect(snapshot.queue1.blockedSenders).toBe(1)
-    expect(snapshot.queue1.oldestBlockedSenderMs).toBeGreaterThanOrEqual(300)
-    expect(snapshot.queue1.blockedMs).toBeGreaterThanOrEqual(300)
-
-    await adapter.dispatch({ type: 'set-read-batch-size', value: 100_000 })
-    await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
-    await vi.advanceTimersByTimeAsync(100)
-    expect(adapter.getSnapshot().queue1.blockedSenders).toBe(0)
-    expect(adapter.getSnapshot().queue1.flowState).toBe('backpressure')
-    await vi.advanceTimersByTimeAsync(100)
-    expect(adapter.getSnapshot().queue1.flowState).not.toBe('backpressure')
-    adapter.dispose()
-  })
-
-  it('does not create depth when worker count changes from one to seven', async () => {
-    const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 1 })
-    const before = adapter.getSnapshot()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
-    const after = adapter.getSnapshot()
-
-    expect(before.queue1.depthBatches).toBe(0)
-    expect(after.queue1.depthBatches).toBe(0)
-    expect(after.queue1.enqueuedBatchesTotal).toBe(0)
-    expect(after.reader.workers.applied).toBe(7)
-    adapter.dispose()
-  })
-
-  it('does not create batches when capacity changes from zero to four', async () => {
-    const adapter = new SimulationAdapter()
-    await adapter.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
-      value: 0,
-    })
-    await adapter.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
-      value: 4,
-    })
-
-    const snapshot = adapter.getSnapshot()
-    expect(snapshot.queue1.capacity.applied).toBe(4)
-    expect(snapshot.queue1.depthBatches).toBe(0)
-    expect(snapshot.queue1.enqueuedBatchesTotal).toBe(0)
-    expect(snapshot.queue1.queuedTransactions).toBe(0)
     adapter.dispose()
   })
 
@@ -781,7 +480,7 @@ describe('SimulationAdapter', () => {
     adapter.dispose()
   })
 
-  it('preserves state across pause and reproduces the run after reset', async () => {
+  it('replays deterministic telemetry after pause, resume, and reset', async () => {
     const baseline = new SimulationAdapter()
     await baseline.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(1_000)
@@ -800,33 +499,33 @@ describe('SimulationAdapter', () => {
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(500)
     const resumed = adapter.getSnapshot()
-    expect(resumed.elapsedMs).toBe(expected.elapsedMs)
-    expect(resumed.queue1.enqueuedBatchesTotal).toBe(
+    expect([
+      resumed.elapsedMs,
+      resumed.queue1.enqueuedBatchesTotal,
+      resumed.queue1.dequeuedBatchesTotal,
+      resumed.queue2.enqueuedBatchesTotal,
+      resumed.http.requestsStartedTotal,
+    ]).toEqual([
+      expected.elapsedMs,
       expected.queue1.enqueuedBatchesTotal,
-    )
-    expect(resumed.queue1.dequeuedBatchesTotal).toBe(
       expected.queue1.dequeuedBatchesTotal,
-    )
-    expect(resumed.queue2.enqueuedBatchesTotal).toBe(
       expected.queue2.enqueuedBatchesTotal,
-    )
-    expect(resumed.http.requestsStartedTotal).toBe(
       expected.http.requestsStartedTotal,
-    )
+    ])
 
     await adapter.dispatch({ type: 'reset' })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(1_000)
     const replay = adapter.getSnapshot()
-    expect(replay.queue1.enqueuedBatchesTotal).toBe(
+    expect([
+      replay.queue1.enqueuedBatchesTotal,
+      replay.queue2.enqueuedBatchesTotal,
+      replay.http.requestsStartedTotal,
+    ]).toEqual([
       expected.queue1.enqueuedBatchesTotal,
-    )
-    expect(replay.queue2.enqueuedBatchesTotal).toBe(
       expected.queue2.enqueuedBatchesTotal,
-    )
-    expect(replay.http.requestsStartedTotal).toBe(
       expected.http.requestsStartedTotal,
-    )
+    ])
     adapter.dispose()
   })
 

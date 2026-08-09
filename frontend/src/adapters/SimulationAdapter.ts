@@ -3,7 +3,7 @@ import type {
   AdapterError,
   CommandReceipt,
   LoadgenCommand,
-  LoadgenSnapshot,
+  LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
   RunState,
 } from '../model/loadgen'
@@ -116,14 +116,13 @@ function freezeQueueSnapshot(
     throughputTps: Math.round(queue.outputTransactionsPerSecond),
     blockedMs: Math.floor(queue.blockedMsTotal),
     trend: queue.trend,
-    flowState: queue.flowState,
   })
 }
 
 function freezeSnapshot(
   state: AdapterState,
   simulation: FixedStepSimulation,
-): LoadgenSnapshot {
+): LoadgenTelemetrySnapshot {
   const running = state.runState === 'running'
   const telemetry: SimulationTelemetry = simulation.telemetry(running)
   const config = simulation.config
@@ -255,7 +254,7 @@ export class SimulationAdapter implements LoadgenAdapter {
     4,
     100,
   )
-  private snapshot: LoadgenSnapshot
+  private snapshot: LoadgenTelemetrySnapshot
   private timer: ReturnType<typeof setInterval> | null
   private lastTickMs: number
   private pendingStepMs = 0
@@ -268,7 +267,7 @@ export class SimulationAdapter implements LoadgenAdapter {
     this.timer = setInterval(this.tick, SNAPSHOT_INTERVAL_MS)
   }
 
-  getSnapshot = (): LoadgenSnapshot => this.snapshot
+  getSnapshot = (): LoadgenTelemetrySnapshot => this.snapshot
 
   subscribe = (listener: LoadgenSnapshotListener): (() => void) => {
     this.listeners.add(listener)

@@ -60,8 +60,8 @@ function queueTelemetry(snapshot: QueueSnapshot): QueueMarkerTelemetry {
     flowActive: queueFlowActive(snapshot),
     enqueuedBatchesTotal: snapshot.enqueuedBatchesTotal,
     dequeuedBatchesTotal: snapshot.dequeuedBatchesTotal,
-    occupancyTravelLength: paths.occupancyLength,
-    flowTravelLength: paths.flowLength,
+    occupancyTravelLength: paths.cableLength,
+    flowTravelLength: paths.cableLength,
   }
 }
 

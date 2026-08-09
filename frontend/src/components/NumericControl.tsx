@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import type { NumericControlSnapshot } from '../model/loadgen'
 
@@ -18,28 +18,53 @@ export function NumericControl({
   const inputId = useId()
   const unitId = `${inputId}-unit`
   const [editing, setEditing] = useState(false)
+  const suppressBlurCommit = useRef(false)
   const [draft, setDraft] = useState(
     control.applied === null ? '' : String(control.applied),
   )
+  const appliedDraft = control.applied === null ? '' : String(control.applied)
 
   useEffect(() => {
     if (!editing) {
-      setDraft(control.applied === null ? '' : String(control.applied))
+      setDraft(appliedDraft)
     }
-  }, [control.applied, editing])
+  }, [appliedDraft, editing])
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     setDraft(event.currentTarget.value)
-    const value = event.currentTarget.valueAsNumber
-    if (Number.isFinite(value)) onValueChange(value)
+  }
+
+  const commitDraft = (input: HTMLInputElement) => {
+    const value = input.valueAsNumber
+    if (input.checkValidity() && Number.isFinite(value)) {
+      onValueChange(value)
+    } else {
+      setDraft(appliedDraft)
+    }
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') event.currentTarget.blur()
-    if (event.key === 'Escape') {
-      setDraft(control.applied === null ? '' : String(control.applied))
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      suppressBlurCommit.current = true
+      commitDraft(event.currentTarget)
       event.currentTarget.blur()
     }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      suppressBlurCommit.current = true
+      setDraft(appliedDraft)
+      event.currentTarget.blur()
+    }
+  }
+
+  const handleBlur = (event: ChangeEvent<HTMLInputElement>) => {
+    setEditing(false)
+    if (suppressBlurCommit.current) {
+      suppressBlurCommit.current = false
+      return
+    }
+    commitDraft(event.currentTarget)
   }
 
   return (
@@ -59,7 +84,7 @@ export function NumericControl({
         inputMode="numeric"
         aria-describedby={unitId}
         onFocus={() => setEditing(true)}
-        onBlur={() => setEditing(false)}
+        onBlur={handleBlur}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
       />

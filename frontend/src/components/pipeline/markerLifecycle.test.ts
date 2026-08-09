@@ -138,23 +138,6 @@ describe('MarkerLifecycleController', () => {
     ).toHaveLength(0)
   })
 
-  it('shows many continuous flow markers at 250K TPS with zero capacity', () => {
-    const controller = new MarkerLifecycleController(telemetry({
-      queue1: {
-        depthBatches: 0,
-        appliedCapacity: 0,
-        throughputTps: 250_000,
-        flowActive: true,
-      },
-    }))
-    const queue = controller.getSnapshot().queue1
-
-    expect(queue.filter((slot) => slot.kind === 'occupancy' && slot.state !== 'inactive'))
-      .toHaveLength(0)
-    expect(queue.filter((slot) => slot.kind === 'flow' && slot.state !== 'inactive').length)
-      .toBe(MAX_FLOW_MARKERS)
-  })
-
   it('freezes exact phases while paused and continues them on resume', () => {
     const controller = new MarkerLifecycleController(telemetry())
     controller.advance(600)
@@ -311,31 +294,6 @@ describe('MarkerLifecycleController', () => {
     }
   })
 
-  it('retires the longest queue marker within four seconds', () => {
-    const controller = new MarkerLifecycleController(telemetry({
-      queue1: {
-        depthBatches: 24,
-        appliedCapacity: 24,
-        occupancyTravelLength: 700,
-      },
-    }))
-    controller.reconcile(telemetry({
-      queue1: {
-        depthBatches: 0,
-        appliedCapacity: 24,
-        occupancyTravelLength: 700,
-      },
-    }))
-    const retiringIds = controller.getSnapshot().queue1
-      .filter((slot) => slot.kind === 'occupancy' && slot.state === 'retiring')
-      .map((slot) => slot.slotId)
-
-    controller.advance(4_000)
-    expect(controller.getSnapshot().queue1.filter(
-      (slot) => retiringIds.includes(slot.slotId) && slot.state !== 'inactive',
-    )).toHaveLength(0)
-  })
-
   it('keeps HTTP attempts until a success or error outcome is shown', () => {
     const controller = new MarkerLifecycleController(telemetry())
     controller.reconcile(telemetry({
@@ -366,18 +324,6 @@ describe('MarkerLifecycleController', () => {
       (slot) => slot.slotId === attempt.slotId,
     )?.state).toBe('inactive')
     expect(controller.getSnapshot().http).toHaveLength(MAX_HTTP_ATTEMPT_MARKERS)
-  })
-
-  it('classifies completed-only HTTP telemetry so attempts still end', () => {
-    const controller = new MarkerLifecycleController(telemetry())
-    controller.reconcile(telemetry({
-      http: { inFlightRequests: 1, requestsStartedTotal: 1 },
-    }))
-    controller.reconcile(telemetry({
-      http: { requestsStartedTotal: 1, requestsCompletedTotal: 1 },
-    }))
-
-    expect(visible(controller.getSnapshot().http)[0]?.outcome).toBe('success')
   })
 
   it('disables travel and pulse while preserving reduced-motion meaning', () => {

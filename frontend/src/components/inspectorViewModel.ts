@@ -65,6 +65,10 @@ function queueViewModel(queue: QueueSnapshot): InspectorViewModel {
         label: 'Depth / capacity',
         value: `${depth} / ${appliedCapacity}`,
       },
+      {
+        label: 'Pressure',
+        value: `${Math.round(queue.displayedPressure * 100)}%`,
+      },
       ...capacityChange,
       { label: 'Queued tx', value: formatInteger(queue.queuedTransactions) },
       {
