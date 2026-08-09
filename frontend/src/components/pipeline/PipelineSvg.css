@@ -238,20 +238,18 @@
 }
 
 .pipeline-queue {
-  color: var(--green);
-}
-
-.pipeline-queue--near-limit {
-  color: var(--yellow);
-}
-
-.pipeline-queue--backpressure,
-.pipeline-queue--connection-error {
-  color: var(--red);
+  color: var(--pipeline-queue-pressure-color, #79d957);
+  transition: color 100ms linear;
 }
 
 .pipeline-queue--stopped {
   color: var(--muted);
+  transition: none;
+}
+
+.pipeline-queue--connection-error {
+  color: var(--red);
+  transition: none;
 }
 
 .pipeline-queue-cable {
@@ -265,6 +263,26 @@
 
 .pipeline-queue--connection-error .pipeline-queue-cable {
   stroke-dasharray: 15 10;
+}
+
+.pipeline-queue-requested-cable {
+  fill: none;
+  opacity: 0.84;
+  pointer-events: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2px;
+  stroke-dasharray: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-queue-requested-cable--preview {
+  opacity: 0.92;
+  stroke: var(--cyan);
+}
+
+.pipeline-queue-requested-cable--pending {
+  stroke: var(--yellow);
 }
 
 .pipeline-queue-scale {
@@ -288,23 +306,6 @@
   pointer-events: none;
 }
 
-.pipeline-marker-family {
-  color: var(--green);
-}
-
-.pipeline-marker-family--near-limit {
-  color: var(--yellow);
-}
-
-.pipeline-marker-family--backpressure,
-.pipeline-marker-family--connection-error {
-  color: var(--red);
-}
-
-.pipeline-marker-family--stopped {
-  color: var(--muted);
-}
-
 .pipeline-marker,
 .pipeline-http-marker {
   fill: currentColor;
@@ -320,12 +321,6 @@
 
 .pipeline-marker--flow {
   filter: drop-shadow(0 0 2px currentColor);
-}
-
-.pipeline-marker--handoff {
-  fill: var(--navy-850);
-  stroke: currentColor;
-  stroke-width: 2;
 }
 
 .pipeline-marker--queued {
@@ -389,21 +384,54 @@
 }
 
 .pipeline-queue-handle {
-  color: currentColor;
   cursor: ns-resize;
   outline: none;
   touch-action: none;
 }
 
-.pipeline-queue-handle rect {
-  fill: var(--navy-850);
-  stroke: currentColor;
+.pipeline-queue-handle {
+  --pipeline-queue-handle-state-color: currentColor;
+}
+
+.pipeline-queue-handle--pending {
+  --pipeline-queue-handle-state-color: var(--yellow);
+}
+
+.pipeline-queue-handle--preview {
+  --pipeline-queue-handle-state-color: var(--cyan);
+}
+
+.pipeline-queue-handle__body {
+  fill: color-mix(
+    in srgb,
+    var(--pipeline-queue-handle-state-color) 14%,
+    var(--navy-850)
+  );
+  fill-opacity: 1;
+  stroke: var(--pipeline-queue-handle-state-color);
   stroke-width: 1.4;
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-handle text {
-  fill: var(--text);
+.pipeline-queue-handle--connection-error .pipeline-queue-handle__body {
+  stroke-dasharray: 6 3;
+}
+
+.pipeline-queue-handle__request-ring,
+.pipeline-queue-handle__focus-ring {
+  fill: none;
+  opacity: 0;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-queue-handle__focus-ring {
+  stroke: var(--cyan);
+  stroke-width: 2;
+}
+
+.pipeline-queue-handle__value {
+  fill: var(--pipeline-queue-handle-state-color);
   font-size: 10px;
   font-weight: 750;
   font-variant-numeric: tabular-nums;
@@ -411,9 +439,8 @@
   user-select: none;
 }
 
-.pipeline-queue-handle:focus-visible rect {
-  stroke: var(--cyan);
-  stroke-width: 2.5;
+.pipeline-queue-handle:focus-visible .pipeline-queue-handle__focus-ring {
+  opacity: 1;
 }
 
 .pipeline-queue-handle--disabled {
@@ -421,16 +448,14 @@
   opacity: 0.58;
 }
 
-.pipeline-queue-handle--preview {
-  color: var(--cyan);
-}
-
-.pipeline-queue-handle--pending {
-  color: var(--yellow);
+.pipeline-queue-handle--preview .pipeline-queue-handle__request-ring {
+  stroke: var(--cyan);
+  stroke-dasharray: 2 2;
+  stroke-width: 1.5;
+  opacity: 1;
 }
 
 .pipeline-queue-capacity-applied {
-  color: currentColor;
   pointer-events: none;
 }
 

@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { SimulationAdapter } from '../adapters/SimulationAdapter'
 import type { LoadgenSnapshot, SelectableId } from '../model/loadgen'
+import { QueueFlowStateDeriver } from '../model/queueFlowState'
 import {
   formatStateLabel,
   getInspectorViewModel,
 } from './inspectorViewModel'
+
+function derivedSnapshot(adapter: SimulationAdapter): LoadgenSnapshot {
+  return new QueueFlowStateDeriver().derive(adapter.getSnapshot(), 0)
+}
 
 function withQueueCapacity(
   snapshot: LoadgenSnapshot,
@@ -47,7 +52,7 @@ function withQueueBlocking(
 describe('inspector view model', () => {
   it('builds a distinct model for every selectable pipeline object', () => {
     const adapter = new SimulationAdapter()
-    const snapshot = adapter.getSnapshot()
+    const snapshot = derivedSnapshot(adapter)
     const selections: SelectableId[] = [
       'reader',
       'throttler',
@@ -67,7 +72,7 @@ describe('inspector view model', () => {
 
   it('shows complete zeroed simulation metrics before the first run', () => {
     const adapter = new SimulationAdapter()
-    const model = getInspectorViewModel(adapter.getSnapshot(), 'sender')
+    const model = getInspectorViewModel(derivedSnapshot(adapter), 'sender')
 
     expect(model?.rows.find((row) => row.label === 'Attempted TPS')?.value).toBe('0 tx/s')
     expect(model?.rows.find((row) => row.label === 'Retries')?.value).toBe('0')
@@ -77,7 +82,7 @@ describe('inspector view model', () => {
   it('formats queue depth, capacity, state, and rates from the snapshot', () => {
     const adapter = new SimulationAdapter()
     const model = getInspectorViewModel(
-      adapter.getSnapshot(),
+      derivedSnapshot(adapter),
       'reader-to-throttler',
     )
 
@@ -86,52 +91,52 @@ describe('inspector view model', () => {
       value: '0 / 4 batches',
     })
     expect(model?.rows).toContainEqual({ label: 'Flow state', value: 'Stopped' })
+    expect(model?.rows).toContainEqual({ label: 'Pressure', value: '0%' })
     expect(model?.rows).toContainEqual({ label: 'Throughput', value: '0 tx/s' })
     adapter.dispose()
   })
 
-  it('separates historical blocked time from an unblocked current state', () => {
+  it('separates historical blocked time from current upstream waiters', () => {
     const adapter = new SimulationAdapter()
-    const snapshot = withQueueBlocking(adapter.getSnapshot(), 0, 0, 1_250)
-    const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
+    const cases = [
+      {
+        blockedSenders: 0,
+        oldestMs: 0,
+        blockedMs: 1_250,
+        expected: ['0', '—', '1,250 ms'],
+      },
+      {
+        blockedSenders: 1,
+        oldestMs: 450,
+        blockedMs: 1_600,
+        expected: ['1', '450 ms', '1,600 ms'],
+      },
+    ] as const
 
-    expect(model?.rows).toContainEqual({
-      label: 'Waiting upstream now',
-      value: '0',
-    })
-    expect(model?.rows).toContainEqual({
-      label: 'Oldest current wait',
-      value: '—',
-    })
-    expect(model?.rows).toContainEqual({
-      label: 'Accumulated blocked time',
-      value: '1,250 ms',
-    })
-    expect(model?.rows.some((row) => row.label === 'Blocked time')).toBe(false)
+    for (const testCase of cases) {
+      const snapshot = withQueueBlocking(
+        derivedSnapshot(adapter),
+        testCase.blockedSenders,
+        testCase.oldestMs,
+        testCase.blockedMs,
+      )
+      const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
+      const labels = [
+        'Waiting upstream now',
+        'Oldest current wait',
+        'Accumulated blocked time',
+      ]
+
+      expect(labels.map((label) =>
+        model?.rows.find((row) => row.label === label)?.value,
+      )).toEqual(testCase.expected)
+      expect(model?.rows.some((row) => row.label === 'Blocked time')).toBe(false)
+    }
     adapter.dispose()
   })
 
-  it('shows current blocked senders and the oldest active block', () => {
-    const adapter = new SimulationAdapter()
-    const snapshot = withQueueBlocking(adapter.getSnapshot(), 1, 450, 1_600)
-    const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
-
-    expect(model?.rows).toContainEqual({
-      label: 'Waiting upstream now',
-      value: '1',
-    })
-    expect(model?.rows).toContainEqual({
-      label: 'Oldest current wait',
-      value: '450 ms',
-    })
-    expect(model?.rows).toContainEqual({
-      label: 'Accumulated blocked time',
-      value: '1,600 ms',
-    })
-    adapter.dispose()
-  })
-
-  it.each([
+  it('keeps queue depth and capacity truthful across apply states', () => {
+    const cases = [
     {
       name: 'applied 4, depth 4, pending 0',
       applied: 4,
@@ -164,30 +169,29 @@ describe('inspector view model', () => {
       expectedDepth: '0 / 0 batches',
       expectedChange: null,
     },
-  ])('keeps queue presentation truthful for $name', ({
-    applied,
-    depth,
-    pending,
-    expectedDepth,
-    expectedChange,
-  }) => {
+    ]
     const adapter = new SimulationAdapter()
-    const snapshot = withQueueCapacity(
-      adapter.getSnapshot(),
-      applied,
-      depth,
-      pending,
-    )
-    const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
-    const depthRow = model?.rows.find(
-      (row) => row.label === 'Depth / capacity',
-    )
-    const changeRow = model?.rows.find(
-      (row) => row.label === 'Capacity change',
-    )
 
-    expect(depthRow?.value).toBe(expectedDepth)
-    expect(changeRow?.value ?? null).toBe(expectedChange)
+    for (const testCase of cases) {
+      const snapshot = withQueueCapacity(
+        derivedSnapshot(adapter),
+        testCase.applied,
+        testCase.depth,
+        testCase.pending,
+      )
+      const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
+      const depthRow = model?.rows.find(
+        (row) => row.label === 'Depth / capacity',
+      )
+      const changeRow = model?.rows.find(
+        (row) => row.label === 'Capacity change',
+      )
+
+      expect(depthRow?.value, testCase.name).toBe(testCase.expectedDepth)
+      expect(changeRow?.value ?? null, testCase.name).toBe(
+        testCase.expectedChange,
+      )
+    }
     adapter.dispose()
   })
 })

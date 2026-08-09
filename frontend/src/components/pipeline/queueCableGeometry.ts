@@ -22,6 +22,16 @@ export interface QueueCapacityPresentation {
   readonly requestState: QueueCapacityRequestState
 }
 
+export interface QueueCableGeometryPresentation {
+  readonly capacity: QueueCapacityPresentation
+  readonly cableY: number
+  readonly sliderY: number
+  readonly cablePath: string
+  readonly requestedPath: string | null
+  readonly markerPath: string
+  readonly markerPathLength: number
+}
+
 export const QUEUE_CABLE_MAX_MARKERS = 24
 export const QUEUE_CABLE_MAX_LIFT = 240
 
@@ -120,6 +130,40 @@ export function capacityFromVerticalDrag(
   return normalizeCapacity(initialCapacity + capacityDelta, range)
 }
 
+export function capacityFromKeyboard(
+  key: string,
+  currentCapacity: number,
+  range: CapacityRange,
+): number | null {
+  let nextCapacity: number
+  switch (key) {
+    case 'ArrowUp':
+    case 'ArrowRight':
+      nextCapacity = currentCapacity + range.step
+      break
+    case 'ArrowDown':
+    case 'ArrowLeft':
+      nextCapacity = currentCapacity - range.step
+      break
+    case 'PageUp':
+      nextCapacity = currentCapacity + range.step * 5
+      break
+    case 'PageDown':
+      nextCapacity = currentCapacity - range.step * 5
+      break
+    case 'Home':
+      nextCapacity = range.min
+      break
+    case 'End':
+      nextCapacity = range.max
+      break
+    default:
+      return null
+  }
+
+  return normalizeCapacity(nextCapacity, range)
+}
+
 export function buildQueueCablePath(
   start: Point,
   end: Point,
@@ -159,27 +203,40 @@ function buildQueueCableCommands(
   ].join(' ')
 }
 
-export function buildQueueTraversalPath(
-  upstreamPoints: readonly Point[],
+export function getQueueCableGeometryPresentation(
+  control: NumericControlSnapshot,
   start: Point,
   end: Point,
-  topY: number,
-  downstreamPoints: readonly Point[],
-): string {
-  const first = upstreamPoints[0] ?? start
-  const upstream = [...upstreamPoints.slice(1), start]
-    .map((point) => `L${formatCoordinate(point.x)} ${formatCoordinate(point.y)}`)
-    .join(' ')
-  const downstream = downstreamPoints
-    .map((point) => `L${formatCoordinate(point.x)} ${formatCoordinate(point.y)}`)
-    .join(' ')
+  localPreview: number | null = null,
+): QueueCableGeometryPresentation {
+  const capacity = getQueueCapacityPresentation(control, localPreview)
+  const cableY = capacityToCableY(
+    capacity.applied,
+    control,
+    start.y,
+    QUEUE_CABLE_MAX_LIFT,
+  )
+  const sliderY = capacityToCableY(
+    capacity.candidate,
+    control,
+    start.y,
+    QUEUE_CABLE_MAX_LIFT,
+  )
+  const cablePath = buildQueueCablePath(start, end, cableY)
 
-  return [
-    `M${formatCoordinate(first.x)} ${formatCoordinate(first.y)}`,
-    upstream,
-    buildQueueCableCommands(start, end, topY),
-    downstream,
-  ].filter(Boolean).join(' ')
+  return {
+    capacity,
+    cableY,
+    sliderY,
+    cablePath,
+    requestedPath:
+      capacity.requestState === null
+        ? null
+        : buildQueueCablePath(start, end, sliderY),
+    markerPath: cablePath,
+    markerPathLength:
+      Math.max(0, end.x - start.x) + 2 * Math.max(0, start.y - cableY),
+  }
 }
 
 export function getCapacityTicks(

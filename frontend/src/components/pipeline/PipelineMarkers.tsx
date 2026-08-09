@@ -1,72 +1,17 @@
 import type { CSSProperties } from 'react'
-import type {
-  LoadgenSnapshot,
-  QueueFlowState,
-  QueueSnapshot,
-} from '../../model/loadgen'
+import type { LoadgenSnapshot } from '../../model/loadgen'
 import type {
   HttpMarkerSlotSnapshot,
   MarkerLifecycleSnapshot,
-  QueueMarkerSlotSnapshot,
 } from './markerLifecycle'
 import {
-  FLOW_MARKER_RADIUS,
   getHttpTraversalPath,
-  getQueueMarkerPathGeometry,
   HTTP_TRAVERSAL_POINTS,
 } from './markerPaths'
 
 interface PipelineMarkersProps {
   readonly snapshot: LoadgenSnapshot
   readonly markers: MarkerLifecycleSnapshot
-}
-
-function stateClass(flowState: QueueFlowState): string {
-  return `pipeline-marker-family--${flowState}`
-}
-
-function markerRadius(marker: QueueMarkerSlotSnapshot): number {
-  switch (marker.kind) {
-    case 'occupancy':
-      return 4.5
-    case 'flow':
-      return FLOW_MARKER_RADIUS
-  }
-}
-
-function QueueFlowMarkerPool({
-  markers,
-  queue,
-}: {
-  readonly markers: readonly QueueMarkerSlotSnapshot[]
-  readonly queue: QueueSnapshot
-}) {
-  const geometry = getQueueMarkerPathGeometry(queue.id, queue.capacity)
-
-  return (
-    <g className={`pipeline-marker-family ${stateClass(queue.flowState)}`}>
-      {markers.filter((marker) => marker.kind === 'flow').map((marker) => {
-        const markerStyle = {
-          offsetPath: `path("${geometry.flowPath}")`,
-          offsetDistance: `${marker.phase * 100}%`,
-        } satisfies CSSProperties
-        return (
-          <circle
-            key={marker.slotId}
-            r={markerRadius(marker)}
-            visibility={marker.state === 'inactive' ? 'hidden' : 'visible'}
-            className={`pipeline-marker pipeline-marker--${marker.kind} pipeline-marker--${marker.state}${marker.queued ? ' pipeline-marker--queued' : ''}`}
-            style={markerStyle}
-            data-marker-id={marker.slotId}
-            data-family-id={marker.familyId ?? ''}
-            data-marker-kind={marker.kind}
-            data-marker-state={marker.state}
-            data-marker-phase={marker.phase.toFixed(4)}
-          />
-        )
-      })}
-    </g>
-  )
 }
 
 function HttpMarkerPool({
@@ -138,8 +83,6 @@ export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
       data-run-state={snapshot.runState}
     >
       <ActorProcessingSlots />
-      <QueueFlowMarkerPool markers={markers.queue1} queue={snapshot.queue1} />
-      <QueueFlowMarkerPool markers={markers.queue2} queue={snapshot.queue2} />
       <HttpMarkerPool markers={markers.http} />
     </g>
   )
