@@ -1,3 +1,5 @@
+import type { QueueId } from '../../model/loadgen'
+
 export interface Point {
   readonly x: number
   readonly y: number
@@ -79,5 +81,23 @@ export const ACTOR_GEOMETRY = Object.freeze({
     } satisfies FixedActorBounds,
     ports: { input: { x: 930, y: FLOW_BASELINE } satisfies Point },
     title: { x: 1000, y: 38 } satisfies Point,
+  },
+})
+
+export interface QueueCableEndpoints {
+  readonly start: Point
+  readonly end: Point
+}
+
+export const QUEUE_CABLE_ENDPOINTS: Readonly<
+  Record<QueueId, QueueCableEndpoints>
+> = Object.freeze({
+  'reader-to-throttler': {
+    start: ACTOR_GEOMETRY.reader.ports.output,
+    end: ACTOR_GEOMETRY.throttler.ports.input,
+  },
+  'throttler-to-sender': {
+    start: ACTOR_GEOMETRY.throttler.ports.output,
+    end: ACTOR_GEOMETRY.sender.ports.input,
   },
 })

@@ -1,61 +1,83 @@
 import { describe, expect, it } from 'vitest'
-import type { NumericControlSnapshot } from '../../model/loadgen'
-import {
-  FLOW_HANDLE_GAP,
-  FLOW_MARKER_RADIUS,
-  getQueueMarkerPathGeometry,
-  QUEUE_HANDLE_HALF_HEIGHT,
-} from './markerPaths'
+import type { NumericControlSnapshot, QueueId } from '../../model/loadgen'
+import { QUEUE_CABLE_ENDPOINTS } from './geometry'
+import { buildQueueCablePath, capacityToCableY } from './queueCableGeometry'
+import { getQueueMarkerPathGeometry } from './markerPaths'
 
-function capacityControl(applied: number): NumericControlSnapshot {
+function capacityControl(
+  applied: number,
+  max: number,
+  step: number,
+  candidate: number | null = null,
+): NumericControlSnapshot {
   return {
     applied,
-    preview: null,
-    pending: null,
+    preview: candidate,
+    pending: candidate,
     min: 0,
-    max: 160,
-    step: 10,
+    max,
+    step,
     unit: 'batches',
     applyMode: 'immediate',
   }
 }
 
 describe('marker paths', () => {
-  it('keeps occupancy on the bounded cable between actor ports', () => {
-    const geometry = getQueueMarkerPathGeometry(
-      'reader-to-throttler',
-      capacityControl(0),
-    )
-
-    expect(geometry.occupancyPath).toBe('M150 415 H355')
-    expect(geometry.occupancyPath).not.toContain('96 392')
-    expect(geometry.occupancyPath).not.toContain('384 394')
-  })
-
-  it('uses one actor-to-actor flow path across the full raised cable', () => {
-    const geometry = getQueueMarkerPathGeometry(
-      'throttler-to-sender',
-      capacityControl(100),
-    )
-
-    expect(geometry.flowPath).not.toBe(geometry.occupancyPath)
-    expect(geometry.flowPath).toContain('M432 394')
-    expect(geometry.flowPath).toContain('L790 394')
-    expect(geometry.flowPath.match(/V/g)).toHaveLength(2)
-    expect(geometry.flowLength).toBeGreaterThan(0)
-  })
-
-  it('keeps the flow marker visibly clear of the capacity handle center', () => {
-    const geometry = getQueueMarkerPathGeometry(
-      'reader-to-throttler',
+  it('uses canonical endpoints and changes only with applied capacity', () => {
+    const cases: ReadonlyArray<{
+      queueId: QueueId
+      applied: number
+      candidate: number
+      max: number
+      step: number
+    }> = [
       {
-        ...capacityControl(40),
-        pending: 120,
+        queueId: 'reader-to-throttler',
+        applied: 10,
+        candidate: 0,
+        max: 12,
+        step: 1,
       },
-    )
-    const markerBottomY = geometry.flowTopY + FLOW_MARKER_RADIUS
-    const handleTopY = geometry.handleCenterY - QUEUE_HANDLE_HALF_HEIGHT
+      {
+        queueId: 'throttler-to-sender',
+        applied: 160,
+        candidate: 50,
+        max: 160,
+        step: 10,
+      },
+    ]
 
-    expect(handleTopY - markerBottomY).toBeGreaterThanOrEqual(FLOW_HANDLE_GAP)
+    for (const testCase of cases) {
+      const endpoints = QUEUE_CABLE_ENDPOINTS[testCase.queueId]
+      const canonical = getQueueMarkerPathGeometry(
+        testCase.queueId,
+        capacityControl(testCase.applied, testCase.max, testCase.step),
+      )
+      const pending = getQueueMarkerPathGeometry(
+        testCase.queueId,
+        capacityControl(
+          testCase.applied,
+          testCase.max,
+          testCase.step,
+          testCase.candidate,
+        ),
+      )
+      const afterApply = getQueueMarkerPathGeometry(
+        testCase.queueId,
+        capacityControl(testCase.candidate, testCase.max, testCase.step),
+      )
+      const topY = capacityToCableY(
+        testCase.applied,
+        capacityControl(testCase.applied, testCase.max, testCase.step),
+        endpoints.start.y,
+        240,
+      )
+
+      expect(canonical.cablePath).toBe(
+        buildQueueCablePath(endpoints.start, endpoints.end, topY),
+      )
+      expect(pending).toEqual(canonical)
+      expect(afterApply).not.toEqual(canonical)
+    }
   })
 })
