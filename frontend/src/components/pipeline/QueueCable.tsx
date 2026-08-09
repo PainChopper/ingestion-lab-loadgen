@@ -20,6 +20,7 @@ import type { QueueMarkerSlotSnapshot } from './markerLifecycle'
 import {
   capacityFromKeyboard,
   capacityFromVerticalDrag,
+  capacityToCableY,
   getCapacityTicks,
   getQueueCableGeometryPresentation,
   QUEUE_CABLE_MAX_LIFT,
@@ -75,15 +76,19 @@ export function getQueueCablePresentation(
   return {
     ...geometry,
     capacity,
-    handleCapacity:
-      dragPreview === null ? capacity.applied : capacity.candidate,
-    handleState:
-      capacity.requestState === 'preview' ? 'preview' : null,
-    dragStartCapacity: capacity.applied,
+    handleCapacity: capacity.candidate,
+    handleState: capacity.requestState,
+    dragStartCapacity: capacity.candidate,
     appliedMarker:
       capacity.requestState !== null
         ? {
             capacity: capacity.applied,
+            y: capacityToCableY(
+              capacity.applied,
+              snapshot.capacity,
+              start.y,
+              QUEUE_CABLE_MAX_LIFT,
+            ),
           }
         : null,
     depth: `Depth ${formatInteger(snapshot.depthBatches)} / ${formatInteger(capacity.applied)} batches`,
@@ -260,13 +265,13 @@ export function QueueCable({
 
     const nextCapacity = capacityFromKeyboard(
       event.key,
-      presentation.handleCapacity,
+      capacity.candidate,
       control,
     )
     if (nextCapacity === null) return
 
     event.preventDefault()
-    if (nextCapacity !== presentation.handleCapacity) {
+    if (nextCapacity !== capacity.candidate) {
       onCapacityChange(snapshot.id, nextCapacity)
     }
   }
@@ -367,7 +372,7 @@ export function QueueCable({
       {presentation.appliedMarker !== null && (
         <g
           className={`pipeline-queue-capacity-applied pipeline-queue-capacity-applied--${snapshot.flowState}`}
-          transform={`translate(${centerX - 50} ${presentation.cableY})`}
+          transform={`translate(${centerX - 50} ${presentation.appliedMarker.y})`}
           role="status"
           aria-label={`${snapshot.from} to ${snapshot.to} queue applied capacity ${formatInteger(presentation.appliedMarker.capacity)} batches`}
           data-capacity={presentation.appliedMarker.capacity}
@@ -426,13 +431,11 @@ export function QueueCable({
         aria-label={`${snapshot.from} to ${snapshot.to} queue capacity`}
         aria-valuemin={control.min}
         aria-valuemax={control.max}
-        aria-valuenow={presentation.handleCapacity}
+        aria-valuenow={capacity.candidate}
         aria-valuetext={
-          capacity.requestState === 'preview'
-            ? `Preview ${formatInteger(capacity.candidate)} batches; ${formatInteger(capacity.applied)} batches applied`
-            : capacity.requestState === 'pending'
-              ? `${formatInteger(capacity.applied)} batches applied; pending ${formatInteger(capacity.candidate)} batches`
-              : `${formatInteger(capacity.applied)} batches applied`
+          capacity.requestState === null
+            ? `${formatInteger(capacity.applied)} batches applied`
+            : `${capacity.requestState === 'pending' ? 'Pending' : 'Preview'} ${formatInteger(capacity.candidate)} batches; ${formatInteger(capacity.applied)} batches applied`
         }
         aria-disabled={disabled}
         transform={`translate(${centerX} ${presentation.sliderY})`}

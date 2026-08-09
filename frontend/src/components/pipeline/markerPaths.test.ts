@@ -23,7 +23,7 @@ function capacityControl(
 }
 
 describe('marker paths', () => {
-  it('uses canonical endpoints and changes only with applied capacity', () => {
+  it('uses canonical endpoints and follows the committed candidate capacity', () => {
     const cases: ReadonlyArray<{
       queueId: QueueId
       applied: number
@@ -66,17 +66,26 @@ describe('marker paths', () => {
         testCase.queueId,
         capacityControl(testCase.candidate, testCase.max, testCase.step),
       )
-      const topY = capacityToCableY(
+      const appliedTopY = capacityToCableY(
         testCase.applied,
+        capacityControl(testCase.applied, testCase.max, testCase.step),
+        endpoints.start.y,
+        240,
+      )
+      const candidateTopY = capacityToCableY(
+        testCase.candidate,
         capacityControl(testCase.applied, testCase.max, testCase.step),
         endpoints.start.y,
         240,
       )
 
       expect(canonical.cablePath).toBe(
-        buildQueueCablePath(endpoints.start, endpoints.end, topY),
+        buildQueueCablePath(endpoints.start, endpoints.end, appliedTopY),
       )
-      expect(pending).toEqual(canonical)
+      expect(pending.cablePath).toBe(
+        buildQueueCablePath(endpoints.start, endpoints.end, candidateTopY),
+      )
+      expect(pending).toEqual(afterApply)
       expect(afterApply).not.toEqual(canonical)
     }
   })
