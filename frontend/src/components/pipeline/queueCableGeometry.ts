@@ -216,12 +216,14 @@ export function getQueueCableGeometryPresentation(
     start.y,
     QUEUE_CABLE_MAX_LIFT,
   )
-  const sliderY = capacityToCableY(
-    capacity.candidate,
-    control,
-    start.y,
-    QUEUE_CABLE_MAX_LIFT,
-  )
+  const sliderY = localPreview === null
+    ? cableY
+    : capacityToCableY(
+        capacity.candidate,
+        control,
+        start.y,
+        QUEUE_CABLE_MAX_LIFT,
+      )
   const cablePath = buildQueueCablePath(start, end, cableY)
 
   return {

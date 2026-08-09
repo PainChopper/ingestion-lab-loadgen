@@ -75,9 +75,11 @@ export function getQueueCablePresentation(
   return {
     ...geometry,
     capacity,
-    handleCapacity: capacity.candidate,
-    handleState: capacity.requestState,
-    dragStartCapacity: capacity.candidate,
+    handleCapacity:
+      dragPreview === null ? capacity.applied : capacity.candidate,
+    handleState:
+      capacity.requestState === 'preview' ? 'preview' : null,
+    dragStartCapacity: capacity.applied,
     appliedMarker:
       capacity.requestState !== null
         ? {
@@ -258,13 +260,13 @@ export function QueueCable({
 
     const nextCapacity = capacityFromKeyboard(
       event.key,
-      capacity.candidate,
+      presentation.handleCapacity,
       control,
     )
     if (nextCapacity === null) return
 
     event.preventDefault()
-    if (nextCapacity !== capacity.candidate) {
+    if (nextCapacity !== presentation.handleCapacity) {
       onCapacityChange(snapshot.id, nextCapacity)
     }
   }
@@ -424,11 +426,13 @@ export function QueueCable({
         aria-label={`${snapshot.from} to ${snapshot.to} queue capacity`}
         aria-valuemin={control.min}
         aria-valuemax={control.max}
-        aria-valuenow={capacity.candidate}
+        aria-valuenow={presentation.handleCapacity}
         aria-valuetext={
-          capacity.requestState === null
-            ? `${formatInteger(capacity.applied)} batches applied`
-            : `${capacity.requestState === 'pending' ? 'Pending' : 'Preview'} ${formatInteger(capacity.candidate)} batches; ${formatInteger(capacity.applied)} batches applied`
+          capacity.requestState === 'preview'
+            ? `Preview ${formatInteger(capacity.candidate)} batches; ${formatInteger(capacity.applied)} batches applied`
+            : capacity.requestState === 'pending'
+              ? `${formatInteger(capacity.applied)} batches applied; pending ${formatInteger(capacity.candidate)} batches`
+              : `${formatInteger(capacity.applied)} batches applied`
         }
         aria-disabled={disabled}
         transform={`translate(${centerX} ${presentation.sliderY})`}
