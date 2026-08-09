@@ -116,8 +116,7 @@ describe('PipelineSvg marker wiring', () => {
       const slider = queueGroup.querySelector('.pipeline-queue-handle')!
       const children = [...queueGroup.children]
 
-      expect(queueGroup.querySelector('.pipeline-queue-requested-cable'))
-        .not.toBeNull()
+      expect(queueGroup.querySelector('.pipeline-queue-requested-cable')).toBeNull()
       expect(queueGroup.querySelector('.pipeline-marker--occupancy'))
         .not.toBeNull()
       expect(queueGroup.querySelector('.pipeline-marker--flow')).not.toBeNull()

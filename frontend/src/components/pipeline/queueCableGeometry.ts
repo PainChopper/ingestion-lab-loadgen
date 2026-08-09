@@ -230,7 +230,7 @@ export function getQueueCableGeometryPresentation(
     sliderY,
     cablePath,
     requestedPath:
-      capacity.requestState === null
+      localPreview === null
         ? null
         : buildQueueCablePath(start, end, sliderY),
     markerPath: cablePath,

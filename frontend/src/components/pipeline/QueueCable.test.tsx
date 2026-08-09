@@ -363,7 +363,7 @@ describe('QueueCable mounted behavior', () => {
     adapter.dispose()
   })
 
-  it('keeps applied cable, markers, label, and z-order stable for candidates', () => {
+  it('keeps applied cable, markers, label, and z-order stable for pending values', () => {
     const adapter = new SimulationAdapter()
     const snapshot = derivedSnapshot(adapter)
     const cases = [
@@ -395,17 +395,11 @@ describe('QueueCable mounted behavior', () => {
         endpoints.end,
         appliedY,
       )
-      const candidatePath = buildQueueCablePath(
-        endpoints.start,
-        endpoints.end,
-        candidateY,
-      )
       const view = renderCable(snapshot, {
         markers: [marker(snapshot, 'occupancy'), marker(snapshot, 'flow')],
       })
       const queueGroup = view.container.querySelector(`#queue-${snapshot.id}`)!
       const cable = queueGroup.querySelector('.pipeline-queue-cable')!
-      const ghost = queueGroup.querySelector('.pipeline-queue-requested-cable')!
       const markerGroup = queueGroup.querySelector('.pipeline-queue-markers')!
       const markers = [...markerGroup.querySelectorAll<SVGCircleElement>('.pipeline-marker')]
       const appliedLabel = queueGroup.querySelector('.pipeline-queue-capacity-applied')!
@@ -415,19 +409,11 @@ describe('QueueCable mounted behavior', () => {
       const handleValue = slider.querySelector('.pipeline-queue-handle__value')!
       const children = [...queueGroup.children]
       const cableStyle = getComputedStyle(cable)
-      const ghostStyle = getComputedStyle(ghost)
       const handleStyle = getComputedStyle(slider)
 
       expect(cable.getAttribute('d')).toBe(appliedPath)
-      expect(ghost.getAttribute('d')).toBe(candidatePath)
-      expect(ghost.classList).toContain('pipeline-queue-requested-cable--pending')
-      expect(ghostStyle.stroke).toBe('var(--yellow)')
-      expect(ghostStyle.strokeWidth).toBe('2px')
-      expect(ghostStyle.strokeDasharray).toBe('none')
-      expect(ghostStyle.opacity).toBe('0.84')
-      expect(Number.parseFloat(ghostStyle.strokeWidth)).toBeLessThan(
-        Number.parseFloat(cableStyle.strokeWidth),
-      )
+      expect(queueGroup.querySelector('.pipeline-queue-requested-cable')).toBeNull()
+      expect(Number.parseFloat(cableStyle.strokeWidth)).toBeGreaterThan(0)
       expect(handleStyle.getPropertyValue(
         '--pipeline-queue-handle-state-color',
       )).toBe('var(--yellow)')
@@ -437,7 +423,7 @@ describe('QueueCable mounted behavior', () => {
       expect(getComputedStyle(handleValue).fill).toBe(
         'var(--pipeline-queue-handle-state-color)',
       )
-      expect(translatedY(slider)).toBe(pathApexY(ghost.getAttribute('d')!))
+      expect(translatedY(slider)).toBe(candidateY)
       expect(markers.map((item) => item.style.offsetPath)).toEqual([
         `path("${appliedPath}")`,
         `path("${appliedPath}")`,
@@ -467,7 +453,7 @@ describe('QueueCable mounted behavior', () => {
     adapter.dispose()
   })
 
-  it('removes candidate geometry and applied labels after apply', () => {
+  it('removes pending indicators after apply', () => {
     const adapter = new SimulationAdapter()
     const base = derivedSnapshot(adapter).queue1
     const pending = queueSnapshot(base, 10, 4)
@@ -475,7 +461,7 @@ describe('QueueCable mounted behavior', () => {
     const endpoints = QUEUE_CABLE_ENDPOINTS[base.id]
     const view = renderCable(pending)
 
-    expect(view.container.querySelector('.pipeline-queue-requested-cable')).not.toBeNull()
+    expect(view.container.querySelector('.pipeline-queue-requested-cable')).toBeNull()
     expect(screen.getByText('Applied 10')).not.toBeNull()
     expect(screen.getByText('Pending 4 batches')).not.toBeNull()
 
