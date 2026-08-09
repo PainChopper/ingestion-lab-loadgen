@@ -210,20 +210,23 @@ export function getQueueCableGeometryPresentation(
   localPreview: number | null = null,
 ): QueueCableGeometryPresentation {
   const capacity = getQueueCapacityPresentation(control, localPreview)
-  const cableY = capacityToCableY(
+  const appliedY = capacityToCableY(
     capacity.applied,
     control,
     start.y,
     QUEUE_CABLE_MAX_LIFT,
   )
-  const sliderY = localPreview === null
-    ? cableY
-    : capacityToCableY(
-        capacity.candidate,
-        control,
-        start.y,
-        QUEUE_CABLE_MAX_LIFT,
-      )
+  const candidateY = capacityToCableY(
+    capacity.candidate,
+    control,
+    start.y,
+    QUEUE_CABLE_MAX_LIFT,
+  )
+  const cableY =
+    localPreview === null && capacity.requestState === 'pending'
+      ? candidateY
+      : appliedY
+  const sliderY = candidateY
   const cablePath = buildQueueCablePath(start, end, cableY)
 
   return {

@@ -161,11 +161,10 @@ describe('queue cable capacity geometry', () => {
         testCase.end,
       )
 
-      expect(pending.cablePath).toBe(canonical.cablePath)
+      expect(preview.cablePath).toBe(canonical.cablePath)
       expect(preview.markerPath).toBe(canonical.markerPath)
-      expect(pending.markerPathLength).toBe(canonical.markerPathLength)
-      expect(pending.cableY).toBe(testCase.appliedY)
-      expect(pending.sliderY).toBe(testCase.appliedY)
+      expect(pending.cableY).toBe(testCase.candidateY)
+      expect(pending.sliderY).toBe(testCase.candidateY)
       expect(pending.requestedPath).toBeNull()
       expect(preview.sliderY).toBe(testCase.candidateY)
       expect(preview.requestedPath).toBe(
