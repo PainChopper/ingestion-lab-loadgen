@@ -56,9 +56,15 @@ export function blockingPressure(
   )
 }
 
+function hasRendezvousWaiter(queue: QueueTelemetrySnapshot): boolean {
+  return queue.capacity.applied === 0 && queue.blockedSenders > 0
+}
+
 export function effectiveQueuePressure(
   queue: QueueTelemetrySnapshot,
 ): number {
+  if (hasRendezvousWaiter(queue)) return 1
+
   return Math.max(
     occupancyPressure(queue.depthBatches, queue.capacity.applied),
     blockingPressure(queue.blockedSenders, queue.oldestBlockedSenderMs),
@@ -188,11 +194,13 @@ export class QueueFlowStateDeriver {
         state.pressureActive && state.observedAtMs !== null
           ? observedAtMs - state.observedAtMs
           : 0
-      state.displayedPressure = moveDisplayedPressure(
-        state.displayedPressure,
-        effectiveQueuePressure(queue),
-        elapsedMs,
-      )
+      state.displayedPressure = hasRendezvousWaiter(queue)
+        ? 1
+        : moveDisplayedPressure(
+            state.displayedPressure,
+            effectiveQueuePressure(queue),
+            elapsedMs,
+          )
       state.pressureActive = Number.isFinite(observedAtMs) && elapsedMs >= 0
     } else {
       state.pressureActive = false

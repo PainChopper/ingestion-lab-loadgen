@@ -119,6 +119,18 @@ describe('queue flow state derivation', () => {
         pending: 0,
       },
     })).toBe(0.5)
+    expect(effectiveQueuePressure({
+      ...telemetry,
+      depthBatches: 10,
+      blockedSenders: 0,
+      oldestBlockedSenderMs: 0,
+      capacity: {
+        ...telemetry.capacity,
+        applied: 10,
+        preview: 0,
+        pending: 0,
+      },
+    })).toBe(1)
     expect([
       queuePressureColor(0),
       queuePressureColor(0.5),
@@ -127,6 +139,85 @@ describe('queue flow state derivation', () => {
       QUEUE_PRESSURE_GREEN,
       QUEUE_PRESSURE_YELLOW,
       QUEUE_PRESSURE_RED,
+    ])
+  })
+
+  it('applies rendezvous waiter pressure immediately at every waiter age', () => {
+    const base = baseTelemetry()
+    const deriver = new QueueFlowStateDeriver()
+    const idle = deriver.derive(queueInput(base, {
+      depth: 0,
+      applied: 0,
+      preview: 12,
+      pending: 12,
+      blockedSenders: 0,
+      oldestBlockedSenderMs: 0,
+    }), 0).queue1
+
+    expect(idle).toMatchObject({
+      depthBatches: 0,
+      displayedPressure: 0,
+      flowState: 'normal',
+    })
+
+    const waiting = deriveSequence(deriver, base, [10, 20, 50].map((age) => ({
+      atMs: age,
+      values: {
+        depth: 0,
+        applied: 0,
+        preview: 12,
+        pending: 12,
+        blockedSenders: 1,
+        oldestBlockedSenderMs: age,
+      },
+    })))
+
+    expect(waiting.map((queue) => [
+      queue.displayedPressure,
+      queue.flowState,
+      queuePressureColor(queue.displayedPressure),
+    ])).toEqual([
+      [1, 'backpressure', QUEUE_PRESSURE_RED],
+      [1, 'backpressure', QUEUE_PRESSURE_RED],
+      [1, 'backpressure', QUEUE_PRESSURE_RED],
+    ])
+  })
+
+  it('recovers from rendezvous waiter pressure at two units per second', () => {
+    const base = baseTelemetry()
+    const deriver = new QueueFlowStateDeriver()
+    const waiting = queueInput(base, {
+      depth: 0,
+      applied: 0,
+      blockedSenders: 1,
+      oldestBlockedSenderMs: 10,
+    })
+
+    expect(deriver.derive(waiting, 0).queue1.displayedPressure).toBe(1)
+    const recovery = deriveSequence(deriver, waiting, [100, 200, 300, 400, 500]
+      .map((atMs) => ({
+        atMs,
+        values: {
+          depth: 0,
+          applied: 0,
+          blockedSenders: 0,
+          oldestBlockedSenderMs: 0,
+        },
+      })))
+
+    expect(recovery.map((queue) => queue.displayedPressure)).toEqual([
+      0.8,
+      0.6,
+      0.4,
+      0.2,
+      0,
+    ])
+    expect(recovery.map((queue) => queue.flowState)).toEqual([
+      'near-limit',
+      'near-limit',
+      'normal',
+      'normal',
+      'normal',
     ])
   })
 
@@ -162,10 +253,10 @@ describe('queue flow state derivation', () => {
     const bottleneckDeriver = new QueueFlowStateDeriver()
     bottleneckDeriver.derive(base, 0)
     const bottleneck = deriveSequence(bottleneckDeriver, base, [
-      { atMs: 100, values: { depth: 160, applied: 160 } },
-      { atMs: 250, values: { depth: 160, applied: 160 } },
-      { atMs: 499, values: { depth: 160, applied: 160 } },
-      { atMs: 500, values: { depth: 160, applied: 160 } },
+      { atMs: 100, values: { depth: 10, applied: 10 } },
+      { atMs: 250, values: { depth: 10, applied: 10 } },
+      { atMs: 499, values: { depth: 10, applied: 10 } },
+      { atMs: 500, values: { depth: 10, applied: 10 } },
     ])
     expect(bottleneck.map((queue) => queue.displayedPressure)).toEqual([
       0.2,
@@ -192,10 +283,24 @@ describe('queue flow state derivation', () => {
     const deriver = new QueueFlowStateDeriver()
     deriver.derive(base, 0)
     const states = deriveSequence(deriver, base, [
-      { atMs: 500, values: { depth: 160, applied: 160 } },
+      {
+        atMs: 10,
+        values: {
+          depth: 0,
+          applied: 0,
+          blockedSenders: 1,
+          oldestBlockedSenderMs: 10,
+        },
+      },
       {
         atMs: 600,
-        values: { depth: 0, applied: 160, runState: 'paused' },
+        values: {
+          depth: 0,
+          applied: 0,
+          blockedSenders: 0,
+          oldestBlockedSenderMs: 0,
+          runState: 'paused',
+        },
       },
       {
         atMs: 5_000,
@@ -209,14 +314,16 @@ describe('queue flow state derivation', () => {
         atMs: 10_000,
         values: {
           depth: 0,
-          applied: 160,
+          applied: 0,
+          blockedSenders: 0,
+          oldestBlockedSenderMs: 0,
           runState: 'running',
           connectionState: 'connected',
         },
       },
       {
         atMs: 10_100,
-        values: { depth: 0, applied: 160 },
+        values: { depth: 0, applied: 0 },
       },
     ])
 

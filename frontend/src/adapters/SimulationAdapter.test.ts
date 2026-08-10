@@ -4,6 +4,7 @@ import type {
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
 } from '../model/loadgen'
+import { QueueFlowStateDeriver } from '../model/queueFlowState'
 import { SimulationAdapter } from './SimulationAdapter'
 
 describe('SimulationAdapter', () => {
@@ -364,14 +365,21 @@ describe('SimulationAdapter', () => {
     await vi.advanceTimersByTimeAsync(1_000)
 
     const snapshot = adapter.getSnapshot()
+    const derived = new QueueFlowStateDeriver().derive(snapshot, 0)
+    expect(snapshot.sender.workers.applied).toBe(1)
+    expect(snapshot.sender.inFlightRequests).toBe(1)
     expect(snapshot.queue1.depthBatches).toBe(0)
     expect(snapshot.queue2.depthBatches).toBe(0)
     expect(snapshot.queue1.blockedSenders).toBeGreaterThan(0)
     expect(snapshot.queue2.blockedSenders).toBeGreaterThan(0)
-    expect(snapshot.queue1.handoffBatchesTotal).toBeGreaterThan(0)
-    expect(snapshot.queue2.handoffBatchesTotal).toBeGreaterThan(0)
-    expect(snapshot.queue1.oldestBlockedSenderMs).toBeLessThan(300)
-    expect(snapshot.queue2.oldestBlockedSenderMs).toBeLessThan(300)
+    expect(snapshot.queue1.handoffBatchesTotal).toBeGreaterThan(1)
+    expect(snapshot.queue2.handoffBatchesTotal).toBeGreaterThan(1)
+    expect(snapshot.queue1.oldestBlockedSenderMs).toBeLessThan(100)
+    expect(snapshot.queue2.oldestBlockedSenderMs).toBeLessThan(100)
+    expect(derived.queue2).toMatchObject({
+      displayedPressure: 1,
+      flowState: 'backpressure',
+    })
     adapter.dispose()
   })
 

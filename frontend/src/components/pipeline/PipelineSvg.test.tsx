@@ -620,4 +620,70 @@ describe('PipelineSvg marker wiring', () => {
     expect(q2.style.getPropertyValue('--pipeline-queue-pressure-color'))
       .toBe('#79d957')
   })
+
+  it('projects rendezvous pressure without occupancy markers', () => {
+    const base = activeSnapshot()
+    const rendezvous: LoadgenSnapshot = {
+      ...base,
+      queue1: {
+        ...base.queue1,
+        depthBatches: 0,
+        throughputTps: 0,
+        blockedSenders: 1,
+        oldestBlockedSenderMs: 10,
+        displayedPressure: 1,
+        flowState: 'backpressure',
+        capacity: {
+          ...base.queue1.capacity,
+          applied: 0,
+          preview: 12,
+          pending: 12,
+        },
+      },
+      queue2: {
+        ...base.queue2,
+        depthBatches: 0,
+        throughputTps: 0,
+        displayedPressure: 0,
+        flowState: 'normal',
+      },
+    }
+    const view = renderPipeline(rendezvous)
+    const q1 = view.container.querySelector<SVGGElement>(
+      '#queue-reader-to-throttler',
+    )!
+
+    expect(q1.style.getPropertyValue('--pipeline-queue-pressure-color'))
+      .toBe('#ff6748')
+    expect(view.container.querySelectorAll(
+      '.pipeline-marker[data-marker-stage="queue1"][visibility="visible"]',
+    )).toHaveLength(0)
+  })
+
+  it('keeps valve flow color owned by upstream queue1', () => {
+    const base = activeSnapshot()
+    const snapshot: LoadgenSnapshot = {
+      ...base,
+      queue1: {
+        ...base.queue1,
+        displayedPressure: 0,
+        flowState: 'normal',
+      },
+      queue2: {
+        ...base.queue2,
+        displayedPressure: 1,
+        flowState: 'backpressure',
+      },
+    }
+    const view = renderPipeline(snapshot)
+    const valve = view.container.querySelector<SVGGElement>('#throttler-actor')!
+    const q2 = view.container.querySelector<SVGGElement>(
+      '#queue-throttler-to-sender',
+    )!
+
+    expect(valve.style.getPropertyValue('--pipeline-valve-flow-color'))
+      .toBe('#79d957')
+    expect(q2.style.getPropertyValue('--pipeline-queue-pressure-color'))
+      .toBe('#ff6748')
+  })
 })
