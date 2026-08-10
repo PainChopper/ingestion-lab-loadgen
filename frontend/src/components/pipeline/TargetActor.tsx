@@ -1,20 +1,22 @@
 import type { KeyboardEvent } from 'react'
 import type { SelectableId, TargetSnapshot } from '../../model/loadgen'
 import { formatRate } from './formatters'
-import { ACTOR_GEOMETRY } from './geometry'
+import type { PipelineGeometry } from './geometry'
 
 interface TargetActorProps {
   snapshot: TargetSnapshot
   selected: boolean
   onSelect: (id: SelectableId) => void
+  geometry: PipelineGeometry['actors']['target']
 }
 
 export function TargetActor({
   snapshot,
   selected,
   onSelect,
+  geometry,
 }: TargetActorProps) {
-  const geometry = ACTOR_GEOMETRY.target
+  const { center, labels } = geometry
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
@@ -55,18 +57,18 @@ export function TargetActor({
           r="7"
           className="pipeline-port"
         />
-        <circle cx="1000" cy="342" r="30" className="pipeline-target-ring" />
-        <circle cx="1000" cy="342" r="17" className="pipeline-target-ring" />
-        <circle cx="1000" cy="342" r="4" className="pipeline-target-center" />
-        <line x1="1000" y1="305" x2="1000" y2="379" className="pipeline-target-ring" />
-        <line x1="963" y1="342" x2="1037" y2="342" className="pipeline-target-ring" />
-        <text x="1000" y="407" textAnchor="middle" className="pipeline-small">
+        <circle cx={center.x} cy={center.y} r="30" className="pipeline-target-ring" />
+        <circle cx={center.x} cy={center.y} r="17" className="pipeline-target-ring" />
+        <circle cx={center.x} cy={center.y} r="4" className="pipeline-target-center" />
+        <line x1={center.x} y1={center.y - 37} x2={center.x} y2={center.y + 37} className="pipeline-target-ring" />
+        <line x1={center.x - 37} y1={center.y} x2={center.x + 37} y2={center.y} className="pipeline-target-ring" />
+        <text x={labels.caption.x} y={labels.caption.y} textAnchor="middle" className="pipeline-small pipeline-target-secondary">
           Accepted TPS
         </text>
-        <text x="1000" y="431" textAnchor="middle" className="pipeline-value">
+        <text x={labels.value.x} y={labels.value.y} textAnchor="middle" className="pipeline-value pipeline-target-primary">
           {formatRate(snapshot.acceptedTps)}
         </text>
-        <text x="1000" y="456" textAnchor="middle" className="pipeline-small">
+        <text x={labels.state.x} y={labels.state.y} textAnchor="middle" className="pipeline-small pipeline-target-secondary">
           {snapshot.connectionState}
         </text>
       </g>

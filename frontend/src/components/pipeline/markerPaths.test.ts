@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { NumericControlSnapshot, QueueId } from '../../model/loadgen'
-import { QUEUE_CABLE_ENDPOINTS } from './geometry'
+import { createPipelineGeometry, QUEUE_CABLE_ENDPOINTS } from './geometry'
 import { buildQueueCablePath, capacityToCableY } from './queueCableGeometry'
 import {
   getMarkerStagePathGeometry,
@@ -146,4 +146,82 @@ describe('marker paths', () => {
       }
     }
   })
+
+  it('joins portrait stages at top and bottom ports through upright valve elbows', () => {
+    const queue1 = capacityControl(10, 12, 1)
+    const queue2 = capacityControl(160, 160, 10)
+    const stages: readonly MarkerStage[] = [
+      'reader',
+      'queue1',
+      'throttler',
+      'queue2',
+      'sender',
+      'http',
+      'target',
+    ]
+    for (const readerWorkers of [1, 7]) {
+      for (const senderWorkers of [1, 7, 8, 16, 32]) {
+        const geometry = createPipelineGeometry({
+          orientation: 'portrait',
+          readerWorkers,
+          senderWorkers,
+        })
+        const paths = stages.map((stage) =>
+          getMarkerStagePathGeometry(stage, queue1, queue2, 11, geometry)
+        )
+        for (let index = 0; index < paths.length - 1; index += 1) {
+          expect(paths[index].end).toEqual(paths[index + 1].start)
+        }
+      }
+    }
+
+    const geometry = createPipelineGeometry({
+      orientation: 'portrait',
+      readerWorkers: 7,
+      senderWorkers: 32,
+    })
+    const paths = stages.map((stage) =>
+      getMarkerStagePathGeometry(stage, queue1, queue2, 11, geometry)
+    )
+    expect(paths[1].start).toEqual({ x: 240, y: 246 })
+    expect(paths[1].end).toEqual({ x: 240, y: 493 })
+    expect(paths[2].start).toEqual({ x: 240, y: 493 })
+    expect(paths[2].end).toEqual({ x: 240, y: 686 })
+    expect(paths[5].end).toEqual({ x: 240, y: 1258 })
+
+    const valve = getValveMarkerPathGeometry(5, geometry)
+    expect(valve.points).toContainEqual({ x: 192, y: 626 })
+    expect(valve.points).toContainEqual({ x: 288, y: 626 })
+    expect(valve.points.some((point) => point.y > 626)).toBe(true)
+  })
+
+  it.each([1120, 1440, 1920])(
+    'joins landscape stages at content width %i',
+    (landscapeContentWidth) => {
+      const queue1 = capacityControl(10, 12, 1)
+      const queue2 = capacityControl(160, 160, 10)
+      const geometry = createPipelineGeometry({
+        orientation: 'landscape',
+        landscapeContentWidth,
+        readerWorkers: 7,
+        senderWorkers: 32,
+      })
+      const stages: readonly MarkerStage[] = [
+        'reader',
+        'queue1',
+        'throttler',
+        'queue2',
+        'sender',
+        'http',
+        'target',
+      ]
+      const paths = stages.map((stage) =>
+        getMarkerStagePathGeometry(stage, queue1, queue2, 11, geometry)
+      )
+
+      for (let index = 0; index < paths.length - 1; index += 1) {
+        expect(paths[index].end).toEqual(paths[index + 1].start)
+      }
+    },
+  )
 })

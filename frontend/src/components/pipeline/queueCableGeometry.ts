@@ -2,6 +2,7 @@ import type {
   NumericControlSnapshot,
 } from '../../model/loadgen'
 import type { Point } from './geometry'
+import type { PipelineOrientation } from './pipelineLayout'
 
 export type CapacityRange = Pick<
   NumericControlSnapshot,
@@ -26,6 +27,8 @@ export interface QueueCableGeometryPresentation {
   readonly capacity: QueueCapacityPresentation
   readonly cableY: number
   readonly sliderY: number
+  readonly cableX: number
+  readonly sliderX: number
   readonly cablePath: string
   readonly requestedPath: string | null
   readonly markerPath: string
@@ -34,6 +37,7 @@ export interface QueueCableGeometryPresentation {
 
 export const QUEUE_CABLE_MAX_MARKERS = 24
 export const QUEUE_CABLE_MAX_LIFT = 240
+export const PORTRAIT_QUEUE_CABLE_MAX_LIFT = 140
 
 function decimalPlaces(value: number): number {
   const [, fraction = ''] = String(value).split('.')
@@ -172,6 +176,36 @@ export function buildQueueCablePath(
   return `M${formatCoordinate(start.x)} ${formatCoordinate(start.y)} ${buildQueueCableCommands(start, end, topY)}`
 }
 
+export function buildPortraitQueueCablePath(
+  start: Point,
+  end: Point,
+  leftX: number,
+): string {
+  const shift = Math.max(0, start.x - leftX)
+  if (shift < 0.5) {
+    return `M${formatCoordinate(start.x)} ${formatCoordinate(start.y)} V${formatCoordinate(end.y)}`
+  }
+
+  const height = end.y - start.y
+  const shoulder = Math.min(46, height * 0.24)
+  const topY = start.y + shoulder
+  const bottomY = end.y - shoulder
+  const radius = Math.min(16, shift / 2, (bottomY - topY) / 2)
+  const f = formatCoordinate
+  return [
+    `M${f(start.x)} ${f(start.y)}`,
+    `V${f(topY - radius)}`,
+    `Q${f(start.x)} ${f(topY)} ${f(start.x - radius)} ${f(topY)}`,
+    `H${f(leftX + radius)}`,
+    `Q${f(leftX)} ${f(topY)} ${f(leftX)} ${f(topY + radius)}`,
+    `V${f(bottomY - radius)}`,
+    `Q${f(leftX)} ${f(bottomY)} ${f(leftX + radius)} ${f(bottomY)}`,
+    `H${f(start.x - radius)}`,
+    `Q${f(start.x)} ${f(bottomY)} ${f(start.x)} ${f(bottomY + radius)}`,
+    `V${f(end.y)}`,
+  ].join(' ')
+}
+
 function quadraticBezierLength(
   start: Point,
   control: Point,
@@ -256,6 +290,28 @@ export function getQueueCablePathLength(
     lineLength(points.fourthCurveEnd, points.end)
 }
 
+export function getPortraitQueueCablePathLength(
+  start: Point,
+  end: Point,
+  leftX: number,
+): number {
+  const shift = Math.max(0, start.x - leftX)
+  if (shift < 0.5) return Math.max(0, end.y - start.y)
+
+  const height = end.y - start.y
+  const shoulder = Math.min(46, height * 0.24)
+  const topY = start.y + shoulder
+  const bottomY = end.y - shoulder
+  const radius = Math.min(16, shift / 2, (bottomY - topY) / 2)
+  const straight = height + shift * 2 - radius * 8
+  const quarterCurve = quadraticBezierLength(
+    { x: 0, y: 0 },
+    { x: 0, y: radius },
+    { x: radius, y: radius },
+  )
+  return straight + quarterCurve * 4
+}
+
 function buildQueueCableCommands(
   start: Point,
   end: Point,
@@ -292,8 +348,46 @@ export function getQueueCableGeometryPresentation(
   start: Point,
   end: Point,
   localPreview: number | null = null,
+  orientation: PipelineOrientation = 'landscape',
+  maxLift = orientation === 'portrait'
+    ? PORTRAIT_QUEUE_CABLE_MAX_LIFT
+    : QUEUE_CABLE_MAX_LIFT,
 ): QueueCableGeometryPresentation {
   const capacity = getQueueCapacityPresentation(control, localPreview)
+  if (orientation === 'portrait') {
+    const appliedX = capacityToCableY(
+      capacity.applied,
+      control,
+      start.x,
+      maxLift,
+    )
+    const candidateX = capacityToCableY(
+      capacity.candidate,
+      control,
+      start.x,
+      maxLift,
+    )
+    const cableX =
+      localPreview === null && capacity.requestState === 'pending'
+        ? candidateX
+        : appliedX
+    const cablePath = buildPortraitQueueCablePath(start, end, cableX)
+    return {
+      capacity,
+      cableY: start.y,
+      sliderY: (start.y + end.y) / 2,
+      cableX,
+      sliderX: candidateX,
+      cablePath,
+      requestedPath:
+        localPreview === null
+          ? null
+          : buildPortraitQueueCablePath(start, end, candidateX),
+      markerPath: cablePath,
+      markerPathLength: getPortraitQueueCablePathLength(start, end, cableX),
+    }
+  }
+
   const appliedY = capacityToCableY(
     capacity.applied,
     control,
@@ -317,6 +411,8 @@ export function getQueueCableGeometryPresentation(
     capacity,
     cableY,
     sliderY,
+    cableX: start.x,
+    sliderX: (start.x + end.x) / 2,
     cablePath,
     requestedPath:
       localPreview === null

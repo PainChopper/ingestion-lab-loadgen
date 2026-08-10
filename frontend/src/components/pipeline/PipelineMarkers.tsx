@@ -15,10 +15,16 @@ import {
   VALVE_APERTURE,
   valueToOpeningIndex,
 } from './throttlerValve'
+import {
+  createPipelineGeometry,
+  type PipelineGeometry,
+} from './geometry'
+import { normalizedWorkerCount } from './workerActorLayout'
 
 interface PipelineMarkersProps {
   readonly snapshot: LoadgenSnapshot
   readonly markers: MarkerLifecycleSnapshot
+  readonly geometry?: PipelineGeometry
 }
 
 function queueMarkerColor(queue: QueueSnapshot): string {
@@ -42,7 +48,17 @@ function markerColor(
   return 'var(--yellow)'
 }
 
-export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
+export function PipelineMarkers({
+  snapshot,
+  markers,
+  geometry,
+}: PipelineMarkersProps) {
+  const resolvedGeometry = geometry ?? createPipelineGeometry({
+    orientation: 'landscape',
+    readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+    senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+  })
+  const orientation = resolvedGeometry.orientation
   const valveOpeningIndex = valueToOpeningIndex(
     snapshot.throttler.requestedTps.applied,
     snapshot.throttler.requestedTps,
@@ -62,6 +78,7 @@ export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
       snapshot.queue1.capacity,
       snapshot.queue2.capacity,
       valveOpeningIndex,
+      resolvedGeometry,
     ),
   ])) as Record<MarkerStage, ReturnType<typeof getMarkerStagePathGeometry>>
   const waitingMarkers = markers.markers
@@ -92,14 +109,27 @@ export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
     >
       <defs>
         <clipPath id={valveMarkerClipId}>
-          <rect x="355" y="398" width="60" height="34" />
-          <ellipse
-            cx={VALVE_APERTURE.centerX}
-            cy={VALVE_APERTURE.centerY}
-            rx={VALVE_APERTURE.radiusX}
-            ry={VALVE_APERTURE.radiusY}
-          />
-          <rect x="445" y="398" width="60" height="34" />
+          <g transform={`translate(${resolvedGeometry.actors.throttler.transform.x} ${resolvedGeometry.actors.throttler.transform.y})`}>
+            {orientation === 'portrait' ? (
+              <>
+                <rect x="378" y="278" width="56" height="141" />
+                <ellipse cx="430" cy="415" rx={VALVE_APERTURE.radiusX} ry={VALVE_APERTURE.radiusY} />
+                <rect x="445" y="411" width="37" height="68" />
+                <rect x="426" y="471" width="56" height="8" />
+              </>
+            ) : (
+              <>
+              <rect x="355" y="398" width="60" height="34" />
+              <ellipse
+                cx={VALVE_APERTURE.centerX}
+                cy={VALVE_APERTURE.centerY}
+                rx={VALVE_APERTURE.radiusX}
+                ry={VALVE_APERTURE.radiusY}
+              />
+              <rect x="445" y="398" width="60" height="34" />
+              </>
+            )}
+          </g>
         </clipPath>
       </defs>
       {markers.markers.map((marker) => {
