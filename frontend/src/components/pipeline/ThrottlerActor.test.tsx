@@ -7,6 +7,7 @@ import type {
   NumericControlSnapshot,
   QueueSnapshot,
   SelectableId,
+  ThrottlerInstallationMode,
 } from '../../model/loadgen'
 import { QueueFlowStateDeriver } from '../../model/queueFlowState'
 import { ThrottlerActor } from './ThrottlerActor'
@@ -33,12 +34,20 @@ function Harness({
   onCommand = vi.fn(),
   onSelect = vi.fn(),
   queueOverrides = {},
+  installationMode = 'installed',
+  pendingInstallationMode = null,
+  modeAccepted = true,
+  onModeCommand = vi.fn(),
 }: {
   control?: NumericControlSnapshot
   accepted?: boolean
   onCommand?: (value: number) => void
   onSelect?: (id: SelectableId) => void
   queueOverrides?: Partial<QueueSnapshot>
+  installationMode?: ThrottlerInstallationMode
+  pendingInstallationMode?: ThrottlerInstallationMode | null
+  modeAccepted?: boolean
+  onModeCommand?: (value: ThrottlerInstallationMode) => void
 }) {
   const adapter = new SimulationAdapter()
   const snapshot = new QueueFlowStateDeriver().derive(adapter.getSnapshot(), 0)
@@ -48,7 +57,15 @@ function Harness({
   return (
     <svg>
       <ThrottlerActor
-        snapshot={{ ...snapshot.throttler, requestedTps: control }}
+        snapshot={{
+          ...snapshot.throttler,
+          requestedTps: control,
+          installationMode: {
+            ...snapshot.throttler.installationMode,
+            applied: installationMode,
+            pending: pendingInstallationMode,
+          },
+        }}
         upstreamQueue={{ ...snapshot.queue1, ...queueOverrides }}
         previewTps={preview}
         selected={false}
@@ -57,6 +74,10 @@ function Harness({
         onRequestedTpsChange={async (value) => {
           onCommand(value)
           return accepted
+        }}
+        onInstallationModeChange={async (value) => {
+          onModeCommand(value)
+          return modeAccepted
         }}
       />
     </svg>
@@ -90,6 +111,10 @@ describe('ThrottlerActor valve control', () => {
     expect(view.container.querySelector('.pipeline-valve-ghost--preview')).not.toBeNull()
     expect(onSelect).not.toHaveBeenCalled()
 
+    fireEvent.pointerDown(view.container.querySelector('[data-direction="decrease"]')!)
+    fireEvent.pointerUp(window)
+    expect(onCommand).toHaveBeenLastCalledWith(115_000)
+
     await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect throttler' }))
     expect(onSelect).toHaveBeenCalledWith('throttler')
   })
@@ -120,6 +145,169 @@ describe('ThrottlerActor valve control', () => {
     expect(onCommand).toHaveBeenLastCalledWith(0)
     expect(slider.getAttribute('aria-valuenow')).toBe('0')
     expect(slider.getAttribute('data-wheel-phase')).toBe('0')
+  })
+
+  it('pulls the wheel center upward past a threshold and cancels short pulls', () => {
+    const onModeCommand = vi.fn()
+    const view = render(<Harness onModeCommand={onModeCommand} />)
+    const control = screen.getByRole('button', {
+      name: 'Remove throttler valve',
+    })
+    const grip = view.container.querySelector(
+      '[data-installation-grip="wheel"]',
+    )!
+
+    fireEvent.pointerDown(grip, { clientX: 100, clientY: 100, pointerId: 1 })
+    fireEvent.pointerMove(control, { clientX: 100, clientY: 75, pointerId: 1 })
+    expect(view.container.querySelector(
+      '.pipeline-valve-installation-ghost--preview',
+    )).not.toBeNull()
+    fireEvent.pointerUp(control, { clientX: 100, clientY: 75, pointerId: 1 })
+    expect(onModeCommand).not.toHaveBeenCalled()
+    expect(view.container.querySelector(
+      '.pipeline-valve-installation-ghost',
+    )).toBeNull()
+
+    fireEvent.pointerDown(grip, { clientX: 100, clientY: 100, pointerId: 2 })
+    fireEvent.pointerMove(control, { clientX: 100, clientY: 45, pointerId: 2 })
+    fireEvent.pointerUp(control, { clientX: 100, clientY: 45, pointerId: 2 })
+    expect(onModeCommand).toHaveBeenCalledOnce()
+    expect(onModeCommand).toHaveBeenCalledWith('bypass')
+  })
+
+  it('reinserts the detached assembly with the opposite down-left pull', () => {
+    const onModeCommand = vi.fn()
+    render(
+      <Harness
+        installationMode="bypass"
+        onModeCommand={onModeCommand}
+      />,
+    )
+    const control = screen.getByRole('button', {
+      name: 'Reinsert throttler valve',
+    })
+
+    expect(control.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.pointerDown(control, {
+      clientX: 140,
+      clientY: 80,
+      pointerId: 3,
+    })
+    fireEvent.pointerMove(control, {
+      clientX: 90,
+      clientY: 130,
+      pointerId: 3,
+    })
+    fireEvent.pointerUp(control, {
+      clientX: 90,
+      clientY: 130,
+      pointerId: 3,
+    })
+
+    expect(onModeCommand).toHaveBeenCalledOnce()
+    expect(onModeCommand).toHaveBeenCalledWith('installed')
+  })
+
+  it('hides saved requested TPS only while bypass is applied', () => {
+    const view = render(
+      <Harness
+        control={requestedControl({ applied: 135_000 })}
+        installationMode="bypass"
+      />,
+    )
+    const actor = view.container.querySelector('#throttler-actor')
+
+    expect(actor?.textContent).not.toContain('Requested TPS')
+    expect(actor?.textContent).not.toContain('135,000 tx/s')
+    expect(actor?.textContent).toContain('Admitted TPS')
+
+    view.rerender(
+      <Harness
+        control={requestedControl({ applied: 135_000 })}
+        installationMode="installed"
+      />,
+    )
+    expect(actor?.textContent).toContain('Requested TPS')
+    expect(actor?.textContent).toContain('135,000 tx/s')
+  })
+
+  it('cancels removal preview on Escape pointercancel and window blur', () => {
+    const onModeCommand = vi.fn()
+    const view = render(<Harness onModeCommand={onModeCommand} />)
+    const control = screen.getByRole('button', {
+      name: 'Remove throttler valve',
+    })
+    const grip = view.container.querySelector(
+      '[data-installation-grip="wheel"]',
+    )!
+    const begin = (pointerId: number) => {
+      fireEvent.pointerDown(grip, {
+        clientX: 100,
+        clientY: 100,
+        pointerId,
+      })
+      expect(view.container.querySelector(
+        '.pipeline-valve-installation-ghost--preview',
+      )).not.toBeNull()
+    }
+
+    begin(4)
+    fireEvent.keyDown(control, { key: 'Escape' })
+    expect(view.container.querySelector(
+      '.pipeline-valve-installation-ghost',
+    )).toBeNull()
+    begin(5)
+    fireEvent.pointerCancel(control, { pointerId: 5 })
+    expect(view.container.querySelector(
+      '.pipeline-valve-installation-ghost',
+    )).toBeNull()
+    begin(6)
+    fireEvent.blur(window)
+    expect(view.container.querySelector(
+      '.pipeline-valve-installation-ghost',
+    )).toBeNull()
+    expect(onModeCommand).not.toHaveBeenCalled()
+  })
+
+  it('supports click and keyboard fallback once and keeps focus after rejection', async () => {
+    const user = userEvent.setup()
+    const onModeCommand = vi.fn()
+    render(
+      <Harness
+        modeAccepted={false}
+        onModeCommand={onModeCommand}
+      />,
+    )
+    const control = screen.getByRole('button', {
+      name: 'Remove throttler valve',
+    })
+
+    fireEvent.keyDown(control, { key: 'Enter', repeat: true })
+    expect(onModeCommand).not.toHaveBeenCalled()
+    await user.click(control)
+    await waitFor(() => {
+      expect(onModeCommand).toHaveBeenCalledOnce()
+      expect(document.activeElement).toBe(control)
+      expect(screen.getByText('Valve mode change rejected')).not.toBeNull()
+    })
+  })
+
+  it('renders backend pending mode as a yellow ghost without changing applied state', () => {
+    const view = render(
+      <Harness pendingInstallationMode="bypass" />,
+    )
+    const control = screen.getByRole('button', {
+      name: 'Remove throttler valve',
+    })
+
+    expect(control.getAttribute('aria-pressed')).toBe('false')
+    expect(control.getAttribute('aria-valuetext')).toContain('bypass pending')
+    expect(view.container.querySelector(
+      '.pipeline-valve-installation-ghost--pending',
+    )).not.toBeNull()
+    expect(view.container.querySelector(
+      '.pipeline-valve-detached-assembly--applied',
+    )).toBeNull()
   })
 
   it('keeps applied opening solid while preview takes precedence over pending', () => {
@@ -285,8 +473,8 @@ describe('ThrottlerActor valve control', () => {
       hit.getAttribute('x'), hit.getAttribute('y'),
       hit.getAttribute('width'), hit.getAttribute('height'),
     ])).toEqual([
-      ['382', '321', '48', '58'],
-      ['430', '321', '48', '58'],
+      ['382', '321', '48', '46'],
+      ['430', '321', '48', '46'],
     ])
 
     view.rerender(<Harness control={requestedControl({ applied: 115_000 })} />)

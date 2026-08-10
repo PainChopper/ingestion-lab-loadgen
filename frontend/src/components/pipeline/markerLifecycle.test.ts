@@ -728,6 +728,64 @@ describe('MarkerLifecycleController', () => {
         },
       },
     }, false).valveOpeningIndex).toBe(6)
+
+    const pendingBypass: LoadgenSnapshot = {
+      ...withCandidate,
+      throttler: {
+        ...withCandidate.throttler,
+        installationMode: {
+          ...withCandidate.throttler.installationMode,
+          applied: 'installed',
+          pending: 'bypass',
+        },
+      },
+    }
+    expect(markerTelemetryFromSnapshot(pendingBypass, false).valveOpeningIndex)
+      .toBe(0)
+    expect(markerTelemetryFromSnapshot({
+      ...pendingBypass,
+      throttler: {
+        ...pendingBypass.throttler,
+        installationMode: {
+          ...pendingBypass.throttler.installationMode,
+          applied: 'bypass',
+          pending: null,
+        },
+      },
+    }, false).valveOpeningIndex).toBe(11)
+  })
+
+  it('freezes family identity and marker paths across paused mode changes', () => {
+    const controller = new MarkerLifecycleController(telemetry({
+      valveOpeningIndex: 0,
+    }))
+    advanceUntil(controller, () => waitingAtValve(controller).length >= 2, 60_000)
+    controller.reconcile(telemetry({
+      runState: 'paused',
+      valveOpeningIndex: 0,
+    }))
+    const before = new Map(visible(controller).map((marker) => [
+      marker.familyId,
+      markerPosition(marker),
+    ]))
+
+    controller.reconcile(telemetry({
+      runState: 'paused',
+      valveOpeningIndex: 11,
+    }))
+    controller.advance(1_000)
+
+    expect(controller.getSnapshot().valveOpeningIndex).toBe(0)
+    expect(new Map(visible(controller).map((marker) => [
+      marker.familyId,
+      markerPosition(marker),
+    ]))).toEqual(before)
+
+    controller.reconcile(telemetry({ valveOpeningIndex: 11 }))
+    expect(controller.getSnapshot().valveOpeningIndex).toBe(11)
+    expect(visible(controller).every((marker) =>
+      marker.familyId !== null && before.has(marker.familyId)
+    )).toBe(true)
   })
 
   it('keeps exactly 60 fixed slots with unique active family IDs', () => {

@@ -20,7 +20,7 @@ import {
 } from './markerPaths'
 import type { MarkerStage } from './markerLifecycle'
 import { getQueueCapacityPresentation } from './queueCableGeometry'
-import { valueToOpeningIndex } from './throttlerValve'
+import { effectiveValveOpeningIndex } from './throttlerValve'
 import {
   createPipelineGeometry,
   type PipelineGeometry,
@@ -78,8 +78,8 @@ export function markerTelemetryFromSnapshot(
     readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
     senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
   })
-  const valveOpeningIndex = valueToOpeningIndex(
-    snapshot.throttler.requestedTps.applied,
+  const valveOpeningIndex = effectiveValveOpeningIndex(
+    snapshot.throttler.installationMode.applied,
     snapshot.throttler.requestedTps,
   )
   const valveGeometry = getValveMarkerPathGeometry(

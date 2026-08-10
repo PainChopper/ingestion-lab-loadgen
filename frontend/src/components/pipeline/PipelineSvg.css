@@ -25,6 +25,10 @@
   font-weight: 600;
 }
 
+.pipeline-svg--portrait .pipeline-worker-status {
+  font-size: 11px;
+}
+
 .pipeline-svg--portrait .pipeline-queue-metric.pipeline-small-strong {
   font-size: 15px;
   font-weight: 700;
@@ -163,6 +167,12 @@
   font-weight: 650;
 }
 
+.pipeline-worker-status {
+  fill: var(--orange);
+  font-size: 10px;
+  font-weight: 750;
+}
+
 .pipeline-divider {
   stroke: var(--line);
   vector-effect: non-scaling-stroke;
@@ -293,6 +303,106 @@
   stroke: #ff7568;
   stroke-width: 1.4;
   vector-effect: non-scaling-stroke;
+}
+
+.pipeline-valve-detached-piston {
+  fill: #9e2928;
+  stroke: #ff7568;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-valve-detached-sway {
+  transform-box: fill-box;
+  transform-origin: 50% 12%;
+  animation: pipeline-valve-dangle 2.8s ease-in-out infinite alternate;
+}
+
+@keyframes pipeline-valve-dangle {
+  from {
+    transform: rotate(-1.25deg) translateY(-0.4px);
+  }
+
+  to {
+    transform: rotate(1.25deg) translateY(0.6px);
+  }
+}
+
+.pipeline-valve-installation-ghost {
+  color: var(--yellow);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.pipeline-valve-installation-ghost--preview {
+  color: var(--cyan);
+}
+
+.pipeline-valve-installation-ghost .pipeline-valve-wheel-rim,
+.pipeline-valve-installation-ghost .pipeline-valve-wheel-inner-rim,
+.pipeline-valve-installation-ghost .pipeline-valve-wheel-knob,
+.pipeline-valve-installation-ghost .pipeline-valve-wheel-spoke,
+.pipeline-valve-installation-ghost .pipeline-valve-wheel-hub,
+.pipeline-valve-installation-ghost .pipeline-valve-wheel-index,
+.pipeline-valve-installation-ghost .pipeline-valve-neck,
+.pipeline-valve-installation-ghost .pipeline-valve-stem,
+.pipeline-valve-installation-ghost .pipeline-valve-detached-piston,
+.pipeline-valve-installation-ghost .pipeline-valve-gate line,
+.pipeline-valve-installation-ghost .pipeline-valve-gate ellipse {
+  fill: color-mix(in srgb, currentColor 12%, transparent);
+  stroke: currentColor;
+  stroke-dasharray: 4 3;
+}
+
+.pipeline-valve-installation-trajectory {
+  fill: none;
+  color: var(--yellow);
+  opacity: 0.82;
+  pointer-events: none;
+  stroke: currentColor;
+  stroke-dasharray: 6 5;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-valve-installation-trajectory--preview {
+  color: var(--cyan);
+}
+
+.pipeline-valve-installation-control {
+  cursor: grab;
+  outline: none;
+  touch-action: none;
+}
+
+.pipeline-valve-installation-control--disabled {
+  cursor: default;
+}
+
+.pipeline-valve-installation-hit-area {
+  fill: transparent;
+}
+
+.pipeline-valve-installation-focus-ring {
+  fill: none;
+  opacity: 0;
+  pointer-events: none;
+  stroke: #eafaff;
+  stroke-width: 2.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-valve-installation-control:focus-visible
+  .pipeline-valve-installation-focus-ring {
+  opacity: 1;
+  filter: drop-shadow(0 0 3px rgba(39, 199, 234, 0.92));
+}
+
+.pipeline-valve-installation-error {
+  fill: var(--red);
+  font-size: 8px;
+  font-weight: 700;
 }
 
 .pipeline-valve-ghost {
@@ -697,6 +807,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .pipeline-valve-detached-sway {
+    animation: none;
+  }
+
   .pipeline-valve-wheel-inner-motion {
     transition: none;
   }

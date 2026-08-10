@@ -86,6 +86,44 @@ describe('LabShell', () => {
     })
   })
 
+  it('removes and reinserts the valve without changing selection or saved TPS', async () => {
+    const user = userEvent.setup()
+    adapter = new SimulationAdapter()
+    const dispatch = vi.spyOn(adapter, 'dispatch')
+    render(<LabShell adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
+    const remove = screen.getByRole('button', {
+      name: 'Remove throttler valve',
+    })
+    await user.click(remove)
+
+    const reinsert = await screen.findByRole('button', {
+      name: 'Reinsert throttler valve',
+    })
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'set-throttler-installation-mode',
+      value: 'bypass',
+    })
+    expect(reinsert.getAttribute('aria-pressed')).toBe('true')
+    expect(document.activeElement).toBe(reinsert)
+    expect(screen.getAllByRole('spinbutton', { name: /^Requested TPS/ })
+      .every((input) => (input as HTMLInputElement).value === '120000'))
+      .toBe(true)
+    expect(screen.getByRole('heading', { name: 'THROTTLER' })).not.toBeNull()
+
+    await user.click(reinsert)
+    const restored = await screen.findByRole('button', {
+      name: 'Remove throttler valve',
+    })
+    expect(dispatch).toHaveBeenCalledWith({
+      type: 'set-throttler-installation-mode',
+      value: 'installed',
+    })
+    expect(restored.getAttribute('aria-pressed')).toBe('false')
+    expect(document.activeElement).toBe(restored)
+  })
+
   it('preserves adapter state, selection, inspector, and preview on live resize', async () => {
     const user = userEvent.setup()
     const resizeCallbacks: ResizeObserverCallback[] = []

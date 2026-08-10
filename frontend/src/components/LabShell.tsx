@@ -13,6 +13,7 @@ import type {
   QueueFlowState,
   QueueId,
   SelectableId,
+  ThrottlerInstallationMode,
 } from '../model/loadgen'
 import { useLoadgenSnapshot } from '../hooks/useLoadgenSnapshot'
 import { getInspectorViewModel } from './inspectorViewModel'
@@ -146,6 +147,9 @@ interface PipelineViewportProps {
   requestedTpsPreview: number | null
   onRequestedTpsPreviewChange: (value: number | null) => void
   onRequestedTpsChange: (value: number) => Promise<boolean>
+  onInstallationModeChange: (
+    value: ThrottlerInstallationMode,
+  ) => Promise<boolean>
   orientation: PipelineOrientation
 }
 
@@ -158,6 +162,7 @@ function PipelineViewport({
   requestedTpsPreview,
   onRequestedTpsPreviewChange,
   onRequestedTpsChange,
+  onInstallationModeChange,
   orientation,
 }: PipelineViewportProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -217,6 +222,7 @@ function PipelineViewport({
           requestedTpsPreview={requestedTpsPreview}
           onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
           onRequestedTpsChange={onRequestedTpsChange}
+          onInstallationModeChange={onInstallationModeChange}
           orientation={orientation}
           geometry={geometry}
         />
@@ -409,6 +415,9 @@ interface WorkspaceProps extends SnapshotProps, RequestedTpsControlProps {
   onClearSelection: () => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
   onQueueCapacityChange: (queue: QueueId, value: number) => void
+  onInstallationModeChange: (
+    value: ThrottlerInstallationMode,
+  ) => Promise<boolean>
   orientation: PipelineOrientation
 }
 
@@ -423,6 +432,7 @@ function Workspace({
   requestedTpsPreview,
   onRequestedTpsPreviewChange,
   onRequestedTpsChange,
+  onInstallationModeChange,
   orientation,
 }: WorkspaceProps) {
   return (
@@ -436,6 +446,7 @@ function Workspace({
         requestedTpsPreview={requestedTpsPreview}
         onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
         onRequestedTpsChange={onRequestedTpsChange}
+        onInstallationModeChange={onInstallationModeChange}
         orientation={orientation}
       />
       <InspectorDock
@@ -513,6 +524,19 @@ export function LabShell({ adapter }: AdapterProps) {
       return false
     }
   }
+  const handleInstallationModeChange = async (
+    value: ThrottlerInstallationMode,
+  ): Promise<boolean> => {
+    try {
+      const receipt = await adapter.dispatch({
+        type: 'set-throttler-installation-mode',
+        value,
+      })
+      return receipt.accepted
+    } catch {
+      return false
+    }
+  }
   const handleWorkerCountChange = (actor: WorkerActorId, value: number) => {
     void adapter.dispatch({ type: 'set-worker-count', actor, value })
   }
@@ -544,6 +568,7 @@ export function LabShell({ adapter }: AdapterProps) {
         requestedTpsPreview={requestedTpsPreview}
         onRequestedTpsPreviewChange={handleRequestedTpsPreviewChange}
         onRequestedTpsChange={handleRequestedTpsChange}
+        onInstallationModeChange={handleInstallationModeChange}
         orientation={orientation}
       />
       <QueueStateLegend />

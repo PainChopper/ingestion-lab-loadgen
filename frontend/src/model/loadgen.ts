@@ -16,6 +16,10 @@ export type RunState = 'idle' | 'running' | 'paused'
 
 export type ApplyMode = 'immediate' | 'next-run' | 'unavailable'
 
+export type ThrottlerInstallationMode = 'installed' | 'bypass'
+
+export type ReaderLimitationReason = 'downstream-backpressure'
+
 export type QueueTrend = 'rising' | 'steady' | 'falling' | 'unknown'
 
 export type QueueFlowState =
@@ -36,11 +40,21 @@ export interface NumericControlSnapshot {
   readonly applyMode: ApplyMode
 }
 
+export interface InstallationModeControlSnapshot {
+  readonly applied: ThrottlerInstallationMode | null
+  readonly pending: ThrottlerInstallationMode | null
+  readonly applyMode: ApplyMode
+  readonly writable: boolean
+  readonly unavailableReason: string | null
+}
+
 export interface ReaderSnapshot {
   readonly id: 'reader'
   readonly workers: NumericControlSnapshot
   readonly readBatchSize: NumericControlSnapshot
   readonly readTps: number | null
+  readonly configuredCapacityTps: number | null
+  readonly limitationReason: ReaderLimitationReason | null
   readonly rowsRead: number | null
   readonly source: string | null
   readonly state: RunState
@@ -49,6 +63,7 @@ export interface ReaderSnapshot {
 export interface ThrottlerSnapshot {
   readonly id: 'throttler'
   readonly requestedTps: NumericControlSnapshot
+  readonly installationMode: InstallationModeControlSnapshot
   readonly admittedTps: number | null
   readonly limitedMs: number | null
   readonly state: RunState
@@ -153,6 +168,10 @@ export type LoadgenCommand =
   | { type: 'pause' }
   | { type: 'reset' }
   | { type: 'set-requested-tps'; value: number }
+  | {
+      type: 'set-throttler-installation-mode'
+      value: ThrottlerInstallationMode
+    }
   | { type: 'set-worker-count'; actor: 'reader' | 'sender'; value: number }
   | { type: 'set-queue-capacity'; queue: QueueId; value: number }
   | { type: 'set-read-batch-size'; value: number }
