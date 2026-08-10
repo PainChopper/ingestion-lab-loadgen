@@ -6,7 +6,15 @@ import type {
   MarkerStage,
   PipelineMarkerSlotSnapshot,
 } from './markerLifecycle'
+import {
+  markerWaitingOffset,
+  MAX_VISIBLE_WAITING_FAMILIES,
+} from './markerLifecycle'
 import { getMarkerStagePathGeometry } from './markerPaths'
+import {
+  VALVE_APERTURE,
+  valueToOpeningIndex,
+} from './throttlerValve'
 
 interface PipelineMarkersProps {
   readonly snapshot: LoadgenSnapshot
@@ -35,6 +43,10 @@ function markerColor(
 }
 
 export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
+  const valveOpeningIndex = valueToOpeningIndex(
+    snapshot.throttler.requestedTps.applied,
+    snapshot.throttler.requestedTps,
+  )
   const stagePaths = Object.fromEntries(([
     'reader',
     'queue1',
@@ -49,8 +61,27 @@ export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
       stage,
       snapshot.queue1.capacity,
       snapshot.queue2.capacity,
+      valveOpeningIndex,
     ),
   ])) as Record<MarkerStage, ReturnType<typeof getMarkerStagePathGeometry>>
+  const waitingMarkers = markers.markers
+    .filter((marker) => marker.stage === 'throttler' && marker.queued)
+    .sort((left, right) =>
+      right.phase - left.phase ||
+      Number(left.familyId?.split('-').at(-1)) -
+        Number(right.familyId?.split('-').at(-1))
+    )
+  const waitingTarget = Math.min(
+    Math.max(0, Math.floor(snapshot.queue1.depthBatches ?? 0)),
+    MAX_VISIBLE_WAITING_FAMILIES,
+  )
+  const visibleWaitingIds = new Set(
+    waitingMarkers.slice(0, waitingTarget).map((marker) => marker.slotId),
+  )
+  const waitingRanks = new Map(
+    waitingMarkers.map((marker, index) => [marker.slotId, index]),
+  )
+  const valveMarkerClipId = 'pipeline-valve-marker-clip'
 
   return (
     <g
@@ -59,8 +90,30 @@ export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
       data-reduced-motion={markers.reducedMotion}
       data-run-state={snapshot.runState}
     >
+      <defs>
+        <clipPath id={valveMarkerClipId}>
+          <rect x="355" y="398" width="60" height="34" />
+          <ellipse
+            cx={VALVE_APERTURE.centerX}
+            cy={VALVE_APERTURE.centerY}
+            rx={VALVE_APERTURE.radiusX}
+            ry={VALVE_APERTURE.radiusY}
+          />
+          <rect x="445" y="398" width="60" height="34" />
+        </clipPath>
+      </defs>
       {markers.markers.map((marker) => {
         const geometry = stagePaths[marker.stage]
+        const jitter = marker.queued && marker.stage === 'throttler'
+          ? markerWaitingOffset(
+            marker.familyId ?? '',
+            marker.slotId,
+            markers.motionElapsedMs,
+            markers.reducedMotion,
+          )
+          : { x: 0, y: 0 }
+        const waitingVisible = marker.stage !== 'throttler' ||
+          !marker.queued || visibleWaitingIds.has(marker.slotId)
         const outcomeClass = marker.outcomeVisible && marker.outcome !== null
           ? ` pipeline-marker--outcome pipeline-marker--${marker.outcome}`
           : ''
@@ -74,13 +127,26 @@ export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
           opacity: marker.outcomeVisible
             ? Math.max(0.28, 1 - marker.pulseProgress * 0.72)
             : undefined,
+          transform: jitter.x === 0 && jitter.y === 0
+            ? undefined
+            : `translate(${jitter.x}px, ${jitter.y}px)`,
         } satisfies CSSProperties
 
         return (
-          <circle
+          <g
             key={marker.slotId}
+            clipPath={marker.stage === 'throttler'
+              ? `url(#${valveMarkerClipId})`
+              : undefined}
+            data-marker-mask={marker.stage === 'throttler'
+              ? 'aperture-and-body'
+              : undefined}
+          >
+            <circle
             r={marker.outcomeVisible ? 4 + marker.pulseProgress * 2 : 4}
-            visibility={marker.state === 'inactive' ? 'hidden' : 'visible'}
+            visibility={marker.state === 'inactive' || !waitingVisible
+              ? 'hidden'
+              : 'visible'}
             className={`pipeline-marker pipeline-marker--${marker.state} pipeline-marker--stage-${marker.stage}${marker.queued ? ' pipeline-marker--queued' : ''}${outcomeClass}`}
             style={markerStyle}
             data-marker-id={marker.slotId}
@@ -90,7 +156,12 @@ export function PipelineMarkers({ snapshot, markers }: PipelineMarkersProps) {
             data-marker-phase={marker.phase.toFixed(4)}
             data-marker-outcome={marker.outcome ?? ''}
             data-marker-path={geometry.path}
-          />
+            data-marker-jitter-x={jitter.x}
+            data-marker-jitter-y={jitter.y}
+            data-marker-waiting-rank={waitingRanks.get(marker.slotId) ?? ''}
+            data-marker-rendered={waitingVisible}
+            />
+          </g>
         )
       })}
     </g>

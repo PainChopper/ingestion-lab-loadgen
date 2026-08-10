@@ -6,6 +6,7 @@ interface NumericControlProps {
   readonly label: string
   readonly control: NumericControlSnapshot
   readonly onValueChange: (value: number) => void
+  readonly onPreviewChange?: (value: number | null) => void
   readonly className?: string
 }
 
@@ -13,6 +14,7 @@ export function NumericControl({
   label,
   control,
   onValueChange,
+  onPreviewChange,
   className,
 }: NumericControlProps) {
   const inputId = useId()
@@ -32,6 +34,12 @@ export function NumericControl({
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     setDraft(event.currentTarget.value)
+    const value = event.currentTarget.valueAsNumber
+    onPreviewChange?.(
+      event.currentTarget.checkValidity() && Number.isFinite(value)
+        ? value
+        : null,
+    )
   }
 
   const commitDraft = (input: HTMLInputElement) => {
@@ -40,6 +48,7 @@ export function NumericControl({
       onValueChange(value)
     } else {
       setDraft(appliedDraft)
+      onPreviewChange?.(null)
     }
   }
 
@@ -54,6 +63,7 @@ export function NumericControl({
       event.preventDefault()
       suppressBlurCommit.current = true
       setDraft(appliedDraft)
+      onPreviewChange?.(null)
       event.currentTarget.blur()
     }
   }
