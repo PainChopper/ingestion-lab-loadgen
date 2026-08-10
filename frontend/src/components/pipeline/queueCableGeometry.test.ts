@@ -9,6 +9,7 @@ import {
   getCapacityTicks,
   getQueueCapacityPresentation,
   getQueueCableGeometryPresentation,
+  getQueueCablePathLength,
   getQueueMarkerCount,
   normalizeCapacity,
 } from './queueCableGeometry'
@@ -181,6 +182,13 @@ describe('queue cable capacity geometry', () => {
     expect(buildQueueCablePath(start, end, 295)).toMatch(
       /^M150 415 H.+ Q.+ V.+ Q.+ H.+ Q.+ V.+ Q.+ H355$/,
     )
+    expect(getQueueCablePathLength(start, end, 415)).toBe(205)
+    expect(getQueueCablePathLength(start, end, 335)).toBeCloseTo(340.89, 2)
+    expect(getQueueCablePathLength(
+      { x: 505, y: 415 },
+      { x: 720, y: 415 },
+      265,
+    )).toBeCloseTo(490.89, 2)
   })
 
   it('exposes every 0..12 step 1 and 0..160 step 10 capacity tick', () => {
@@ -199,7 +207,7 @@ describe('queue cable capacity geometry', () => {
       .toEqual([0, 80, 160])
   })
 
-  it('bounds occupancy by depth, fill ratio, and the fixed marker pool', () => {
+  it('bounds queue family density by depth and the fixed marker pool', () => {
     expect([
       getQueueMarkerCount(4, 0),
       getQueueMarkerCount(4, 4),
@@ -210,7 +218,7 @@ describe('queue cable capacity geometry', () => {
     ]).toEqual([0, 4, 4, 4, 12, 24])
   })
 
-  it('never increases occupancy marker count when capacity grows', () => {
+  it('never increases queue family density when capacity grows', () => {
     const capacities = [1, 2, 3, 4, 5, 8, 12, 16, 24, 50, 100, 250]
 
     for (const depth of [1, 4, 8, 15, 24, 50, 100]) {
