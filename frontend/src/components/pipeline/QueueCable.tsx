@@ -15,34 +15,39 @@ import {
   formatMilliseconds,
   formatRate,
 } from './formatters'
-import type { Point } from './geometry'
+import type { PipelineQueueGeometry, Point } from './geometry'
+import type { PipelineOrientation } from './pipelineLayout'
 import {
   capacityFromKeyboard,
   capacityFromVerticalDrag,
   capacityToCableY,
   getCapacityTicks,
   getQueueCableGeometryPresentation,
+  PORTRAIT_QUEUE_CABLE_MAX_LIFT,
   QUEUE_CABLE_MAX_LIFT,
 } from './queueCableGeometry'
 
 interface QueueCableProps {
   snapshot: QueueSnapshot
-  start: Point
-  end: Point
+  geometry?: PipelineQueueGeometry
+  start?: Point
+  end?: Point
   selected: boolean
   onSelect: (id: SelectableId) => void
   onCapacityChange: (queue: QueueId, value: number) => void
+  orientation?: PipelineOrientation
 }
 
 interface DragSession {
   readonly pointerId: number
-  readonly pointerY: number
+  readonly pointerAxis: number
   readonly capacity: number
   readonly control: QueueSnapshot['capacity']
   readonly handle: SVGGElement
   readonly svg: SVGSVGElement
   readonly queue: QueueId
   readonly commit: (queue: QueueId, value: number) => void
+  readonly orientation: PipelineOrientation
 }
 
 interface DragListeners {
@@ -58,12 +63,18 @@ export function getQueueCablePresentation(
   start: Point,
   end: Point,
   dragPreview: number | null = null,
+  orientation: PipelineOrientation = 'landscape',
 ) {
+  const maxLift = orientation === 'portrait'
+    ? PORTRAIT_QUEUE_CABLE_MAX_LIFT
+    : QUEUE_CABLE_MAX_LIFT
   const geometry = getQueueCableGeometryPresentation(
     snapshot.capacity,
     start,
     end,
     dragPreview,
+    orientation,
+    maxLift,
   )
   const { capacity } = geometry
   const waitingUpstream =
@@ -85,7 +96,13 @@ export function getQueueCablePresentation(
               capacity.applied,
               snapshot.capacity,
               start.y,
-              QUEUE_CABLE_MAX_LIFT,
+              maxLift,
+            ),
+            x: capacityToCableY(
+              capacity.applied,
+              snapshot.capacity,
+              start.x,
+              maxLift,
             ),
           }
         : null,
@@ -96,22 +113,25 @@ export function getQueueCablePresentation(
   }
 }
 
-function pointerYInSvg(
+function pointerInSvg(
   svg: SVGSVGElement,
   clientX: number,
   clientY: number,
-): number {
+): Point {
   const matrix = svg.getScreenCTM()
   if (matrix !== null) {
     const point = svg.createSVGPoint()
     point.x = clientX
     point.y = clientY
-    return point.matrixTransform(matrix.inverse()).y
+    return point.matrixTransform(matrix.inverse())
   }
 
   const bounds = svg.getBoundingClientRect()
   const viewBox = svg.viewBox.baseVal
-  return viewBox.y + ((clientY - bounds.top) / bounds.height) * viewBox.height
+  return {
+    x: viewBox.x + ((clientX - bounds.left) / bounds.width) * viewBox.width,
+    y: viewBox.y + ((clientY - bounds.top) / bounds.height) * viewBox.height,
+  }
 }
 
 function removeDragListeners(listeners: DragListeners) {
@@ -123,12 +143,31 @@ function removeDragListeners(listeners: DragListeners) {
 
 export function QueueCable({
   snapshot,
-  start,
-  end,
+  geometry,
+  start: startProp,
+  end: endProp,
   selected,
   onSelect,
   onCapacityChange,
+  orientation = 'landscape',
 }: QueueCableProps) {
+  const start = geometry?.start ?? startProp ?? { x: 0, y: 0 }
+  const end = geometry?.end ?? endProp ?? start
+  const metrics = geometry?.metrics ?? {
+    x: (start.x + end.x) / 2,
+    throughputY: orientation === 'portrait'
+      ? snapshot.id === 'reader-to-throttler' ? 328 : 750
+      : 507,
+    depthY: orientation === 'portrait'
+      ? snapshot.id === 'reader-to-throttler' ? 349 : 771
+      : 528,
+    waitingY: orientation === 'portrait'
+      ? snapshot.id === 'reader-to-throttler' ? 370 : 792
+      : 548,
+    requestY: orientation === 'portrait'
+      ? snapshot.id === 'reader-to-throttler' ? 388 : 810
+      : 566,
+  }
   const [dragPreview, setDragPreview] = useState<number | null>(null)
   const dragSession = useRef<DragSession | null>(null)
   const dragListeners = useRef<DragListeners | null>(null)
@@ -138,10 +177,20 @@ export function QueueCable({
     start,
     end,
     dragPreview,
+    orientation,
   )
   const { capacity } = presentation
   const centerX = (start.x + end.x) / 2
-  const ticks = getCapacityTicks(control, start.y, QUEUE_CABLE_MAX_LIFT)
+  const portrait = orientation === 'portrait'
+  const maxLift = portrait
+    ? PORTRAIT_QUEUE_CABLE_MAX_LIFT
+    : QUEUE_CABLE_MAX_LIFT
+  const ticks = getCapacityTicks(
+    control,
+    portrait ? start.x : start.y,
+    maxLift,
+  )
+  const centerY = (start.y + end.y) / 2
   const disabled = control.applyMode === 'unavailable'
   const queueStyle = {
     '--pipeline-queue-pressure-color': queuePressureColor(
@@ -156,9 +205,11 @@ export function QueueCable({
   ) =>
     capacityFromVerticalDrag(
       session.capacity,
-      pointerYInSvg(session.svg, clientX, clientY) - session.pointerY,
+      (session.orientation === 'portrait'
+        ? pointerInSvg(session.svg, clientX, clientY).x
+        : pointerInSvg(session.svg, clientX, clientY).y) - session.pointerAxis,
       session.control,
-      QUEUE_CABLE_MAX_LIFT,
+      maxLift,
     )
 
   const closeDragSession = (pointerId?: number): DragSession | null => {
@@ -195,13 +246,16 @@ export function QueueCable({
 
     const session: DragSession = {
       pointerId: event.pointerId,
-      pointerY: pointerYInSvg(svg, event.clientX, event.clientY),
+      pointerAxis: portrait
+        ? pointerInSvg(svg, event.clientX, event.clientY).x
+        : pointerInSvg(svg, event.clientX, event.clientY).y,
       capacity: presentation.dragStartCapacity,
       control,
       handle: event.currentTarget,
       svg,
       queue: snapshot.id,
       commit: onCapacityChange,
+      orientation,
     }
     const listeners: DragListeners = {
       pointerMove: (pointerEvent) => {
@@ -294,25 +348,26 @@ export function QueueCable({
     >
       <g className="pipeline-queue-scale" aria-hidden="true">
         <line
-          x1={centerX}
-          y1={start.y - QUEUE_CABLE_MAX_LIFT}
-          x2={centerX}
-          y2={start.y}
+          x1={portrait ? start.x - maxLift : centerX}
+          y1={portrait ? centerY : start.y - maxLift}
+          x2={portrait ? start.x : centerX}
+          y2={portrait ? centerY : start.y}
           className="pipeline-queue-scale__line"
         />
         {ticks.map((tick) => (
           <g key={tick.value}>
             <line
-              x1={centerX - (tick.major ? 5 : 3)}
-              y1={tick.y}
-              x2={centerX + (tick.major ? 5 : 3)}
-              y2={tick.y}
+              x1={portrait ? tick.y : centerX - (tick.major ? 5 : 3)}
+              y1={portrait ? centerY - (tick.major ? 5 : 3) : tick.y}
+              x2={portrait ? tick.y : centerX + (tick.major ? 5 : 3)}
+              y2={portrait ? centerY + (tick.major ? 5 : 3) : tick.y}
               className="pipeline-queue-scale__tick"
             />
             {tick.major && (
               <text
-                x={centerX + 10}
-                y={tick.y + 4}
+                x={portrait ? tick.y : centerX + 10}
+                y={portrait ? centerY + 18 : tick.y + 4}
+                textAnchor={portrait ? 'middle' : undefined}
                 className="pipeline-queue-scale__label"
               >
                 {formatInteger(tick.value)}
@@ -342,12 +397,14 @@ export function QueueCable({
       {presentation.appliedMarker !== null && (
         <g
           className={`pipeline-queue-capacity-applied pipeline-queue-capacity-applied--${snapshot.flowState}`}
-          transform={`translate(${centerX - 50} ${presentation.appliedMarker.y})`}
+          transform={portrait
+            ? `translate(${presentation.appliedMarker.x} ${centerY - 28})`
+            : `translate(${centerX - 50} ${presentation.appliedMarker.y})`}
           role="status"
           aria-label={`${snapshot.from} to ${snapshot.to} queue applied capacity ${formatInteger(presentation.appliedMarker.capacity)} batches`}
           data-capacity={presentation.appliedMarker.capacity}
         >
-          <line x1="30" x2="50" />
+          <line x1={portrait ? 0 : 30} y1={portrait ? 9 : 0} x2={portrait ? 0 : 50} y2={portrait ? 28 : 0} />
           <rect x="-30" y="-9" width="60" height="18" rx="3" />
           <text y="3" textAnchor="middle">
             Applied {formatInteger(presentation.appliedMarker.capacity)}
@@ -356,16 +413,16 @@ export function QueueCable({
       )}
 
       <text
-        x={centerX}
-        y="507"
+        x={metrics.x}
+        y={metrics.throughputY}
         textAnchor="middle"
         className="pipeline-small-strong pipeline-queue-metric"
       >
         {formatRate(snapshot.throughputTps)}
       </text>
       <text
-        x={centerX}
-        y="528"
+        x={metrics.x}
+        y={metrics.depthY}
         textAnchor="middle"
         className="pipeline-small pipeline-queue-metric"
       >
@@ -373,8 +430,8 @@ export function QueueCable({
       </text>
       {presentation.waitingUpstream !== null && (
         <text
-          x={centerX}
-          y={presentation.waitingUpstreamY}
+          x={metrics.x}
+          y={metrics.waitingY}
           textAnchor="middle"
           className="pipeline-queue-wait-status"
         >
@@ -383,8 +440,8 @@ export function QueueCable({
       )}
       {capacity.requestState !== null && (
         <text
-          x={centerX}
-          y={presentation.capacityStatusY}
+          x={metrics.x}
+          y={metrics.requestY}
           textAnchor="middle"
           className={`pipeline-queue-capacity-status pipeline-queue-capacity-status--${capacity.requestState}`}
         >
@@ -396,7 +453,7 @@ export function QueueCable({
       <g
         className={`pipeline-queue-handle pipeline-queue-handle--${snapshot.flowState}${presentation.handleState === null ? '' : ` pipeline-queue-handle--${presentation.handleState}`}${disabled ? ' pipeline-queue-handle--disabled' : ''}`}
         role="slider"
-        aria-orientation="vertical"
+        aria-orientation={portrait ? 'horizontal' : 'vertical'}
         tabIndex={disabled ? -1 : 0}
         aria-label={`${snapshot.from} to ${snapshot.to} queue capacity`}
         aria-valuemin={control.min}
@@ -408,7 +465,7 @@ export function QueueCable({
             : `${capacity.requestState === 'pending' ? 'Pending' : 'Preview'} ${formatInteger(capacity.candidate)} batches; ${formatInteger(capacity.applied)} batches applied`
         }
         aria-disabled={disabled}
-        transform={`translate(${centerX} ${presentation.sliderY})`}
+        transform={`translate(${presentation.sliderX} ${presentation.sliderY})`}
         onPointerDown={handlePointerDown}
         onLostPointerCapture={(event) => cancelDrag(event.pointerId)}
         onKeyDown={handleKeyDown}

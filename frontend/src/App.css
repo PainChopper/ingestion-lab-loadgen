@@ -217,6 +217,49 @@
   background-size: 440px 440px;
 }
 
+.lab-shell--portrait .workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lab-shell--portrait .pipeline-scroll {
+  overflow-x: hidden;
+  overflow-y: visible;
+}
+
+.pipeline-viewport--portrait {
+  width: min(480px, 100%);
+  min-width: 0;
+  height: auto;
+  margin: 0 auto;
+  background-position: 18px 18px;
+  background-size: 320px 320px;
+}
+
+.lab-shell--portrait .inspector {
+  min-height: 220px;
+  border-top: 1px solid var(--line);
+  border-left: 0;
+}
+
+.lab-shell--portrait .inspector-empty {
+  min-height: 130px;
+}
+
+.lab-shell--portrait .inspector-data {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  column-gap: 24px;
+}
+
+.lab-shell--portrait .queue-legend {
+  flex-wrap: wrap;
+  overflow-x: hidden;
+}
+
+.lab-shell--portrait .queue-legend-items {
+  flex-wrap: wrap;
+  row-gap: 10px;
+}
+
 .inspector {
   min-width: 0;
   padding: 20px 18px 24px;
@@ -490,6 +533,14 @@
 
   .numeric-control--topbar .numeric-control__label {
     margin-right: auto;
+  }
+
+  .lab-shell--portrait .inspector {
+    padding-inline: 14px;
+  }
+
+  .lab-shell--portrait .queue-legend-items {
+    gap: 10px 16px;
   }
 }
 

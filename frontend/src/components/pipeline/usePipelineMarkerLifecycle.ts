@@ -21,6 +21,11 @@ import {
 import type { MarkerStage } from './markerLifecycle'
 import { getQueueCapacityPresentation } from './queueCableGeometry'
 import { valueToOpeningIndex } from './throttlerValve'
+import {
+  createPipelineGeometry,
+  type PipelineGeometry,
+} from './geometry'
+import { normalizedWorkerCount } from './workerActorLayout'
 
 function usePrefersReducedMotion(): boolean {
   const [reducedMotion, setReducedMotion] = useState(() =>
@@ -66,12 +71,21 @@ function queueTelemetry(snapshot: QueueSnapshot): QueueMarkerTelemetry {
 export function markerTelemetryFromSnapshot(
   snapshot: LoadgenSnapshot,
   reducedMotion: boolean,
+  geometry?: PipelineGeometry,
 ): MarkerLifecycleTelemetry {
+  const resolvedGeometry = geometry ?? createPipelineGeometry({
+    orientation: 'landscape',
+    readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+    senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+  })
   const valveOpeningIndex = valueToOpeningIndex(
     snapshot.throttler.requestedTps.applied,
     snapshot.throttler.requestedTps,
   )
-  const valveGeometry = getValveMarkerPathGeometry(valveOpeningIndex)
+  const valveGeometry = getValveMarkerPathGeometry(
+    valveOpeningIndex,
+    resolvedGeometry,
+  )
   const stages: readonly MarkerStage[] = [
     'reader',
     'queue1',
@@ -88,6 +102,7 @@ export function markerTelemetryFromSnapshot(
       snapshot.queue1.capacity,
       snapshot.queue2.capacity,
       valveOpeningIndex,
+      resolvedGeometry,
     ).length,
   ])) as Record<MarkerStage, number>
 
@@ -115,11 +130,12 @@ export function markerTelemetryFromSnapshot(
 
 export function usePipelineMarkerLifecycle(
   snapshot: LoadgenSnapshot,
+  geometry: PipelineGeometry,
 ): MarkerLifecycleSnapshot {
   const reducedMotion = usePrefersReducedMotion()
   const telemetry = useMemo(
-    () => markerTelemetryFromSnapshot(snapshot, reducedMotion),
-    [snapshot, reducedMotion],
+    () => markerTelemetryFromSnapshot(snapshot, reducedMotion, geometry),
+    [snapshot, reducedMotion, geometry],
   )
   const [controller] = useState(
     () => new MarkerLifecycleController(telemetry),

@@ -6,7 +6,7 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import type {
   LoadgenSnapshot,
@@ -19,6 +19,12 @@ import { getInspectorViewModel } from './inspectorViewModel'
 import { NumericControl } from './NumericControl'
 import { PipelineSvg } from './pipeline/PipelineSvg'
 import type { WorkerActorId } from './pipeline/WorkerActor'
+import { createPipelineGeometry } from './pipeline/geometry'
+import {
+  usePipelineOrientation,
+  type PipelineOrientation,
+} from './pipeline/pipelineLayout'
+import { normalizedWorkerCount } from './pipeline/workerActorLayout'
 
 interface AdapterProps {
   adapter: LoadgenAdapter
@@ -140,6 +146,7 @@ interface PipelineViewportProps {
   requestedTpsPreview: number | null
   onRequestedTpsPreviewChange: (value: number | null) => void
   onRequestedTpsChange: (value: number) => Promise<boolean>
+  orientation: PipelineOrientation
 }
 
 function PipelineViewport({
@@ -151,10 +158,56 @@ function PipelineViewport({
   requestedTpsPreview,
   onRequestedTpsPreviewChange,
   onRequestedTpsChange,
+  orientation,
 }: PipelineViewportProps) {
+  const viewportRef = useRef<HTMLDivElement>(null)
+  const [landscapeContentWidth, setLandscapeContentWidth] = useState(1120)
+
+  useEffect(() => {
+    if (orientation !== 'landscape') return
+    const viewport = viewportRef.current
+    if (viewport === null) return
+    const updateWidth = (width: number) => {
+      const resolved = Math.max(1120, Math.round(width))
+      setLandscapeContentWidth((current) =>
+        current === resolved ? current : resolved
+      )
+    }
+
+    updateWidth(viewport.clientWidth)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (entry !== undefined) updateWidth(entry.contentRect.width)
+    })
+    observer.observe(viewport, { box: 'content-box' })
+    return () => observer.disconnect()
+  }, [orientation])
+
+  const geometry = useMemo(() => createPipelineGeometry({
+    orientation,
+    landscapeContentWidth,
+    readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+    senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+  }), [
+    landscapeContentWidth,
+    orientation,
+    snapshot.reader.workers,
+    snapshot.sender.workers,
+  ])
+
   return (
     <main className="pipeline-scroll" aria-label="Pipeline viewport">
-      <div className="pipeline-viewport" data-testid="pipeline-viewport">
+      <div
+        ref={viewportRef}
+        className={`pipeline-viewport pipeline-viewport--${orientation}`}
+        data-testid="pipeline-viewport"
+        data-layout={orientation}
+        data-content-width={geometry.viewBox.width}
+        style={orientation === 'portrait'
+          ? { aspectRatio: `480 / ${geometry.viewBox.height}` }
+          : undefined}
+      >
         <PipelineSvg
           snapshot={snapshot}
           selectedId={selectedId}
@@ -164,6 +217,8 @@ function PipelineViewport({
           requestedTpsPreview={requestedTpsPreview}
           onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
           onRequestedTpsChange={onRequestedTpsChange}
+          orientation={orientation}
+          geometry={geometry}
         />
       </div>
     </main>
@@ -354,6 +409,7 @@ interface WorkspaceProps extends SnapshotProps, RequestedTpsControlProps {
   onClearSelection: () => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
   onQueueCapacityChange: (queue: QueueId, value: number) => void
+  orientation: PipelineOrientation
 }
 
 function Workspace({
@@ -367,6 +423,7 @@ function Workspace({
   requestedTpsPreview,
   onRequestedTpsPreviewChange,
   onRequestedTpsChange,
+  orientation,
 }: WorkspaceProps) {
   return (
     <div className="workspace">
@@ -379,6 +436,7 @@ function Workspace({
         requestedTpsPreview={requestedTpsPreview}
         onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
         onRequestedTpsChange={onRequestedTpsChange}
+        orientation={orientation}
       />
       <InspectorDock
         adapter={adapter}
@@ -411,6 +469,7 @@ function QueueStateLegend() {
 
 export function LabShell({ adapter }: AdapterProps) {
   const snapshot = useLoadgenSnapshot(adapter)
+  const orientation = usePipelineOrientation()
   const [selectedId, setSelectedId] = useState<SelectableId | null>(null)
   const [requestedTpsDraft, setRequestedTpsDraft] = useState<{
     value: number | null
@@ -462,7 +521,11 @@ export function LabShell({ adapter }: AdapterProps) {
   }
 
   return (
-    <section className="lab-shell" aria-label="Load generator laboratory">
+    <section
+      className={`lab-shell lab-shell--${orientation}`}
+      aria-label="Load generator laboratory"
+      data-layout={orientation}
+    >
       <TopBar
         adapter={adapter}
         snapshot={snapshot}
@@ -481,6 +544,7 @@ export function LabShell({ adapter }: AdapterProps) {
         requestedTpsPreview={requestedTpsPreview}
         onRequestedTpsPreviewChange={handleRequestedTpsPreviewChange}
         onRequestedTpsChange={handleRequestedTpsChange}
+        orientation={orientation}
       />
       <QueueStateLegend />
     </section>

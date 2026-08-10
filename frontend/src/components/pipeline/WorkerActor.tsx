@@ -6,6 +6,7 @@ import type {
 } from '../../model/loadgen'
 import type { Point, WorkerActorBounds } from './geometry'
 import type { KeyboardEvent } from 'react'
+import type { PipelineOrientation } from './pipelineLayout'
 import {
   getWorkerActorLayout,
   type WorkerChipLayout,
@@ -31,6 +32,11 @@ interface WorkerActorProps {
   outputPort: Point
   primaryMetric: string
   secondaryMetric: string
+  metricPoints?: {
+    readonly primary: Point
+    readonly secondary: Point
+  }
+  orientation?: PipelineOrientation
   selected: boolean
   onSelect: (id: SelectableId) => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
@@ -114,11 +120,13 @@ export function WorkerActor({
   outputPort,
   primaryMetric,
   secondaryMetric,
+  metricPoints,
+  orientation = 'landscape',
   selected,
   onSelect,
   onWorkerCountChange,
 }: WorkerActorProps) {
-  const layout = getWorkerActorLayout(actor, bounds, workers)
+  const layout = getWorkerActorLayout(actor, bounds, workers, orientation)
   const workerMin = Math.round(workers.min)
   const workerMax = Math.round(workers.max)
   const workerStep = Math.max(1, Math.round(workers.step))
@@ -194,6 +202,8 @@ export function WorkerActor({
         aria-pressed={selected}
         data-worker-count={layout.workerCount}
         data-worker-layout={layout.mode}
+        data-worker-columns={layout.columns}
+        data-worker-rows={layout.rows}
         onClick={() => onSelect(actor)}
         onKeyDown={handleKeyDown}
       >
@@ -227,18 +237,18 @@ export function WorkerActor({
           className="pipeline-port"
         />
         <text
-          x={centerX}
-          y="510"
+          x={metricPoints?.primary.x ?? centerX}
+          y={metricPoints?.primary.y ?? 510}
           textAnchor="middle"
-          className="pipeline-value"
+          className="pipeline-value pipeline-worker-primary"
         >
           {primaryMetric}
         </text>
         <text
-          x={centerX}
-          y="531"
+          x={metricPoints?.secondary.x ?? centerX}
+          y={metricPoints?.secondary.y ?? 531}
           textAnchor="middle"
-          className="pipeline-small"
+          className="pipeline-small pipeline-worker-secondary"
         >
           {secondaryMetric}
         </text>
