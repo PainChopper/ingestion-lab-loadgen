@@ -1,6 +1,9 @@
 import type { NumericControlSnapshot, QueueId } from '../../model/loadgen'
-import type { Point } from './geometry'
-import { ACTOR_GEOMETRY, QUEUE_CABLE_ENDPOINTS } from './geometry'
+import {
+  createPipelineGeometry,
+  type PipelineGeometry,
+  type Point,
+} from './geometry'
 import type { MarkerStage } from './markerLifecycle'
 import {
   getQueueCableGeometryPresentation,
@@ -32,27 +35,32 @@ export interface ValveMarkerPathGeometry extends MarkerStagePathGeometry {
 
 export const VALVE_WAITING_STOP_X = VALVE_FLANGES.left - 4
 
-const FIXED_STAGE_POINTS: Readonly<
-  Partial<Record<MarkerStage, readonly Point[]>>
-> = Object.freeze({
-  reader: [
-    { x: 96, y: 392 },
-    ACTOR_GEOMETRY.reader.ports.output,
-  ],
-  sender: [
-    ACTOR_GEOMETRY.sender.ports.input,
-    { x: 783, y: 397 },
-    ACTOR_GEOMETRY.sender.ports.output,
-  ],
-  http: [
-    ACTOR_GEOMETRY.sender.ports.output,
-    ACTOR_GEOMETRY.target.ports.input,
-  ],
-  target: [
-    ACTOR_GEOMETRY.target.ports.input,
-    { x: 962, y: 415 },
-  ],
+const DEFAULT_PIPELINE_GEOMETRY = createPipelineGeometry({
+  orientation: 'landscape',
+  readerWorkers: 1,
+  senderWorkers: 1,
 })
+
+function fixedStagePoints(geometry: PipelineGeometry): Readonly<
+  Partial<Record<MarkerStage, readonly Point[]>>
+> {
+  return {
+    reader: [
+      geometry.actors.reader.markerPoint,
+      geometry.actors.reader.ports.output,
+    ],
+    sender: [
+      geometry.actors.sender.ports.input,
+      geometry.actors.sender.markerPoint,
+      geometry.actors.sender.ports.output,
+    ],
+    http: [geometry.http.start, geometry.http.end],
+    target: [
+      geometry.actors.target.ports.input,
+      geometry.actors.target.markerPoint,
+    ],
+  }
+}
 
 function pointDistance(left: Point, right: Point): number {
   return Math.hypot(right.x - left.x, right.y - left.y)
@@ -81,18 +89,52 @@ function distanceAtPoint(points: readonly Point[], pointIndex: number): number {
 
 export function getValveMarkerPathGeometry(
   openingIndex: number,
+  geometry: PipelineGeometry = DEFAULT_PIPELINE_GEOMETRY,
 ): ValveMarkerPathGeometry {
   const passageY = valvePassageCenterY(openingIndex === 0 ? 1 : openingIndex)
+  const transform = geometry.actors.throttler.transform
+  if (geometry.orientation === 'portrait') {
+    const translate = (x: number, y: number): Point => ({
+      x: x + transform.x,
+      y: y + transform.y,
+    })
+    const points = Object.freeze([
+      geometry.actors.throttler.ports.input,
+      translate(382, 282),
+      translate(382, 415),
+      translate(397, 415),
+      translate(401, 415),
+      translate(415, 415),
+      translate(421, passageY),
+      translate(439, passageY),
+      translate(445, 415),
+      translate(459, 415),
+      translate(478, 415),
+      translate(478, 475),
+      geometry.actors.throttler.ports.output,
+    ])
+    const length = polylineLength(points)
+    return Object.freeze({
+      path: pointsPath(points),
+      length,
+      start: points[0],
+      end: points.at(-1) ?? points[0],
+      points,
+      preAdmissionStopPhase: distanceAtPoint(points, 3) / length,
+      exitPhase: distanceAtPoint(points, 9) / length,
+    })
+  }
+
   const points = Object.freeze([
-    ACTOR_GEOMETRY.throttler.ports.input,
-    { x: VALVE_WAITING_STOP_X, y: VALVE_APERTURE.centerY },
-    { x: VALVE_FLANGES.left, y: VALVE_APERTURE.centerY },
-    { x: VALVE_APERTURE.centerX - VALVE_APERTURE.radiusX, y: VALVE_APERTURE.centerY },
-    { x: VALVE_APERTURE.centerX - 9, y: passageY },
-    { x: VALVE_APERTURE.centerX + 9, y: passageY },
-    { x: VALVE_APERTURE.centerX + VALVE_APERTURE.radiusX, y: VALVE_APERTURE.centerY },
-    { x: VALVE_FLANGES.right, y: VALVE_APERTURE.centerY },
-    ACTOR_GEOMETRY.throttler.ports.output,
+    geometry.actors.throttler.ports.input,
+    { x: VALVE_WAITING_STOP_X + transform.x, y: VALVE_APERTURE.centerY },
+    { x: VALVE_FLANGES.left + transform.x, y: VALVE_APERTURE.centerY },
+    { x: VALVE_APERTURE.centerX - VALVE_APERTURE.radiusX + transform.x, y: VALVE_APERTURE.centerY },
+    { x: VALVE_APERTURE.centerX - 9 + transform.x, y: passageY },
+    { x: VALVE_APERTURE.centerX + 9 + transform.x, y: passageY },
+    { x: VALVE_APERTURE.centerX + VALVE_APERTURE.radiusX + transform.x, y: VALVE_APERTURE.centerY },
+    { x: VALVE_FLANGES.right + transform.x, y: VALVE_APERTURE.centerY },
+    geometry.actors.throttler.ports.output,
   ])
   const length = polylineLength(points)
   return Object.freeze({
@@ -134,27 +176,36 @@ function clampPhase(phase: number): number {
 export function getQueueMarkerPathGeometry(
   queueId: QueueId,
   control: NumericControlSnapshot,
+  geometry: PipelineGeometry = DEFAULT_PIPELINE_GEOMETRY,
 ): QueueMarkerPathGeometry {
-  const endpoints = QUEUE_CABLE_ENDPOINTS[queueId]
-  const geometry = getQueueCableGeometryPresentation(
+  const endpoints = geometry.queues[queueId]
+  const presentationGeometry = getQueueCableGeometryPresentation(
     control,
     endpoints.start,
     endpoints.end,
+    null,
+    geometry.orientation,
   )
 
   return {
-    cablePath: geometry.cablePath,
-    cableLength: geometry.markerPathLength,
-    cableY: geometry.cableY,
+    cablePath: presentationGeometry.cablePath,
+    cableLength: presentationGeometry.markerPathLength,
+    cableY: presentationGeometry.cableY,
   }
 }
 
-export function getHttpTraversalPath(): string {
-  return pointsPath(FIXED_STAGE_POINTS.http ?? [])
+export function getHttpTraversalPath(
+  geometry: PipelineGeometry = DEFAULT_PIPELINE_GEOMETRY,
+): string {
+  const points = fixedStagePoints(geometry)
+  return pointsPath(points.http ?? [])
 }
 
-export function getHttpTraversalLength(): number {
-  return polylineLength(FIXED_STAGE_POINTS.http ?? [])
+export function getHttpTraversalLength(
+  geometry: PipelineGeometry = DEFAULT_PIPELINE_GEOMETRY,
+): number {
+  const points = fixedStagePoints(geometry)
+  return polylineLength(points.http ?? [])
 }
 
 export function getMarkerStagePathGeometry(
@@ -162,6 +213,7 @@ export function getMarkerStagePathGeometry(
   queue1Control: NumericControlSnapshot,
   queue2Control: NumericControlSnapshot,
   valveOpeningIndex = 11,
+  geometry: PipelineGeometry = DEFAULT_PIPELINE_GEOMETRY,
 ): MarkerStagePathGeometry {
   if (stage === 'queue1' || stage === 'queue2') {
     const queueId: QueueId = stage === 'queue1'
@@ -170,8 +222,9 @@ export function getMarkerStagePathGeometry(
     const queue = getQueueMarkerPathGeometry(
       queueId,
       stage === 'queue1' ? queue1Control : queue2Control,
+      geometry,
     )
-    const endpoints = QUEUE_CABLE_ENDPOINTS[queueId]
+    const endpoints = geometry.queues[queueId]
     return {
       path: queue.cablePath,
       length: queue.cableLength,
@@ -181,10 +234,11 @@ export function getMarkerStagePathGeometry(
   }
 
   if (stage === 'throttler') {
-    return getValveMarkerPathGeometry(valveOpeningIndex)
+    return getValveMarkerPathGeometry(valveOpeningIndex, geometry)
   }
 
-  const points = FIXED_STAGE_POINTS[stage] ?? []
+  const stagePoints = fixedStagePoints(geometry)
+  const points = stagePoints[stage] ?? []
   const start = points[0] ?? { x: 0, y: 0 }
   const end = points.at(-1) ?? start
   return {

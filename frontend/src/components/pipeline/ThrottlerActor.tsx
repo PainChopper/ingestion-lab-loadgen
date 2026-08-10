@@ -16,7 +16,8 @@ import type {
 } from '../../model/loadgen'
 import { queuePressureColor } from '../../model/queueFlowState'
 import { formatRate } from './formatters'
-import { ACTOR_GEOMETRY } from './geometry'
+import { ACTOR_GEOMETRY, type PipelineGeometry } from './geometry'
+import type { PipelineOrientation } from './pipelineLayout'
 import {
   getValveWheelKnobs,
   getValveTargets,
@@ -38,6 +39,8 @@ interface ThrottlerActorProps {
   onSelect: (id: SelectableId) => void
   onPreviewTpsChange: (value: number | null) => void
   onRequestedTpsChange: (value: number) => Promise<boolean>
+  geometry?: PipelineGeometry['actors']['throttler']
+  orientation?: PipelineOrientation
 }
 
 const HOLD_DELAY_MS = 420
@@ -56,8 +59,23 @@ export function ThrottlerActor({
   onSelect,
   onPreviewTpsChange,
   onRequestedTpsChange,
+  geometry,
+  orientation = 'landscape',
 }: ThrottlerActorProps) {
-  const geometry = ACTOR_GEOMETRY.throttler
+  const localGeometry = ACTOR_GEOMETRY.throttler
+  const resolvedGeometry = geometry ?? {
+    ...localGeometry,
+    transform: { x: 0, y: 0 },
+  }
+  const portrait = orientation === 'portrait'
+  const actorTransform = resolvedGeometry.transform.x === 0 &&
+      resolvedGeometry.transform.y === 0
+    ? undefined
+    : `translate(${resolvedGeometry.transform.x} ${resolvedGeometry.transform.y})`
+  const titlePoint = {
+    x: resolvedGeometry.title.x - resolvedGeometry.transform.x,
+    y: resolvedGeometry.title.y - resolvedGeometry.transform.y,
+  }
   const targets = getValveTargets(snapshot.requestedTps)
   const adjustable = valveIsAdjustable(snapshot.requestedTps)
   const appliedIndex = valueToOpeningIndex(
@@ -254,10 +272,10 @@ export function ThrottlerActor({
   )
 
   return (
-    <>
+    <g transform={actorTransform} data-pipeline-orientation={orientation}>
       <text
-        x={geometry.title.x}
-        y={geometry.title.y}
+        x={titlePoint.x}
+        y={titlePoint.y}
         textAnchor="middle"
         className="pipeline-title pipeline-title--throttler"
       >
@@ -284,32 +302,53 @@ export function ThrottlerActor({
           onKeyDown={handleSelectKeyDown}
         >
           <rect
-            x={geometry.bounds.x}
-            y={geometry.bounds.y}
-            width={geometry.bounds.width}
-            height={geometry.bounds.height}
+            x={localGeometry.bounds.x}
+            y={localGeometry.bounds.y}
+            width={localGeometry.bounds.width}
+            height={localGeometry.bounds.height}
             rx="5"
             className="pipeline-actor-box"
           />
         </g>
-        <line
-          x1="355"
-          y1="415"
-          x2={VALVE_FLANGES.left}
-          y2="415"
-          className="pipeline-valve-flow-line"
-          data-connector-side="left"
-        />
-        <line
-          x1={VALVE_FLANGES.right}
-          y1="415"
-          x2="505"
-          y2="415"
-          className="pipeline-valve-flow-line"
-          data-connector-side="right"
-        />
-        <circle cx="355" cy="415" r="7" className="pipeline-port" />
-        <circle cx="505" cy="415" r="7" className="pipeline-port" />
+        {portrait ? (
+          <>
+            <path
+              d={`M430 282 H382 Q374 282 374 290 V407 Q374 415 382 415 H${VALVE_FLANGES.left}`}
+              className="pipeline-valve-flow-line"
+              fill="none"
+              data-connector-side="portrait-input"
+            />
+            <path
+              d={`M${VALVE_FLANGES.right} 415 H478 Q486 415 486 423 V467 Q486 475 478 475 H430`}
+              className="pipeline-valve-flow-line"
+              fill="none"
+              data-connector-side="portrait-output"
+            />
+            <circle cx="430" cy="282" r="7" className="pipeline-port" />
+            <circle cx="430" cy="475" r="7" className="pipeline-port" />
+          </>
+        ) : (
+          <>
+            <line
+              x1="355"
+              y1="415"
+              x2={VALVE_FLANGES.left}
+              y2="415"
+              className="pipeline-valve-flow-line"
+              data-connector-side="left"
+            />
+            <line
+              x1={VALVE_FLANGES.right}
+              y1="415"
+              x2="505"
+              y2="415"
+              className="pipeline-valve-flow-line"
+              data-connector-side="right"
+            />
+            <circle cx="355" cy="415" r="7" className="pipeline-port" />
+            <circle cx="505" cy="415" r="7" className="pipeline-port" />
+          </>
+        )}
 
         <text x="382" y="304" textAnchor="middle" className="pipeline-small">
           Requested TPS
@@ -445,6 +484,6 @@ export function ThrottlerActor({
           </text>
         )}
       </g>
-    </>
+    </g>
   )
 }

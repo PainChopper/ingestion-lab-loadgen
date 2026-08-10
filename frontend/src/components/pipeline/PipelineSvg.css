@@ -6,6 +6,83 @@
   overflow: visible;
 }
 
+.pipeline-svg--portrait {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  overflow: visible;
+}
+
+.pipeline-svg--portrait .pipeline-worker-primary,
+.pipeline-svg--portrait .pipeline-target-primary {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.pipeline-svg--portrait .pipeline-worker-secondary,
+.pipeline-svg--portrait .pipeline-target-secondary {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pipeline-svg--portrait .pipeline-queue-metric.pipeline-small-strong {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.pipeline-svg--portrait .pipeline-queue-metric.pipeline-small {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pipeline-svg--portrait .pipeline-queue-wait-status,
+.pipeline-svg--portrait .pipeline-queue-capacity-status {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pipeline-svg--portrait .pipeline-http-status {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.pipeline-svg--portrait .pipeline-http-throughput {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pipeline-svg--portrait .pipeline-http-detail {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pipeline-svg--portrait #throttler-actor > .pipeline-small {
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.pipeline-svg--portrait #throttler-actor > .pipeline-value {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.pipeline-svg--portrait .pipeline-valve-opening-label {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.pipeline-svg--portrait .pipeline-valve-ghost-label,
+.pipeline-svg--portrait .pipeline-valve-readonly-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.pipeline-svg--portrait .pipeline-queue-handle__value {
+  font-size: 11px;
+  font-weight: 750;
+}
+
 .pipeline-selectable {
   outline: none;
   cursor: pointer;
@@ -487,6 +564,11 @@
   cursor: ns-resize;
   outline: none;
   touch-action: none;
+}
+
+.pipeline-svg--portrait
+  .pipeline-queue-handle:not(.pipeline-queue-handle--disabled) {
+  cursor: ew-resize;
 }
 
 .pipeline-queue-handle {

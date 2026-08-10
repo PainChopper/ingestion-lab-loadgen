@@ -1,5 +1,9 @@
+/// <reference types="node" />
+
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { act, render } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
   LoadgenSnapshot,
@@ -7,7 +11,11 @@ import type {
   QueueTelemetrySnapshot,
 } from '../../model/loadgen'
 import { QueueFlowStateDeriver } from '../../model/queueFlowState'
-import { QUEUE_CABLE_ENDPOINTS } from './geometry'
+import {
+  createPipelineGeometry,
+  QUEUE_CABLE_ENDPOINTS,
+} from './geometry'
+import type { PipelineOrientation } from './pipelineLayout'
 import {
   getFlowMarkerTarget,
   getQueueDepthFamilyTarget,
@@ -18,6 +26,100 @@ import { getQueueMarkerPathGeometry } from './markerPaths'
 import { PipelineMarkers } from './PipelineMarkers'
 import { PipelineSvg } from './PipelineSvg'
 import { markerTelemetryFromSnapshot } from './usePipelineMarkerLifecycle'
+import { normalizedWorkerCount } from './workerActorLayout'
+
+const styleElement = document.createElement('style')
+const pipelineStyles = readFileSync(
+  resolve(process.cwd(), 'src/components/pipeline/PipelineSvg.css'),
+  'utf8',
+)
+
+beforeAll(() => {
+  styleElement.textContent = pipelineStyles
+  document.head.append(styleElement)
+})
+
+describe('responsive pipeline geometry', () => {
+  it.each([
+    { observed: 900, width: 1120 },
+    { observed: 1120, width: 1120 },
+    { observed: 1440, width: 1440 },
+    { observed: 1920, width: 1920 },
+  ])('distributes landscape stations at $observed px', ({ observed, width }) => {
+    const geometry = createPipelineGeometry({
+      orientation: 'landscape',
+      landscapeContentWidth: observed,
+      readerWorkers: 7,
+      senderWorkers: 32,
+    })
+    const delta = (width - 1120) / 3
+
+    expect(geometry.viewBox).toEqual({
+      width,
+      height: 650,
+      value: `0 0 ${width} 650`,
+    })
+    expect(geometry.stationDelta).toBe(delta)
+    expect(geometry.actors.reader.bounds.width).toBe(120)
+    expect(geometry.actors.throttler.bounds.width).toBe(150)
+    expect(geometry.actors.sender.bounds.width).toBe(120)
+    expect(geometry.actors.target.bounds.width).toBe(140)
+    expect(width - (
+      geometry.actors.target.bounds.x + geometry.actors.target.bounds.width
+    )).toBe(50)
+    expect(
+      geometry.queues['reader-to-throttler'].end.x -
+      geometry.queues['reader-to-throttler'].start.x,
+    ).toBeCloseTo(205 + delta, 10)
+    expect(
+      geometry.queues['throttler-to-sender'].end.x -
+      geometry.queues['throttler-to-sender'].start.x,
+    ).toBeCloseTo(215 + delta, 10)
+    expect(geometry.http.end.x - geometry.http.start.x)
+      .toBeCloseTo(90 + delta, 10)
+  })
+
+  it.each([
+    { reader: 1, sender: 1, readerHeight: 113, senderHeight: 113 },
+    { reader: 7, sender: 1, readerHeight: 158, senderHeight: 113 },
+    { reader: 7, sender: 7, readerHeight: 158, senderHeight: 158 },
+    { reader: 7, sender: 8, readerHeight: 158, senderHeight: 96 },
+    { reader: 7, sender: 16, readerHeight: 158, senderHeight: 124 },
+    { reader: 7, sender: 32, readerHeight: 158, senderHeight: 180 },
+  ])(
+    'derives portrait stages for Reader $reader and Sender $sender',
+    ({ reader, sender, readerHeight, senderHeight }) => {
+      const geometry = createPipelineGeometry({
+        orientation: 'portrait',
+        readerWorkers: reader,
+        senderWorkers: sender,
+      })
+      const readerBottom = 88 + readerHeight
+      const throttlerInput = readerBottom + 247
+      const throttlerOutput = throttlerInput + 193
+      const senderTop = throttlerOutput + 222
+      const senderBottom = senderTop + senderHeight
+      const targetTop = senderBottom + 170
+
+      expect(geometry.actors.reader.ports.output.y).toBe(readerBottom)
+      expect(geometry.actors.throttler.ports.input.y).toBe(throttlerInput)
+      expect(geometry.actors.throttler.ports.output.y).toBe(throttlerOutput)
+      expect(geometry.actors.sender.ports.input.y).toBe(senderTop)
+      expect(geometry.actors.sender.ports.output.y).toBe(senderBottom)
+      expect(geometry.actors.target.ports.input.y).toBe(targetTop)
+      expect(geometry.viewBox.height)
+        .toBe(1160 + readerHeight + senderHeight)
+      expect(geometry.queues['reader-to-throttler'].metrics.throughputY)
+        .toBe(readerBottom + 60)
+      expect(geometry.queues['throttler-to-sender'].metrics.throughputY)
+        .toBe(throttlerOutput + 42)
+    },
+  )
+})
+
+afterAll(() => {
+  styleElement.remove()
+})
 
 function activeQueue<TQueue extends QueueTelemetrySnapshot>(
   queue: TQueue,
@@ -61,7 +163,17 @@ function activeSnapshot(): LoadgenSnapshot {
   return new QueueFlowStateDeriver().derive(telemetry, 0)
 }
 
-function renderPipeline(snapshot: LoadgenSnapshot) {
+function renderPipeline(
+  snapshot: LoadgenSnapshot,
+  orientation: PipelineOrientation = 'landscape',
+  landscapeContentWidth = 1120,
+) {
+  const geometry = createPipelineGeometry({
+    orientation,
+    landscapeContentWidth,
+    readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+    senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+  })
   return render(
     <PipelineSvg
       snapshot={snapshot}
@@ -72,6 +184,8 @@ function renderPipeline(snapshot: LoadgenSnapshot) {
       requestedTpsPreview={null}
       onRequestedTpsPreviewChange={vi.fn()}
       onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
+      orientation={orientation}
+      geometry={geometry}
     />,
   )
 }
@@ -685,5 +799,267 @@ describe('PipelineSvg marker wiring', () => {
       .toBe('#79d957')
     expect(q2.style.getPropertyValue('--pipeline-queue-pressure-color'))
       .toBe('#ff6748')
+  })
+
+  it('renders portrait viewBox, vertical ports, elbows, and shared marker paths', () => {
+    const snapshot = activeSnapshot()
+    const view = renderPipeline(snapshot, 'portrait')
+    const svg = view.container.querySelector('svg')!
+    const geometry = createPipelineGeometry({
+      orientation: 'portrait',
+      readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+      senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+    })
+
+    expect(svg.getAttribute('viewBox')).toBe(geometry.viewBox.value)
+    expect(svg.dataset.layout).toBe('portrait')
+    for (const queue of [snapshot.queue1, snapshot.queue2]) {
+      const endpoints = geometry.queues[queue.id]
+      const cable = view.container.querySelector<SVGPathElement>(
+        `#queue-${queue.id} .pipeline-queue-cable`,
+      )!
+      expect(cable.getAttribute('d')?.startsWith(
+        `M${endpoints.start.x} ${endpoints.start.y}`,
+      )).toBe(true)
+      expect(cable.getAttribute('d')?.endsWith(`V${endpoints.end.y}`))
+        .toBe(true)
+    }
+
+    const throttler = view.container.querySelector('#throttler-actor')!
+    expect(throttler.parentElement?.getAttribute('transform'))
+      .toBe(`translate(${geometry.actors.throttler.transform.x} ${geometry.actors.throttler.transform.y})`)
+    expect(throttler.querySelector('[data-connector-side="portrait-input"]'))
+      .not.toBeNull()
+    expect(throttler.querySelector('[data-connector-side="portrait-output"]'))
+      .not.toBeNull()
+    expect(throttler.querySelector('[data-connector-side="left"]')).toBeNull()
+    expect(throttler.querySelector('[data-connector-side="right"]')).toBeNull()
+
+    const sender = view.container.querySelector('#sender-actor')!
+    expect(Number(sender.getAttribute('data-worker-columns')))
+      .toBeLessThanOrEqual(8)
+    expect(Number(sender.getAttribute('data-worker-rows'))).toBeGreaterThan(0)
+  })
+
+  it('follows the resolved layout class for queue handle cursors', () => {
+    const snapshot = activeSnapshot()
+    const cases = [
+      {
+        orientation: 'landscape',
+        expectedCursor: 'ns-resize',
+        expectedAriaOrientation: 'vertical',
+      },
+      {
+        orientation: 'portrait',
+        expectedCursor: 'ew-resize',
+        expectedAriaOrientation: 'horizontal',
+      },
+    ] as const
+
+    for (const testCase of cases) {
+      const view = renderPipeline(snapshot, testCase.orientation)
+      const svg = view.container.querySelector('svg')!
+      const slider = view.container.querySelector<SVGGElement>(
+        '.pipeline-queue-handle',
+      )!
+
+      expect(svg.classList).toContain(
+        `pipeline-svg--${testCase.orientation}`,
+      )
+      expect(getComputedStyle(slider).cursor).toBe(testCase.expectedCursor)
+      expect(slider.getAttribute('aria-orientation'))
+        .toBe(testCase.expectedAriaOrientation)
+      view.unmount()
+    }
+
+    const unavailableSnapshot: LoadgenSnapshot = {
+      ...snapshot,
+      queue1: {
+        ...snapshot.queue1,
+        capacity: {
+          ...snapshot.queue1.capacity,
+          applyMode: 'unavailable',
+        },
+      },
+    }
+    const unavailableView = renderPipeline(unavailableSnapshot, 'portrait')
+    const disabledSlider = unavailableView.container.querySelector<SVGGElement>(
+      '#queue-reader-to-throttler .pipeline-queue-handle',
+    )!
+
+    expect(disabledSlider.classList)
+      .toContain('pipeline-queue-handle--disabled')
+    expect(getComputedStyle(disabledSlider).cursor).toBe('default')
+  })
+
+  it('applies the portrait operational typography matrix', () => {
+    const base = activeSnapshot()
+    const snapshot: LoadgenSnapshot = {
+      ...base,
+      queue1: {
+        ...base.queue1,
+        blockedSenders: 3,
+        oldestBlockedSenderMs: 1_250,
+      },
+    }
+    const view = renderPipeline(snapshot, 'portrait')
+    const assertTypography = (
+      selector: string,
+      fontSize: string,
+      fontWeight: string,
+    ) => {
+      const element = view.container.querySelector<SVGTextElement>(selector)
+      expect(element).not.toBeNull()
+      const style = getComputedStyle(element!)
+      expect(style.fontSize).toBe(fontSize)
+      expect(style.fontWeight).toBe(fontWeight)
+    }
+
+    assertTypography('#reader-actor .pipeline-worker-primary', '15px', '650')
+    assertTypography('#reader-actor .pipeline-worker-secondary', '12px', '600')
+    assertTypography('#target-actor .pipeline-target-primary', '15px', '650')
+    assertTypography('#target-actor .pipeline-target-secondary', '12px', '600')
+    assertTypography('.pipeline-queue-metric.pipeline-small-strong', '15px', '700')
+    assertTypography('.pipeline-queue-metric.pipeline-small', '13px', '600')
+    assertTypography('.pipeline-queue-wait-status', '12px', '700')
+    assertTypography('.pipeline-queue-capacity-status', '12px', '700')
+    assertTypography('.pipeline-http-status', '14px', '700')
+    assertTypography('.pipeline-http-throughput', '13px', '650')
+    assertTypography('.pipeline-http-detail', '12px', '600')
+    assertTypography('#requested-display', '14px', '650')
+    assertTypography('.pipeline-valve-opening-label', '13px', '800')
+    assertTypography('.pipeline-queue-handle__value', '11px', '750')
+  })
+
+  it('hides and neutralizes an idle stale HTTP 503', () => {
+    const base = activeSnapshot()
+    const snapshot: LoadgenSnapshot = {
+      ...base,
+      http: {
+        ...base.http,
+        connectionState: 'connected',
+        statusCode: 503,
+        throughputTps: 0,
+        inFlightRequests: 0,
+      },
+    }
+    const view = renderPipeline(snapshot)
+    const http = view.container.querySelector('#http-link')!
+
+    expect(http.classList).toContain('pipeline-http--normal')
+    expect(http.classList).not.toContain('pipeline-http--error')
+    expect(http.querySelector('.pipeline-http-status')?.textContent)
+      .toBe('HTTP —')
+  })
+
+  it('shows and classifies statuses whenever HTTP work is not known idle', () => {
+    const base = activeSnapshot()
+    const cases = [
+      [503, 25_000, 0, 'pipeline-http--error'],
+      [503, 0, 1, 'pipeline-http--error'],
+      [404, 25_000, 0, 'pipeline-http--warning'],
+      [503, null, null, 'pipeline-http--error'],
+    ] as const
+
+    for (const [statusCode, throughputTps, inFlightRequests, expectedClass]
+      of cases) {
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        http: {
+          ...base.http,
+          connectionState: 'connected',
+          statusCode,
+          throughputTps,
+          inFlightRequests,
+        },
+      }
+      const view = renderPipeline(snapshot)
+      const http = view.container.querySelector('#http-link')!
+
+      expect(http.classList).toContain(expectedClass)
+      expect(http.querySelector('.pipeline-http-status')?.textContent)
+        .toBe(`HTTP ${statusCode}`)
+      view.unmount()
+    }
+  })
+
+  it('keeps transport connection states authoritative', () => {
+    const base = activeSnapshot()
+    const cases = [
+      ['error', 0, 0, 'pipeline-http--error', 'HTTP —'],
+      ['disconnected', 25_000, 0, 'pipeline-http--stopped', 'HTTP 503'],
+      ['connecting', 0, 1, 'pipeline-http--warning', 'HTTP 503'],
+    ] as const
+
+    for (const [
+      connectionState,
+      throughputTps,
+      inFlightRequests,
+      expectedClass,
+      expectedStatus,
+    ] of cases) {
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        http: {
+          ...base.http,
+          connectionState,
+          statusCode: 503,
+          throughputTps,
+          inFlightRequests,
+        },
+      }
+      const view = renderPipeline(snapshot)
+      const http = view.container.querySelector('#http-link')!
+
+      expect(http.classList).toContain(expectedClass)
+      expect(http.querySelector('.pipeline-http-status')?.textContent)
+        .toBe(expectedStatus)
+      if (connectionState !== 'error') {
+        expect(http.classList).not.toContain('pipeline-http--error')
+      }
+      view.unmount()
+    }
+  })
+
+  it('aligns landscape HTTP metrics and preserves portrait coordinates', () => {
+    const snapshot = activeSnapshot()
+    const landscape = renderPipeline(snapshot)
+    const landscapeMetrics = [...landscape.container.querySelectorAll(
+      '#http-link text',
+    )]
+    const queueTopRow = landscape.container.querySelector(
+      '#queue-throttler-to-sender .pipeline-queue-metric',
+    )!
+    const senderTopRow = landscape.container.querySelector(
+      '#sender-actor .pipeline-value',
+    )!
+
+    expect(landscapeMetrics.map((metric) => metric.getAttribute('y')))
+      .toEqual(['507', '528', '549'])
+    expect(landscapeMetrics[0].getAttribute('y'))
+      .toBe(queueTopRow.getAttribute('y'))
+    expect(Math.abs(
+      Number(landscapeMetrics[0].getAttribute('y')) -
+      Number(senderTopRow.getAttribute('y')),
+    )).toBeLessThanOrEqual(3)
+    landscape.unmount()
+
+    const portrait = renderPipeline(snapshot, 'portrait')
+    const geometry = createPipelineGeometry({
+      orientation: 'portrait',
+      readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+      senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+    })
+    const portraitMetrics = [...portrait.container.querySelectorAll(
+      '#http-link text',
+    )]
+    expect(portraitMetrics.map((metric) => metric.getAttribute('x')))
+      .toEqual(['340', '340', '340'])
+    expect(portraitMetrics.map((metric) => metric.getAttribute('y')))
+      .toEqual([
+        String(geometry.http.metrics.statusY),
+        String(geometry.http.metrics.throughputY),
+        String(geometry.http.metrics.detailY),
+      ])
   })
 })

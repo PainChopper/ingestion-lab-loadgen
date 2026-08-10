@@ -1,6 +1,7 @@
 import type { ReaderSnapshot, SelectableId } from '../../model/loadgen'
 import { formatInteger, formatRate } from './formatters'
-import { ACTOR_GEOMETRY } from './geometry'
+import type { PipelineGeometry } from './geometry'
+import type { PipelineOrientation } from './pipelineLayout'
 import { WorkerActor, type WorkerActorId } from './WorkerActor'
 
 interface ReaderActorProps {
@@ -8,6 +9,8 @@ interface ReaderActorProps {
   selected: boolean
   onSelect: (id: SelectableId) => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
+  geometry: PipelineGeometry['actors']['reader']
+  orientation: PipelineOrientation
 }
 
 export function ReaderActor({
@@ -15,8 +18,9 @@ export function ReaderActor({
   selected,
   onSelect,
   onWorkerCountChange,
+  geometry,
+  orientation,
 }: ReaderActorProps) {
-  const geometry = ACTOR_GEOMETRY.reader
   const rowsRead =
     snapshot.rowsRead === null
       ? '—'
@@ -35,6 +39,8 @@ export function ReaderActor({
       outputPort={geometry.ports.output}
       primaryMetric={formatRate(snapshot.readTps)}
       secondaryMetric={rowsRead}
+      metricPoints={'metrics' in geometry ? geometry.metrics : undefined}
+      orientation={orientation}
       selected={selected}
       onSelect={onSelect}
       onWorkerCountChange={onWorkerCountChange}

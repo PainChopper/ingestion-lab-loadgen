@@ -1,6 +1,7 @@
 import type { SelectableId, SenderSnapshot } from '../../model/loadgen'
 import { formatInteger, formatRate } from './formatters'
-import { ACTOR_GEOMETRY } from './geometry'
+import type { PipelineGeometry } from './geometry'
+import type { PipelineOrientation } from './pipelineLayout'
 import { WorkerActor, type WorkerActorId } from './WorkerActor'
 
 interface SenderActorProps {
@@ -8,6 +9,8 @@ interface SenderActorProps {
   selected: boolean
   onSelect: (id: SelectableId) => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
+  geometry: PipelineGeometry['actors']['sender']
+  orientation: PipelineOrientation
 }
 
 export function SenderActor({
@@ -15,8 +18,9 @@ export function SenderActor({
   selected,
   onSelect,
   onWorkerCountChange,
+  geometry,
+  orientation,
 }: SenderActorProps) {
-  const geometry = ACTOR_GEOMETRY.sender
   const inFlight =
     snapshot.inFlightRequests === null
       ? '—'
@@ -36,6 +40,8 @@ export function SenderActor({
       outputPort={geometry.ports.output}
       primaryMetric={formatRate(snapshot.attemptedTps)}
       secondaryMetric={inFlight}
+      metricPoints={'metrics' in geometry ? geometry.metrics : undefined}
+      orientation={orientation}
       selected={selected}
       onSelect={onSelect}
       onWorkerCountChange={onWorkerCountChange}

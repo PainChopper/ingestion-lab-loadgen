@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { NumericControlSnapshot } from '../../model/loadgen'
-import { ACTOR_GEOMETRY } from './geometry'
+import { ACTOR_GEOMETRY, createPipelineGeometry } from './geometry'
 import { getWorkerActorLayout } from './workerActorLayout'
 
 function senderWorkers(applied: number): NumericControlSnapshot {
@@ -78,4 +78,48 @@ describe('WorkerActor sender layout', () => {
     expect(layout.rows).toBe(7)
     expect(layout.chips.every((chip) => chip.scale === 1)).toBe(true)
   })
+
+  it.each([
+    { actor: 'reader', count: 1, mode: 'detailed', columns: 1, rows: 1, height: 113 },
+    { actor: 'reader', count: 7, mode: 'detailed', columns: 4, rows: 2, height: 158 },
+    { actor: 'sender', count: 1, mode: 'detailed', columns: 1, rows: 1, height: 113 },
+    { actor: 'sender', count: 7, mode: 'detailed', columns: 4, rows: 2, height: 158 },
+    { actor: 'sender', count: 8, mode: 'compact', columns: 8, rows: 1, height: 96 },
+    { actor: 'sender', count: 16, mode: 'compact', columns: 8, rows: 2, height: 124 },
+    { actor: 'sender', count: 32, mode: 'compact', columns: 8, rows: 4, height: 180 },
+  ] as const)(
+    'uses the portrait $actor $count worker grid',
+    ({ actor, count, mode, columns, rows, height }) => {
+      const geometry = createPipelineGeometry({
+        orientation: 'portrait',
+        readerWorkers: actor === 'reader' ? count : 7,
+        senderWorkers: actor === 'sender' ? count : 32,
+      })
+      const actorGeometry = geometry.actors[actor]
+      if (!('metrics' in actorGeometry)) {
+        throw new Error('portrait worker metrics are missing')
+      }
+      const bounds = actorGeometry.bounds
+      const layout = getWorkerActorLayout(
+        actor,
+        bounds,
+        senderWorkers(count),
+        'portrait',
+      )
+
+      expect(layout).toMatchObject({ mode, columns, rows, height })
+      expect(layout.top + layout.height).toBe(bounds.bottom)
+      expect(bounds.bottom - actorGeometry.metrics.secondary.y)
+        .toBeGreaterThanOrEqual(18)
+      expect(layout.chips).toHaveLength(count)
+      for (const chip of layout.chips) {
+        expect(chip.x).toBeGreaterThanOrEqual(bounds.x)
+        expect(chip.x + chip.width).toBeLessThanOrEqual(
+          bounds.x + bounds.width,
+        )
+        expect(chip.y).toBeGreaterThanOrEqual(layout.top)
+        expect(chip.y + chip.height).toBeLessThanOrEqual(bounds.bottom)
+      }
+    },
+  )
 })

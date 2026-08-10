@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { NumericControlSnapshot } from '../../model/loadgen'
 import {
   buildQueueCablePath,
+  buildPortraitQueueCablePath,
   cableYToCapacity,
   capacityFromKeyboard,
   capacityFromVerticalDrag,
@@ -189,6 +190,34 @@ describe('queue cable capacity geometry', () => {
       { x: 720, y: 415 },
       265,
     )).toBeCloseTo(490.89, 2)
+  })
+
+  it('builds portrait queues from exact vertical endpoints without overflow', () => {
+    const start = { x: 240, y: 268 }
+    const end = { x: 240, y: 515 }
+    const zero = getQueueCableGeometryPresentation(
+      capacityControl(0),
+      start,
+      end,
+      null,
+      'portrait',
+    )
+    const full = getQueueCableGeometryPresentation(
+      capacityControl(12),
+      start,
+      end,
+      null,
+      'portrait',
+    )
+
+    expect(zero.cablePath).toBe('M240 268 V515')
+    expect(full.cablePath).toBe(
+      buildPortraitQueueCablePath(start, end, 100),
+    )
+    expect(full.sliderX).toBe(100)
+    expect(full.sliderY).toBe(391.5)
+    expect(full.cablePath.startsWith('M240 268')).toBe(true)
+    expect(full.cablePath.endsWith('V515')).toBe(true)
   })
 
   it('exposes every 0..12 step 1 and 0..160 step 10 capacity tick', () => {
