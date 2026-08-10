@@ -4,36 +4,36 @@ import {
   QUEUE_CABLE_MAX_MARKERS,
 } from './queueCableGeometry'
 
-export const MAX_OCCUPANCY_MARKERS = QUEUE_CABLE_MAX_MARKERS
+export const MAX_QUEUE_DEPTH_FAMILIES = QUEUE_CABLE_MAX_MARKERS
+export const MIN_FLOW_MARKERS = 3
 export const MAX_FLOW_MARKERS = 12
 export const MAX_HTTP_ATTEMPT_MARKERS = 3
+export const MAX_PIPELINE_MARKERS = MAX_QUEUE_DEPTH_FAMILIES * 2 + MAX_FLOW_MARKERS
+export const MAX_PENDING_OUTCOMES = MAX_PIPELINE_MARKERS
 
-const QUEUE_MARKER_SPEED = 70
+const MARKER_SPEED = 70
 const FLOW_MARKER_SCALE_TPS = 250_000
-const HTTP_MARKER_SPEED = 100
-const HTTP_OUTCOME_PULSE_MS = 520
-const HTTP_ARRIVAL_PHASE = 0.94
-const MAX_RETIRING_OCCUPANCY_MARKERS = 2
+const OUTCOME_PULSE_MS = 520
+const RETIREMENT_GRACE_MS = 1_000
 
-export type QueueMarkerKind = 'occupancy' | 'flow'
 export type MarkerSlotState = 'inactive' | 'active' | 'retiring'
 export type HttpOutcome = 'success' | 'error'
+export type MarkerStage =
+  | 'reader'
+  | 'queue1'
+  | 'throttler'
+  | 'queue2'
+  | 'sender'
+  | 'http'
+  | 'target'
 
-export interface QueueMarkerSlotSnapshot {
+export interface PipelineMarkerSlotSnapshot {
   readonly slotId: string
   readonly familyId: string | null
-  readonly queueId: QueueId
-  readonly kind: QueueMarkerKind
   readonly state: MarkerSlotState
+  readonly stage: MarkerStage
   readonly phase: number
   readonly queued: boolean
-}
-
-export interface HttpMarkerSlotSnapshot {
-  readonly slotId: string
-  readonly familyId: string | null
-  readonly state: MarkerSlotState
-  readonly phase: number
   readonly outcome: HttpOutcome | null
   readonly outcomeVisible: boolean
   readonly pulseProgress: number
@@ -42,9 +42,7 @@ export interface HttpMarkerSlotSnapshot {
 export interface MarkerLifecycleSnapshot {
   readonly revision: number
   readonly reducedMotion: boolean
-  readonly queue1: readonly QueueMarkerSlotSnapshot[]
-  readonly queue2: readonly QueueMarkerSlotSnapshot[]
-  readonly http: readonly HttpMarkerSlotSnapshot[]
+  readonly markers: readonly PipelineMarkerSlotSnapshot[]
 }
 
 export interface QueueMarkerTelemetry {
@@ -52,11 +50,10 @@ export interface QueueMarkerTelemetry {
   readonly depthBatches: number | null
   readonly appliedCapacity: number
   readonly throughputTps: number | null
-  readonly flowActive: boolean
+  readonly dequeueActive: boolean
+  readonly blocked: boolean
   readonly enqueuedBatchesTotal: number
   readonly dequeuedBatchesTotal: number
-  readonly occupancyTravelLength: number
-  readonly flowTravelLength: number
 }
 
 export interface HttpMarkerTelemetry {
@@ -65,7 +62,6 @@ export interface HttpMarkerTelemetry {
   readonly requestsCompletedTotal: number
   readonly requestsSucceededTotal: number
   readonly requestsFailedTotal: number
-  readonly travelLength: number
   readonly connectionError: boolean
 }
 
@@ -75,40 +71,33 @@ export interface MarkerLifecycleTelemetry {
   readonly queue1: QueueMarkerTelemetry
   readonly queue2: QueueMarkerTelemetry
   readonly http: HttpMarkerTelemetry
+  readonly stageTravelLengths: Readonly<Record<MarkerStage, number>>
 }
 
-interface MutableQueueMarkerSlot {
-  readonly slotId: string
-  readonly queueId: QueueId
-  readonly kind: QueueMarkerKind
-  familyId: string | null
-  state: MarkerSlotState
-  phase: number
-  launchDelayMs: number
-}
-
-interface MutableQueuePool {
-  readonly id: QueueId
-  readonly slots: MutableQueueMarkerSlot[]
-  initialized: boolean
-  familySequence: number
-  flowActive: boolean
-  occupancyTravelLength: number
-  flowTravelLength: number
-  previousEnqueuedTotal: number
-  previousDequeuedTotal: number
-}
-
-interface MutableHttpMarkerSlot {
+interface MutableMarkerSlot {
   readonly slotId: string
   familyId: string | null
   state: MarkerSlotState
+  stage: MarkerStage
   phase: number
+  retirementRemainingMs: number | null
   outcome: HttpOutcome | null
   pulseProgress: number
 }
 
 type Listener = () => void
+
+export const MARKER_STAGE_ORDER: readonly MarkerStage[] = [
+  'reader',
+  'queue1',
+  'throttler',
+  'queue2',
+  'sender',
+  'http',
+  'target',
+]
+
+const FLOW_TRAVEL_STAGES = MARKER_STAGE_ORDER.slice(0, -1)
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -118,14 +107,11 @@ function positiveInteger(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
 }
 
-export function getOccupancyMarkerTarget(
+export function getQueueDepthFamilyTarget(
   depthBatches: number | null,
   appliedCapacity: number,
 ): number {
-  return getQueueMarkerCount(
-    depthBatches,
-    appliedCapacity,
-  )
+  return getQueueMarkerCount(depthBatches, appliedCapacity)
 }
 
 export function getFlowMarkerTarget(throughputTps: number | null): number {
@@ -134,268 +120,73 @@ export function getFlowMarkerTarget(throughputTps: number | null): number {
 
   return clamp(
     Math.ceil((throughputTps / FLOW_MARKER_SCALE_TPS) * MAX_FLOW_MARKERS),
-    1,
+    MIN_FLOW_MARKERS,
     MAX_FLOW_MARKERS,
   )
 }
 
-function createQueueSlots(
-  queueId: QueueId,
-  kind: QueueMarkerKind,
-  count: number,
-): MutableQueueMarkerSlot[] {
-  return Array.from({ length: count }, (_, ordinal) => ({
-    slotId: `${queueId}-${kind}-${ordinal + 1}`,
-    queueId,
-    kind,
-    familyId: null,
-    state: 'inactive',
-    phase: 0,
-    launchDelayMs: 0,
-  }))
+function evenPhase(index: number, count: number): number {
+  if (count <= 0) return 0.5
+  return (index + 0.5) / count
 }
 
-function createQueuePool(id: QueueId): MutableQueuePool {
-  return {
-    id,
-    slots: [
-      ...createQueueSlots(id, 'occupancy', MAX_OCCUPANCY_MARKERS),
-      ...createQueueSlots(id, 'flow', MAX_FLOW_MARKERS),
-    ],
-    initialized: false,
-    familySequence: 0,
-    flowActive: false,
-    occupancyTravelLength: 1,
-    flowTravelLength: 1,
-    previousEnqueuedTotal: 0,
-    previousDequeuedTotal: 0,
-  }
+function nextStage(stage: MarkerStage): MarkerStage | null {
+  const index = MARKER_STAGE_ORDER.indexOf(stage)
+  return index < 0 || index === MARKER_STAGE_ORDER.length - 1
+    ? null
+    : MARKER_STAGE_ORDER[index + 1]
 }
 
-function createHttpSlots(): MutableHttpMarkerSlot[] {
-  return Array.from({ length: MAX_HTTP_ATTEMPT_MARKERS }, (_, ordinal) => ({
-    slotId: `http-attempt-${ordinal + 1}`,
+function lifecycleRank(slot: MutableMarkerSlot): number {
+  return MARKER_STAGE_ORDER.indexOf(slot.stage) + slot.phase
+}
+
+function createSlots(): MutableMarkerSlot[] {
+  return Array.from({ length: MAX_PIPELINE_MARKERS }, (_, ordinal) => ({
+    slotId: `pipeline-marker-${ordinal + 1}`,
     familyId: null,
     state: 'inactive',
+    stage: 'reader',
     phase: 0,
+    retirementRemainingMs: null,
     outcome: null,
     pulseProgress: 0,
   }))
 }
 
-function activeSlots(
-  pool: MutableQueuePool,
-  kind: QueueMarkerKind,
-): MutableQueueMarkerSlot[] {
-  return pool.slots.filter(
-    (slot) => slot.kind === kind && slot.state === 'active',
-  )
-}
-
-function visibleSlots(
-  pool: MutableQueuePool,
-  kind: QueueMarkerKind,
-): MutableQueueMarkerSlot[] {
-  return pool.slots.filter(
-    (slot) => slot.kind === kind && slot.state !== 'inactive',
-  )
-}
-
-function activateQueueSlot(
-  pool: MutableQueuePool,
-  kind: QueueMarkerKind,
-  phase: number,
-  launchDelayMs = 0,
-): MutableQueueMarkerSlot | null {
-  const slot = pool.slots.find(
-    (candidate) => candidate.kind === kind && candidate.state === 'inactive',
-  )
-  if (slot === undefined) return null
-
-  pool.familySequence += 1
-  slot.familyId = `${pool.id}-family-${pool.familySequence}`
-  slot.state = 'active'
-  slot.phase = clamp(phase, 0, 1)
-  slot.launchDelayMs = Math.max(0, launchDelayMs)
-  return slot
-}
-
-function deactivateQueueSlot(slot: MutableQueueMarkerSlot): void {
-  slot.familyId = null
-  slot.state = 'inactive'
-  slot.phase = 0
-  slot.launchDelayMs = 0
-}
-
-function resetQueuePool(pool: MutableQueuePool): void {
-  pool.slots.forEach(deactivateQueueSlot)
-  pool.initialized = false
-  pool.flowActive = false
-  pool.previousEnqueuedTotal = 0
-  pool.previousDequeuedTotal = 0
-}
-
-function initializeOccupancy(
-  pool: MutableQueuePool,
-  target: number,
-): void {
-  for (let index = 0; index < target; index += 1) {
-    const phase = target === 1 ? 0.5 : 0.2 + (index / (target - 1)) * 0.6
-    activateQueueSlot(pool, 'occupancy', phase)
-  }
-  pool.initialized = true
-}
-
-function reconcileOccupancy(
-  pool: MutableQueuePool,
-  target: number,
-): void {
-  if (!pool.initialized) {
-    initializeOccupancy(pool, target)
-    return
-  }
-
-  const current = activeSlots(pool, 'occupancy')
-  const retiring = visibleSlots(pool, 'occupancy')
-    .filter((slot) => slot.state === 'retiring')
-    .sort((left, right) => left.phase - right.phase)
-
-  if (current.length < target) {
-    const reviveCount = Math.min(target - current.length, retiring.length)
-    for (let index = 0; index < reviveCount; index += 1) {
-      const slot = retiring[index]
-      slot.state = 'active'
-      slot.launchDelayMs = 0
-    }
-    retiring
-      .slice(reviveCount + MAX_RETIRING_OCCUPANCY_MARKERS)
-      .forEach(deactivateQueueSlot)
-
-    const activeCount = current.length + reviveCount
-    const travelDurationMs =
-      (pool.occupancyTravelLength / QUEUE_MARKER_SPEED) * 1000
-    const launchSpacingMs = target > 0 ? travelDurationMs / target : 0
-    for (let index = activeCount; index < target; index += 1) {
-      activateQueueSlot(
-        pool,
-        'occupancy',
-        0,
-        (index - activeCount) * launchSpacingMs,
-      )
-    }
-    return
-  }
-
-  if (current.length > target) {
-    const excessSlots = current
-      .slice()
-      .sort((left, right) => right.slotId.localeCompare(left.slotId))
-      .slice(0, current.length - target)
-    const retireBudget = Math.max(
-      0,
-      MAX_RETIRING_OCCUPANCY_MARKERS - retiring.length,
-    )
-
-    excessSlots.forEach((slot, index) => {
-      if (index < retireBudget) {
-        slot.state = 'retiring'
-        slot.launchDelayMs = 0
-      } else {
-        deactivateQueueSlot(slot)
-      }
-    })
-  }
-
-  retiring
-    .slice(MAX_RETIRING_OCCUPANCY_MARKERS)
-    .forEach(deactivateQueueSlot)
-}
-
-function reconcileFlow(pool: MutableQueuePool, desiredCount: number): void {
-  const current = activeSlots(pool, 'flow')
-  if (current.length === desiredCount) return
-
-  if (current.length < desiredCount) {
-    const retiring = visibleSlots(pool, 'flow')
-      .filter((slot) => slot.state === 'retiring')
-    const reviveCount = Math.min(desiredCount - current.length, retiring.length)
-    for (let index = 0; index < reviveCount; index += 1) {
-      retiring[index].state = 'active'
-      retiring[index].launchDelayMs = 0
-    }
-
-    for (
-      let index = current.length + reviveCount;
-      index < desiredCount;
-      index += 1
-    ) {
-      activateQueueSlot(pool, 'flow', 0)
-    }
-  }
-
-  if (current.length > desiredCount) {
-    current
-      .slice(desiredCount)
-      .forEach((slot) => {
-        slot.state = 'retiring'
-        slot.launchDelayMs = 0
-      })
-  }
-
-  const active = activeSlots(pool, 'flow')
-  if (active.length === 0) return
-
-  const anchorPhase = current[0]?.phase ?? 0
-  for (let index = 0; index < active.length; index += 1) {
-    active[index].phase = (anchorPhase + index / active.length) % 1
-  }
-}
-
-function queueTotalsReset(
-  pool: MutableQueuePool,
-  telemetry: QueueMarkerTelemetry,
-): boolean {
-  return telemetry.enqueuedBatchesTotal < pool.previousEnqueuedTotal ||
-    telemetry.dequeuedBatchesTotal < pool.previousDequeuedTotal
-}
-
-function queueSnapshot(pool: MutableQueuePool): readonly QueueMarkerSlotSnapshot[] {
-  return Object.freeze(pool.slots.map((slot) => Object.freeze({
-    slotId: slot.slotId,
-    familyId: slot.familyId,
-    queueId: slot.queueId,
-    kind: slot.kind,
-    state: slot.state,
-    phase: slot.phase,
-    queued: slot.kind === 'occupancy' && !pool.flowActive,
-  })))
-}
-
 export class MarkerLifecycleController {
   private readonly listeners = new Set<Listener>()
-  private readonly queue1 = createQueuePool('reader-to-throttler')
-  private readonly queue2 = createQueuePool('throttler-to-sender')
-  private readonly httpSlots = createHttpSlots()
+  private readonly slots = createSlots()
   private readonly pendingOutcomes: HttpOutcome[] = []
   private revision = 0
   private familySequence = 0
   private runState: RunState = 'idle'
   private reducedMotion = false
-  private httpTravelLength = 1
+  private initialized = false
+  private familyTarget = 0
+  private throughputCadenceActive = false
+  private queue1DequeueActive = false
+  private queue2DequeueActive = false
+  private connectionError = false
+  private queue1DepthTarget = 0
+  private queue2DepthTarget = 0
+  private stageTravelLengths: Readonly<Record<MarkerStage, number>>
+  private previousQueue1EnqueuedTotal = 0
+  private previousQueue1DequeuedTotal = 0
+  private previousQueue2EnqueuedTotal = 0
+  private previousQueue2DequeuedTotal = 0
   private previousRequestsStartedTotal = 0
   private previousRequestsCompletedTotal = 0
   private previousRequestsSucceededTotal = 0
   private previousRequestsFailedTotal = 0
-  private initializedHttp = false
   private snapshot: MarkerLifecycleSnapshot
 
   constructor(telemetry: MarkerLifecycleTelemetry) {
+    this.stageTravelLengths = telemetry.stageTravelLengths
     this.snapshot = Object.freeze({
       revision: 0,
       reducedMotion: telemetry.reducedMotion,
-      queue1: Object.freeze([]),
-      queue2: Object.freeze([]),
-      http: Object.freeze([]),
+      markers: Object.freeze([]),
     })
     this.reconcile(telemetry)
   }
@@ -408,275 +199,594 @@ export class MarkerLifecycleController {
   readonly getSnapshot = (): MarkerLifecycleSnapshot => this.snapshot
 
   reconcile(telemetry: MarkerLifecycleTelemetry): void {
+    const totalsReset = this.initialized && (
+      telemetry.queue1.enqueuedBatchesTotal < this.previousQueue1EnqueuedTotal ||
+      telemetry.queue1.dequeuedBatchesTotal < this.previousQueue1DequeuedTotal ||
+      telemetry.queue2.enqueuedBatchesTotal < this.previousQueue2EnqueuedTotal ||
+      telemetry.queue2.dequeuedBatchesTotal < this.previousQueue2DequeuedTotal ||
+      telemetry.http.requestsStartedTotal < this.previousRequestsStartedTotal ||
+      telemetry.http.requestsCompletedTotal < this.previousRequestsCompletedTotal ||
+      telemetry.http.requestsSucceededTotal < this.previousRequestsSucceededTotal ||
+      telemetry.http.requestsFailedTotal < this.previousRequestsFailedTotal
+    )
+    if (totalsReset) this.reset()
+
     this.runState = telemetry.runState
     this.reducedMotion = telemetry.reducedMotion
-    this.reconcileQueue(this.queue1, telemetry.queue1)
-    this.reconcileQueue(this.queue2, telemetry.queue2)
-    this.reconcileHttp(telemetry.http)
+    this.queue1DequeueActive = (telemetry.queue1.throughputTps ?? 0) > 0
+    this.queue2DequeueActive = (telemetry.queue2.throughputTps ?? 0) > 0
+    this.connectionError = telemetry.http.connectionError
+    this.queue1DepthTarget = getQueueDepthFamilyTarget(
+      telemetry.queue1.depthBatches,
+      telemetry.queue1.appliedCapacity,
+    )
+    this.queue2DepthTarget = getQueueDepthFamilyTarget(
+      telemetry.queue2.depthBatches,
+      telemetry.queue2.appliedCapacity,
+    )
+    this.throughputCadenceActive = this.maximumThroughput(telemetry) > 0
+    this.stageTravelLengths = telemetry.stageTravelLengths
+
+    if (!this.initialized) {
+      this.initialized = true
+      this.reconcilePool(telemetry)
+    } else {
+      this.captureOutcomes(telemetry)
+      if (this.runState !== 'paused') {
+        this.reconcilePool(telemetry)
+      }
+    }
+
+    if (this.runState !== 'paused') {
+      if (this.reducedMotion) this.exposeReducedMotionArrivals()
+      this.assignPendingOutcomes()
+      if (telemetry.http.connectionError) this.assignConnectionErrors()
+    }
+    this.captureTotals(telemetry)
     this.publish()
   }
 
   advance(deltaMs: number): void {
     if (
-      this.runState !== 'running' ||
-      this.reducedMotion ||
+      this.runState === 'paused' ||
+      !this.throughputCadenceActive ||
       !Number.isFinite(deltaMs) ||
       deltaMs <= 0
     ) {
       return
     }
 
-    const queue1Changed = this.advanceQueue(this.queue1, deltaMs)
-    const queue2Changed = this.advanceQueue(this.queue2, deltaMs)
-    const httpChanged = this.advanceHttp(deltaMs)
-    if (queue1Changed || queue2Changed || httpChanged) this.publish()
-  }
-
-  private reconcileQueue(
-    pool: MutableQueuePool,
-    telemetry: QueueMarkerTelemetry,
-  ): void {
-    if (queueTotalsReset(pool, telemetry)) resetQueuePool(pool)
-
-    pool.occupancyTravelLength = Math.max(1, telemetry.occupancyTravelLength)
-    pool.flowTravelLength = Math.max(1, telemetry.flowTravelLength)
-    const occupancyTarget = getOccupancyMarkerTarget(
-      telemetry.depthBatches,
-      telemetry.appliedCapacity,
-    )
-    reconcileOccupancy(pool, occupancyTarget)
-
-    if (this.runState !== 'paused') {
-      pool.flowActive = this.runState === 'running' && telemetry.flowActive
-      const desiredFlowCount = pool.flowActive
-        ? getFlowMarkerTarget(telemetry.throughputTps)
-        : 0
-      reconcileFlow(pool, desiredFlowCount)
-    }
-
-    pool.previousEnqueuedTotal = telemetry.enqueuedBatchesTotal
-    pool.previousDequeuedTotal = telemetry.dequeuedBatchesTotal
-  }
-
-  private advanceQueue(pool: MutableQueuePool, deltaMs: number): boolean {
     let changed = false
-
-    for (const slot of pool.slots) {
+    const orderedSlots = this.slots.slice().sort(
+      (left, right) => lifecycleRank(right) - lifecycleRank(left),
+    )
+    for (const slot of orderedSlots) {
       if (slot.state === 'inactive') continue
 
-      const shouldAdvance = slot.state === 'retiring' ||
-        slot.kind !== 'occupancy' ||
-        pool.flowActive
-      if (!shouldAdvance) continue
-
-      const delayConsumed = Math.min(slot.launchDelayMs, deltaMs)
-      slot.launchDelayMs -= delayConsumed
-      const movingMs = deltaMs - delayConsumed
-      if (movingMs <= 0) {
+      if (slot.state === 'retiring') {
+        const remaining = slot.retirementRemainingMs ?? RETIREMENT_GRACE_MS
+        slot.retirementRemainingMs = Math.max(0, remaining - deltaMs)
         changed = true
+        if (slot.retirementRemainingMs === 0) {
+          this.deactivateSlot(slot)
+          continue
+        }
+      }
+
+      if (
+        slot.stage === 'target' &&
+        slot.phase >= 1 &&
+        slot.outcome !== null &&
+        (this.runState === 'running' || this.reducedMotion)
+      ) {
+        changed = this.advanceOutcomeDwell(slot, deltaMs) || changed
         continue
       }
+      if (this.runState !== 'running' || this.reducedMotion) continue
+      if (!this.throughputCadenceActive) continue
 
-      const travelLength = slot.kind === 'occupancy'
-        ? pool.occupancyTravelLength
-        : pool.flowTravelLength
-      slot.phase += (QUEUE_MARKER_SPEED * movingMs) / (travelLength * 1000)
-      changed = true
-      if (slot.phase < 1) continue
-
-      if (slot.state === 'retiring') {
-        deactivateQueueSlot(slot)
-      } else {
-        slot.phase %= 1
-        pool.familySequence += 1
-        slot.familyId = `${pool.id}-family-${pool.familySequence}`
-      }
-    }
-
-    return changed
-  }
-
-  private reconcileHttp(telemetry: HttpMarkerTelemetry): void {
-    const totalsReset = this.initializedHttp && (
-      telemetry.requestsStartedTotal < this.previousRequestsStartedTotal ||
-      telemetry.requestsCompletedTotal < this.previousRequestsCompletedTotal ||
-      telemetry.requestsSucceededTotal < this.previousRequestsSucceededTotal ||
-      telemetry.requestsFailedTotal < this.previousRequestsFailedTotal
-    )
-    if (totalsReset) this.resetHttp()
-
-    this.httpTravelLength = Math.max(1, telemetry.travelLength)
-    if (!this.initializedHttp) {
-      this.initializedHttp = true
-      const initialCount = clamp(
-        positiveInteger(telemetry.inFlightRequests),
-        0,
-        MAX_HTTP_ATTEMPT_MARKERS,
-      )
-      for (let index = 0; index < initialCount; index += 1) {
-        this.activateHttpSlot(index * 0.08)
-      }
-    } else {
-      const startedDelta = Math.max(
-        0,
-        telemetry.requestsStartedTotal - this.previousRequestsStartedTotal,
-      )
-      const successDelta = Math.max(
-        0,
-        telemetry.requestsSucceededTotal - this.previousRequestsSucceededTotal,
-      )
-      const failureDelta = Math.max(
-        0,
-        telemetry.requestsFailedTotal - this.previousRequestsFailedTotal,
-      )
-      const completedDelta = Math.max(
-        0,
-        telemetry.requestsCompletedTotal - this.previousRequestsCompletedTotal,
-      )
-      const unclassifiedCompletions = Math.max(
-        0,
-        completedDelta - successDelta - failureDelta,
-      )
-      this.enqueueOutcomes(
-        successDelta + (telemetry.connectionError ? 0 : unclassifiedCompletions),
-        failureDelta + (telemetry.connectionError ? unclassifiedCompletions : 0),
-      )
-
-      if (this.runState === 'running' && startedDelta > 0) {
-        const desired = clamp(
-          Math.max(1, positiveInteger(telemetry.inFlightRequests)),
-          1,
-          MAX_HTTP_ATTEMPT_MARKERS,
-        )
-        this.ensureHttpSlots(desired)
-      }
-    }
-
-    if (
-      this.runState === 'running' &&
-      telemetry.inFlightRequests > 0 &&
-      this.httpSlots.every((slot) => slot.state === 'inactive')
-    ) {
-      this.activateHttpSlot(0)
-    }
-
-    this.assignPendingOutcomes()
-    if (telemetry.connectionError) {
-      this.httpSlots
-        .filter((slot) => slot.state !== 'inactive' && slot.outcome === null)
-        .forEach((slot) => {
-          slot.outcome = 'error'
-        })
+      changed = this.advanceFamily(slot, deltaMs) || changed
     }
 
     if (this.reducedMotion) {
-      this.httpSlots
-        .filter((slot) => slot.state !== 'inactive' && slot.outcome !== null)
-        .forEach((slot) => {
-          slot.phase = Math.max(slot.phase, HTTP_ARRIVAL_PHASE)
-        })
+      changed = this.exposeReducedMotionArrivals() || changed
     }
-
-    this.previousRequestsStartedTotal = telemetry.requestsStartedTotal
-    this.previousRequestsCompletedTotal = telemetry.requestsCompletedTotal
-    this.previousRequestsSucceededTotal = telemetry.requestsSucceededTotal
-    this.previousRequestsFailedTotal = telemetry.requestsFailedTotal
+    changed = this.assignPendingOutcomes() || changed
+    if (this.connectionError) {
+      changed = this.assignConnectionErrors() || changed
+    }
+    if (changed) this.publish()
   }
 
-  private enqueueOutcomes(successCount: number, failureCount: number): void {
-    let remaining = MAX_HTTP_ATTEMPT_MARKERS - this.pendingOutcomes.length
-    const add = (outcome: HttpOutcome, count: number) => {
-      const accepted = Math.min(remaining, positiveInteger(count))
-      for (let index = 0; index < accepted; index += 1) {
-        this.pendingOutcomes.push(outcome)
+  private maximumThroughput(telemetry: MarkerLifecycleTelemetry): number {
+    return Math.max(
+      0,
+      telemetry.queue1.throughputTps ?? 0,
+      telemetry.queue2.throughputTps ?? 0,
+    )
+  }
+
+  private desiredThroughputTarget(telemetry: MarkerLifecycleTelemetry): number {
+    if (telemetry.runState === 'idle') return 0
+    const throughputTps = this.maximumThroughput(telemetry)
+    if (throughputTps <= 0) return 0
+
+    return Math.max(
+      getFlowMarkerTarget(throughputTps),
+      clamp(
+        positiveInteger(telemetry.http.inFlightRequests),
+        0,
+        MAX_HTTP_ATTEMPT_MARKERS,
+      ),
+    )
+  }
+
+  private reconcilePool(telemetry: MarkerLifecycleTelemetry): void {
+    const requestedFamilyTarget = Math.min(
+      MAX_PIPELINE_MARKERS,
+      this.queue1DepthTarget +
+        this.queue2DepthTarget +
+        this.desiredThroughputTarget(telemetry),
+    )
+    const heldByZeroThroughput =
+      telemetry.runState === 'running' &&
+      this.familySlots().length > 0 &&
+      (!this.queue1DequeueActive || !this.queue2DequeueActive)
+    this.familyTarget = heldByZeroThroughput
+      ? this.activeFamilySlots().length
+      : requestedFamilyTarget
+    this.reconcileFamilySlots(this.familyTarget)
+  }
+
+  private reconcileFamilySlots(target: number): void {
+    let active = this.activeFamilySlots()
+    if (active.length > target) {
+      const ordered = active
+        .slice()
+        .sort((left, right) => lifecycleRank(left) - lifecycleRank(right))
+      const survivorIndexes = new Set(
+        Array.from({ length: target }, (_, index) =>
+          Math.min(
+            ordered.length - 1,
+            Math.floor(((index + 0.5) * ordered.length) / target),
+          )
+        ),
+      )
+      ordered.forEach((slot, index) => {
+        if (!survivorIndexes.has(index)) this.retireSlot(slot)
+      })
+      active = this.activeFamilySlots()
+    }
+
+    const retiring = this.slots
+      .filter((slot) => slot.state === 'retiring')
+      .sort((left, right) => lifecycleRank(right) - lifecycleRank(left))
+    const reviveCount = Math.min(target - active.length, retiring.length)
+    for (const slot of retiring.slice(0, reviveCount)) {
+      slot.state = 'active'
+      slot.retirementRemainingMs = null
+    }
+
+    active = this.activeFamilySlots()
+    const missing = target - active.length
+    for (const position of this.familyHydrationPositions(missing, target)) {
+      const slot = this.activateFamily('reader', 0)
+      if (slot === null) break
+      if (position.stage === null) {
+        this.positionFamilyAtRouteFraction(slot, position.phase)
+      } else {
+        slot.stage = position.stage
+        slot.phase = position.phase
       }
-      remaining -= accepted
-    }
-
-    add('error', failureCount)
-    add('success', successCount)
-  }
-
-  private ensureHttpSlots(desired: number): void {
-    const current = this.httpSlots.filter((slot) => slot.state !== 'inactive').length
-    for (let index = current; index < desired; index += 1) {
-      if (this.activateHttpSlot(index * 0.08) === null) return
     }
   }
 
-  private activateHttpSlot(phase: number): MutableHttpMarkerSlot | null {
-    const slot = this.httpSlots.find((candidate) => candidate.state === 'inactive')
-    if (slot === undefined) return null
+  private familyHydrationPositions(
+    count: number,
+    target: number,
+  ): readonly { stage: 'queue1' | 'queue2' | null; phase: number }[] {
+    if (count <= 0) return []
+
+    const selected: { stage: 'queue1' | 'queue2' | null; phase: number }[] = []
+    const queueTargets = [
+      { stage: 'queue1' as const, target: this.queue1DepthTarget },
+      { stage: 'queue2' as const, target: this.queue2DepthTarget },
+    ]
+    for (const queue of queueTargets) {
+      const resident = this.familySlots().filter(
+        (slot) => slot.stage === queue.stage,
+      ).length
+      const needed = Math.min(
+        count - selected.length,
+        Math.max(0, queue.target - resident),
+      )
+      for (const phase of this.queueHydrationPhases(
+        queue.stage,
+        needed,
+        queue.target,
+      )) {
+        selected.push({ stage: queue.stage, phase })
+      }
+    }
+
+    const remaining = count - selected.length
+    for (const fraction of this.flowHydrationFractions(remaining, target)) {
+      selected.push({ stage: null, phase: fraction })
+    }
+    return selected
+  }
+
+  private flowHydrationFractions(
+    count: number,
+    target: number,
+  ): readonly number[] {
+    if (count <= 0) return []
+
+    const routeLength = FLOW_TRAVEL_STAGES.reduce(
+      (sum, stage) => sum + Math.max(1, this.stageTravelLengths[stage]),
+      0,
+    )
+    const occupied = this.activeFamilySlots().map((slot) => {
+      const stageIndex = FLOW_TRAVEL_STAGES.indexOf(slot.stage)
+      if (stageIndex < 0) return 1
+      const preceding = FLOW_TRAVEL_STAGES
+        .slice(0, stageIndex)
+        .reduce(
+          (sum, stage) => sum + Math.max(1, this.stageTravelLengths[stage]),
+          0,
+        )
+      return (preceding + slot.phase * Math.max(
+        1,
+        this.stageTravelLengths[slot.stage],
+      )) / routeLength
+    })
+    const candidates = Array.from(
+      { length: Math.max(1, target) },
+      (_, index) => evenPhase(index, Math.max(1, target)),
+    )
+    const selected: number[] = []
+
+    while (selected.length < count && candidates.length > 0) {
+      let bestIndex = 0
+      let bestDistance = -1
+      for (let index = 0; index < candidates.length; index += 1) {
+        const candidate = candidates[index]
+        const distance = occupied.length === 0
+          ? 1
+          : Math.min(...occupied.map((fraction) => Math.abs(fraction - candidate)))
+        if (distance > bestDistance) {
+          bestIndex = index
+          bestDistance = distance
+        }
+      }
+      const [fraction] = candidates.splice(bestIndex, 1)
+      occupied.push(fraction)
+      selected.push(fraction)
+    }
+
+    return selected
+  }
+
+  private queueHydrationPhases(
+    stage: 'queue1' | 'queue2',
+    count: number,
+    target: number,
+  ): readonly number[] {
+    if (count <= 0) return []
+
+    const occupied = this.slots
+      .filter((slot) =>
+        slot.state !== 'inactive' &&
+        slot.stage === stage
+      )
+      .map((slot) => slot.phase)
+    const candidates = Array.from(
+      { length: Math.max(1, target) },
+      (_, index) => evenPhase(index, Math.max(1, target)),
+    )
+    const selected: number[] = []
+
+    while (selected.length < count && candidates.length > 0) {
+      let bestIndex = 0
+      let bestDistance = -1
+      for (let index = 0; index < candidates.length; index += 1) {
+        const candidate = candidates[index]
+        const distance = occupied.length === 0
+          ? 1
+          : Math.min(...occupied.map((phase) => Math.abs(phase - candidate)))
+        if (distance > bestDistance) {
+          bestIndex = index
+          bestDistance = distance
+        }
+      }
+      const [phase] = candidates.splice(bestIndex, 1)
+      occupied.push(phase)
+      selected.push(phase)
+    }
+
+    return selected
+  }
+
+  private positionFamilyAtRouteFraction(
+    slot: MutableMarkerSlot,
+    fraction: number,
+  ): void {
+    const totalLength = FLOW_TRAVEL_STAGES.reduce(
+      (sum, stage) => sum + Math.max(1, this.stageTravelLengths[stage]),
+      0,
+    )
+    let remainingDistance = clamp(fraction, 0, 1) * totalLength
+    for (const stage of FLOW_TRAVEL_STAGES) {
+      const stageLength = Math.max(1, this.stageTravelLengths[stage])
+      if (remainingDistance <= stageLength) {
+        slot.stage = stage
+        slot.phase = remainingDistance / stageLength
+        return
+      }
+      remainingDistance -= stageLength
+    }
+    slot.stage = 'http'
+    slot.phase = 1
+  }
+
+  private activateFamily(
+    stage: MarkerStage,
+    phase: number,
+  ): MutableMarkerSlot | null {
+    const slot = this.inactiveSlot()
+    if (slot === null) return null
 
     this.familySequence += 1
-    slot.familyId = `http-family-${this.familySequence}`
+    slot.familyId = `transaction-family-${this.familySequence}`
     slot.state = 'active'
-    slot.phase = clamp(phase, 0, HTTP_ARRIVAL_PHASE)
+    slot.stage = stage
+    slot.phase = clamp(phase, 0, 1)
+    slot.retirementRemainingMs = null
     slot.outcome = null
     slot.pulseProgress = 0
     return slot
   }
 
-  private assignPendingOutcomes(): void {
-    const candidates = this.httpSlots
-      .filter((slot) => slot.state !== 'inactive' && slot.outcome === null)
-      .sort((left, right) => right.phase - left.phase)
+  private inactiveSlot(): MutableMarkerSlot | null {
+    return this.slots.find((slot) => slot.state === 'inactive') ?? null
+  }
+
+  private retireSlot(slot: MutableMarkerSlot): void {
+    if (slot.state !== 'active') return
+    slot.state = 'retiring'
+    slot.retirementRemainingMs = RETIREMENT_GRACE_MS
+  }
+
+  private advanceFamily(slot: MutableMarkerSlot, deltaMs: number): boolean {
+    if (slot.stage === 'target' && slot.phase >= 1) return false
+    if (
+      (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
+      (slot.stage === 'queue2' && !this.queue2DequeueActive)
+    ) {
+      return false
+    }
+
+    let changed = false
+    let remainingDistance = MARKER_SPEED * deltaMs / 1_000
+    while (remainingDistance > 0) {
+      const travelLength = Math.max(1, this.stageTravelLengths[slot.stage])
+      const distanceToEnd = Math.max(0, 1 - slot.phase) * travelLength
+      if (remainingDistance < distanceToEnd) {
+        slot.phase += remainingDistance / travelLength
+        return true
+      }
+
+      remainingDistance -= distanceToEnd
+      if (slot.phase < 1) changed = true
+      slot.phase = 1
+      const followingStage = nextStage(slot.stage)
+      if (followingStage === null) return changed
+      if (!this.canCrossBoundary(slot.stage, followingStage)) return changed
+
+      slot.stage = followingStage
+      slot.phase = 0
+      changed = true
+      if (
+        (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
+        (slot.stage === 'queue2' && !this.queue2DequeueActive)
+      ) {
+        return changed
+      }
+    }
+    return changed
+  }
+
+  private canCrossBoundary(
+    stage: MarkerStage,
+    followingStage: MarkerStage,
+  ): boolean {
+    if (stage === 'reader' && followingStage === 'queue1') {
+      return this.queue1DequeueActive
+    }
+    if (stage === 'queue1') return this.queue1DequeueActive
+    if (stage === 'throttler' && followingStage === 'queue2') {
+      return this.queue2DequeueActive
+    }
+    if (stage === 'queue2') return this.queue2DequeueActive
+    return true
+  }
+
+  private advanceOutcomeDwell(
+    slot: MutableMarkerSlot,
+    deltaMs: number,
+  ): boolean {
+    slot.pulseProgress = clamp(
+      slot.pulseProgress + deltaMs / OUTCOME_PULSE_MS,
+      0,
+      1,
+    )
+    if (
+      slot.pulseProgress >= 1 &&
+      (
+        this.throughputCadenceActive ||
+        this.familyTarget === 0 ||
+        slot.state === 'retiring'
+      )
+    ) {
+      this.completeFamilyLifecycle(slot)
+    }
+    return true
+  }
+
+  private completeFamilyLifecycle(slot: MutableMarkerSlot): void {
+    if (
+      slot.state === 'retiring' ||
+      this.familyTarget === 0 ||
+      this.activeFamilySlots().length > this.familyTarget
+    ) {
+      this.deactivateSlot(slot)
+      return
+    }
+
+    this.familySequence += 1
+    slot.familyId = `transaction-family-${this.familySequence}`
+    slot.stage = 'reader'
+    slot.phase = 0
+    slot.retirementRemainingMs = null
+    slot.outcome = null
+    slot.pulseProgress = 0
+  }
+
+  private deactivateSlot(slot: MutableMarkerSlot): void {
+    slot.familyId = null
+    slot.state = 'inactive'
+    slot.stage = 'reader'
+    slot.phase = 0
+    slot.retirementRemainingMs = null
+    slot.outcome = null
+    slot.pulseProgress = 0
+  }
+
+  private activeFamilySlots(): MutableMarkerSlot[] {
+    return this.slots.filter((slot) => slot.state === 'active')
+  }
+
+  private familySlots(): MutableMarkerSlot[] {
+    return this.slots.filter((slot) => slot.state !== 'inactive')
+  }
+
+  private captureOutcomes(telemetry: MarkerLifecycleTelemetry): void {
+    const successDelta = Math.max(
+      0,
+      telemetry.http.requestsSucceededTotal - this.previousRequestsSucceededTotal,
+    )
+    const failureDelta = Math.max(
+      0,
+      telemetry.http.requestsFailedTotal - this.previousRequestsFailedTotal,
+    )
+    const completedDelta = Math.max(
+      0,
+      telemetry.http.requestsCompletedTotal - this.previousRequestsCompletedTotal,
+    )
+    const unclassified = Math.max(0, completedDelta - successDelta - failureDelta)
+    const successCount = successDelta + (telemetry.http.connectionError ? 0 : unclassified)
+    const errorCount = failureDelta + (telemetry.http.connectionError ? unclassified : 0)
+
+    const available = MAX_PENDING_OUTCOMES - this.pendingOutcomes.length
+    for (let index = 0; index < Math.min(errorCount, available); index += 1) {
+      this.pendingOutcomes.push('error')
+    }
+    const remaining = MAX_PENDING_OUTCOMES - this.pendingOutcomes.length
+    for (let index = 0; index < Math.min(successCount, remaining); index += 1) {
+      this.pendingOutcomes.push('success')
+    }
+  }
+
+  private assignPendingOutcomes(): boolean {
+    const candidates = this.familySlots()
+      .filter((slot) =>
+        slot.outcome === null &&
+        slot.stage === 'target' &&
+        slot.phase >= 1
+      )
+      .sort((left, right) => lifecycleRank(right) - lifecycleRank(left))
+
+    let changed = false
 
     for (const slot of candidates) {
       const outcome = this.pendingOutcomes.shift()
       if (outcome === undefined) break
       slot.outcome = outcome
-    }
-
-    while (
-      this.pendingOutcomes.length > 0 &&
-      this.httpSlots.some((slot) => slot.state === 'inactive')
-    ) {
-      const slot = this.activateHttpSlot(0)
-      if (slot === null) break
-      slot.outcome = this.pendingOutcomes.shift() ?? null
-    }
-  }
-
-  private advanceHttp(deltaMs: number): boolean {
-    const phaseDelta = (HTTP_MARKER_SPEED * deltaMs) / (this.httpTravelLength * 1000)
-    let changed = false
-
-    for (const slot of this.httpSlots) {
-      if (slot.state === 'inactive') continue
-
-      if (slot.phase < HTTP_ARRIVAL_PHASE) {
-        slot.phase = Math.min(HTTP_ARRIVAL_PHASE, slot.phase + phaseDelta)
-        changed = true
-      }
-
-      if (slot.phase < HTTP_ARRIVAL_PHASE || slot.outcome === null) continue
-
-      slot.state = 'retiring'
-      slot.pulseProgress = clamp(
-        slot.pulseProgress + deltaMs / HTTP_OUTCOME_PULSE_MS,
-        0,
-        1,
-      )
       changed = true
-      if (slot.pulseProgress >= 1) this.deactivateHttpSlot(slot)
     }
-
     return changed
   }
 
-  private deactivateHttpSlot(slot: MutableHttpMarkerSlot): void {
-    slot.familyId = null
-    slot.state = 'inactive'
-    slot.phase = 0
-    slot.outcome = null
-    slot.pulseProgress = 0
+  private assignConnectionErrors(): boolean {
+    let changed = false
+    this.familySlots()
+      .filter((slot) =>
+        slot.outcome === null &&
+        slot.stage === 'target' &&
+        slot.phase >= 1
+      )
+      .forEach((slot) => {
+        slot.outcome = 'error'
+        changed = true
+      })
+    return changed
   }
 
-  private resetHttp(): void {
-    this.httpSlots.forEach((slot) => this.deactivateHttpSlot(slot))
+  private exposeReducedMotionArrivals(): boolean {
+    const waitingAtTarget = this.familySlots().filter((slot) =>
+      slot.outcome === null && slot.stage === 'target' && slot.phase >= 1
+    ).length
+    const requiredArrivals = Math.max(
+      this.pendingOutcomes.length,
+      this.connectionError ? 1 : 0,
+    )
+    const missing = Math.max(0, requiredArrivals - waitingAtTarget)
+    if (missing === 0) return false
+
+    const completedHttp = this.activeFamilySlots()
+      .filter((slot) =>
+        slot.outcome === null && !this.familyHeldAtStoppedQueue(slot)
+      )
+      .sort((left, right) => lifecycleRank(right) - lifecycleRank(left))
+      .slice(0, missing)
+    for (const slot of completedHttp) {
+      slot.stage = 'target'
+      slot.phase = 1
+    }
+    return completedHttp.length > 0
+  }
+
+  private familyHeldAtStoppedQueue(slot: MutableMarkerSlot): boolean {
+    return (slot.stage === 'reader' && !this.queue1DequeueActive && slot.phase >= 1) ||
+      (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
+      (slot.stage === 'throttler' && !this.queue2DequeueActive && slot.phase >= 1) ||
+      (slot.stage === 'queue2' && !this.queue2DequeueActive)
+  }
+
+  private captureTotals(telemetry: MarkerLifecycleTelemetry): void {
+    this.previousQueue1EnqueuedTotal = telemetry.queue1.enqueuedBatchesTotal
+    this.previousQueue1DequeuedTotal = telemetry.queue1.dequeuedBatchesTotal
+    this.previousQueue2EnqueuedTotal = telemetry.queue2.enqueuedBatchesTotal
+    this.previousQueue2DequeuedTotal = telemetry.queue2.dequeuedBatchesTotal
+    this.previousRequestsStartedTotal = telemetry.http.requestsStartedTotal
+    this.previousRequestsCompletedTotal = telemetry.http.requestsCompletedTotal
+    this.previousRequestsSucceededTotal = telemetry.http.requestsSucceededTotal
+    this.previousRequestsFailedTotal = telemetry.http.requestsFailedTotal
+  }
+
+  private reset(): void {
+    this.slots.forEach((slot) => this.deactivateSlot(slot))
     this.pendingOutcomes.length = 0
-    this.initializedHttp = false
+    this.familyTarget = 0
+    this.throughputCadenceActive = false
+    this.initialized = false
+  }
+
+  private queued(slot: MutableMarkerSlot): boolean {
+    return (slot.stage === 'reader' && !this.queue1DequeueActive && slot.phase >= 1) ||
+      (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
+      (slot.stage === 'throttler' && !this.queue2DequeueActive && slot.phase >= 1) ||
+      (slot.stage === 'queue2' && !this.queue2DequeueActive)
   }
 
   private publish(): void {
@@ -684,15 +794,16 @@ export class MarkerLifecycleController {
     this.snapshot = Object.freeze({
       revision: this.revision,
       reducedMotion: this.reducedMotion,
-      queue1: queueSnapshot(this.queue1),
-      queue2: queueSnapshot(this.queue2),
-      http: Object.freeze(this.httpSlots.map((slot) => Object.freeze({
+      markers: Object.freeze(this.slots.map((slot) => Object.freeze({
         slotId: slot.slotId,
         familyId: slot.familyId,
         state: slot.state,
+        stage: slot.stage,
         phase: slot.phase,
+        queued: this.queued(slot),
         outcome: slot.outcome,
-        outcomeVisible: slot.outcome !== null && slot.phase >= HTTP_ARRIVAL_PHASE,
+        outcomeVisible:
+          slot.outcome !== null && slot.stage === 'target' && slot.phase >= 1,
         pulseProgress: slot.pulseProgress,
       }))),
     })

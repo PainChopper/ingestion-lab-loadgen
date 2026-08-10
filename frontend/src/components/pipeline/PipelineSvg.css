@@ -306,21 +306,13 @@
   pointer-events: none;
 }
 
-.pipeline-marker,
-.pipeline-http-marker {
+.pipeline-marker {
   fill: currentColor;
   stroke: var(--navy-950);
   stroke-width: 1.5;
+  filter: drop-shadow(0 0 2px currentColor);
   offset-rotate: 0deg;
   vector-effect: non-scaling-stroke;
-}
-
-.pipeline-marker--occupancy {
-  opacity: 0.92;
-}
-
-.pipeline-marker--flow {
-  filter: drop-shadow(0 0 2px currentColor);
 }
 
 .pipeline-marker--queued {
@@ -332,55 +324,9 @@
   opacity: 0.76;
 }
 
-.pipeline-http-marker {
-  color: var(--green);
-  filter: drop-shadow(0 0 2px currentColor);
-}
-
-.pipeline-http-marker--success {
-  color: var(--green);
-}
-
-.pipeline-http-marker--error {
-  color: var(--red);
-}
-
-.pipeline-target-outcome {
-  fill: none;
+.pipeline-marker--outcome {
+  stroke: currentColor;
   stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-target-outcome--success {
-  stroke: var(--green);
-}
-
-.pipeline-target-outcome--error {
-  stroke: var(--red);
-}
-
-.pipeline-processing-slot {
-  fill: rgba(6, 21, 34, 0.88);
-  stroke-width: 1.4;
-  opacity: 0.82;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-processing-slot--reader {
-  stroke: var(--cyan);
-}
-
-.pipeline-processing-slot--throttler,
-.pipeline-processing-slot--sender {
-  stroke: var(--yellow);
-}
-
-.pipeline-processing-slot--target {
-  stroke: var(--purple);
-}
-
-.pipeline-marker-layer[data-run-state='running'] .pipeline-processing-slot--reader {
-  animation: pipeline-processing-pulse 1.8s ease-in-out infinite;
 }
 
 .pipeline-queue-handle {
@@ -506,23 +452,8 @@
   fill: var(--yellow);
 }
 
-@keyframes pipeline-processing-pulse {
-  0%,
-  100% {
-    opacity: 0.52;
-  }
-
-  50% {
-    opacity: 1;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .pipeline-barrier-arm {
     transition: none;
-  }
-
-  .pipeline-processing-slot--reader {
-    animation: none !important;
   }
 }

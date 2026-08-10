@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { NumericControlSnapshot, QueueId } from '../../model/loadgen'
 import { QUEUE_CABLE_ENDPOINTS } from './geometry'
 import { buildQueueCablePath, capacityToCableY } from './queueCableGeometry'
-import { getQueueMarkerPathGeometry } from './markerPaths'
+import {
+  getMarkerStagePathGeometry,
+  getQueueMarkerPathGeometry,
+} from './markerPaths'
+import type { MarkerStage } from './markerLifecycle'
 
 function capacityControl(
   applied: number,
@@ -23,6 +27,28 @@ function capacityControl(
 }
 
 describe('marker paths', () => {
+  it('joins every lifecycle stage at the exact next endpoint', () => {
+    const queue1 = capacityControl(10, 12, 1)
+    const queue2 = capacityControl(160, 160, 10)
+    const stages: readonly MarkerStage[] = [
+      'reader',
+      'queue1',
+      'throttler',
+      'queue2',
+      'sender',
+      'http',
+      'target',
+    ]
+    const paths = stages.map((stage) =>
+      getMarkerStagePathGeometry(stage, queue1, queue2)
+    )
+
+    for (let index = 0; index < paths.length - 1; index += 1) {
+      expect(paths[index].end).toEqual(paths[index + 1].start)
+    }
+    expect(paths.every((path) => path.length > 0)).toBe(true)
+  })
+
   it('uses canonical endpoints and follows the committed candidate capacity', () => {
     const cases: ReadonlyArray<{
       queueId: QueueId

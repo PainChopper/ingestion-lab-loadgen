@@ -55,7 +55,6 @@ export function PipelineSvg({
         start={queue1Endpoints.start}
         end={queue1Endpoints.end}
         selected={selectedId === snapshot.queue1.id}
-        markers={markers.queue1}
         onSelect={onSelect}
         onCapacityChange={onQueueCapacityChange}
       />
@@ -64,7 +63,6 @@ export function PipelineSvg({
         start={queue2Endpoints.start}
         end={queue2Endpoints.end}
         selected={selectedId === snapshot.queue2.id}
-        markers={markers.queue2}
         onSelect={onSelect}
         onCapacityChange={onQueueCapacityChange}
       />
