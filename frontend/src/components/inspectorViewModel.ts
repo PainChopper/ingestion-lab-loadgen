@@ -103,7 +103,17 @@ export function getInspectorViewModel(
         title: 'READER',
         kind: 'Parquet source',
         rows: [
-          { label: 'Read TPS', value: formatRate(snapshot.reader.readTps) },
+          { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
+          {
+            label: 'Configured capacity',
+            value: formatRate(snapshot.reader.configuredCapacityTps),
+          },
+          {
+            label: 'Capacity state',
+            value: snapshot.reader.limitationReason === 'downstream-backpressure'
+              ? 'Downstream limited'
+              : 'Available',
+          },
           { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
           { label: 'Source', value: snapshot.reader.source ?? '—' },
           { label: 'State', value: formatStateLabel(snapshot.reader.state) },
@@ -115,6 +125,14 @@ export function getInspectorViewModel(
         title: 'THROTTLER',
         kind: 'Rate control',
         rows: [
+          {
+            label: 'Valve mode',
+            value: snapshot.throttler.installationMode.pending === null
+              ? formatStateLabel(
+                snapshot.throttler.installationMode.applied ?? 'unavailable',
+              )
+              : `${formatStateLabel(snapshot.throttler.installationMode.applied ?? 'unavailable')} → ${formatStateLabel(snapshot.throttler.installationMode.pending)}`,
+          },
           { label: 'Admitted TPS', value: formatRate(snapshot.throttler.admittedTps) },
           { label: 'State', value: formatStateLabel(snapshot.throttler.state) },
           { label: 'Limited time', value: formatMilliseconds(snapshot.throttler.limitedMs) },

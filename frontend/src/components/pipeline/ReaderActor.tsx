@@ -1,5 +1,5 @@
 import type { ReaderSnapshot, SelectableId } from '../../model/loadgen'
-import { formatInteger, formatRate } from './formatters'
+import { formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { WorkerActor, type WorkerActorId } from './WorkerActor'
@@ -21,11 +21,6 @@ export function ReaderActor({
   geometry,
   orientation,
 }: ReaderActorProps) {
-  const rowsRead =
-    snapshot.rowsRead === null
-      ? '—'
-      : `${formatInteger(snapshot.rowsRead)} rows`
-
   return (
     <WorkerActor
       actor="reader"
@@ -37,8 +32,11 @@ export function ReaderActor({
       workers={snapshot.workers}
       runState={snapshot.state}
       outputPort={geometry.ports.output}
-      primaryMetric={formatRate(snapshot.readTps)}
-      secondaryMetric={rowsRead}
+      primaryMetric={`Read ${formatRate(snapshot.readTps)}`}
+      secondaryMetric={`Capacity ${formatRate(snapshot.configuredCapacityTps)}`}
+      statusMetric={snapshot.limitationReason === 'downstream-backpressure'
+        ? 'Downstream limited'
+        : undefined}
       metricPoints={'metrics' in geometry ? geometry.metrics : undefined}
       orientation={orientation}
       selected={selected}

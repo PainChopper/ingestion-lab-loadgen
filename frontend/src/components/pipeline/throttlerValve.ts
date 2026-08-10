@@ -1,4 +1,7 @@
-import type { NumericControlSnapshot } from '../../model/loadgen'
+import type {
+  NumericControlSnapshot,
+  ThrottlerInstallationMode,
+} from '../../model/loadgen'
 
 export const OPENING_POSITION_COUNT = 12
 export const WHEEL_PHASE_COUNT = 6
@@ -23,6 +26,20 @@ export const VALVE_PISTON = Object.freeze({
 })
 export const VALVE_FLANGES = Object.freeze({ left: 401, right: 459 })
 export const VALVE_MARKER_RADIUS = 4
+export const VALVE_DETACHED_ASSEMBLY = Object.freeze({
+  translateX: 120,
+  translateY: -8,
+  rotationDegrees: 8,
+  wheelCenterX: 550,
+  wheelCenterY: 342,
+  pistonCenterX: 550,
+  pistonCenterY: 401,
+})
+export const VALVE_INSTALLATION_CONTROL = Object.freeze({
+  installedTarget: Object.freeze({ x: 406, y: 368, width: 48, height: 44 }),
+  bypassTarget: Object.freeze({ x: 502, y: 310, width: 96, height: 112 }),
+  dragThresholdPx: 44,
+})
 
 export interface ValveWheelKnob {
   readonly angle: number
@@ -124,6 +141,15 @@ export function valueToOpeningIndex(
     1,
   )
   return Math.round(normalized * (OPENING_POSITION_COUNT - 1))
+}
+
+export function effectiveValveOpeningIndex(
+  installationMode: ThrottlerInstallationMode | null,
+  control: NumericControlSnapshot,
+): number {
+  return installationMode === 'bypass'
+    ? OPENING_POSITION_COUNT - 1
+    : valueToOpeningIndex(control.applied, control)
 }
 
 export function openingPercent(index: number): number {

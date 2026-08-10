@@ -6,6 +6,7 @@ import type {
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
   RunState,
+  ThrottlerInstallationMode,
 } from '../model/loadgen'
 import {
   FIXED_STEP_MS,
@@ -126,6 +127,13 @@ function freezeSnapshot(
   const running = state.runState === 'running'
   const telemetry: SimulationTelemetry = simulation.telemetry(running)
   const config = simulation.config
+  const readerCapacityTps = Math.round(telemetry.readerCapacityTps)
+  const readerReadTps = Math.round(telemetry.readerTransactionsPerSecond)
+  const readerLimitationReason = running &&
+      telemetry.queue1.blockedSenders > 0 &&
+      readerReadTps < readerCapacityTps
+    ? 'downstream-backpressure'
+    : null
 
   return Object.freeze({
     revision: state.revision,
@@ -146,7 +154,9 @@ function freezeSnapshot(
         CONTROL_RANGES.readBatchSize,
         'tx',
       ),
-      readTps: Math.round(telemetry.readerTransactionsPerSecond),
+      readTps: readerReadTps,
+      configuredCapacityTps: readerCapacityTps,
+      limitationReason: readerLimitationReason,
       rowsRead: telemetry.queue1.enqueuedTransactionsTotal,
       source: 'events.parquet',
       state: state.runState,
@@ -158,6 +168,13 @@ function freezeSnapshot(
         CONTROL_RANGES.requestedTps,
         'tx/s',
       ),
+      installationMode: Object.freeze({
+        applied: config.throttlerInstallationMode,
+        pending: null,
+        applyMode: 'immediate',
+        writable: true,
+        unavailableReason: null,
+      }),
       admittedTps: Math.round(telemetry.admittedTransactionsPerSecond),
       limitedMs: Math.floor(telemetry.limitedMs),
       state: state.runState,
@@ -252,6 +269,7 @@ export class SimulationAdapter implements LoadgenAdapter {
       readerWorkers: 4,
       senderWorkers: 3,
       requestedTps: 120_000,
+      throttlerInstallationMode: 'installed',
       readBatchSize: 25_000,
       httpBatchSize: 1_000,
       httpTimeoutMs: 500,
@@ -325,6 +343,17 @@ export class SimulationAdapter implements LoadgenAdapter {
           'requestedTps',
           normalizeNumericValue(command.value, CONTROL_RANGES.requestedTps),
         )
+        break
+      case 'set-throttler-installation-mode':
+        if (command.value !== 'installed' && command.value !== 'bypass') {
+          return this.reject(commandId, command, {
+            code: 'invalid-command',
+            message: 'throttler installation mode must be installed or bypass',
+            retryable: false,
+            details: null,
+          })
+        }
+        changed = this.updateInstallationMode(command.value)
         break
       case 'set-worker-count':
         if (!Number.isFinite(command.value)) {
@@ -464,6 +493,15 @@ export class SimulationAdapter implements LoadgenAdapter {
     const advanced = this.advanceToNow()
     if (this.simulation.config[key] === value) return advanced
     this.simulation.updateConfig({ [key]: value })
+    return true
+  }
+
+  private updateInstallationMode(value: ThrottlerInstallationMode): boolean {
+    const advanced = this.advanceToNow()
+    if (this.simulation.config.throttlerInstallationMode === value) {
+      return advanced
+    }
+    this.simulation.updateConfig({ throttlerInstallationMode: value })
     return true
   }
 

@@ -184,6 +184,7 @@ function renderPipeline(
       requestedTpsPreview={null}
       onRequestedTpsPreviewChange={vi.fn()}
       onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
+      onInstallationModeChange={vi.fn().mockResolvedValue(true)}
       orientation={orientation}
       geometry={geometry}
     />,
@@ -191,6 +192,28 @@ function renderPipeline(
 }
 
 describe('PipelineSvg marker wiring', () => {
+  it.each(['landscape', 'portrait'] as const)(
+    'shows Reader actual rate, capacity, and downstream limitation in %s',
+    (orientation) => {
+      const base = activeSnapshot()
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        reader: {
+          ...base.reader,
+          readTps: 50_000,
+          configuredCapacityTps: 350_000,
+          limitationReason: 'downstream-backpressure',
+        },
+      }
+      const view = renderPipeline(snapshot, orientation)
+      const reader = view.container.querySelector('#reader-actor')
+
+      expect(reader?.textContent).toContain('Read 50,000 tx/s')
+      expect(reader?.textContent).toContain('Capacity 350,000 tx/s')
+      expect(reader?.textContent).toContain('Downstream limited')
+    },
+  )
+
   it.each(['landscape', 'portrait'] as const)(
     'shows applied target failures and rolling failed TPS in %s',
     (orientation) => {
@@ -338,6 +361,7 @@ describe('PipelineSvg marker wiring', () => {
         requestedTpsPreview={null}
         onRequestedTpsPreviewChange={vi.fn()}
         onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
+        onInstallationModeChange={vi.fn().mockResolvedValue(true)}
       />,
     )
 
@@ -355,6 +379,7 @@ describe('PipelineSvg marker wiring', () => {
       revision: 1,
       reducedMotion: false,
       motionElapsedMs: 0,
+      valveOpeningIndex: 5,
       markers: [{
         slotId: 'pipeline-marker-1',
         familyId: 'transaction-family-1',
@@ -452,6 +477,7 @@ describe('PipelineSvg marker wiring', () => {
         requestedTpsPreview={null}
         onRequestedTpsPreviewChange={vi.fn()}
         onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
+        onInstallationModeChange={vi.fn().mockResolvedValue(true)}
       />,
     )
     const atZero = readVisibleFamilies(view.container)
@@ -487,6 +513,7 @@ describe('PipelineSvg marker wiring', () => {
         requestedTpsPreview={null}
         onRequestedTpsPreviewChange={vi.fn()}
         onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
+        onInstallationModeChange={vi.fn().mockResolvedValue(true)}
       />,
     )
 
@@ -530,6 +557,7 @@ describe('PipelineSvg marker wiring', () => {
           requestedTpsPreview={null}
           onRequestedTpsPreviewChange={vi.fn()}
           onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
+          onInstallationModeChange={vi.fn().mockResolvedValue(true)}
         />,
       )
       const after = readActiveFlow(view.container)
@@ -662,6 +690,7 @@ describe('PipelineSvg marker wiring', () => {
       revision: 1,
       reducedMotion: false,
       motionElapsedMs: 0,
+      valveOpeningIndex: 0,
       markers: waiting,
     }
     const view = render(
@@ -905,6 +934,39 @@ describe('PipelineSvg marker wiring', () => {
     expect(Number(sender.getAttribute('data-worker-columns')))
       .toBeLessThanOrEqual(8)
     expect(Number(sender.getAttribute('data-worker-rows'))).toBeGreaterThan(0)
+  })
+
+  it('keeps the offset bypass cradle inside portrait and right of centerline', () => {
+    const base = activeSnapshot()
+    const snapshot: LoadgenSnapshot = {
+      ...base,
+      throttler: {
+        ...base.throttler,
+        installationMode: {
+          ...base.throttler.installationMode,
+          applied: 'bypass',
+          pending: null,
+        },
+      },
+    }
+    const view = renderPipeline(snapshot, 'portrait')
+    const geometry = createPipelineGeometry({
+      orientation: 'portrait',
+      readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+      senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+    })
+    const target = view.container.querySelector<SVGRectElement>(
+      '.pipeline-valve-installation-hit-area:not(.pipeline-valve-installation-hit-area--wheel-grip)',
+    )!
+    const left = Number(target.getAttribute('x')) +
+      geometry.actors.throttler.transform.x
+    const right = left + Number(target.getAttribute('width'))
+
+    expect(left).toBeGreaterThan(240)
+    expect(right).toBeLessThanOrEqual(480)
+    expect(view.container.querySelector(
+      '.pipeline-valve-detached-assembly--applied',
+    )?.getAttribute('data-detached-anchor')).toBe('550 342')
   })
 
   it('follows the resolved layout class for queue handle cursors', () => {

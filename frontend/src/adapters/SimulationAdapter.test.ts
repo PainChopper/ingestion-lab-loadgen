@@ -233,6 +233,152 @@ describe('SimulationAdapter', () => {
     adapter.dispose()
   })
 
+  it('maps configured reader capacity independently from actual throughput', async () => {
+    const adapter = new SimulationAdapter()
+
+    await adapter.dispatch({
+      type: 'set-worker-count',
+      actor: 'reader',
+      value: 1,
+    })
+    expect(adapter.getSnapshot().reader).toMatchObject({
+      readTps: 0,
+      configuredCapacityTps: 50_000,
+    })
+
+    await adapter.dispatch({
+      type: 'set-worker-count',
+      actor: 'reader',
+      value: 7,
+    })
+    expect(adapter.getSnapshot().reader).toMatchObject({
+      readTps: 0,
+      configuredCapacityTps: 350_000,
+    })
+    adapter.dispose()
+  })
+
+  it('removes the installed throttle only after applied bypass', async () => {
+    const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-requested-tps', value: 0 })
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 5_000 })
+    await adapter.dispatch({
+      type: 'set-queue-capacity',
+      queue: 'reader-to-throttler',
+      value: 12,
+    })
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
+    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(1_000)
+
+    const installed = adapter.getSnapshot()
+    expect(installed.throttler.installationMode.applied).toBe('installed')
+    expect(installed.queue1.depthBatches).toBe(12)
+    expect(installed.queue1.dequeuedBatchesTotal).toBe(0)
+
+    await adapter.dispatch({
+      type: 'set-throttler-installation-mode',
+      value: 'bypass',
+    })
+    const applied = adapter.getSnapshot()
+    expect(applied.throttler.requestedTps.applied).toBe(0)
+    expect(applied.throttler.installationMode).toMatchObject({
+      applied: 'bypass',
+      pending: null,
+    })
+    expect(applied.queue1.dequeuedBatchesTotal).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(500)
+    const bypass = adapter.getSnapshot()
+    expect(bypass.queue1.dequeuedBatchesTotal).toBeGreaterThan(0)
+    expect(bypass.queue2.depthBatches).toBeGreaterThan(0)
+    expect(bypass.http.inFlightRequests).toBe(1)
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
+    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(adapter.getSnapshot().queue2.depthBatches).toBe(0)
+    await adapter.dispatch({ type: 'reset' })
+    expect(adapter.getSnapshot().throttler).toMatchObject({
+      requestedTps: { applied: 0 },
+      installationMode: { applied: 'bypass', pending: null },
+    })
+    adapter.dispose()
+  })
+
+  it('reports saturated bypass reading as downstream limited', async () => {
+    const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-requested-tps', value: 0 })
+    await adapter.dispatch({
+      type: 'set-worker-count',
+      actor: 'reader',
+      value: 7,
+    })
+    await adapter.dispatch({
+      type: 'set-throttler-installation-mode',
+      value: 'bypass',
+    })
+    await adapter.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(50_000)
+
+    const snapshot = adapter.getSnapshot()
+    expect(snapshot.reader).toMatchObject({
+      readTps: 50_000,
+      configuredCapacityTps: 350_000,
+      limitationReason: 'downstream-backpressure',
+    })
+    expect(snapshot.reader.readTps).toBeLessThan(
+      snapshot.reader.configuredCapacityTps ?? 0,
+    )
+    expect(snapshot.queue1.depthBatches).toBe(snapshot.queue1.capacity.applied)
+    expect(snapshot.queue2.depthBatches).toBe(snapshot.queue2.capacity.applied)
+    expect(snapshot.queue1.blockedSenders).toBe(1)
+    expect(snapshot.queue2.blockedSenders).toBe(1)
+    adapter.dispose()
+  })
+
+  it('reinserts at admission while admitted work continues downstream', async () => {
+    const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-requested-tps', value: 0 })
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 25_000 })
+    await adapter.dispatch({
+      type: 'set-queue-capacity',
+      queue: 'throttler-to-sender',
+      value: 10,
+    })
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
+    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(500)
+    await adapter.dispatch({
+      type: 'set-throttler-installation-mode',
+      value: 'bypass',
+    })
+    await vi.advanceTimersByTimeAsync(300)
+
+    const beforeReinsert = adapter.getSnapshot()
+    expect(beforeReinsert.queue2.depthBatches).toBe(10)
+    await adapter.dispatch({
+      type: 'set-throttler-installation-mode',
+      value: 'installed',
+    })
+    const appliedReinsert = adapter.getSnapshot()
+    const q1DequeuedAtReinsert = appliedReinsert.queue1.dequeuedBatchesTotal
+    const q2EnqueuedAtReinsert = appliedReinsert.queue2.enqueuedBatchesTotal
+
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
+    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
+    await vi.advanceTimersByTimeAsync(500)
+    const afterReinsert = adapter.getSnapshot()
+
+    expect(afterReinsert.throttler.installationMode.applied).toBe('installed')
+    expect(afterReinsert.queue1.dequeuedBatchesTotal).toBe(q1DequeuedAtReinsert)
+    expect(afterReinsert.queue2.enqueuedBatchesTotal)
+      .toBeGreaterThan(q2EnqueuedAtReinsert)
+    expect(afterReinsert.queue2.depthBatches).toBe(0)
+    adapter.dispose()
+  })
+
   it('drains recovered q2 and releases backpressure when service exceeds input', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })

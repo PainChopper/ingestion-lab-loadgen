@@ -79,6 +79,27 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
+  it('separates reader actual rate, configured capacity, and limitation', () => {
+    const adapter = new SimulationAdapter()
+    const base = derivedSnapshot(adapter)
+    const model = getInspectorViewModel({
+      ...base,
+      reader: {
+        ...base.reader,
+        readTps: 50_000,
+        configuredCapacityTps: 350_000,
+        limitationReason: 'downstream-backpressure',
+      },
+    }, 'reader')
+
+    expect(model?.rows).toEqual(expect.arrayContaining([
+      { label: 'Actual Read TPS', value: '50,000 tx/s' },
+      { label: 'Configured capacity', value: '350,000 tx/s' },
+      { label: 'Capacity state', value: 'Downstream limited' },
+    ]))
+    adapter.dispose()
+  })
+
   it('formats queue depth, capacity, state, and rates from the snapshot', () => {
     const adapter = new SimulationAdapter()
     const model = getInspectorViewModel(
