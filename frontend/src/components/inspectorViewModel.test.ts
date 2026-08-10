@@ -135,6 +135,37 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
+  it('projects immediate rendezvous pressure without inventing queue depth', () => {
+    const adapter = new SimulationAdapter()
+    const base = adapter.getSnapshot()
+    const snapshot = new QueueFlowStateDeriver().derive({
+      ...base,
+      runState: 'running',
+      queue1: {
+        ...base.queue1,
+        depthBatches: 0,
+        blockedSenders: 1,
+        oldestBlockedSenderMs: 10,
+        capacity: {
+          ...base.queue1.capacity,
+          applied: 0,
+          preview: 12,
+          pending: 12,
+        },
+      },
+    }, 0)
+    const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
+
+    expect(model?.rows).toEqual(expect.arrayContaining([
+      { label: 'Depth / capacity', value: '0 / 0 batches' },
+      { label: 'Pressure', value: '100%' },
+      { label: 'Waiting upstream now', value: '1' },
+      { label: 'Oldest current wait', value: '10 ms' },
+      { label: 'Flow state', value: 'Backpressure' },
+    ]))
+    adapter.dispose()
+  })
+
   it('keeps queue depth and capacity truthful across apply states', () => {
     const cases = [
     {
