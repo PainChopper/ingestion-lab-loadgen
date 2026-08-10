@@ -80,7 +80,7 @@ export const ACTOR_GEOMETRY = Object.freeze({
       x: 930,
       y: 245,
       width: 140,
-      height: 230,
+      height: 245,
     } satisfies FixedActorBounds,
     ports: { input: { x: 930, y: FLOW_BASELINE } satisfies Point },
     title: { x: 1000, y: 38 } satisfies Point,
@@ -195,7 +195,8 @@ function landscapeGeometry(contentWidth: number) {
     labels: {
       caption: { x: 1000 + targetOffset, y: 407 },
       value: { x: 1000 + targetOffset, y: 431 },
-      state: { x: 1000 + targetOffset, y: 456 },
+      failure: { x: 1000 + targetOffset, y: 454 },
+      state: { x: 1000 + targetOffset, y: 477 },
     },
     markerPoint: { x: 962 + targetOffset, y: FLOW_BASELINE },
   }
@@ -331,7 +332,7 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       x: 120,
       y: targetTop,
       width: 240,
-      height: 210,
+      height: 230,
     } satisfies FixedActorBounds,
     ports: { input: { x: 240, y: targetTop } satisfies Point },
     title: { x: 240, y: targetTop - 17 } satisfies Point,
@@ -339,7 +340,8 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
     labels: {
       caption: { x: 240, y: targetTop + 145 } satisfies Point,
       value: { x: 240, y: targetTop + 169 } satisfies Point,
-      state: { x: 240, y: targetTop + 194 } satisfies Point,
+      failure: { x: 240, y: targetTop + 193 } satisfies Point,
+      state: { x: 240, y: targetTop + 217 } satisfies Point,
     },
     markerPoint: { x: 240, y: targetTop + 43 } satisfies Point,
   }
