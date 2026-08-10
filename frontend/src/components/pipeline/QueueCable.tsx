@@ -16,7 +16,6 @@ import {
   formatRate,
 } from './formatters'
 import type { Point } from './geometry'
-import type { QueueMarkerSlotSnapshot } from './markerLifecycle'
 import {
   capacityFromKeyboard,
   capacityFromVerticalDrag,
@@ -31,7 +30,6 @@ interface QueueCableProps {
   start: Point
   end: Point
   selected: boolean
-  markers: readonly QueueMarkerSlotSnapshot[]
   onSelect: (id: SelectableId) => void
   onCapacityChange: (queue: QueueId, value: number) => void
 }
@@ -128,7 +126,6 @@ export function QueueCable({
   start,
   end,
   selected,
-  markers,
   onSelect,
   onCapacityChange,
 }: QueueCableProps) {
@@ -341,33 +338,6 @@ export function QueueCable({
           aria-hidden="true"
         />
       )}
-
-      <g
-        className="pipeline-queue-markers"
-        aria-hidden="true"
-        data-marker-path={presentation.markerPath}
-      >
-        {markers.map((marker) => {
-          const markerStyle = {
-            offsetPath: `path("${presentation.markerPath}")`,
-            offsetDistance: `${marker.phase * 100}%`,
-          } satisfies CSSProperties
-          return (
-            <circle
-              key={marker.slotId}
-              r={marker.kind === 'occupancy' ? 4.5 : 3.5}
-              visibility={marker.state === 'inactive' ? 'hidden' : 'visible'}
-              className={`pipeline-marker pipeline-marker--${marker.kind} pipeline-marker--${marker.state}${marker.queued ? ' pipeline-marker--queued' : ''}`}
-              style={markerStyle}
-              data-marker-id={marker.slotId}
-              data-family-id={marker.familyId ?? ''}
-              data-marker-kind={marker.kind}
-              data-marker-state={marker.state}
-              data-marker-phase={marker.phase.toFixed(4)}
-            />
-          )
-        })}
-      </g>
 
       {presentation.appliedMarker !== null && (
         <g

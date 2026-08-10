@@ -14,10 +14,8 @@ import type {
   MarkerLifecycleTelemetry,
   QueueMarkerTelemetry,
 } from './markerLifecycle'
-import {
-  getHttpTraversalLength,
-  getQueueMarkerPathGeometry,
-} from './markerPaths'
+import { getMarkerStagePathGeometry } from './markerPaths'
+import type { MarkerStage } from './markerLifecycle'
 import { getQueueCapacityPresentation } from './queueCableGeometry'
 
 function usePrefersReducedMotion(): boolean {
@@ -36,7 +34,7 @@ function usePrefersReducedMotion(): boolean {
   return reducedMotion
 }
 
-function queueFlowActive(snapshot: QueueSnapshot): boolean {
+function queueDequeueActive(snapshot: QueueSnapshot): boolean {
   if (
     snapshot.flowState === 'stopped' ||
     snapshot.flowState === 'connection-error'
@@ -44,24 +42,20 @@ function queueFlowActive(snapshot: QueueSnapshot): boolean {
     return false
   }
 
-  return snapshot.inputBatchesPerSecond > 0 ||
-    snapshot.outputBatchesPerSecond > 0 ||
-    snapshot.handoffBatches > 0 ||
-    (snapshot.throughputTps !== null && snapshot.throughputTps > 0)
+  return snapshot.throughputTps !== null && snapshot.throughputTps > 0
 }
 
 function queueTelemetry(snapshot: QueueSnapshot): QueueMarkerTelemetry {
-  const paths = getQueueMarkerPathGeometry(snapshot.id, snapshot.capacity)
   return {
     id: snapshot.id,
     depthBatches: snapshot.depthBatches,
     appliedCapacity: getQueueCapacityPresentation(snapshot.capacity).applied,
     throughputTps: snapshot.throughputTps,
-    flowActive: queueFlowActive(snapshot),
+    dequeueActive: queueDequeueActive(snapshot),
+    blocked:
+      snapshot.flowState === 'backpressure' || snapshot.blockedSenders > 0,
     enqueuedBatchesTotal: snapshot.enqueuedBatchesTotal,
     dequeuedBatchesTotal: snapshot.dequeuedBatchesTotal,
-    occupancyTravelLength: paths.cableLength,
-    flowTravelLength: paths.cableLength,
   }
 }
 
@@ -69,6 +63,24 @@ export function markerTelemetryFromSnapshot(
   snapshot: LoadgenSnapshot,
   reducedMotion: boolean,
 ): MarkerLifecycleTelemetry {
+  const stages: readonly MarkerStage[] = [
+    'reader',
+    'queue1',
+    'throttler',
+    'queue2',
+    'sender',
+    'http',
+    'target',
+  ]
+  const stageTravelLengths = Object.fromEntries(stages.map((stage) => [
+    stage,
+    getMarkerStagePathGeometry(
+      stage,
+      snapshot.queue1.capacity,
+      snapshot.queue2.capacity,
+    ).length,
+  ])) as Record<MarkerStage, number>
+
   return {
     runState: snapshot.runState,
     reducedMotion,
@@ -80,11 +92,11 @@ export function markerTelemetryFromSnapshot(
       requestsCompletedTotal: snapshot.http.requestsCompletedTotal,
       requestsSucceededTotal: snapshot.http.requestsSucceededTotal,
       requestsFailedTotal: snapshot.http.requestsFailedTotal,
-      travelLength: getHttpTraversalLength(),
       connectionError:
         snapshot.http.connectionState === 'error' ||
         snapshot.http.connectionState === 'disconnected',
     },
+    stageTravelLengths,
   }
 }
 

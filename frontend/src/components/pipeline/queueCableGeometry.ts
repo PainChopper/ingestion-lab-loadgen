@@ -172,6 +172,90 @@ export function buildQueueCablePath(
   return `M${formatCoordinate(start.x)} ${formatCoordinate(start.y)} ${buildQueueCableCommands(start, end, topY)}`
 }
 
+function quadraticBezierLength(
+  start: Point,
+  control: Point,
+  end: Point,
+): number {
+  const segments = 16
+  const speed = (t: number) => {
+    const dx = 2 * (
+      (1 - t) * (control.x - start.x) + t * (end.x - control.x)
+    )
+    const dy = 2 * (
+      (1 - t) * (control.y - start.y) + t * (end.y - control.y)
+    )
+    return Math.hypot(dx, dy)
+  }
+  let sum = speed(0) + speed(1)
+  for (let index = 1; index < segments; index += 1) {
+    sum += speed(index / segments) * (index % 2 === 0 ? 2 : 4)
+  }
+  return sum / (segments * 3)
+}
+
+export function getQueueCablePathLength(
+  start: Point,
+  end: Point,
+  topY: number,
+): number {
+  const coordinate = (value: number) => Number(formatCoordinate(value))
+  const baseline = coordinate(start.y)
+  const roundedTopY = coordinate(topY)
+  const lift = Math.max(0, baseline - roundedTopY)
+  if (lift < 0.5) return Math.max(0, coordinate(end.x) - coordinate(start.x))
+
+  const width = end.x - start.x
+  const shoulder = Math.min(46, width * 0.24)
+  const leftX = start.x + shoulder
+  const rightX = end.x - shoulder
+  const radius = Math.min(16, lift / 2, (rightX - leftX) / 2)
+  const points = {
+    start: { x: coordinate(start.x), y: baseline },
+    firstCurveStart: { x: coordinate(leftX - radius), y: baseline },
+    firstControl: { x: coordinate(leftX), y: baseline },
+    firstCurveEnd: { x: coordinate(leftX), y: coordinate(baseline - radius) },
+    secondCurveStart: { x: coordinate(leftX), y: coordinate(roundedTopY + radius) },
+    secondControl: { x: coordinate(leftX), y: roundedTopY },
+    secondCurveEnd: { x: coordinate(leftX + radius), y: roundedTopY },
+    thirdCurveStart: { x: coordinate(rightX - radius), y: roundedTopY },
+    thirdControl: { x: coordinate(rightX), y: roundedTopY },
+    thirdCurveEnd: { x: coordinate(rightX), y: coordinate(roundedTopY + radius) },
+    fourthCurveStart: { x: coordinate(rightX), y: coordinate(baseline - radius) },
+    fourthControl: { x: coordinate(rightX), y: baseline },
+    fourthCurveEnd: { x: coordinate(rightX + radius), y: baseline },
+    end: { x: coordinate(end.x), y: coordinate(end.y) },
+  }
+  const lineLength = (left: Point, right: Point) =>
+    Math.hypot(right.x - left.x, right.y - left.y)
+
+  return lineLength(points.start, points.firstCurveStart) +
+    quadraticBezierLength(
+      points.firstCurveStart,
+      points.firstControl,
+      points.firstCurveEnd,
+    ) +
+    lineLength(points.firstCurveEnd, points.secondCurveStart) +
+    quadraticBezierLength(
+      points.secondCurveStart,
+      points.secondControl,
+      points.secondCurveEnd,
+    ) +
+    lineLength(points.secondCurveEnd, points.thirdCurveStart) +
+    quadraticBezierLength(
+      points.thirdCurveStart,
+      points.thirdControl,
+      points.thirdCurveEnd,
+    ) +
+    lineLength(points.thirdCurveEnd, points.fourthCurveStart) +
+    quadraticBezierLength(
+      points.fourthCurveStart,
+      points.fourthControl,
+      points.fourthCurveEnd,
+    ) +
+    lineLength(points.fourthCurveEnd, points.end)
+}
+
 function buildQueueCableCommands(
   start: Point,
   end: Point,
@@ -239,8 +323,7 @@ export function getQueueCableGeometryPresentation(
         ? null
         : buildQueueCablePath(start, end, sliderY),
     markerPath: cablePath,
-    markerPathLength:
-      Math.max(0, end.x - start.x) + 2 * Math.max(0, start.y - cableY),
+    markerPathLength: getQueueCablePathLength(start, end, cableY),
   }
 }
 

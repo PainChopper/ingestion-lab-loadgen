@@ -9,7 +9,6 @@ import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type { QueueSnapshot, SelectableId } from '../../model/loadgen'
 import { QueueFlowStateDeriver } from '../../model/queueFlowState'
 import { QUEUE_CABLE_ENDPOINTS } from './geometry'
-import type { QueueMarkerSlotSnapshot } from './markerLifecycle'
 import {
   buildQueueCablePath,
   capacityToCableY,
@@ -53,25 +52,9 @@ function queueSnapshot(
   }
 }
 
-function marker(
-  queue: QueueSnapshot,
-  kind: QueueMarkerSlotSnapshot['kind'],
-): QueueMarkerSlotSnapshot {
-  return {
-    slotId: `${queue.id}-${kind}-test`,
-    familyId: `${kind}-family`,
-    queueId: queue.id,
-    kind,
-    state: 'active',
-    phase: kind === 'occupancy' ? 0.25 : 0.75,
-    queued: kind === 'occupancy',
-  }
-}
-
 function renderCable(
   snapshot: QueueSnapshot,
   options: {
-    markers?: readonly QueueMarkerSlotSnapshot[]
     onSelect?: (id: SelectableId) => void
     onCapacityChange?: (id: QueueSnapshot['id'], value: number) => void
   } = {},
@@ -84,7 +67,6 @@ function renderCable(
         start={endpoints.start}
         end={endpoints.end}
         selected={false}
-        markers={options.markers ?? []}
         onSelect={options.onSelect ?? (() => undefined)}
         onCapacityChange={options.onCapacityChange ?? (() => undefined)}
       />
@@ -363,7 +345,7 @@ describe('QueueCable mounted behavior', () => {
     adapter.dispose()
   })
 
-  it('keeps applied cable, markers, label, and z-order stable for pending values', () => {
+  it('keeps one cable geometry and label z-order stable for pending values', () => {
     const adapter = new SimulationAdapter()
     const snapshot = derivedSnapshot(adapter)
     const cases = [
@@ -395,13 +377,9 @@ describe('QueueCable mounted behavior', () => {
         endpoints.end,
         candidateY,
       )
-      const view = renderCable(snapshot, {
-        markers: [marker(snapshot, 'occupancy'), marker(snapshot, 'flow')],
-      })
+      const view = renderCable(snapshot)
       const queueGroup = view.container.querySelector(`#queue-${snapshot.id}`)!
       const cable = queueGroup.querySelector('.pipeline-queue-cable')!
-      const markerGroup = queueGroup.querySelector('.pipeline-queue-markers')!
-      const markers = [...markerGroup.querySelectorAll<SVGCircleElement>('.pipeline-marker')]
       const appliedLabel = queueGroup.querySelector('.pipeline-queue-capacity-applied')!
       const metricLabels = [...queueGroup.querySelectorAll('.pipeline-queue-metric')]
       const slider = queueGroup.querySelector('.pipeline-queue-handle')!
@@ -424,15 +402,8 @@ describe('QueueCable mounted behavior', () => {
         'var(--pipeline-queue-handle-state-color)',
       )
       expect(translatedY(slider)).toBe(candidateY)
-      expect(markers.map((item) => item.style.offsetPath)).toEqual([
-        `path("${candidatePath}")`,
-        `path("${candidatePath}")`,
-      ])
-      expect(getComputedStyle(markers[0]).offsetPath).toBe(
-        `path("${candidatePath}")`,
-      )
-      expect(markers[0].classList).toContain('pipeline-marker--occupancy')
-      expect(markers[1].classList).toContain('pipeline-marker--flow')
+      expect(queueGroup.querySelector('.pipeline-queue-markers')).toBeNull()
+      expect(queueGroup.querySelector('.pipeline-marker')).toBeNull()
       expect(appliedLabel.getAttribute('transform')).toBe(
         `translate(${(endpoints.start.x + endpoints.end.x) / 2 - 50} ${appliedY})`,
       )
@@ -440,8 +411,7 @@ describe('QueueCable mounted behavior', () => {
       expect(slider.getAttribute('transform')).toBe(
         `translate(${(endpoints.start.x + endpoints.end.x) / 2} ${candidateY})`,
       )
-      expect(children.indexOf(cable)).toBeLessThan(children.indexOf(markerGroup))
-      expect(children.indexOf(markerGroup)).toBeLessThan(children.indexOf(appliedLabel))
+      expect(children.indexOf(cable)).toBeLessThan(children.indexOf(appliedLabel))
       expect(children.indexOf(appliedLabel)).toBeLessThan(
         children.indexOf(metricLabels[0]),
       )
@@ -472,7 +442,6 @@ describe('QueueCable mounted behavior', () => {
           start={endpoints.start}
           end={endpoints.end}
           selected={false}
-          markers={[]}
           onSelect={() => undefined}
           onCapacityChange={() => undefined}
         />
@@ -546,7 +515,6 @@ describe('QueueCable mounted behavior', () => {
           start={endpoints.start}
           end={endpoints.end}
           selected={false}
-          markers={[]}
           onSelect={() => undefined}
           onCapacityChange={() => undefined}
         />
