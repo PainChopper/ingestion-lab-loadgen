@@ -5,8 +5,15 @@ import { buildQueueCablePath, capacityToCableY } from './queueCableGeometry'
 import {
   getMarkerStagePathGeometry,
   getQueueMarkerPathGeometry,
+  getValveMarkerPathGeometry,
+  pointAtValvePathPhase,
+  VALVE_WAITING_STOP_X,
 } from './markerPaths'
 import type { MarkerStage } from './markerLifecycle'
+import {
+  VALVE_PISTON,
+  valvePistonCenterY,
+} from './throttlerValve'
 
 function capacityControl(
   applied: number,
@@ -113,6 +120,30 @@ describe('marker paths', () => {
       )
       expect(pending).toEqual(afterApply)
       expect(afterApply).not.toEqual(canonical)
+    }
+  })
+
+  it('keeps waiting before the flange and routes applied openings around piston', () => {
+    const closed = getValveMarkerPathGeometry(0)
+    const partial = getValveMarkerPathGeometry(5)
+    const open = getValveMarkerPathGeometry(11)
+    expect(pointAtValvePathPhase(closed, closed.preAdmissionStopPhase))
+      .toEqual({ x: VALVE_WAITING_STOP_X, y: 415 })
+    expect(VALVE_WAITING_STOP_X).toBe(397)
+    expect(partial.points.some((point) => point.y > 415)).toBe(true)
+    expect(open.points.every((point) => point.y === 415)).toBe(true)
+
+    for (const openingIndex of [1, 5, 11]) {
+      const geometry = getValveMarkerPathGeometry(openingIndex)
+      const pistonY = valvePistonCenterY(openingIndex)
+      for (let sample = 0; sample <= 500; sample += 1) {
+        const point = pointAtValvePathPhase(geometry, sample / 500)
+        if (point.x < 414 || point.x > 446) continue
+        const normalized =
+          ((point.x - 430) / (VALVE_PISTON.radiusX + 4)) ** 2 +
+          ((point.y - pistonY) / (VALVE_PISTON.radiusY + 4)) ** 2
+        expect(normalized).toBeGreaterThanOrEqual(1)
+      }
     }
   })
 })
