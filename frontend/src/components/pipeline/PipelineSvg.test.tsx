@@ -69,6 +69,9 @@ function renderPipeline(snapshot: LoadgenSnapshot) {
       onSelect={vi.fn()}
       onWorkerCountChange={vi.fn()}
       onQueueCapacityChange={vi.fn()}
+      requestedTpsPreview={null}
+      onRequestedTpsPreviewChange={vi.fn()}
+      onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
     />,
   )
 }
@@ -152,6 +155,9 @@ describe('PipelineSvg marker wiring', () => {
         onSelect={vi.fn()}
         onWorkerCountChange={vi.fn()}
         onQueueCapacityChange={vi.fn()}
+        requestedTpsPreview={null}
+        onRequestedTpsPreviewChange={vi.fn()}
+        onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
       />,
     )
 
@@ -168,6 +174,7 @@ describe('PipelineSvg marker wiring', () => {
     const arrivingMarkers: MarkerLifecycleSnapshot = {
       revision: 1,
       reducedMotion: false,
+      motionElapsedMs: 0,
       markers: [{
         slotId: 'pipeline-marker-1',
         familyId: 'transaction-family-1',
@@ -262,6 +269,9 @@ describe('PipelineSvg marker wiring', () => {
         onSelect={vi.fn()}
         onWorkerCountChange={vi.fn()}
         onQueueCapacityChange={vi.fn()}
+        requestedTpsPreview={null}
+        onRequestedTpsPreviewChange={vi.fn()}
+        onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
       />,
     )
     const atZero = readVisibleFamilies(view.container)
@@ -294,6 +304,9 @@ describe('PipelineSvg marker wiring', () => {
         onSelect={vi.fn()}
         onWorkerCountChange={vi.fn()}
         onQueueCapacityChange={vi.fn()}
+        requestedTpsPreview={null}
+        onRequestedTpsPreviewChange={vi.fn()}
+        onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
       />,
     )
 
@@ -334,6 +347,9 @@ describe('PipelineSvg marker wiring', () => {
           onSelect={vi.fn()}
           onWorkerCountChange={vi.fn()}
           onQueueCapacityChange={vi.fn()}
+          requestedTpsPreview={null}
+          onRequestedTpsPreviewChange={vi.fn()}
+          onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
         />,
       )
       const after = readActiveFlow(view.container)
@@ -425,5 +441,183 @@ describe('PipelineSvg marker wiring', () => {
       cancelSpy.mockRestore()
       requestSpy.mockRestore()
     }
+  })
+
+  it('bounds waiting backlog to eight stable FIFO families with deterministic motion', () => {
+    const base = activeSnapshot()
+    const snapshot: LoadgenSnapshot = {
+      ...base,
+      queue1: {
+        ...base.queue1,
+        depthBatches: 12,
+        capacity: {
+          ...base.queue1.capacity,
+          applied: 12,
+          preview: 0,
+          pending: 0,
+        },
+      },
+      throttler: {
+        ...base.throttler,
+        requestedTps: {
+          ...base.throttler.requestedTps,
+          applied: 0,
+          preview: 250_000,
+          pending: 225_000,
+        },
+      },
+    }
+    const waiting = Array.from({ length: 10 }, (_, index) => ({
+      slotId: `pipeline-marker-${index + 1}`,
+      familyId: `transaction-family-${index + 1}`,
+      state: 'active' as const,
+      stage: 'throttler' as const,
+      phase: 0.3 - index * 0.01,
+      queued: true,
+      outcome: null,
+      outcomeVisible: false,
+      pulseProgress: 0,
+    }))
+    const markerSnapshot: MarkerLifecycleSnapshot = {
+      revision: 1,
+      reducedMotion: false,
+      motionElapsedMs: 0,
+      markers: waiting,
+    }
+    const view = render(
+      <svg><PipelineMarkers snapshot={snapshot} markers={markerSnapshot} /></svg>,
+    )
+    const visibleWaiting = () => [...view.container.querySelectorAll<SVGCircleElement>(
+      '[data-marker-stage="throttler"][visibility="visible"]',
+    )]
+    const initial = visibleWaiting().map((marker) => ({
+      familyId: marker.dataset.familyId,
+      x: marker.dataset.markerJitterX,
+      y: marker.dataset.markerJitterY,
+    }))
+    expect(initial).toHaveLength(8)
+    expect(initial.map(({ familyId }) => familyId)).toEqual(
+      waiting.slice(0, 8).map(({ familyId }) => familyId),
+    )
+    expect(view.container.querySelectorAll('[data-marker-mask="aperture-and-body"]'))
+      .toHaveLength(10)
+
+    view.rerender(
+      <svg>
+        <PipelineMarkers
+          snapshot={snapshot}
+          markers={{ ...markerSnapshot, revision: 2, motionElapsedMs: 500 }}
+        />
+      </svg>,
+    )
+    const moved = visibleWaiting().map((marker) => ({
+      familyId: marker.dataset.familyId,
+      x: marker.dataset.markerJitterX,
+      y: marker.dataset.markerJitterY,
+    }))
+    expect(moved.map(({ familyId }) => familyId))
+      .toEqual(initial.map(({ familyId }) => familyId))
+    expect(moved.some((marker, index) =>
+      marker.x !== initial[index].x || marker.y !== initial[index].y
+    )).toBe(true)
+
+    const withoutCandidate: LoadgenSnapshot = {
+      ...snapshot,
+      throttler: {
+        ...snapshot.throttler,
+        requestedTps: {
+          ...snapshot.throttler.requestedTps,
+          preview: null,
+          pending: null,
+        },
+      },
+    }
+    view.rerender(
+      <svg>
+        <PipelineMarkers
+          snapshot={withoutCandidate}
+          markers={{ ...markerSnapshot, revision: 3, motionElapsedMs: 500 }}
+        />
+      </svg>,
+    )
+    expect(visibleWaiting().map((marker) => marker.dataset.familyId))
+      .toEqual(initial.map(({ familyId }) => familyId))
+
+    view.rerender(
+      <svg>
+        <PipelineMarkers
+          snapshot={{
+            ...withoutCandidate,
+            queue1: { ...withoutCandidate.queue1, depthBatches: 3 },
+          }}
+          markers={{ ...markerSnapshot, revision: 4, motionElapsedMs: 500 }}
+        />
+      </svg>,
+    )
+    expect(visibleWaiting().map((marker) => marker.dataset.familyId))
+      .toEqual(waiting.slice(0, 3).map(({ familyId }) => familyId))
+
+    view.rerender(
+      <svg>
+        <PipelineMarkers
+          snapshot={snapshot}
+          markers={{
+            ...markerSnapshot,
+            revision: 5,
+            reducedMotion: true,
+            motionElapsedMs: 1_000,
+          }}
+        />
+      </svg>,
+    )
+    expect(visibleWaiting()).toHaveLength(8)
+    expect(visibleWaiting().every((marker) =>
+      marker.dataset.markerJitterX === '0' &&
+      marker.dataset.markerJitterY === '0'
+    )).toBe(true)
+  })
+
+  it('keeps one uniform vacuum and an empty green q2 projection at drain end', () => {
+    const base = activeSnapshot()
+    const drained: LoadgenSnapshot = {
+      ...base,
+      throttler: {
+        ...base.throttler,
+        requestedTps: {
+          ...base.throttler.requestedTps,
+          applied: 0,
+          preview: 250_000,
+          pending: 225_000,
+        },
+      },
+      queue1: {
+        ...base.queue1,
+        depthBatches: 0,
+        throughputTps: 0,
+        flowState: 'normal',
+        displayedPressure: 0,
+      },
+      queue2: {
+        ...base.queue2,
+        depthBatches: 0,
+        throughputTps: 0,
+        flowState: 'normal',
+        displayedPressure: 0,
+      },
+    }
+    const view = renderPipeline(drained)
+    const vacuum = view.container.querySelector<SVGEllipseElement>(
+      '.pipeline-valve-vacuum',
+    )!
+    expect(vacuum.dataset.vacuumFill).toBe('uniform')
+    expect(vacuum.getAttribute('fill')).toBe('#03111f')
+    expect(view.container.querySelectorAll(
+      '.pipeline-marker[data-marker-stage="queue2"][visibility="visible"]',
+    )).toHaveLength(0)
+    const q2 = view.container.querySelector<SVGGElement>(
+      '#queue-throttler-to-sender',
+    )!
+    expect(q2.style.getPropertyValue('--pipeline-queue-pressure-color'))
+      .toBe('#79d957')
   })
 })

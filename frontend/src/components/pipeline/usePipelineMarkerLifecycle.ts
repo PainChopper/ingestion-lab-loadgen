@@ -14,9 +14,13 @@ import type {
   MarkerLifecycleTelemetry,
   QueueMarkerTelemetry,
 } from './markerLifecycle'
-import { getMarkerStagePathGeometry } from './markerPaths'
+import {
+  getMarkerStagePathGeometry,
+  getValveMarkerPathGeometry,
+} from './markerPaths'
 import type { MarkerStage } from './markerLifecycle'
 import { getQueueCapacityPresentation } from './queueCableGeometry'
+import { valueToOpeningIndex } from './throttlerValve'
 
 function usePrefersReducedMotion(): boolean {
   const [reducedMotion, setReducedMotion] = useState(() =>
@@ -63,6 +67,11 @@ export function markerTelemetryFromSnapshot(
   snapshot: LoadgenSnapshot,
   reducedMotion: boolean,
 ): MarkerLifecycleTelemetry {
+  const valveOpeningIndex = valueToOpeningIndex(
+    snapshot.throttler.requestedTps.applied,
+    snapshot.throttler.requestedTps,
+  )
+  const valveGeometry = getValveMarkerPathGeometry(valveOpeningIndex)
   const stages: readonly MarkerStage[] = [
     'reader',
     'queue1',
@@ -78,12 +87,16 @@ export function markerTelemetryFromSnapshot(
       stage,
       snapshot.queue1.capacity,
       snapshot.queue2.capacity,
+      valveOpeningIndex,
     ).length,
   ])) as Record<MarkerStage, number>
 
   return {
     runState: snapshot.runState,
     reducedMotion,
+    valveOpeningIndex,
+    valvePreAdmissionStopPhase: valveGeometry.preAdmissionStopPhase,
+    valveExitPhase: valveGeometry.exitPhase,
     queue1: queueTelemetry(snapshot.queue1),
     queue2: queueTelemetry(snapshot.queue2),
     http: {

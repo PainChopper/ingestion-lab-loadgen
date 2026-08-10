@@ -10,11 +10,18 @@ export const MAX_FLOW_MARKERS = 12
 export const MAX_HTTP_ATTEMPT_MARKERS = 3
 export const MAX_PIPELINE_MARKERS = MAX_QUEUE_DEPTH_FAMILIES * 2 + MAX_FLOW_MARKERS
 export const MAX_PENDING_OUTCOMES = MAX_PIPELINE_MARKERS
+export const MAX_VISIBLE_WAITING_FAMILIES = 8
 
 const MARKER_SPEED = 70
 const FLOW_MARKER_SCALE_TPS = 250_000
 const OUTCOME_PULSE_MS = 520
 const RETIREMENT_GRACE_MS = 1_000
+const REDUCED_MOTION_STEP_MS = 240
+export const PRE_VALVE_STOP_PHASE = 0.34
+const PRE_VALVE_FAMILY_SPACING = 0.05
+const VALVE_ADMISSION_MAX_INTERVAL_MS = 900
+const VALVE_ADMISSION_MIN_INTERVAL_MS = 120
+const VALVE_OPENING_MAX_INDEX = 11
 
 export type MarkerSlotState = 'inactive' | 'active' | 'retiring'
 export type HttpOutcome = 'success' | 'error'
@@ -42,6 +49,7 @@ export interface PipelineMarkerSlotSnapshot {
 export interface MarkerLifecycleSnapshot {
   readonly revision: number
   readonly reducedMotion: boolean
+  readonly motionElapsedMs: number
   readonly markers: readonly PipelineMarkerSlotSnapshot[]
 }
 
@@ -68,10 +76,18 @@ export interface HttpMarkerTelemetry {
 export interface MarkerLifecycleTelemetry {
   readonly runState: RunState
   readonly reducedMotion: boolean
+  readonly valveOpeningIndex: number
+  readonly valvePreAdmissionStopPhase: number
+  readonly valveExitPhase: number
   readonly queue1: QueueMarkerTelemetry
   readonly queue2: QueueMarkerTelemetry
   readonly http: HttpMarkerTelemetry
   readonly stageTravelLengths: Readonly<Record<MarkerStage, number>>
+}
+
+export interface MarkerMicroJitter {
+  readonly x: number
+  readonly y: number
 }
 
 interface MutableMarkerSlot {
@@ -105,6 +121,59 @@ function clamp(value: number, min: number, max: number): number {
 
 function positiveInteger(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0
+}
+
+function stableHash(value: string): number {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
+export function markerMicroJitter(
+  familyId: string,
+  slotId: string,
+): MarkerMicroJitter {
+  const unit = (suffix: string) =>
+    stableHash(`${familyId}:${slotId}:${suffix}`) / 0xffffffff
+  return Object.freeze({
+    x: Number(((unit('x') * 2 - 1) * 1.8).toFixed(3)),
+    y: Number(((unit('y') * 2 - 1) * 1.2).toFixed(3)),
+  })
+}
+
+export function markerWaitingOffset(
+  familyId: string,
+  slotId: string,
+  elapsedMs: number,
+  reducedMotion: boolean,
+): MarkerMicroJitter {
+  if (reducedMotion) return Object.freeze({ x: 0, y: 0 })
+  const anchor = markerMicroJitter(familyId, slotId)
+  const phase = stableHash(`${familyId}:${slotId}:phase`) / 0xffffffff * Math.PI * 2
+  const speed = 0.0016 +
+    stableHash(`${familyId}:${slotId}:speed`) / 0xffffffff * 0.0008
+  return Object.freeze({
+    x: Number((anchor.x + Math.sin(phase + elapsedMs * speed) * 0.65).toFixed(3)),
+    y: Number((anchor.y + Math.cos(phase + elapsedMs * speed * 0.83) * 0.45).toFixed(3)),
+  })
+}
+
+export function valveAdmissionIntervalMs(openingIndex: number): number {
+  const boundedIndex = clamp(
+    Math.round(openingIndex),
+    0,
+    VALVE_OPENING_MAX_INDEX,
+  )
+  if (boundedIndex === 0) return Number.POSITIVE_INFINITY
+  if (boundedIndex === VALVE_OPENING_MAX_INDEX) return 0
+  const progress = (boundedIndex - 1) / (VALVE_OPENING_MAX_INDEX - 2)
+  return VALVE_ADMISSION_MAX_INTERVAL_MS -
+    progress * (
+      VALVE_ADMISSION_MAX_INTERVAL_MS - VALVE_ADMISSION_MIN_INTERVAL_MS
+    )
 }
 
 export function getQueueDepthFamilyTarget(
@@ -167,6 +236,11 @@ export class MarkerLifecycleController {
   private throughputCadenceActive = false
   private queue1DequeueActive = false
   private queue2DequeueActive = false
+  private valveOpeningIndex = 0
+  private valvePreAdmissionStopPhase = PRE_VALVE_STOP_PHASE
+  private valveAdmissionElapsedMs = 0
+  private motionElapsedMs = 0
+  private reducedMotionElapsedMs = 0
   private connectionError = false
   private queue1DepthTarget = 0
   private queue2DepthTarget = 0
@@ -186,6 +260,7 @@ export class MarkerLifecycleController {
     this.snapshot = Object.freeze({
       revision: 0,
       reducedMotion: telemetry.reducedMotion,
+      motionElapsedMs: 0,
       markers: Object.freeze([]),
     })
     this.reconcile(telemetry)
@@ -215,6 +290,23 @@ export class MarkerLifecycleController {
     this.reducedMotion = telemetry.reducedMotion
     this.queue1DequeueActive = (telemetry.queue1.throughputTps ?? 0) > 0
     this.queue2DequeueActive = (telemetry.queue2.throughputTps ?? 0) > 0
+    const nextValveOpeningIndex = clamp(
+      Math.round(telemetry.valveOpeningIndex),
+      0,
+      VALVE_OPENING_MAX_INDEX,
+    )
+    const nextStopPhase = clamp(telemetry.valvePreAdmissionStopPhase, 0, 1)
+    const nextExitPhase = clamp(telemetry.valveExitPhase, nextStopPhase, 1)
+    this.remapValvePositions(
+      nextValveOpeningIndex,
+      nextStopPhase,
+      nextExitPhase,
+    )
+    if (nextValveOpeningIndex !== this.valveOpeningIndex) {
+      this.valveAdmissionElapsedMs = 0
+    }
+    this.valveOpeningIndex = nextValveOpeningIndex
+    this.valvePreAdmissionStopPhase = nextStopPhase
     this.connectionError = telemetry.http.connectionError
     this.queue1DepthTarget = getQueueDepthFamilyTarget(
       telemetry.queue1.depthBatches,
@@ -249,7 +341,6 @@ export class MarkerLifecycleController {
   advance(deltaMs: number): void {
     if (
       this.runState === 'paused' ||
-      !this.throughputCadenceActive ||
       !Number.isFinite(deltaMs) ||
       deltaMs <= 0
     ) {
@@ -257,6 +348,20 @@ export class MarkerLifecycleController {
     }
 
     let changed = false
+    if (this.runState === 'running' && !this.reducedMotion) {
+      this.motionElapsedMs += deltaMs
+      changed = true
+    }
+    const valveReleaseSlots = this.valveReleaseSlots(deltaMs)
+    let reducedMotionDeltaMs = deltaMs
+    if (this.reducedMotion) {
+      this.reducedMotionElapsedMs += deltaMs
+      const steps = Math.floor(
+        this.reducedMotionElapsedMs / REDUCED_MOTION_STEP_MS,
+      )
+      reducedMotionDeltaMs = steps * REDUCED_MOTION_STEP_MS
+      this.reducedMotionElapsedMs -= reducedMotionDeltaMs
+    }
     const orderedSlots = this.slots.slice().sort(
       (left, right) => lifecycleRank(right) - lifecycleRank(left),
     )
@@ -282,10 +387,21 @@ export class MarkerLifecycleController {
         changed = this.advanceOutcomeDwell(slot, deltaMs) || changed
         continue
       }
-      if (this.runState !== 'running' || this.reducedMotion) continue
-      if (!this.throughputCadenceActive) continue
+      if (this.runState !== 'running') continue
+      if (this.reducedMotion) {
+        const downstream = slot.stage === 'throttler'
+          ? slot.phase > this.valvePreAdmissionStopPhase ||
+            valveReleaseSlots.has(slot.slotId)
+          : MARKER_STAGE_ORDER.indexOf(slot.stage) >
+            MARKER_STAGE_ORDER.indexOf('throttler')
+        if (!downstream || reducedMotionDeltaMs === 0) continue
+      }
 
-      changed = this.advanceFamily(slot, deltaMs) || changed
+      changed = this.advanceFamily(
+        slot,
+        this.reducedMotion ? reducedMotionDeltaMs : deltaMs,
+        valveReleaseSlots.has(slot.slotId),
+      ) || changed
     }
 
     if (this.reducedMotion) {
@@ -557,11 +673,96 @@ export class MarkerLifecycleController {
     slot.retirementRemainingMs = RETIREMENT_GRACE_MS
   }
 
-  private advanceFamily(slot: MutableMarkerSlot, deltaMs: number): boolean {
+  private valveReleaseSlots(deltaMs: number): ReadonlySet<string> {
+    if (this.runState !== 'running') return new Set()
+    if (this.valveOpeningIndex === 0) {
+      this.valveAdmissionElapsedMs = 0
+      return new Set()
+    }
+    const waiting = this.waitingValveSlots()
+    if (this.valveOpeningIndex === VALVE_OPENING_MAX_INDEX) {
+      return new Set(waiting.map((slot) => slot.slotId))
+    }
+    if (waiting.length === 0) {
+      this.valveAdmissionElapsedMs = 0
+      return new Set()
+    }
+
+    const intervalMs = valveAdmissionIntervalMs(this.valveOpeningIndex)
+    this.valveAdmissionElapsedMs = Math.min(
+      intervalMs,
+      this.valveAdmissionElapsedMs + deltaMs,
+    )
+    const releaseCount = Math.min(
+      waiting.length,
+      Math.floor(this.valveAdmissionElapsedMs / intervalMs),
+      1,
+    )
+    if (releaseCount === 0) return new Set()
+
+    this.valveAdmissionElapsedMs -= releaseCount * intervalMs
+    return new Set(
+      waiting
+        .slice(0, releaseCount)
+        .map((slot) => slot.slotId),
+    )
+  }
+
+  private waitingValveSlots(): MutableMarkerSlot[] {
+    return this.familySlots()
+      .filter((slot) =>
+        slot.stage === 'throttler' &&
+        slot.phase <= this.valvePreAdmissionStopPhase &&
+        this.atPreValveStop(slot)
+      )
+      .sort((left, right) =>
+        right.phase - left.phase ||
+        this.familyOrdinal(left) - this.familyOrdinal(right)
+      )
+  }
+
+  private familyOrdinal(slot: MutableMarkerSlot): number {
+    const ordinal = Number(slot.familyId?.split('-').at(-1))
+    return Number.isFinite(ordinal) ? ordinal : Number.MAX_SAFE_INTEGER
+  }
+
+  private remapValvePositions(
+    nextOpeningIndex: number,
+    nextStopPhase: number,
+    nextExitPhase: number,
+  ): void {
+    if (!this.initialized) return
+    const waiting = this.waitingValveSlots()
+    waiting.forEach((slot, index) => {
+      slot.phase = Math.max(
+        0.04,
+        nextStopPhase - index * PRE_VALVE_FAMILY_SPACING,
+      )
+    })
+    if (nextOpeningIndex !== 0) return
+    this.familySlots()
+      .filter((slot) =>
+        slot.stage === 'throttler' &&
+        slot.phase > this.valvePreAdmissionStopPhase &&
+        slot.phase < nextExitPhase
+      )
+      .forEach((slot) => {
+        slot.phase = nextExitPhase
+      })
+  }
+
+  private atPreValveStop(slot: MutableMarkerSlot): boolean {
+    return Math.abs(slot.phase - this.preValveStopPhase(slot)) < 1e-9
+  }
+
+  private advanceFamily(
+    slot: MutableMarkerSlot,
+    deltaMs: number,
+    valveReleaseGranted: boolean,
+  ): boolean {
     if (slot.stage === 'target' && slot.phase >= 1) return false
     if (
-      (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
-      (slot.stage === 'queue2' && !this.queue2DequeueActive)
+      slot.stage === 'queue1' && !this.queue1DequeueActive
     ) {
       return false
     }
@@ -570,6 +771,22 @@ export class MarkerLifecycleController {
     let remainingDistance = MARKER_SPEED * deltaMs / 1_000
     while (remainingDistance > 0) {
       const travelLength = Math.max(1, this.stageTravelLengths[slot.stage])
+      if (
+        slot.stage === 'throttler' &&
+        this.valveOpeningIndex < VALVE_OPENING_MAX_INDEX &&
+        !valveReleaseGranted &&
+        slot.phase <= this.valvePreAdmissionStopPhase
+      ) {
+        const stopPhase = this.preValveStopPhase(slot)
+        const distanceToStop = Math.max(0, stopPhase - slot.phase) * travelLength
+        if (distanceToStop === 0) return changed
+        if (remainingDistance < distanceToStop) {
+          slot.phase += remainingDistance / travelLength
+        } else {
+          slot.phase = stopPhase
+        }
+        return true
+      }
       const distanceToEnd = Math.max(0, 1 - slot.phase) * travelLength
       if (remainingDistance < distanceToEnd) {
         slot.phase += remainingDistance / travelLength
@@ -586,14 +803,25 @@ export class MarkerLifecycleController {
       slot.stage = followingStage
       slot.phase = 0
       changed = true
-      if (
-        (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
-        (slot.stage === 'queue2' && !this.queue2DequeueActive)
-      ) {
+      if (slot.stage === 'queue1' && !this.queue1DequeueActive) {
         return changed
       }
     }
     return changed
+  }
+
+  private preValveStopPhase(slot: MutableMarkerSlot): number {
+    const familiesAhead = this.familySlots().filter((candidate) =>
+      candidate !== slot &&
+      candidate.stage === 'throttler' &&
+      candidate.phase > slot.phase &&
+      candidate.phase <= this.valvePreAdmissionStopPhase
+    ).length
+    return Math.max(
+      0.04,
+      this.valvePreAdmissionStopPhase -
+        familiesAhead * PRE_VALVE_FAMILY_SPACING,
+    )
   }
 
   private canCrossBoundary(
@@ -604,10 +832,6 @@ export class MarkerLifecycleController {
       return this.queue1DequeueActive
     }
     if (stage === 'queue1') return this.queue1DequeueActive
-    if (stage === 'throttler' && followingStage === 'queue2') {
-      return this.queue2DequeueActive
-    }
-    if (stage === 'queue2') return this.queue2DequeueActive
     return true
   }
 
@@ -621,12 +845,7 @@ export class MarkerLifecycleController {
       1,
     )
     if (
-      slot.pulseProgress >= 1 &&
-      (
-        this.throughputCadenceActive ||
-        this.familyTarget === 0 ||
-        slot.state === 'retiring'
-      )
+      slot.pulseProgress >= 1
     ) {
       this.completeFamilyLifecycle(slot)
     }
@@ -636,6 +855,7 @@ export class MarkerLifecycleController {
   private completeFamilyLifecycle(slot: MutableMarkerSlot): void {
     if (
       slot.state === 'retiring' ||
+      !this.throughputCadenceActive ||
       this.familyTarget === 0 ||
       this.activeFamilySlots().length > this.familyTarget
     ) {
@@ -759,8 +979,9 @@ export class MarkerLifecycleController {
   private familyHeldAtStoppedQueue(slot: MutableMarkerSlot): boolean {
     return (slot.stage === 'reader' && !this.queue1DequeueActive && slot.phase >= 1) ||
       (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
-      (slot.stage === 'throttler' && !this.queue2DequeueActive && slot.phase >= 1) ||
-      (slot.stage === 'queue2' && !this.queue2DequeueActive)
+      (slot.stage === 'throttler' &&
+        this.valveOpeningIndex < VALVE_OPENING_MAX_INDEX &&
+        slot.phase <= this.valvePreAdmissionStopPhase)
   }
 
   private captureTotals(telemetry: MarkerLifecycleTelemetry): void {
@@ -779,14 +1000,18 @@ export class MarkerLifecycleController {
     this.pendingOutcomes.length = 0
     this.familyTarget = 0
     this.throughputCadenceActive = false
+    this.valveAdmissionElapsedMs = 0
+    this.motionElapsedMs = 0
+    this.reducedMotionElapsedMs = 0
     this.initialized = false
   }
 
   private queued(slot: MutableMarkerSlot): boolean {
     return (slot.stage === 'reader' && !this.queue1DequeueActive && slot.phase >= 1) ||
       (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
-      (slot.stage === 'throttler' && !this.queue2DequeueActive && slot.phase >= 1) ||
-      (slot.stage === 'queue2' && !this.queue2DequeueActive)
+      (slot.stage === 'throttler' &&
+        this.valveOpeningIndex < VALVE_OPENING_MAX_INDEX &&
+        slot.phase <= this.valvePreAdmissionStopPhase)
   }
 
   private publish(): void {
@@ -794,6 +1019,7 @@ export class MarkerLifecycleController {
     this.snapshot = Object.freeze({
       revision: this.revision,
       reducedMotion: this.reducedMotion,
+      motionElapsedMs: this.motionElapsedMs,
       markers: Object.freeze(this.slots.map((slot) => Object.freeze({
         slotId: slot.slotId,
         familyId: slot.familyId,

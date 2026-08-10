@@ -14,6 +14,7 @@ import { ReaderActor } from './ReaderActor'
 import { SenderActor } from './SenderActor'
 import { TargetActor } from './TargetActor'
 import { ThrottlerActor } from './ThrottlerActor'
+import { VALVE_APERTURE } from './throttlerValve'
 import { usePipelineMarkerLifecycle } from './usePipelineMarkerLifecycle'
 import type { WorkerActorId } from './WorkerActor'
 import './PipelineSvg.css'
@@ -24,6 +25,9 @@ interface PipelineSvgProps {
   onSelect: (id: SelectableId) => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
   onQueueCapacityChange: (queue: QueueId, value: number) => void
+  requestedTpsPreview: number | null
+  onRequestedTpsPreviewChange: (value: number | null) => void
+  onRequestedTpsChange: (value: number) => Promise<boolean>
 }
 
 export function PipelineSvg({
@@ -32,6 +36,9 @@ export function PipelineSvg({
   onSelect,
   onWorkerCountChange,
   onQueueCapacityChange,
+  requestedTpsPreview,
+  onRequestedTpsPreviewChange,
+  onRequestedTpsChange,
 }: PipelineSvgProps) {
   const markers = usePipelineMarkerLifecycle(snapshot)
   const queue1Endpoints = QUEUE_CABLE_ENDPOINTS[snapshot.queue1.id]
@@ -66,6 +73,15 @@ export function PipelineSvg({
         onSelect={onSelect}
         onCapacityChange={onQueueCapacityChange}
       />
+      <ellipse
+        cx={VALVE_APERTURE.centerX}
+        cy={VALVE_APERTURE.centerY}
+        rx={VALVE_APERTURE.radiusX}
+        ry={VALVE_APERTURE.radiusY}
+        fill="#03111f"
+        className="pipeline-valve-vacuum"
+        data-vacuum-fill="uniform"
+      />
       <PipelineMarkers snapshot={snapshot} markers={markers} />
       <ReaderActor
         snapshot={snapshot.reader}
@@ -75,8 +91,12 @@ export function PipelineSvg({
       />
       <ThrottlerActor
         snapshot={snapshot.throttler}
+        upstreamQueue={snapshot.queue1}
+        previewTps={requestedTpsPreview}
         selected={selectedId === snapshot.throttler.id}
         onSelect={onSelect}
+        onPreviewTpsChange={onRequestedTpsPreviewChange}
+        onRequestedTpsChange={onRequestedTpsChange}
       />
       <SenderActor
         snapshot={snapshot.sender}

@@ -6,7 +6,7 @@ import {
   RotateCcw,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import type {
   LoadgenSnapshot,
@@ -26,6 +26,12 @@ interface AdapterProps {
 
 interface SnapshotProps extends AdapterProps {
   snapshot: LoadgenSnapshot
+}
+
+interface RequestedTpsControlProps {
+  requestedTpsPreview: number | null
+  onRequestedTpsPreviewChange: (value: number | null) => void
+  onRequestedTpsChange: (value: number) => Promise<boolean>
 }
 
 const QUEUE_STATES: ReadonlyArray<{
@@ -53,7 +59,12 @@ function formatCount(value: number): string {
   return new Intl.NumberFormat('en-US').format(value)
 }
 
-function TopBar({ adapter, snapshot }: SnapshotProps) {
+function TopBar({
+  adapter,
+  snapshot,
+  onRequestedTpsPreviewChange,
+  onRequestedTpsChange,
+}: SnapshotProps & RequestedTpsControlProps) {
   const running = snapshot.runState === 'running'
 
   return (
@@ -113,9 +124,8 @@ function TopBar({ adapter, snapshot }: SnapshotProps) {
         className="numeric-control--topbar"
         label="Requested TPS"
         control={snapshot.throttler.requestedTps}
-        onValueChange={(value) =>
-          void adapter.dispatch({ type: 'set-requested-tps', value })
-        }
+        onPreviewChange={onRequestedTpsPreviewChange}
+        onValueChange={(value) => void onRequestedTpsChange(value)}
       />
     </header>
   )
@@ -127,6 +137,9 @@ interface PipelineViewportProps {
   onSelect: (id: SelectableId) => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
   onQueueCapacityChange: (queue: QueueId, value: number) => void
+  requestedTpsPreview: number | null
+  onRequestedTpsPreviewChange: (value: number | null) => void
+  onRequestedTpsChange: (value: number) => Promise<boolean>
 }
 
 function PipelineViewport({
@@ -135,6 +148,9 @@ function PipelineViewport({
   onSelect,
   onWorkerCountChange,
   onQueueCapacityChange,
+  requestedTpsPreview,
+  onRequestedTpsPreviewChange,
+  onRequestedTpsChange,
 }: PipelineViewportProps) {
   return (
     <main className="pipeline-scroll" aria-label="Pipeline viewport">
@@ -145,13 +161,16 @@ function PipelineViewport({
           onSelect={onSelect}
           onWorkerCountChange={onWorkerCountChange}
           onQueueCapacityChange={onQueueCapacityChange}
+          requestedTpsPreview={requestedTpsPreview}
+          onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
+          onRequestedTpsChange={onRequestedTpsChange}
         />
       </div>
     </main>
   )
 }
 
-interface InspectorDockProps extends SnapshotProps {
+interface InspectorDockProps extends SnapshotProps, RequestedTpsControlProps {
   selectedId: SelectableId | null
   onClearSelection: () => void
 }
@@ -160,6 +179,8 @@ function InspectorControls({
   adapter,
   snapshot,
   selectedId,
+  onRequestedTpsPreviewChange,
+  onRequestedTpsChange,
 }: Omit<InspectorDockProps, 'onClearSelection'>) {
   switch (selectedId) {
     case 'reader':
@@ -192,9 +213,8 @@ function InspectorControls({
           <NumericControl
             label="Requested TPS"
             control={snapshot.throttler.requestedTps}
-            onValueChange={(value) =>
-              void adapter.dispatch({ type: 'set-requested-tps', value })
-            }
+            onPreviewChange={onRequestedTpsPreviewChange}
+            onValueChange={(value) => void onRequestedTpsChange(value)}
           />
           <button
             className="button inspector-command"
@@ -271,6 +291,9 @@ function InspectorDock({
   snapshot,
   selectedId,
   onClearSelection,
+  requestedTpsPreview,
+  onRequestedTpsPreviewChange,
+  onRequestedTpsChange,
 }: InspectorDockProps) {
   const model = getInspectorViewModel(snapshot, selectedId)
 
@@ -307,6 +330,9 @@ function InspectorDock({
             adapter={adapter}
             snapshot={snapshot}
             selectedId={selectedId}
+            requestedTpsPreview={requestedTpsPreview}
+            onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
+            onRequestedTpsChange={onRequestedTpsChange}
           />
           <dl className="inspector-data">
             {model.rows.map((row) => (
@@ -322,7 +348,7 @@ function InspectorDock({
   )
 }
 
-interface WorkspaceProps extends SnapshotProps {
+interface WorkspaceProps extends SnapshotProps, RequestedTpsControlProps {
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
   onClearSelection: () => void
@@ -338,6 +364,9 @@ function Workspace({
   onClearSelection,
   onWorkerCountChange,
   onQueueCapacityChange,
+  requestedTpsPreview,
+  onRequestedTpsPreviewChange,
+  onRequestedTpsChange,
 }: WorkspaceProps) {
   return (
     <div className="workspace">
@@ -347,12 +376,18 @@ function Workspace({
         onSelect={onSelect}
         onWorkerCountChange={onWorkerCountChange}
         onQueueCapacityChange={onQueueCapacityChange}
+        requestedTpsPreview={requestedTpsPreview}
+        onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
+        onRequestedTpsChange={onRequestedTpsChange}
       />
       <InspectorDock
         adapter={adapter}
         snapshot={snapshot}
         selectedId={selectedId}
         onClearSelection={onClearSelection}
+        requestedTpsPreview={requestedTpsPreview}
+        onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
+        onRequestedTpsChange={onRequestedTpsChange}
       />
     </div>
   )
@@ -377,6 +412,48 @@ function QueueStateLegend() {
 export function LabShell({ adapter }: AdapterProps) {
   const snapshot = useLoadgenSnapshot(adapter)
   const [selectedId, setSelectedId] = useState<SelectableId | null>(null)
+  const [requestedTpsDraft, setRequestedTpsDraft] = useState<{
+    value: number | null
+    resolutionRevision: number | null
+  }>({ value: null, resolutionRevision: null })
+  const requestedTpsPreview = requestedTpsDraft.value
+
+  const handleRequestedTpsPreviewChange = (value: number | null) => {
+    setRequestedTpsDraft({ value, resolutionRevision: null })
+  }
+
+  useEffect(() => {
+    if (requestedTpsPreview === null) return
+    const control = snapshot.throttler.requestedTps
+    if (
+      control.applied === requestedTpsPreview ||
+      control.pending === requestedTpsPreview ||
+      control.preview === requestedTpsPreview ||
+      (
+        requestedTpsDraft.resolutionRevision !== null &&
+        snapshot.revision >= requestedTpsDraft.resolutionRevision
+      )
+    ) {
+      setRequestedTpsDraft({ value: null, resolutionRevision: null })
+    }
+  }, [requestedTpsDraft, requestedTpsPreview, snapshot.revision, snapshot.throttler.requestedTps])
+
+  const handleRequestedTpsChange = async (value: number): Promise<boolean> => {
+    setRequestedTpsDraft({ value, resolutionRevision: null })
+    try {
+      const receipt = await adapter.dispatch({ type: 'set-requested-tps', value })
+      setRequestedTpsDraft((current) => {
+        if (current.value !== value) return current
+        return receipt.accepted
+          ? { value, resolutionRevision: receipt.snapshotRevision }
+          : { value: null, resolutionRevision: null }
+      })
+      return receipt.accepted
+    } catch {
+      setRequestedTpsDraft({ value: null, resolutionRevision: null })
+      return false
+    }
+  }
   const handleWorkerCountChange = (actor: WorkerActorId, value: number) => {
     void adapter.dispatch({ type: 'set-worker-count', actor, value })
   }
@@ -386,7 +463,13 @@ export function LabShell({ adapter }: AdapterProps) {
 
   return (
     <section className="lab-shell" aria-label="Load generator laboratory">
-      <TopBar adapter={adapter} snapshot={snapshot} />
+      <TopBar
+        adapter={adapter}
+        snapshot={snapshot}
+        requestedTpsPreview={requestedTpsPreview}
+        onRequestedTpsPreviewChange={handleRequestedTpsPreviewChange}
+        onRequestedTpsChange={handleRequestedTpsChange}
+      />
       <Workspace
         adapter={adapter}
         snapshot={snapshot}
@@ -395,6 +478,9 @@ export function LabShell({ adapter }: AdapterProps) {
         onClearSelection={() => setSelectedId(null)}
         onWorkerCountChange={handleWorkerCountChange}
         onQueueCapacityChange={handleQueueCapacityChange}
+        requestedTpsPreview={requestedTpsPreview}
+        onRequestedTpsPreviewChange={handleRequestedTpsPreviewChange}
+        onRequestedTpsChange={handleRequestedTpsChange}
       />
       <QueueStateLegend />
     </section>
