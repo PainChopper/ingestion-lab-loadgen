@@ -32,9 +32,11 @@ interface WorkerActorProps {
   outputPort: Point
   primaryMetric: string
   secondaryMetric: string
+  statusMetric?: string
   metricPoints?: {
     readonly primary: Point
     readonly secondary: Point
+    readonly status?: Point
   }
   orientation?: PipelineOrientation
   selected: boolean
@@ -120,6 +122,7 @@ export function WorkerActor({
   outputPort,
   primaryMetric,
   secondaryMetric,
+  statusMetric,
   metricPoints,
   orientation = 'landscape',
   selected,
@@ -252,6 +255,16 @@ export function WorkerActor({
         >
           {secondaryMetric}
         </text>
+        {statusMetric && (
+          <text
+            x={metricPoints?.status?.x ?? metricPoints?.secondary.x ?? centerX}
+            y={metricPoints?.status?.y ?? (metricPoints?.secondary.y ?? 531) + 17}
+            textAnchor="middle"
+            className="pipeline-worker-status"
+          >
+            {statusMetric}
+          </text>
+        )}
       </g>
     </>
   )

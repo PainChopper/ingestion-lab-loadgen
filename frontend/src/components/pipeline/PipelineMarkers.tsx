@@ -13,7 +13,6 @@ import {
 import { getMarkerStagePathGeometry } from './markerPaths'
 import {
   VALVE_APERTURE,
-  valueToOpeningIndex,
 } from './throttlerValve'
 import {
   createPipelineGeometry,
@@ -59,10 +58,7 @@ export function PipelineMarkers({
     senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
   })
   const orientation = resolvedGeometry.orientation
-  const valveOpeningIndex = valueToOpeningIndex(
-    snapshot.throttler.requestedTps.applied,
-    snapshot.throttler.requestedTps,
-  )
+  const valveOpeningIndex = markers.valveOpeningIndex
   const stagePaths = Object.fromEntries(([
     'reader',
     'queue1',

@@ -1,4 +1,4 @@
-import type { QueueTrend } from './loadgen'
+import type { QueueTrend, ThrottlerInstallationMode } from './loadgen'
 
 export const FIXED_STEP_MS = 10
 export const SNAPSHOT_INTERVAL_MS = 100
@@ -10,6 +10,7 @@ export interface SimulationConfig {
   readerWorkers: number
   senderWorkers: number
   requestedTps: number
+  throttlerInstallationMode: ThrottlerInstallationMode
   readBatchSize: number
   httpBatchSize: number
   httpTimeoutMs: number
@@ -356,7 +357,12 @@ export class FixedStepSimulation {
 
   updateConfig(values: Partial<SimulationConfig>): void {
     Object.assign(this.config, values)
-    if (values.requestedTps === 0) this.throttlerTokens = 0
+    if (
+      values.requestedTps === 0 ||
+      values.throttlerInstallationMode !== undefined
+    ) {
+      this.throttlerTokens = 0
+    }
     this.readerTransactionCredit = Math.min(
       this.readerTransactionCredit,
       this.config.readerWorkers * this.config.readBatchSize,
@@ -466,6 +472,10 @@ export class FixedStepSimulation {
   }
 
   private refillThrottlerTokens(): void {
+    if (this.config.throttlerInstallationMode === 'bypass') {
+      this.throttlerTokens = 0
+      return
+    }
     const headTransactions = this.queue1.peek() ?? this.config.readBatchSize
     const tokenCapacity = Math.max(headTransactions, this.config.readBatchSize)
     this.throttlerTokens = Math.min(
@@ -505,10 +515,12 @@ export class FixedStepSimulation {
   private receiveQueue1(activity: StepActivity): void {
     if (this.throttlerBufferedTransactions !== 0) return
     const transactions = this.queue1.peek()
-    if (transactions === null || this.throttlerTokens < transactions) return
+    if (transactions === null) return
+    const installed = this.config.throttlerInstallationMode === 'installed'
+    if (installed && this.throttlerTokens < transactions) return
     const received = this.queue1.dequeue(activity.queue1)
     if (received === null) return
-    this.throttlerTokens -= received
+    if (installed) this.throttlerTokens -= received
     this.throttlerBufferedTransactions += received
   }
 
@@ -525,12 +537,17 @@ export class FixedStepSimulation {
       if (this.queue1.capacity.applied === 0) {
         if (
           this.throttlerBufferedTransactions !== 0 ||
-          this.throttlerTokens < transactions
+          (
+            this.config.throttlerInstallationMode === 'installed' &&
+            this.throttlerTokens < transactions
+          )
         ) {
           return true
         }
         this.queue1.handoff(transactions, activity.queue1)
-        this.throttlerTokens -= transactions
+        if (this.config.throttlerInstallationMode === 'installed') {
+          this.throttlerTokens -= transactions
+        }
         this.throttlerBufferedTransactions += transactions
       } else if (!this.queue1.enqueue(transactions, activity.queue1)) {
         return true

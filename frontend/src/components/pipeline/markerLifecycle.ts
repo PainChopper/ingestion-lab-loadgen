@@ -50,6 +50,7 @@ export interface MarkerLifecycleSnapshot {
   readonly revision: number
   readonly reducedMotion: boolean
   readonly motionElapsedMs: number
+  readonly valveOpeningIndex: number
   readonly markers: readonly PipelineMarkerSlotSnapshot[]
 }
 
@@ -261,6 +262,7 @@ export class MarkerLifecycleController {
       revision: 0,
       reducedMotion: telemetry.reducedMotion,
       motionElapsedMs: 0,
+      valveOpeningIndex: telemetry.valveOpeningIndex,
       markers: Object.freeze([]),
     })
     this.reconcile(telemetry)
@@ -290,23 +292,25 @@ export class MarkerLifecycleController {
     this.reducedMotion = telemetry.reducedMotion
     this.queue1DequeueActive = (telemetry.queue1.throughputTps ?? 0) > 0
     this.queue2DequeueActive = (telemetry.queue2.throughputTps ?? 0) > 0
-    const nextValveOpeningIndex = clamp(
-      Math.round(telemetry.valveOpeningIndex),
-      0,
-      VALVE_OPENING_MAX_INDEX,
-    )
-    const nextStopPhase = clamp(telemetry.valvePreAdmissionStopPhase, 0, 1)
-    const nextExitPhase = clamp(telemetry.valveExitPhase, nextStopPhase, 1)
-    this.remapValvePositions(
-      nextValveOpeningIndex,
-      nextStopPhase,
-      nextExitPhase,
-    )
-    if (nextValveOpeningIndex !== this.valveOpeningIndex) {
-      this.valveAdmissionElapsedMs = 0
+    if (!this.initialized || telemetry.runState !== 'paused') {
+      const nextValveOpeningIndex = clamp(
+        Math.round(telemetry.valveOpeningIndex),
+        0,
+        VALVE_OPENING_MAX_INDEX,
+      )
+      const nextStopPhase = clamp(telemetry.valvePreAdmissionStopPhase, 0, 1)
+      const nextExitPhase = clamp(telemetry.valveExitPhase, nextStopPhase, 1)
+      this.remapValvePositions(
+        nextValveOpeningIndex,
+        nextStopPhase,
+        nextExitPhase,
+      )
+      if (nextValveOpeningIndex !== this.valveOpeningIndex) {
+        this.valveAdmissionElapsedMs = 0
+      }
+      this.valveOpeningIndex = nextValveOpeningIndex
+      this.valvePreAdmissionStopPhase = nextStopPhase
     }
-    this.valveOpeningIndex = nextValveOpeningIndex
-    this.valvePreAdmissionStopPhase = nextStopPhase
     this.connectionError = telemetry.http.connectionError
     this.queue1DepthTarget = getQueueDepthFamilyTarget(
       telemetry.queue1.depthBatches,
@@ -1020,6 +1024,7 @@ export class MarkerLifecycleController {
       revision: this.revision,
       reducedMotion: this.reducedMotion,
       motionElapsedMs: this.motionElapsedMs,
+      valveOpeningIndex: this.valveOpeningIndex,
       markers: Object.freeze(this.slots.map((slot) => Object.freeze({
         slotId: slot.slotId,
         familyId: slot.familyId,

@@ -2,6 +2,7 @@ import type {
   LoadgenSnapshot,
   QueueId,
   SelectableId,
+  ThrottlerInstallationMode,
 } from '../../model/loadgen'
 import { useMemo } from 'react'
 import { HttpLink } from './HttpLink'
@@ -31,6 +32,9 @@ interface PipelineSvgProps {
   requestedTpsPreview: number | null
   onRequestedTpsPreviewChange: (value: number | null) => void
   onRequestedTpsChange: (value: number) => Promise<boolean>
+  onInstallationModeChange: (
+    value: ThrottlerInstallationMode,
+  ) => Promise<boolean>
   orientation?: PipelineOrientation
   geometry?: PipelineGeometry
 }
@@ -44,6 +48,7 @@ export function PipelineSvg({
   requestedTpsPreview,
   onRequestedTpsPreviewChange,
   onRequestedTpsChange,
+  onInstallationModeChange,
   orientation = 'landscape',
   geometry,
 }: PipelineSvgProps) {
@@ -124,6 +129,7 @@ export function PipelineSvg({
         onSelect={onSelect}
         onPreviewTpsChange={onRequestedTpsPreviewChange}
         onRequestedTpsChange={onRequestedTpsChange}
+        onInstallationModeChange={onInstallationModeChange}
         geometry={resolvedGeometry.actors.throttler}
         orientation={resolvedGeometry.orientation}
       />
