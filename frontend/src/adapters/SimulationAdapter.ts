@@ -226,6 +226,13 @@ function freezeSnapshot(
         '%',
       ),
       acceptedTps: Math.round(telemetry.acceptedTransactionsPerSecond),
+      failedTps: Math.max(
+        0,
+        Math.round(
+          telemetry.http.completedTransactionsPerSecond -
+            telemetry.http.succeededTransactionsPerSecond,
+        ),
+      ),
       latencyP95Ms: running ? config.targetDelayMs + 5 : 0,
       http200Responses: telemetry.http.requestsSucceededTotal,
       http503Responses:

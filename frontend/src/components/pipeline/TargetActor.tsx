@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from 'react'
 import type { SelectableId, TargetSnapshot } from '../../model/loadgen'
-import { formatRate } from './formatters'
+import { formatInteger, formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
 
 interface TargetActorProps {
@@ -17,6 +17,8 @@ export function TargetActor({
   geometry,
 }: TargetActorProps) {
   const { center, labels } = geometry
+  const failurePercent = formatInteger(snapshot.errorRatePercent.applied)
+  const failedTps = formatInteger(snapshot.failedTps)
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
@@ -67,6 +69,9 @@ export function TargetActor({
         </text>
         <text x={labels.value.x} y={labels.value.y} textAnchor="middle" className="pipeline-value pipeline-target-primary">
           {formatRate(snapshot.acceptedTps)}
+        </text>
+        <text x={labels.failure.x} y={labels.failure.y} textAnchor="middle" className="pipeline-small pipeline-target-secondary pipeline-target-failure">
+          {failurePercent === '—' ? failurePercent : `${failurePercent}%`} failures · {failedTps} failed tx/s
         </text>
         <text x={labels.state.x} y={labels.state.y} textAnchor="middle" className="pipeline-small pipeline-target-secondary">
           {snapshot.connectionState}
