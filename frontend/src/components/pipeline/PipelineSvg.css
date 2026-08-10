@@ -437,6 +437,14 @@
   fill: var(--purple);
 }
 
+.pipeline-target-failure {
+  font-size: 9px;
+}
+
+.pipeline-svg--portrait .pipeline-target-failure {
+  font-size: 11px;
+}
+
 .pipeline-http-line {
   fill: none;
   stroke: currentColor;

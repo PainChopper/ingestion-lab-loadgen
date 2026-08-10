@@ -117,6 +117,7 @@ export interface TargetSnapshot {
   readonly artificialDelayMs: NumericControlSnapshot
   readonly errorRatePercent: NumericControlSnapshot
   readonly acceptedTps: number | null
+  readonly failedTps: number | null
   readonly latencyP95Ms: number | null
   readonly http200Responses: number | null
   readonly http503Responses: number | null

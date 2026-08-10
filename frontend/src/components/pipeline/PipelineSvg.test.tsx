@@ -191,6 +191,72 @@ function renderPipeline(
 }
 
 describe('PipelineSvg marker wiring', () => {
+  it.each(['landscape', 'portrait'] as const)(
+    'shows applied target failures and rolling failed TPS in %s',
+    (orientation) => {
+      const base = activeSnapshot()
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        target: {
+          ...base.target,
+          acceptedTps: 245_000,
+          failedTps: 5_000,
+          errorRatePercent: {
+            ...base.target.errorRatePercent,
+            applied: 2,
+            preview: 7,
+            pending: 7,
+          },
+        },
+      }
+      const view = renderPipeline(snapshot, orientation)
+      const target = view.container.querySelector('#target-actor')!
+      const geometry = createPipelineGeometry({
+        orientation,
+        readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+        senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+      })
+      const boundsBottom = geometry.actors.target.bounds.y +
+        geometry.actors.target.bounds.height
+
+      expect(target.textContent).toContain('245,000 tx/s')
+      expect(target.textContent).toContain(
+        '2% failures · 5,000 failed tx/s',
+      )
+      expect(target.textContent).not.toContain('7% failures')
+      expect(target.textContent).toContain('connected')
+      expect(geometry.actors.target.labels.state.y).toBeLessThan(boundsBottom)
+    },
+  )
+
+  it('preserves unknown and measured zero target failure telemetry', () => {
+    const base = activeSnapshot()
+    const cases = [
+      { applied: null, failedTps: null, expected: '— failures · — failed tx/s' },
+      { applied: 0, failedTps: 0, expected: '0% failures · 0 failed tx/s' },
+    ] as const
+
+    for (const testCase of cases) {
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        target: {
+          ...base.target,
+          failedTps: testCase.failedTps,
+          errorRatePercent: {
+            ...base.target.errorRatePercent,
+            applied: testCase.applied,
+            preview: 2,
+            pending: 2,
+          },
+        },
+      }
+      const view = renderPipeline(snapshot)
+      expect(view.container.querySelector('#target-actor')?.textContent)
+        .toContain(testCase.expected)
+      view.unmount()
+    }
+  })
+
   it('projects the unified marker pool onto applied queue paths', () => {
     const snapshot = activeSnapshot()
     const telemetry = markerTelemetryFromSnapshot(snapshot, false)

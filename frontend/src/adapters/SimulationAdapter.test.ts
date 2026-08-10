@@ -474,6 +474,22 @@ describe('SimulationAdapter', () => {
     adapter.dispose()
   })
 
+  it('maps actual rolling failed transaction throughput to the target', async () => {
+    const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 5 })
+    await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
+    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
+    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 2 })
+    await adapter.dispatch({ type: 'run' })
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    const snapshot = adapter.getSnapshot()
+    expect(snapshot.sender.attemptedTps).toBe(250_000)
+    expect(snapshot.target.acceptedTps).toBe(245_000)
+    expect(snapshot.target.failedTps).toBe(5_000)
+    adapter.dispose()
+  })
+
   it('counts timeouts as failed HTTP requests without inventing 503 responses', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
