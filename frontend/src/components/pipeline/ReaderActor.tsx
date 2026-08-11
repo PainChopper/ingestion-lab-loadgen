@@ -37,7 +37,7 @@ export function ReaderActor({
       statusMetric={snapshot.limitationReason === 'downstream-backpressure'
         ? 'Downstream limited'
         : undefined}
-      metricPoints={'metrics' in geometry ? geometry.metrics : undefined}
+      metricPoints={geometry.metrics}
       orientation={orientation}
       selected={selected}
       onSelect={onSelect}

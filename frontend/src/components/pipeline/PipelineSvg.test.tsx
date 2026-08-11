@@ -13,7 +13,9 @@ import type {
 import { QueueFlowStateDeriver } from '../../model/queueFlowState'
 import {
   createPipelineGeometry,
+  PORTRAIT_THROTTLER_LIFT,
   QUEUE_CABLE_ENDPOINTS,
+  type TextPlacement,
 } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
@@ -25,6 +27,7 @@ import type { MarkerLifecycleSnapshot } from './markerLifecycle'
 import { getQueueMarkerPathGeometry } from './markerPaths'
 import { PipelineMarkers } from './PipelineMarkers'
 import { PipelineSvg } from './PipelineSvg'
+import { VALVE_FLANGES } from './throttlerValve'
 import { markerTelemetryFromSnapshot } from './usePipelineMarkerLifecycle'
 import { normalizedWorkerCount } from './workerActorLayout'
 
@@ -95,9 +98,11 @@ describe('responsive pipeline geometry', () => {
         senderWorkers: sender,
       })
       const readerBottom = 88 + readerHeight
-      const throttlerInput = readerBottom + 247
+      const throttlerSlotInput = readerBottom + 247
+      const throttlerInput = throttlerSlotInput - PORTRAIT_THROTTLER_LIFT
       const throttlerOutput = throttlerInput + 193
-      const senderTop = throttlerOutput + 222
+      const throttlerSlotOutput = throttlerSlotInput + 193
+      const senderTop = throttlerSlotOutput + 222
       const senderBottom = senderTop + senderHeight
       const targetTop = senderBottom + 170
 
@@ -112,9 +117,214 @@ describe('responsive pipeline geometry', () => {
       expect(geometry.queues['reader-to-throttler'].metrics.throughputY)
         .toBe(readerBottom + 60)
       expect(geometry.queues['throttler-to-sender'].metrics.throughputY)
-        .toBe(throttlerOutput + 42)
+        .toBe(throttlerSlotOutput + 42)
     },
   )
+
+  it('owns landscape actor text placement and aligns primary metrics', () => {
+    const geometry = createPipelineGeometry({
+      orientation: 'landscape',
+      landscapeContentWidth: 1440,
+      readerWorkers: 7,
+      senderWorkers: 32,
+    })
+    const throttler = geometry.actors.throttler
+    const throttlerBottom = throttler.bounds.y + throttler.bounds.height
+
+    expect(geometry.actors.reader.metrics.primary).toMatchObject({
+      y: 510,
+      anchor: 'middle',
+    })
+    expect(geometry.actors.sender.metrics.primary).toMatchObject({
+      y: 510,
+      anchor: 'middle',
+    })
+    expect(throttler.metrics.installed.requested.caption).toEqual({
+      x: 382,
+      y: 489,
+      anchor: 'middle',
+    })
+    expect(throttler.metrics.installed.admitted.value.y).toBe(510)
+    expect(throttler.metrics.bypass.admitted.value).toEqual({
+      x: 430,
+      y: 510,
+      anchor: 'middle',
+    })
+    expect(throttler.metrics.installed.requested.caption.y)
+      .toBeGreaterThan(throttlerBottom)
+    expect(throttler.metrics.bypass.admitted.caption.y)
+      .toBeGreaterThan(throttlerBottom)
+    expect(geometry.actors.target.labels.state.anchor).toBe('middle')
+  })
+
+  it.each(['installed', 'bypass'] as const)(
+    'stacks portrait throttler %s metrics in the right telemetry rail',
+    (installationMode) => {
+      const geometry = createPipelineGeometry({
+        orientation: 'portrait',
+        readerWorkers: 7,
+        senderWorkers: 32,
+      })
+      const throttler = geometry.actors.throttler
+      if (!('portraitPipe' in throttler)) {
+        throw new Error('portrait pipe geometry is missing')
+      }
+      const placements = installationMode === 'installed'
+        ? [
+          throttler.metrics.installed.requested.caption,
+          throttler.metrics.installed.requested.value,
+          throttler.metrics.installed.admitted.caption,
+          throttler.metrics.installed.admitted.value,
+        ]
+        : [
+          throttler.metrics.bypass.admitted.caption,
+          throttler.metrics.bypass.admitted.value,
+        ]
+      const cardRight = throttler.bounds.x + throttler.bounds.width
+      const cardBottom = throttler.bounds.y + throttler.bounds.height
+      const inputQueueMetricBottom = Math.max(
+        ...Object.values(geometry.queues['reader-to-throttler'].metrics)
+          .filter((value): value is number => value !== 350),
+      )
+      const outputQueueMetricTop = Math.min(
+        ...Object.values(geometry.queues['throttler-to-sender'].metrics)
+          .filter((value): value is number => value !== 350),
+      )
+      const pipeRight = Math.max(
+        throttler.portraitPipe.input.start.x,
+        throttler.portraitPipe.output.start.x,
+        ...throttler.portraitPipe.input.commands.flatMap((command) =>
+          command.kind === 'quadratic'
+            ? [command.control.x, command.end.x]
+            : command.kind === 'horizontal'
+              ? [command.x]
+              : []
+        ),
+        ...throttler.portraitPipe.output.commands.flatMap((command) =>
+          command.kind === 'quadratic'
+            ? [command.control.x, command.end.x]
+            : command.kind === 'horizontal'
+              ? [command.x]
+              : []
+        ),
+      ) + throttler.transform.x
+
+      for (const placement of placements) {
+        const globalX = placement.x + throttler.transform.x
+        const globalY = placement.y + throttler.transform.y
+
+        expect(globalX).toBeGreaterThan(cardRight)
+        expect(globalX).toBeGreaterThan(pipeRight)
+        expect(globalX).toBeGreaterThan(throttler.ports.output.x)
+        expect(globalY).toBeGreaterThan(inputQueueMetricBottom)
+        expect(globalY).toBeLessThan(outputQueueMetricTop)
+        expect(globalY).toBeLessThan(cardBottom)
+        expect(globalY).toBeLessThan(geometry.actors.sender.title.y)
+        expect(placement.anchor).toBe('start')
+      }
+
+      const globalPlacements = placements.map((placement) => ({
+        x: placement.x + throttler.transform.x,
+        y: placement.y + throttler.transform.y,
+      }))
+      if (installationMode === 'installed') {
+        expect(globalPlacements).toEqual([
+          { x: 330, y: 500 },
+          { x: 330, y: 521 },
+          { x: 330, y: 560 },
+          { x: 330, y: 581 },
+        ])
+        expect(globalPlacements[1].y).toBeLessThan(globalPlacements[2].y)
+      } else {
+        expect(globalPlacements).toEqual([
+          { x: 330, y: 560 },
+          { x: 330, y: 581 },
+        ])
+        expect(throttler.metrics.bypass.admitted)
+          .toEqual(throttler.metrics.installed.admitted)
+      }
+
+      expect(globalPlacements.some(({ y }) => y > cardBottom)).toBe(false)
+    },
+  )
+
+  it('owns monotonic portrait pipe routes with queue-style rounded bends', () => {
+    const geometry = createPipelineGeometry({
+      orientation: 'portrait',
+      readerWorkers: 7,
+      senderWorkers: 32,
+    })
+    const throttler = geometry.actors.throttler
+    if (!('portraitPipe' in throttler)) {
+      throw new Error('portrait pipe geometry is missing')
+    }
+    const { input, output } = throttler.portraitPipe
+    const globalPoint = (point: { x: number; y: number }) => ({
+      x: point.x + throttler.transform.x,
+      y: point.y + throttler.transform.y,
+    })
+    const expectRoundedMonotonicRoute = (path: typeof input) => {
+      let current = path.start
+      const horizontalDirections: number[] = []
+      let curveCount = 0
+
+      for (const command of path.commands) {
+        const next = command.kind === 'horizontal'
+          ? { x: command.x, y: current.y }
+          : command.kind === 'vertical'
+            ? { x: current.x, y: command.y }
+            : command.end
+
+        expect(next.y).toBeGreaterThanOrEqual(current.y)
+        if (command.kind === 'quadratic') {
+          curveCount += 1
+          expect(command.control.y).toBeGreaterThanOrEqual(current.y)
+          expect(command.end.y).toBeGreaterThanOrEqual(command.control.y)
+          expect(Math.hypot(
+            command.control.x - current.x,
+            command.control.y - current.y,
+          )).toBe(16)
+          expect(Math.hypot(
+            command.end.x - command.control.x,
+            command.end.y - command.control.y,
+          )).toBe(16)
+        }
+        const horizontalDirection = Math.sign(next.x - current.x)
+        if (horizontalDirection !== 0) {
+          horizontalDirections.push(horizontalDirection)
+        }
+        current = next
+      }
+
+      const directionChanges = horizontalDirections.slice(1).filter(
+        (direction, index) => direction !== horizontalDirections[index],
+      )
+      expect(current).toEqual(path.end)
+      expect(curveCount).toBe(3)
+      expect(directionChanges.length).toBeLessThanOrEqual(1)
+    }
+
+    expect(globalPoint(input.start)).toEqual(throttler.ports.input)
+    expect(input.end).toEqual({ x: VALVE_FLANGES.left, y: 415 })
+    expect(output.start).toEqual({ x: VALVE_FLANGES.right, y: 415 })
+    expect(globalPoint(output.end)).toEqual(throttler.ports.output)
+    expect(input.d).toBe(
+      'M430 282 V306 Q430 322 414 322 H390 Q374 322 374 338 V399 Q374 415 390 415 H401',
+    )
+    expect(output.d).toBe(
+      'M459 415 H470 Q486 415 486 431 V443 Q486 459 470 459 H446 Q430 459 430 475',
+    )
+    expect(input.commands[0]).toEqual({ kind: 'vertical', y: 306 })
+    expect(input.commands.at(-1)).toEqual({ kind: 'horizontal', x: 401 })
+    expect(output.commands[0]).toEqual({ kind: 'horizontal', x: 470 })
+    expect(output.commands.at(-1)).toEqual({
+      kind: 'quadratic',
+      control: { x: output.end.x, y: 459 },
+      end: output.end,
+    })
+    expectRoundedMonotonicRoute(input)
+    expectRoundedMonotonicRoute(output)
+  })
 })
 
 afterAll(() => {
@@ -191,7 +401,175 @@ function renderPipeline(
   )
 }
 
+function expectTextPlacement(
+  element: Element | null,
+  placement: TextPlacement,
+) {
+  expect(element).not.toBeNull()
+  expect([
+    element?.getAttribute('x'),
+    element?.getAttribute('y'),
+    element?.getAttribute('text-anchor'),
+  ]).toEqual([
+    String(placement.x),
+    String(placement.y),
+    placement.anchor,
+  ])
+}
+
 describe('PipelineSvg marker wiring', () => {
+  it.each([
+    { orientation: 'landscape', installationMode: 'installed' },
+    { orientation: 'landscape', installationMode: 'bypass' },
+    { orientation: 'portrait', installationMode: 'installed' },
+    { orientation: 'portrait', installationMode: 'bypass' },
+  ] as const)(
+    'renders geometry-owned actor text in $orientation $installationMode',
+    ({ orientation, installationMode }) => {
+      const base = activeSnapshot()
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        reader: {
+          ...base.reader,
+          limitationReason: 'downstream-backpressure',
+        },
+        throttler: {
+          ...base.throttler,
+          installationMode: {
+            ...base.throttler.installationMode,
+            applied: installationMode,
+            pending: null,
+          },
+        },
+      }
+      const geometry = createPipelineGeometry({
+        orientation,
+        readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+        senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+      })
+      const view = renderPipeline(snapshot, orientation)
+      const actorGeometry = geometry.actors
+
+      expectTextPlacement(
+        view.container.querySelector('.pipeline-title--reader'),
+        actorGeometry.reader.title,
+      )
+      expectTextPlacement(
+        view.container.querySelector('#reader-actor .pipeline-worker-primary'),
+        actorGeometry.reader.metrics.primary,
+      )
+      expectTextPlacement(
+        view.container.querySelector('#reader-actor .pipeline-worker-secondary'),
+        actorGeometry.reader.metrics.secondary,
+      )
+      expectTextPlacement(
+        view.container.querySelector('#reader-actor .pipeline-worker-status'),
+        actorGeometry.reader.metrics.status,
+      )
+      expectTextPlacement(
+        view.container.querySelector('.pipeline-title--sender'),
+        actorGeometry.sender.title,
+      )
+      expectTextPlacement(
+        view.container.querySelector('#sender-actor .pipeline-worker-primary'),
+        actorGeometry.sender.metrics.primary,
+      )
+      expectTextPlacement(
+        view.container.querySelector('#sender-actor .pipeline-worker-secondary'),
+        actorGeometry.sender.metrics.secondary,
+      )
+      expectTextPlacement(
+        view.container.querySelector('.pipeline-title--throttler'),
+        actorGeometry.throttler.renderTitle,
+      )
+      expectTextPlacement(
+        view.container.querySelector('.pipeline-title--target'),
+        actorGeometry.target.title,
+      )
+      expectTextPlacement(
+        view.container.querySelector('#target-actor .pipeline-target-secondary'),
+        actorGeometry.target.labels.caption,
+      )
+      expectTextPlacement(
+        view.container.querySelector('#target-actor .pipeline-target-primary'),
+        actorGeometry.target.labels.value,
+      )
+      expectTextPlacement(
+        view.container.querySelector('#target-actor .pipeline-target-failure'),
+        actorGeometry.target.labels.failure,
+      )
+      expectTextPlacement(
+        view.container.querySelectorAll(
+          '#target-actor .pipeline-target-secondary',
+        ).item(2),
+        actorGeometry.target.labels.state,
+      )
+
+      const throttlerMetrics = installationMode === 'installed'
+        ? actorGeometry.throttler.metrics.installed
+        : actorGeometry.throttler.metrics.bypass
+      const requestedCaption = view.container.querySelector(
+        '[data-actor-metric="requested-caption"]',
+      )
+      const requestedValue = view.container.querySelector(
+        '[data-actor-metric="requested-value"]',
+      )
+      if (installationMode === 'installed') {
+        expectTextPlacement(
+          requestedCaption,
+          actorGeometry.throttler.metrics.installed.requested.caption,
+        )
+        expectTextPlacement(
+          requestedValue,
+          actorGeometry.throttler.metrics.installed.requested.value,
+        )
+      } else {
+        expect(requestedCaption).toBeNull()
+        expect(requestedValue).toBeNull()
+      }
+      const admittedCaption = view.container.querySelector(
+        '[data-actor-metric="admitted-caption"]',
+      )
+      const admittedValue = view.container.querySelector(
+        '[data-actor-metric="admitted-value"]',
+      )
+      expectTextPlacement(admittedCaption, throttlerMetrics.admitted.caption)
+      expectTextPlacement(admittedValue, throttlerMetrics.admitted.value)
+
+      if (orientation === 'portrait') {
+        const throttler = actorGeometry.throttler
+        const throttlerRight = throttler.bounds.x + throttler.bounds.width
+        const throttlerBottom = throttler.bounds.y + throttler.bounds.height
+        const renderedMetrics = installationMode === 'installed'
+          ? [requestedCaption, requestedValue, admittedCaption, admittedValue]
+          : [admittedCaption, admittedValue]
+        const globalPlacements = renderedMetrics.map(
+          (element) => ({
+            x: Number(element?.getAttribute('x')) + throttler.transform.x,
+            y: Number(element?.getAttribute('y')) + throttler.transform.y,
+            anchor: element?.getAttribute('text-anchor'),
+          }),
+        )
+
+        for (const placement of globalPlacements) {
+          expect(placement.x).toBeGreaterThan(throttlerRight)
+          expect(placement.x).toBeGreaterThan(throttler.ports.output.x)
+          expect(Math.min(
+            ...Object.values(
+              geometry.queues['throttler-to-sender'].metrics,
+            ).filter((value): value is number => value !== 350)
+              .map((queueY) => Math.abs(placement.y - queueY)),
+          )).toBeGreaterThanOrEqual(24)
+          expect(placement.y).toBeLessThan(actorGeometry.sender.title.y)
+          expect(placement.y).toBeLessThan(throttlerBottom)
+          expect(placement.anchor).toBe('start')
+        }
+        expect(globalPlacements.some(({ y }) => y > throttlerBottom))
+          .toBe(false)
+      }
+    },
+  )
+
   it.each(['landscape', 'portrait'] as const)(
     'shows Reader actual rate, capacity, and downstream limitation in %s',
     (orientation) => {
@@ -921,12 +1299,26 @@ describe('PipelineSvg marker wiring', () => {
     }
 
     const throttler = view.container.querySelector('#throttler-actor')!
+    const throttlerGeometry = geometry.actors.throttler
+    if (!('portraitPipe' in throttlerGeometry)) {
+      throw new Error('portrait pipe geometry is missing')
+    }
     expect(throttler.parentElement?.getAttribute('transform'))
-      .toBe(`translate(${geometry.actors.throttler.transform.x} ${geometry.actors.throttler.transform.y})`)
-    expect(throttler.querySelector('[data-connector-side="portrait-input"]'))
-      .not.toBeNull()
-    expect(throttler.querySelector('[data-connector-side="portrait-output"]'))
-      .not.toBeNull()
+      .toBe(`translate(${throttlerGeometry.transform.x} ${throttlerGeometry.transform.y})`)
+    const portraitInput = throttler.querySelector<SVGPathElement>(
+      '[data-connector-side="portrait-input"]',
+    )!
+    const portraitOutput = throttler.querySelector<SVGPathElement>(
+      '[data-connector-side="portrait-output"]',
+    )!
+    expect(portraitInput.getAttribute('d'))
+      .toBe(throttlerGeometry.portraitPipe.input.d)
+    expect(portraitOutput.getAttribute('d'))
+      .toBe(throttlerGeometry.portraitPipe.output.d)
+    expect(portraitInput.getAttribute('d')?.match(/Q/g)).toHaveLength(3)
+    expect(portraitOutput.getAttribute('d')?.match(/Q/g)).toHaveLength(3)
+    expect(portraitInput.getAttribute('d')).not.toMatch(/[CAS]/)
+    expect(portraitOutput.getAttribute('d')).not.toMatch(/[CAS]/)
     expect(throttler.querySelector('[data-connector-side="left"]')).toBeNull()
     expect(throttler.querySelector('[data-connector-side="right"]')).toBeNull()
 
