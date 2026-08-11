@@ -804,6 +804,164 @@ describe('SimulationAdapter', () => {
     adapter.dispose()
   })
 
+  it.each([
+    { readerWorkers: 1, senderWorkers: 1, readBatchSize: 1_000, requestedTps: 250_000, expectedTps: 50_000 },
+    { readerWorkers: 3, senderWorkers: 3, readBatchSize: 5_000, requestedTps: 125_000, expectedTps: 125_000 },
+    { readerWorkers: 7, senderWorkers: 21, readBatchSize: 1_000, requestedTps: 250_000, expectedTps: 250_000 },
+    { readerWorkers: 7, senderWorkers: 32, readBatchSize: 1_000, requestedTps: 250_000, expectedTps: 250_000 },
+    { readerWorkers: 7, senderWorkers: 32, readBatchSize: 25_000, requestedTps: 250_000, expectedTps: 250_000 },
+  ])(
+    'admits $expectedTps TPS with $readerWorkers readers, $senderWorkers senders, and read batches of $readBatchSize',
+    ({ readerWorkers, senderWorkers, readBatchSize, requestedTps, expectedTps }) => {
+      const simulation = new FixedStepSimulation({
+        ...DIRECT_CONFIG,
+        readerWorkers,
+        senderWorkers,
+        requestedTps,
+        readBatchSize,
+        targetDelayMs: 0,
+      }, 40, 100, () => ({
+        kind: 'http-response',
+        statusCode: 200,
+        latencyMs: 10,
+      }))
+
+      for (let step = 0; step < 200; step += 1) simulation.advanceStep()
+      const before = simulation.telemetry(true)
+      for (let step = 0; step < 100; step += 1) simulation.advanceStep()
+      const after = simulation.telemetry(true)
+
+      expect(after.totalTransactions - before.totalTransactions).toBe(expectedTps)
+      if (readerWorkers === 1) expect(after.limitedMs).toBe(0)
+    },
+  )
+
+  it('preserves high-throughput direct handoff through rendezvous q1', () => {
+    const simulation = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      readerWorkers: 5,
+      senderWorkers: 32,
+      requestedTps: 250_000,
+      readBatchSize: 1_000,
+      targetDelayMs: 0,
+    }, 0, 100, () => ({
+      kind: 'http-response',
+      statusCode: 200,
+      latencyMs: 10,
+    }))
+
+    for (let step = 0; step < 200; step += 1) simulation.advanceStep()
+    const before = simulation.telemetry(true)
+    for (let step = 0; step < 100; step += 1) simulation.advanceStep()
+    const after = simulation.telemetry(true)
+
+    expect(after.totalTransactions - before.totalTransactions).toBe(250_000)
+    expect(after.queue1.depthBatches).toBe(0)
+    expect(after.queue1.handoffBatchesTotal).toBeGreaterThan(0)
+    expect(after.limitedMs).toBe(0)
+  })
+
+  it('bounds buffered admission to the pre-step FIFO set', () => {
+    const attempts: SimulationAttemptContext[] = []
+    const simulation = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      readerWorkers: 7,
+      senderWorkers: 32,
+      requestedTps: 0,
+      readBatchSize: 1_000,
+    }, 4, 0, (context) => {
+      attempts.push(context)
+      return { kind: 'http-response', statusCode: 200, latencyMs: 10 }
+    })
+
+    simulation.advanceStep()
+    simulation.advanceStep()
+    const before = simulation.telemetry(true)
+    expect(before.queue1.depthBatches).toBe(4)
+
+    simulation.updateConfig({ throttlerInstallationMode: 'bypass' })
+    simulation.advanceStep()
+    const after = simulation.telemetry(true)
+
+    expect(after.queue1.dequeuedBatchesTotal - before.queue1.dequeuedBatchesTotal)
+      .toBe(before.queue1.depthBatches)
+    expect(after.queue1.enqueuedBatchesTotal).toBeGreaterThan(
+      before.queue1.enqueuedBatchesTotal,
+    )
+    expect(attempts.map(({ batch }) => [batch.sequence, batch.identity]))
+      .toEqual([
+        [0, 'http-batch-0'],
+        [1, 'http-batch-1'],
+        [2, 'http-batch-2'],
+        [3, 'http-batch-3'],
+      ])
+  })
+
+  it('counts limited time only for installed token-gate rejection', () => {
+    const closed = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      requestedTps: 0,
+    }, 4, 100)
+    const partial = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      readerWorkers: 7,
+      senderWorkers: 32,
+      requestedTps: 125_000,
+      targetDelayMs: 0,
+    }, 40, 100)
+    const closedRendezvous = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      requestedTps: 0,
+    }, 0, 100)
+    const fullyOpen = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      readerWorkers: 5,
+      senderWorkers: 32,
+      requestedTps: 250_000,
+      targetDelayMs: 0,
+    }, 40, 100)
+    const saturatedBypass = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      readerWorkers: 7,
+      senderWorkers: 1,
+      requestedTps: 0,
+      throttlerInstallationMode: 'bypass',
+      targetDelayMs: 2_000,
+    }, 4, 10)
+    const saturatedInstalled = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      readerWorkers: 1,
+      senderWorkers: 1,
+      requestedTps: 250_000,
+      targetDelayMs: 40,
+      targetErrorRatePercent: 100,
+    }, 4, 10)
+
+    for (let step = 0; step < 300; step += 1) {
+      closed.advanceStep()
+      partial.advanceStep()
+      closedRendezvous.advanceStep()
+      fullyOpen.advanceStep()
+      saturatedBypass.advanceStep()
+      saturatedInstalled.advanceStep()
+    }
+
+    expect(closed.telemetry(true).limitedMs).toBeGreaterThan(0)
+    expect(partial.telemetry(true).limitedMs).toBeGreaterThan(0)
+    expect(closedRendezvous.telemetry(true).limitedMs).toBeGreaterThan(0)
+    expect(fullyOpen.telemetry(true).limitedMs).toBe(0)
+    expect(saturatedBypass.telemetry(true)).toMatchObject({
+      limitedMs: 0,
+      queue1: { blockedSenders: 1 },
+      queue2: { blockedSenders: 1 },
+    })
+    expect(saturatedInstalled.telemetry(true)).toMatchObject({
+      limitedMs: 0,
+      queue1: { blockedSenders: 1 },
+      queue2: { blockedSenders: 1 },
+    })
+  })
+
   it('uses all exact deterministic jitter buckets without PRNG state', () => {
     expect([4, 0, 1, 2, 3].map((sequence) =>
       deterministicRetryDelayMs(sequence, 1),
@@ -1350,6 +1508,8 @@ describe('SimulationAdapter', () => {
     const paused = adapter.getSnapshot()
     await vi.advanceTimersByTimeAsync(1_000)
     expect(adapter.getSnapshot()).toBe(paused)
+    expect(adapter.getSnapshot().throttler.limitedMs)
+      .toBe(paused.throttler.limitedMs)
     expect(paused.sender.retryAttemptsStartedTotal).toBe(0)
 
     await adapter.dispatch({ type: 'run' })

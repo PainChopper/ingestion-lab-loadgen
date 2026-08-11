@@ -173,6 +173,15 @@ interface StepActivity {
   terminalFailedTransactions: number
 }
 
+interface AdmissionResult {
+  queue2Blocked: boolean
+  tokenLimited: boolean
+}
+
+interface ReaderProductionResult extends AdmissionResult {
+  queue1Blocked: boolean
+}
+
 type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
 
 interface SenderWorker {
@@ -508,23 +517,21 @@ export class FixedStepSimulation {
     this.finalizeSenderScaleDown()
     this.refillThrottlerTokens()
     this.drainQueue2(activity)
-    const queue2Blocked = this.flushThrottlerBuffer(activity)
-    this.receiveQueue1(activity)
-    const queue1Blocked = this.produceReaderBatches(activity)
+    let queue2Blocked = this.flushThrottlerBuffer(activity)
+    const admission = this.receiveQueue1(activity)
+    queue2Blocked ||= admission.queue2Blocked
+    const production = this.produceReaderBatches(activity)
+    queue2Blocked ||= production.queue2Blocked
 
     this.queue1.observeBlocked(
-      queue1Blocked,
+      production.queue1Blocked,
       activity.queue1.inputBatches > 0 || activity.queue1.handoffBatches > 0,
     )
     this.queue2.observeBlocked(
       queue2Blocked,
       activity.queue2.inputBatches > 0 || activity.queue2.handoffBatches > 0,
     )
-    if (
-      this.config.requestedTps > this.readerCapacityTps ||
-      queue1Blocked ||
-      queue2Blocked
-    ) {
+    if (admission.tokenLimited || production.tokenLimited) {
       this.limitedMs += FIXED_STEP_MS
     }
 
@@ -843,11 +850,13 @@ export class FixedStepSimulation {
       this.throttlerTokens = 0
       return
     }
+    const refill = this.config.requestedTps * FIXED_STEP_MS / 1_000
     const headTransactions = this.queue1.peek() ?? this.config.readBatchSize
-    const tokenCapacity = Math.max(headTransactions, this.config.readBatchSize)
+    const tokenCapacity = Math.max(headTransactions, this.config.readBatchSize) +
+      refill
     this.throttlerTokens = Math.min(
       tokenCapacity,
-      this.throttlerTokens + this.config.requestedTps * FIXED_STEP_MS / 1_000,
+      this.throttlerTokens + refill,
     )
   }
 
@@ -881,9 +890,12 @@ export class FixedStepSimulation {
         worker.batch = batch
         worker.hadAmbiguousOutcome = false
         this.startAttempt(worker, 1, activity)
-      } else if (!this.queue2.enqueue(batch, activity.queue2)) {
-        blocked = true
-        break
+      } else {
+        if (!this.queue2.enqueue(batch, activity.queue2)) {
+          blocked = true
+          break
+        }
+        this.drainQueue2(activity)
       }
       this.throttlerBufferedTransactions -= batch.transactions
       this.pendingHttpBatch = null
@@ -901,56 +913,110 @@ export class FixedStepSimulation {
     }
   }
 
-  private receiveQueue1(activity: StepActivity): void {
-    if (
-      this.pendingHttpBatch !== null ||
-      this.throttlerBufferedTransactions >= this.config.httpBatchSize
-    ) {
-      return
-    }
-    const transactions = this.queue1.peek()
-    if (transactions === null) return
+  private receiveQueue1(activity: StepActivity): AdmissionResult {
+    const availableBatches = this.queue1.depthBatches
     const installed = this.config.throttlerInstallationMode === 'installed'
-    if (installed && this.throttlerTokens < transactions) return
-    const received = this.queue1.dequeue(activity.queue1)
-    if (received === null) return
-    if (installed) this.throttlerTokens -= received
-    this.throttlerBufferedTransactions += received
+    for (let batchIndex = 0; batchIndex < availableBatches; batchIndex += 1) {
+      if (this.pendingHttpBatch !== null) break
+      if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
+        const queue2Blocked = this.flushThrottlerBuffer(activity)
+        if (queue2Blocked) return { queue2Blocked: true, tokenLimited: false }
+      }
+
+      const transactions = this.queue1.peek()
+      if (transactions === null) break
+      if (installed && this.throttlerTokens < transactions) {
+        return { queue2Blocked: false, tokenLimited: true }
+      }
+
+      const received = this.queue1.dequeue(activity.queue1)
+      if (received === null) break
+      if (installed) this.throttlerTokens -= received
+      this.throttlerBufferedTransactions += received
+
+      if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
+        const queue2Blocked = this.flushThrottlerBuffer(activity)
+        if (queue2Blocked) return { queue2Blocked: true, tokenLimited: false }
+      }
+    }
+    return { queue2Blocked: false, tokenLimited: false }
   }
 
-  private produceReaderBatches(activity: StepActivity): boolean {
+  private produceReaderBatches(activity: StepActivity): ReaderProductionResult {
     const transactions = this.config.readBatchSize
     this.readerTransactionCredit = Math.min(
       this.config.readerWorkers * transactions,
       this.readerTransactionCredit +
         this.readerCapacityTps * FIXED_STEP_MS / 1_000,
     )
-    if (this.readerTransactionCredit < transactions) return false
+    if (this.readerTransactionCredit < transactions) {
+      return {
+        queue1Blocked: false,
+        queue2Blocked: false,
+        tokenLimited: false,
+      }
+    }
 
     while (this.readerTransactionCredit >= transactions) {
       if (this.queue1.capacity.applied === 0) {
+        if (this.pendingHttpBatch !== null) {
+          return {
+            queue1Blocked: true,
+            queue2Blocked: true,
+            tokenLimited: false,
+          }
+        }
+        if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
+          const queue2Blocked = this.flushThrottlerBuffer(activity)
+          if (queue2Blocked) {
+            return {
+              queue1Blocked: true,
+              queue2Blocked: true,
+              tokenLimited: false,
+            }
+          }
+        }
         if (
-          this.throttlerBufferedTransactions !== 0 ||
-          (
-            this.config.throttlerInstallationMode === 'installed' &&
-            this.throttlerTokens < transactions
-          )
+          this.config.throttlerInstallationMode === 'installed' &&
+          this.throttlerTokens < transactions
         ) {
-          return true
+          return {
+            queue1Blocked: true,
+            queue2Blocked: false,
+            tokenLimited: true,
+          }
         }
         this.queue1.handoff(transactions, activity.queue1)
         if (this.config.throttlerInstallationMode === 'installed') {
           this.throttlerTokens -= transactions
         }
         this.throttlerBufferedTransactions += transactions
+        if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
+          const queue2Blocked = this.flushThrottlerBuffer(activity)
+          if (queue2Blocked) {
+            return {
+              queue1Blocked: true,
+              queue2Blocked: true,
+              tokenLimited: false,
+            }
+          }
+        }
       } else if (!this.queue1.enqueue(transactions, activity.queue1)) {
-        return true
+        return {
+          queue1Blocked: true,
+          queue2Blocked: false,
+          tokenLimited: false,
+        }
       }
 
       this.readerTransactionCredit -= transactions
     }
 
-    return false
+    return {
+      queue1Blocked: false,
+      queue2Blocked: false,
+      tokenLimited: false,
+    }
   }
 
   private startAttempt(
