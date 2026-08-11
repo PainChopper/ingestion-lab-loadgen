@@ -224,6 +224,9 @@ function freezeSnapshot(
         'ms',
       ),
       workerStates: Object.freeze({ ...telemetry.sender.workerStates }),
+      workerSlots: Object.freeze(
+        telemetry.sender.workerSlots.map((slot) => Object.freeze({ ...slot })),
+      ),
       retryPolicy: RETRY_POLICY,
       attemptedTps: Math.round(telemetry.attemptedTransactionsPerSecond),
       retryAttemptedTps: Math.round(
