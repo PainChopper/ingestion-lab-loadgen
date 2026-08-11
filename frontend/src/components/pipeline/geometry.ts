@@ -7,6 +7,26 @@ export interface Point {
   readonly y: number
 }
 
+export type RoundedPathCommand =
+  | { readonly kind: 'horizontal'; readonly x: number }
+  | { readonly kind: 'vertical'; readonly y: number }
+  | {
+    readonly kind: 'quadratic'
+    readonly control: Point
+    readonly end: Point
+  }
+
+export interface RoundedPathGeometry {
+  readonly start: Point
+  readonly commands: readonly RoundedPathCommand[]
+  readonly end: Point
+  readonly d: string
+}
+
+export interface TextPlacement extends Point {
+  readonly anchor: 'start' | 'middle' | 'end'
+}
+
 export interface FixedActorBounds {
   readonly x: number
   readonly y: number
@@ -33,6 +53,37 @@ export const PIPELINE_VIEW_BOX_VALUE =
 
 export const FLOW_BASELINE = 415
 export const ACTOR_BOTTOM = 475
+export const PORTRAIT_THROTTLER_LIFT = 48
+
+function roundedPath(
+  start: Point,
+  commands: readonly RoundedPathCommand[],
+): RoundedPathGeometry {
+  let current = start
+  const d = [
+    `M${start.x} ${start.y}`,
+    ...commands.map((command) => {
+      if (command.kind === 'horizontal') {
+        current = { x: command.x, y: current.y }
+        return `H${command.x}`
+      }
+      if (command.kind === 'vertical') {
+        current = { x: current.x, y: command.y }
+        return `V${command.y}`
+      }
+
+      current = command.end
+      return `Q${command.control.x} ${command.control.y} ${command.end.x} ${command.end.y}`
+    }),
+  ].join(' ')
+
+  return {
+    start,
+    commands,
+    end: current,
+    d,
+  }
+}
 
 export const ACTOR_GEOMETRY = Object.freeze({
   reader: {
@@ -44,8 +95,13 @@ export const ACTOR_GEOMETRY = Object.freeze({
       padding: 16,
     } satisfies WorkerActorBounds,
     ports: { output: { x: 150, y: FLOW_BASELINE } satisfies Point },
-    title: { x: 90, y: 38 } satisfies Point,
+    title: { x: 90, y: 38, anchor: 'middle' } satisfies TextPlacement,
     controls: { x: 46, y: 58, width: 88, height: 30 },
+    metrics: {
+      primary: { x: 90, y: 510, anchor: 'middle' } satisfies TextPlacement,
+      secondary: { x: 90, y: 531, anchor: 'middle' } satisfies TextPlacement,
+      status: { x: 90, y: 548, anchor: 'middle' } satisfies TextPlacement,
+    },
   },
   throttler: {
     bounds: {
@@ -58,7 +114,7 @@ export const ACTOR_GEOMETRY = Object.freeze({
       input: { x: 355, y: FLOW_BASELINE } satisfies Point,
       output: { x: 505, y: FLOW_BASELINE } satisfies Point,
     },
-    title: { x: 430, y: 38 } satisfies Point,
+    title: { x: 430, y: 38, anchor: 'middle' } satisfies TextPlacement,
   },
   sender: {
     bounds: {
@@ -72,8 +128,13 @@ export const ACTOR_GEOMETRY = Object.freeze({
       input: { x: 720, y: FLOW_BASELINE } satisfies Point,
       output: { x: 840, y: FLOW_BASELINE } satisfies Point,
     },
-    title: { x: 780, y: 38 } satisfies Point,
+    title: { x: 780, y: 38, anchor: 'middle' } satisfies TextPlacement,
     controls: { x: 736, y: 58, width: 88, height: 30 },
+    metrics: {
+      primary: { x: 780, y: 510, anchor: 'middle' } satisfies TextPlacement,
+      secondary: { x: 780, y: 531, anchor: 'middle' } satisfies TextPlacement,
+      status: { x: 780, y: 548, anchor: 'middle' } satisfies TextPlacement,
+    },
   },
   target: {
     bounds: {
@@ -83,7 +144,7 @@ export const ACTOR_GEOMETRY = Object.freeze({
       height: 245,
     } satisfies FixedActorBounds,
     ports: { input: { x: 930, y: FLOW_BASELINE } satisfies Point },
-    title: { x: 1000, y: 38 } satisfies Point,
+    title: { x: 1000, y: 38, anchor: 'middle' } satisfies TextPlacement,
   },
 })
 
@@ -148,6 +209,26 @@ function landscapeGeometry(contentWidth: number) {
     title: {
       x: ACTOR_GEOMETRY.throttler.title.x + throttlerOffset,
       y: ACTOR_GEOMETRY.throttler.title.y,
+      anchor: ACTOR_GEOMETRY.throttler.title.anchor,
+    },
+    renderTitle: ACTOR_GEOMETRY.throttler.title,
+    metrics: {
+      installed: {
+        requested: {
+          caption: { x: 382, y: 489, anchor: 'middle' } satisfies TextPlacement,
+          value: { x: 382, y: 510, anchor: 'middle' } satisfies TextPlacement,
+        },
+        admitted: {
+          caption: { x: 478, y: 489, anchor: 'middle' } satisfies TextPlacement,
+          value: { x: 478, y: 510, anchor: 'middle' } satisfies TextPlacement,
+        },
+      },
+      bypass: {
+        admitted: {
+          caption: { x: 430, y: 489, anchor: 'middle' } satisfies TextPlacement,
+          value: { x: 430, y: 510, anchor: 'middle' } satisfies TextPlacement,
+        },
+      },
     },
     transform: { x: throttlerOffset, y: 0 },
   }
@@ -169,10 +250,25 @@ function landscapeGeometry(contentWidth: number) {
     title: {
       x: ACTOR_GEOMETRY.sender.title.x + senderOffset,
       y: ACTOR_GEOMETRY.sender.title.y,
+      anchor: ACTOR_GEOMETRY.sender.title.anchor,
     },
     controls: {
       ...ACTOR_GEOMETRY.sender.controls,
       x: ACTOR_GEOMETRY.sender.controls.x + senderOffset,
+    },
+    metrics: {
+      primary: {
+        ...ACTOR_GEOMETRY.sender.metrics.primary,
+        x: ACTOR_GEOMETRY.sender.metrics.primary.x + senderOffset,
+      },
+      secondary: {
+        ...ACTOR_GEOMETRY.sender.metrics.secondary,
+        x: ACTOR_GEOMETRY.sender.metrics.secondary.x + senderOffset,
+      },
+      status: {
+        ...ACTOR_GEOMETRY.sender.metrics.status,
+        x: ACTOR_GEOMETRY.sender.metrics.status.x + senderOffset,
+      },
     },
     markerPoint: { x: 783 + senderOffset, y: 397 },
   }
@@ -190,13 +286,30 @@ function landscapeGeometry(contentWidth: number) {
     title: {
       x: ACTOR_GEOMETRY.target.title.x + targetOffset,
       y: ACTOR_GEOMETRY.target.title.y,
+      anchor: ACTOR_GEOMETRY.target.title.anchor,
     },
     center: { x: 1000 + targetOffset, y: 342 },
     labels: {
-      caption: { x: 1000 + targetOffset, y: 407 },
-      value: { x: 1000 + targetOffset, y: 431 },
-      failure: { x: 1000 + targetOffset, y: 454 },
-      state: { x: 1000 + targetOffset, y: 477 },
+      caption: {
+        x: 1000 + targetOffset,
+        y: 407,
+        anchor: 'middle',
+      } satisfies TextPlacement,
+      value: {
+        x: 1000 + targetOffset,
+        y: 431,
+        anchor: 'middle',
+      } satisfies TextPlacement,
+      failure: {
+        x: 1000 + targetOffset,
+        y: 454,
+        anchor: 'middle',
+      } satisfies TextPlacement,
+      state: {
+        x: 1000 + targetOffset,
+        y: 477,
+        anchor: 'middle',
+      } satisfies TextPlacement,
     },
     markerPoint: { x: 962 + targetOffset, y: FLOW_BASELINE },
   }
@@ -258,9 +371,11 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
   const senderGrid = getPortraitWorkerGridMetrics('sender', senderWorkers)
   const readerTop = 88
   const readerBottom = readerTop + readerGrid.height
-  const throttlerInput = readerBottom + 247
+  const throttlerSlotInput = readerBottom + 247
+  const throttlerInput = throttlerSlotInput - PORTRAIT_THROTTLER_LIFT
   const throttlerOutput = throttlerInput + 193
-  const senderTop = throttlerOutput + 222
+  const throttlerSlotOutput = throttlerSlotInput + 193
+  const senderTop = throttlerSlotOutput + 222
   const senderBottom = senderTop + senderGrid.height
   const targetTop = senderBottom + 170
   const viewBoxHeight = 1160 + readerGrid.height + senderGrid.height
@@ -273,17 +388,24 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       padding: 18,
     } satisfies WorkerActorBounds,
     ports: { output: { x: 240, y: readerBottom } satisfies Point },
-    title: { x: 240, y: 34 } satisfies Point,
+    title: { x: 240, y: 34, anchor: 'middle' } satisfies TextPlacement,
     controls: { x: 196, y: 48, width: 88, height: 30 },
     metrics: {
       primary: {
         x: 240,
         y: readerTop + readerGrid.gridBottom + 22,
-      } satisfies Point,
+        anchor: 'middle',
+      } satisfies TextPlacement,
       secondary: {
         x: 240,
         y: readerTop + readerGrid.gridBottom + 43,
-      } satisfies Point,
+        anchor: 'middle',
+      } satisfies TextPlacement,
+      status: {
+        x: 240,
+        y: readerTop + readerGrid.gridBottom + 60,
+        anchor: 'middle',
+      } satisfies TextPlacement,
     },
     markerPoint: { x: 240, y: (readerTop + readerBottom) / 2 },
   }
@@ -298,7 +420,79 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       input: { x: 240, y: throttlerInput } satisfies Point,
       output: { x: 240, y: throttlerOutput } satisfies Point,
     },
-    title: { x: 240, y: throttlerInput - 15 } satisfies Point,
+    title: {
+      x: 240,
+      y: throttlerInput - 15,
+      anchor: 'middle',
+    } satisfies TextPlacement,
+    renderTitle: { x: 430, y: 267, anchor: 'middle' } satisfies TextPlacement,
+    metrics: {
+      installed: {
+        requested: {
+          caption: { x: 520, y: 337, anchor: 'start' } satisfies TextPlacement,
+          value: { x: 520, y: 358, anchor: 'start' } satisfies TextPlacement,
+        },
+        admitted: {
+          caption: { x: 520, y: 397, anchor: 'start' } satisfies TextPlacement,
+          value: { x: 520, y: 418, anchor: 'start' } satisfies TextPlacement,
+        },
+      },
+      bypass: {
+        admitted: {
+          caption: { x: 520, y: 397, anchor: 'start' } satisfies TextPlacement,
+          value: { x: 520, y: 418, anchor: 'start' } satisfies TextPlacement,
+        },
+      },
+    },
+    portraitPipe: {
+      input: roundedPath(
+        { x: 430, y: 282 },
+        [
+          { kind: 'vertical', y: 306 },
+          {
+            kind: 'quadratic',
+            control: { x: 430, y: 322 },
+            end: { x: 414, y: 322 },
+          },
+          { kind: 'horizontal', x: 390 },
+          {
+            kind: 'quadratic',
+            control: { x: 374, y: 322 },
+            end: { x: 374, y: 338 },
+          },
+          { kind: 'vertical', y: 399 },
+          {
+            kind: 'quadratic',
+            control: { x: 374, y: 415 },
+            end: { x: 390, y: 415 },
+          },
+          { kind: 'horizontal', x: 401 },
+        ],
+      ),
+      output: roundedPath(
+        { x: 459, y: 415 },
+        [
+          { kind: 'horizontal', x: 470 },
+          {
+            kind: 'quadratic',
+            control: { x: 486, y: 415 },
+            end: { x: 486, y: 431 },
+          },
+          { kind: 'vertical', y: 443 },
+          {
+            kind: 'quadratic',
+            control: { x: 486, y: 459 },
+            end: { x: 470, y: 459 },
+          },
+          { kind: 'horizontal', x: 446 },
+          {
+            kind: 'quadratic',
+            control: { x: 430, y: 459 },
+            end: { x: 430, y: 475 },
+          },
+        ],
+      ),
+    },
     transform: { x: -190, y: throttlerInput - 282 } satisfies Point,
   }
   const sender = {
@@ -313,17 +507,28 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       input: { x: 240, y: senderTop } satisfies Point,
       output: { x: 240, y: senderBottom } satisfies Point,
     },
-    title: { x: 240, y: senderTop - 54 } satisfies Point,
+    title: {
+      x: 240,
+      y: senderTop - 54,
+      anchor: 'middle',
+    } satisfies TextPlacement,
     controls: { x: 196, y: senderTop - 40, width: 88, height: 30 },
     metrics: {
       primary: {
         x: 240,
         y: senderTop + senderGrid.gridBottom + 22,
-      } satisfies Point,
+        anchor: 'middle',
+      } satisfies TextPlacement,
       secondary: {
         x: 240,
         y: senderTop + senderGrid.gridBottom + 43,
-      } satisfies Point,
+        anchor: 'middle',
+      } satisfies TextPlacement,
+      status: {
+        x: 240,
+        y: senderTop + senderGrid.gridBottom + 60,
+        anchor: 'middle',
+      } satisfies TextPlacement,
     },
     markerPoint: { x: 240, y: (senderTop + senderBottom) / 2 },
   }
@@ -335,13 +540,33 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       height: 230,
     } satisfies FixedActorBounds,
     ports: { input: { x: 240, y: targetTop } satisfies Point },
-    title: { x: 240, y: targetTop - 17 } satisfies Point,
+    title: {
+      x: 240,
+      y: targetTop - 17,
+      anchor: 'middle',
+    } satisfies TextPlacement,
     center: { x: 240, y: targetTop + 80 } satisfies Point,
     labels: {
-      caption: { x: 240, y: targetTop + 145 } satisfies Point,
-      value: { x: 240, y: targetTop + 169 } satisfies Point,
-      failure: { x: 240, y: targetTop + 193 } satisfies Point,
-      state: { x: 240, y: targetTop + 217 } satisfies Point,
+      caption: {
+        x: 240,
+        y: targetTop + 145,
+        anchor: 'middle',
+      } satisfies TextPlacement,
+      value: {
+        x: 240,
+        y: targetTop + 169,
+        anchor: 'middle',
+      } satisfies TextPlacement,
+      failure: {
+        x: 240,
+        y: targetTop + 193,
+        anchor: 'middle',
+      } satisfies TextPlacement,
+      state: {
+        x: 240,
+        y: targetTop + 217,
+        anchor: 'middle',
+      } satisfies TextPlacement,
     },
     markerPoint: { x: 240, y: targetTop + 43 } satisfies Point,
   }
@@ -362,10 +587,10 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       end: sender.ports.input,
       metrics: {
         x: 350,
-        throughputY: throttlerOutput + 42,
-        depthY: throttlerOutput + 66,
-        waitingY: throttlerOutput + 89,
-        requestY: throttlerOutput + 112,
+        throughputY: throttlerSlotOutput + 42,
+        depthY: throttlerSlotOutput + 66,
+        waitingY: throttlerSlotOutput + 89,
+        requestY: throttlerSlotOutput + 112,
       },
     },
   }

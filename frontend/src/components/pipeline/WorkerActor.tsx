@@ -7,7 +7,7 @@ import type {
   SenderWorkerStateCounts,
   SenderWorkerSlotSnapshot,
 } from '../../model/loadgen'
-import type { Point, WorkerActorBounds } from './geometry'
+import type { Point, TextPlacement, WorkerActorBounds } from './geometry'
 import type { KeyboardEvent } from 'react'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
@@ -20,7 +20,7 @@ export type WorkerActorId = 'reader' | 'sender'
 interface WorkerActorProps {
   actor: WorkerActorId
   title: string
-  titlePoint: Point
+  titlePoint: TextPlacement
   titleTone: 'reader' | 'sender'
   bounds: WorkerActorBounds
   controls: {
@@ -38,10 +38,10 @@ interface WorkerActorProps {
   primaryMetric: string
   secondaryMetric: string
   statusMetric?: string
-  metricPoints?: {
-    readonly primary: Point
-    readonly secondary: Point
-    readonly status?: Point
+  metricPoints: {
+    readonly primary: TextPlacement
+    readonly secondary: TextPlacement
+    readonly status: TextPlacement
   }
   orientation?: PipelineOrientation
   selected: boolean
@@ -147,7 +147,6 @@ export function WorkerActor({
   const workerMin = Math.round(workers.min)
   const workerMax = Math.round(workers.max)
   const workerStep = Math.max(1, Math.round(workers.step))
-  const centerX = bounds.x + bounds.width / 2
   const chipState = (index: number): SenderWorkerState | 'active' | 'inactive' => {
     if (workerSlots === undefined || workerSlots === null) {
       return runState === 'running' ? 'active' : 'inactive'
@@ -168,7 +167,7 @@ export function WorkerActor({
       <text
         x={titlePoint.x}
         y={titlePoint.y}
-        textAnchor="middle"
+        textAnchor={titlePoint.anchor}
         className={`pipeline-title pipeline-title--${titleTone}`}
       >
         {title}
@@ -271,26 +270,26 @@ export function WorkerActor({
           className="pipeline-port"
         />
         <text
-          x={metricPoints?.primary.x ?? centerX}
-          y={metricPoints?.primary.y ?? 510}
-          textAnchor="middle"
+          x={metricPoints.primary.x}
+          y={metricPoints.primary.y}
+          textAnchor={metricPoints.primary.anchor}
           className="pipeline-value pipeline-worker-primary"
         >
           {primaryMetric}
         </text>
         <text
-          x={metricPoints?.secondary.x ?? centerX}
-          y={metricPoints?.secondary.y ?? 531}
-          textAnchor="middle"
+          x={metricPoints.secondary.x}
+          y={metricPoints.secondary.y}
+          textAnchor={metricPoints.secondary.anchor}
           className="pipeline-small pipeline-worker-secondary"
         >
           {secondaryMetric}
         </text>
         {statusMetric && (
           <text
-            x={metricPoints?.status?.x ?? metricPoints?.secondary.x ?? centerX}
-            y={metricPoints?.status?.y ?? (metricPoints?.secondary.y ?? 531) + 17}
-            textAnchor="middle"
+            x={metricPoints.status.x}
+            y={metricPoints.status.y}
+            textAnchor={metricPoints.status.anchor}
             className="pipeline-worker-status"
           >
             {statusMetric}

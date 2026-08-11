@@ -10,6 +10,8 @@ import type {
   ThrottlerInstallationMode,
 } from '../../model/loadgen'
 import { QueueFlowStateDeriver } from '../../model/queueFlowState'
+import { createPipelineGeometry } from './geometry'
+import type { PipelineOrientation } from './pipelineLayout'
 import { ThrottlerActor } from './ThrottlerActor'
 
 function requestedControl(
@@ -38,6 +40,7 @@ function Harness({
   pendingInstallationMode = null,
   modeAccepted = true,
   onModeCommand = vi.fn(),
+  orientation = 'landscape',
 }: {
   control?: NumericControlSnapshot
   accepted?: boolean
@@ -48,11 +51,17 @@ function Harness({
   pendingInstallationMode?: ThrottlerInstallationMode | null
   modeAccepted?: boolean
   onModeCommand?: (value: ThrottlerInstallationMode) => void
+  orientation?: PipelineOrientation
 }) {
   const adapter = new SimulationAdapter()
   const snapshot = new QueueFlowStateDeriver().derive(adapter.getSnapshot(), 0)
   adapter.dispose()
   const [preview, setPreview] = useState<number | null>(null)
+  const geometry = createPipelineGeometry({
+    orientation,
+    readerWorkers: 7,
+    senderWorkers: 32,
+  })
 
   return (
     <svg>
@@ -79,6 +88,8 @@ function Harness({
           onModeCommand(value)
           return modeAccepted
         }}
+        geometry={geometry.actors.throttler}
+        orientation={orientation}
       />
     </svg>
   )

@@ -30,7 +30,7 @@ export function TargetActor({
       <text
         x={geometry.title.x}
         y={geometry.title.y}
-        textAnchor="middle"
+        textAnchor={geometry.title.anchor}
         className="pipeline-title pipeline-title--target"
       >
         TARGET
@@ -64,16 +64,16 @@ export function TargetActor({
         <circle cx={center.x} cy={center.y} r="4" className="pipeline-target-center" />
         <line x1={center.x} y1={center.y - 37} x2={center.x} y2={center.y + 37} className="pipeline-target-ring" />
         <line x1={center.x - 37} y1={center.y} x2={center.x + 37} y2={center.y} className="pipeline-target-ring" />
-        <text x={labels.caption.x} y={labels.caption.y} textAnchor="middle" className="pipeline-small pipeline-target-secondary">
+        <text x={labels.caption.x} y={labels.caption.y} textAnchor={labels.caption.anchor} className="pipeline-small pipeline-target-secondary">
           Accepted TPS
         </text>
-        <text x={labels.value.x} y={labels.value.y} textAnchor="middle" className="pipeline-value pipeline-target-primary">
+        <text x={labels.value.x} y={labels.value.y} textAnchor={labels.value.anchor} className="pipeline-value pipeline-target-primary">
           {formatRate(snapshot.acceptedTps)}
         </text>
-        <text x={labels.failure.x} y={labels.failure.y} textAnchor="middle" className="pipeline-small pipeline-target-secondary pipeline-target-failure">
+        <text x={labels.failure.x} y={labels.failure.y} textAnchor={labels.failure.anchor} className="pipeline-small pipeline-target-secondary pipeline-target-failure">
           {rejectionPercent === '—' ? rejectionPercent : `${rejectionPercent}%`} 503 rate · {rejectedTps} rejected tx/s
         </text>
-        <text x={labels.state.x} y={labels.state.y} textAnchor="middle" className="pipeline-small pipeline-target-secondary">
+        <text x={labels.state.x} y={labels.state.y} textAnchor={labels.state.anchor} className="pipeline-small pipeline-target-secondary">
           {snapshot.connectionState}
         </text>
       </g>

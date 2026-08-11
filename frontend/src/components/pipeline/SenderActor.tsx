@@ -41,7 +41,7 @@ export function SenderActor({
       outputPort={geometry.ports.output}
       primaryMetric={formatRate(snapshot.attemptedTps)}
       secondaryMetric={workerSummary}
-      metricPoints={'metrics' in geometry ? geometry.metrics : undefined}
+      metricPoints={geometry.metrics}
       orientation={orientation}
       selected={selected}
       onSelect={onSelect}

@@ -184,15 +184,15 @@ describe('marker paths', () => {
       getMarkerStagePathGeometry(stage, queue1, queue2, 11, geometry)
     )
     expect(paths[1].start).toEqual({ x: 240, y: 246 })
-    expect(paths[1].end).toEqual({ x: 240, y: 493 })
-    expect(paths[2].start).toEqual({ x: 240, y: 493 })
-    expect(paths[2].end).toEqual({ x: 240, y: 686 })
+    expect(paths[1].end).toEqual({ x: 240, y: 445 })
+    expect(paths[2].start).toEqual({ x: 240, y: 445 })
+    expect(paths[2].end).toEqual({ x: 240, y: 638 })
     expect(paths[5].end).toEqual({ x: 240, y: 1258 })
 
     const valve = getValveMarkerPathGeometry(5, geometry)
-    expect(valve.points).toContainEqual({ x: 192, y: 626 })
-    expect(valve.points).toContainEqual({ x: 288, y: 626 })
-    expect(valve.points.some((point) => point.y > 626)).toBe(true)
+    expect(valve.points).toContainEqual({ x: 192, y: 578 })
+    expect(valve.points).toContainEqual({ x: 288, y: 578 })
+    expect(valve.points.some((point) => point.y > 578)).toBe(true)
   })
 
   it.each([1120, 1440, 1920])(
