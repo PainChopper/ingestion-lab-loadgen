@@ -223,7 +223,7 @@ describe('PipelineSvg marker wiring', () => {
         target: {
           ...base.target,
           acceptedTps: 245_000,
-          failedTps: 5_000,
+          rejectedTps: 5_000,
           errorRatePercent: {
             ...base.target.errorRatePercent,
             applied: 2,
@@ -244,9 +244,9 @@ describe('PipelineSvg marker wiring', () => {
 
       expect(target.textContent).toContain('245,000 tx/s')
       expect(target.textContent).toContain(
-        '2% failures · 5,000 failed tx/s',
+        '2% 503 rate · 5,000 rejected tx/s',
       )
-      expect(target.textContent).not.toContain('7% failures')
+      expect(target.textContent).not.toContain('7% 503 rate')
       expect(target.textContent).toContain('connected')
       expect(geometry.actors.target.labels.state.y).toBeLessThan(boundsBottom)
     },
@@ -255,8 +255,8 @@ describe('PipelineSvg marker wiring', () => {
   it('preserves unknown and measured zero target failure telemetry', () => {
     const base = activeSnapshot()
     const cases = [
-      { applied: null, failedTps: null, expected: '— failures · — failed tx/s' },
-      { applied: 0, failedTps: 0, expected: '0% failures · 0 failed tx/s' },
+      { applied: null, rejectedTps: null, expected: '— 503 rate · — rejected tx/s' },
+      { applied: 0, rejectedTps: 0, expected: '0% 503 rate · 0 rejected tx/s' },
     ] as const
 
     for (const testCase of cases) {
@@ -264,7 +264,7 @@ describe('PipelineSvg marker wiring', () => {
         ...base,
         target: {
           ...base.target,
-          failedTps: testCase.failedTps,
+          rejectedTps: testCase.rejectedTps,
           errorRatePercent: {
             ...base.target.errorRatePercent,
             applied: testCase.applied,
@@ -1057,6 +1057,91 @@ describe('PipelineSvg marker wiring', () => {
     assertTypography('#requested-display', '14px', '650')
     assertTypography('.pipeline-valve-opening-label', '13px', '800')
     assertTypography('.pipeline-queue-handle__value', '11px', '750')
+  })
+
+  it.each(['landscape', 'portrait'] as const)(
+    'renders deterministic Sender in-flight, backoff, and idle states in %s',
+    (orientation) => {
+      const base = activeSnapshot()
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        sender: {
+          ...base.sender,
+          workerStates: { idle: 1, inFlight: 1, backoff: 1 },
+          inFlightRequests: 1,
+        },
+      }
+      const view = renderPipeline(snapshot, orientation)
+      const sender = view.container.querySelector('#sender-actor')!
+
+      expect(sender.textContent).toContain('1 in-flight · 1 backoff')
+      expect(sender.getAttribute('aria-label'))
+        .toBe('Inspect sender, 1 idle, 1 in-flight, 1 backoff')
+      expect(sender.querySelectorAll('.pipeline-worker--in-flight'))
+        .toHaveLength(1)
+      expect(sender.querySelectorAll('.pipeline-worker--backoff'))
+        .toHaveLength(1)
+      expect(sender.querySelectorAll('.pipeline-worker--idle')).toHaveLength(1)
+      expect(
+        getComputedStyle(
+          sender.querySelector('.pipeline-worker--backoff .pipeline-worker-led')!,
+        ).fill,
+      ).toBe('var(--yellow)')
+    },
+  )
+
+  it('shows timeout as a status without synthetic HTTP 504', () => {
+    const base = activeSnapshot()
+    const snapshot: LoadgenSnapshot = {
+      ...base,
+      http: {
+        ...base.http,
+        statusCode: null,
+        lastOutcome: 'timeout',
+        throughputTps: 1_000,
+        inFlightRequests: 0,
+      },
+    }
+    const view = renderPipeline(snapshot)
+    const http = view.container.querySelector('#http-link')!
+
+    expect(http.classList).toContain('pipeline-http--error')
+    expect(http.querySelector('.pipeline-http-status')?.textContent)
+      .toBe('TIMEOUT')
+    expect(http.textContent).not.toContain('504')
+  })
+
+  it('keeps reduced-motion outcomes static without scale or glow', () => {
+    const snapshot = activeSnapshot()
+    const markers: MarkerLifecycleSnapshot = {
+      revision: 1,
+      reducedMotion: true,
+      motionElapsedMs: 0,
+      valveOpeningIndex: 11,
+      markers: [{
+        slotId: 'pipeline-marker-1',
+        familyId: 'transaction-family-1',
+        state: 'active',
+        stage: 'target',
+        phase: 1,
+        queued: false,
+        outcome: 'error',
+        outcomeVisible: true,
+        pulseProgress: 0.8,
+      }],
+    }
+    const view = render(
+      <svg><PipelineMarkers snapshot={snapshot} markers={markers} /></svg>,
+    )
+    const marker = view.container.querySelector<SVGCircleElement>(
+      '.pipeline-marker--outcome',
+    )!
+
+    expect(marker.getAttribute('r')).toBe('4')
+    expect(marker.style.filter).toBe('')
+    expect(marker.style.opacity).toBe('')
+    expect(marker.dataset.markerJitterX).toBe('0')
+    expect(marker.dataset.markerJitterY).toBe('0')
   })
 
   it('hides and neutralizes an idle stale HTTP 503', () => {

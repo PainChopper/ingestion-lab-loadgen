@@ -11,6 +11,11 @@ import type {
 import {
   FIXED_STEP_MS,
   FixedStepSimulation,
+  RETRY_BACKOFF_BASE_MS,
+  RETRY_BACKOFF_MULTIPLIER,
+  RETRY_JITTER_PERCENT,
+  RETRY_MAX_ATTEMPTS,
+  RETRYABLE_STATUS_CODES,
   SNAPSHOT_INTERVAL_MS,
 } from '../model/simulation'
 import type {
@@ -20,6 +25,14 @@ import type {
 } from '../model/simulation'
 
 const TARGET_ENDPOINT = 'http://target:8080/ingest'
+const RETRY_POLICY = Object.freeze({
+  maxAttempts: RETRY_MAX_ATTEMPTS,
+  backoffBaseMs: RETRY_BACKOFF_BASE_MS,
+  backoffMultiplier: RETRY_BACKOFF_MULTIPLIER,
+  jitterPercent: RETRY_JITTER_PERCENT,
+  retryableStatusCodes: Object.freeze([...RETRYABLE_STATUS_CODES]),
+  retryTimeouts: true,
+})
 
 const CONTROL_RANGES = Object.freeze({
   readerWorkers: Object.freeze({ min: 1, max: 7, step: 1 }),
@@ -194,9 +207,11 @@ function freezeSnapshot(
     sender: Object.freeze({
       id: 'sender',
       workers: numericControl(
-        config.senderWorkers,
+        telemetry.sender.workers.applied,
         CONTROL_RANGES.senderWorkers,
         'workers',
+        telemetry.sender.workers.preview,
+        telemetry.sender.workers.pending,
       ),
       httpBatchSize: numericControl(
         config.httpBatchSize,
@@ -208,26 +223,49 @@ function freezeSnapshot(
         CONTROL_RANGES.httpTimeoutMs,
         'ms',
       ),
+      workerStates: Object.freeze({ ...telemetry.sender.workerStates }),
+      retryPolicy: RETRY_POLICY,
       attemptedTps: Math.round(telemetry.attemptedTransactionsPerSecond),
+      retryAttemptedTps: Math.round(
+        telemetry.sender.retryAttemptedTransactionsPerSecond,
+      ),
+      terminalFailedTps: Math.round(
+        telemetry.sender.terminalFailedTransactionsPerSecond,
+      ),
       inFlightRequests: telemetry.http.inFlightRequests,
+      attemptsStartedTotal: telemetry.http.requestsStartedTotal,
+      retryAttemptsStartedTotal:
+        telemetry.sender.retryAttemptsStartedTotal,
       successfulResponses: telemetry.http.requestsSucceededTotal,
-      failedResponses: telemetry.http.requestsFailedTotal,
-      retries: 0,
+      failedResponses: telemetry.http.responsesRejectedTotal,
+      retries: telemetry.sender.retryAttemptsStartedTotal,
+      timeoutsTotal: telemetry.http.requestsTimedOutTotal,
+      terminalFailedBatchesTotal:
+        telemetry.sender.terminalFailedBatchesTotal,
+      terminalFailedTransactionsTotal:
+        telemetry.sender.terminalFailedTransactionsTotal,
+      ambiguousTimeoutTransactionsTotal:
+        telemetry.sender.ambiguousTimeoutTransactionsTotal,
+      duplicateRiskTransactionsTotal:
+        telemetry.sender.duplicateRiskTransactionsTotal,
+      ambiguousTerminalTransactionsTotal:
+        telemetry.sender.ambiguousTerminalTransactionsTotal,
       state: state.runState,
     }),
     http: Object.freeze({
       id: 'http',
       connectionState: 'connected',
-      statusCode: running ? telemetry.http.latestStatusCode : null,
+      statusCode: telemetry.http.latestStatusCode,
+      lastOutcome: telemetry.http.lastOutcome,
       throughputTps: Math.round(telemetry.http.startedTransactionsPerSecond),
       inFlightRequests: telemetry.http.inFlightRequests,
       requestsStartedTotal: telemetry.http.requestsStartedTotal,
       requestsCompletedTotal: telemetry.http.requestsCompletedTotal,
       requestsSucceededTotal: telemetry.http.requestsSucceededTotal,
       requestsFailedTotal: telemetry.http.requestsFailedTotal,
-      latencyP95Ms: running
-        ? Math.min(config.targetDelayMs + 5, config.httpTimeoutMs)
-        : 0,
+      requestsTimedOutTotal: telemetry.http.requestsTimedOutTotal,
+      networkErrorsTotal: telemetry.http.networkErrorsTotal,
+      latencyP95Ms: telemetry.http.latestLatencyMs ?? (running ? null : 0),
     }),
     target: Object.freeze({
       id: 'target',
@@ -243,17 +281,11 @@ function freezeSnapshot(
         '%',
       ),
       acceptedTps: Math.round(telemetry.acceptedTransactionsPerSecond),
-      failedTps: Math.max(
-        0,
-        Math.round(
-          telemetry.http.completedTransactionsPerSecond -
-            telemetry.http.succeededTransactionsPerSecond,
-        ),
-      ),
-      latencyP95Ms: running ? config.targetDelayMs + 5 : 0,
+      rejectedTps: Math.round(telemetry.rejectedTransactionsPerSecond),
+      latencyP95Ms:
+        telemetry.http.latestResponseLatencyMs ?? (running ? null : 0),
       http200Responses: telemetry.http.requestsSucceededTotal,
-      http503Responses:
-        telemetry.http.requestsFailedTotal - telemetry.http.requestsTimedOutTotal,
+      http503Responses: simulation.http503ResponsesTotal,
       connectionState: 'connected',
     }),
   })
@@ -333,6 +365,14 @@ export class SimulationAdapter implements LoadgenAdapter {
         }
         break
       case 'reset':
+        if (this.state.runState === 'running') {
+          return this.reject(commandId, command, {
+            code: 'invalid-state',
+            message: 'reset is only available while idle or paused',
+            retryable: false,
+            details: null,
+          })
+        }
         changed = this.resetRunState()
         break
       case 'set-requested-tps':

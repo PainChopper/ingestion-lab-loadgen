@@ -256,6 +256,24 @@
   opacity: 0.34;
 }
 
+.pipeline-worker--idle {
+  opacity: 0.34;
+}
+
+.pipeline-worker--backoff .pipeline-worker-chip {
+  fill: color-mix(in srgb, var(--yellow) 14%, #0b314a);
+  stroke: var(--yellow);
+}
+
+.pipeline-worker--backoff .pipeline-worker-chip-pin,
+.pipeline-worker--backoff .pipeline-worker-wave {
+  stroke: var(--yellow);
+}
+
+.pipeline-worker--backoff .pipeline-worker-led {
+  fill: var(--yellow);
+}
+
 .pipeline-valve-flow-line {
   stroke: var(--pipeline-valve-flow-color);
   stroke-linecap: round;
@@ -678,6 +696,11 @@
   stroke-width: 2;
 }
 
+.pipeline-marker-layer[data-reduced-motion='true'] .pipeline-marker {
+  filter: none;
+  transition: none;
+}
+
 .pipeline-queue-handle {
   cursor: ns-resize;
   outline: none;
@@ -815,7 +838,4 @@
     transition: none;
   }
 
-  .pipeline-marker-layer[data-reduced-motion='true'] .pipeline-marker {
-    transition: none;
-  }
 }

@@ -120,6 +120,7 @@ export function markerTelemetryFromSnapshot(
       requestsCompletedTotal: snapshot.http.requestsCompletedTotal,
       requestsSucceededTotal: snapshot.http.requestsSucceededTotal,
       requestsFailedTotal: snapshot.http.requestsFailedTotal,
+      retryAttemptsStartedTotal: snapshot.sender.retryAttemptsStartedTotal,
       connectionError:
         snapshot.http.connectionState === 'error' ||
         snapshot.http.connectionState === 'disconnected',

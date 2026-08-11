@@ -138,32 +138,117 @@ export function getInspectorViewModel(
           { label: 'Limited time', value: formatMilliseconds(snapshot.throttler.limitedMs) },
         ],
       }
-    case 'sender':
+    case 'sender': {
+      const policy = snapshot.sender.retryPolicy
+      const policyValue = policy === null
+        ? '—'
+        : `${formatInteger(policy.maxAttempts)} attempts · ` +
+          `${formatInteger(policy.backoffBaseMs)}/` +
+          `${formatInteger(
+            policy.backoffBaseMs * policy.backoffMultiplier,
+          )} ms · ±${formatInteger(policy.jitterPercent)}% deterministic jitter`
       return {
         id: selectedId,
         title: 'SENDER',
         kind: 'HTTP client',
         rows: [
+          {
+            label: 'Workers',
+            value: snapshot.sender.workers.pending === null
+              ? `${formatInteger(snapshot.sender.workers.applied)} applied`
+              : `${formatInteger(snapshot.sender.workers.applied)} applied · ` +
+                `${formatInteger(snapshot.sender.workers.pending)} pending`,
+          },
+          {
+            label: 'Worker states',
+            value:
+              `${formatInteger(snapshot.sender.workerStates.idle)} idle · ` +
+              `${formatInteger(snapshot.sender.workerStates.inFlight)} in-flight · ` +
+              `${formatInteger(snapshot.sender.workerStates.backoff)} backoff`,
+          },
           { label: 'Attempted TPS', value: formatRate(snapshot.sender.attemptedTps) },
+          { label: 'Retry TPS', value: formatRate(snapshot.sender.retryAttemptedTps) },
+          {
+            label: 'Terminal failed TPS',
+            value: formatRate(snapshot.sender.terminalFailedTps),
+          },
           { label: 'In-flight', value: formatInteger(snapshot.sender.inFlightRequests) },
-          { label: 'Successes', value: formatInteger(snapshot.sender.successfulResponses) },
-          { label: 'Failures', value: formatInteger(snapshot.sender.failedResponses) },
-          { label: 'Retries', value: formatInteger(snapshot.sender.retries) },
+          {
+            label: 'Backoff',
+            value: formatInteger(snapshot.sender.workerStates.backoff),
+          },
+          {
+            label: 'Attempts',
+            value: formatInteger(snapshot.sender.attemptsStartedTotal),
+          },
+          {
+            label: 'Retry attempts',
+            value: formatInteger(snapshot.sender.retryAttemptsStartedTotal),
+          },
+          {
+            label: '2xx responses',
+            value: formatInteger(snapshot.sender.successfulResponses),
+          },
+          {
+            label: 'Rejected responses',
+            value: formatInteger(snapshot.sender.failedResponses),
+          },
+          {
+            label: 'Timeouts',
+            value: formatInteger(snapshot.sender.timeoutsTotal),
+          },
+          {
+            label: 'Terminal failed batches',
+            value: formatInteger(snapshot.sender.terminalFailedBatchesTotal),
+          },
+          {
+            label: 'Terminal failed transactions',
+            value: formatInteger(snapshot.sender.terminalFailedTransactionsTotal),
+          },
+          {
+            label: 'Ambiguous timeout transactions',
+            value: formatInteger(
+              snapshot.sender.ambiguousTimeoutTransactionsTotal,
+            ),
+          },
+          {
+            label: 'Duplicate-risk transactions',
+            value: formatInteger(snapshot.sender.duplicateRiskTransactionsTotal),
+          },
+          {
+            label: 'Ambiguous terminal transactions',
+            value: formatInteger(
+              snapshot.sender.ambiguousTerminalTransactionsTotal,
+            ),
+          },
+          { label: 'Retry policy', value: policyValue },
         ],
       }
-    case 'target':
+    }
+    case 'target': {
+      const configured503Rate = formatInteger(
+        snapshot.target.errorRatePercent.applied,
+      )
       return {
         id: selectedId,
         title: 'TARGET',
         kind: snapshot.target.endpoint ?? 'HTTP endpoint',
         rows: [
+          {
+            label: '503 rate',
+            value: configured503Rate === '—'
+              ? configured503Rate
+              : `${configured503Rate}%`,
+          },
           { label: 'Accepted TPS', value: formatRate(snapshot.target.acceptedTps) },
+          { label: 'Rejected TPS', value: formatRate(snapshot.target.rejectedTps) },
           { label: 'p95 latency', value: formatMilliseconds(snapshot.target.latencyP95Ms) },
           { label: 'HTTP 200', value: formatInteger(snapshot.target.http200Responses) },
           { label: 'HTTP 503', value: formatInteger(snapshot.target.http503Responses) },
           { label: 'Connection', value: formatStateLabel(snapshot.target.connectionState) },
         ],
       }
+    }
     case 'reader-to-throttler':
       return queueViewModel(snapshot.queue1)
     case 'throttler-to-sender':
@@ -177,13 +262,36 @@ export function getInspectorViewModel(
           {
             label: 'Status',
             value:
-              snapshot.http.statusCode === null
-                ? '—'
-                : `HTTP ${formatInteger(snapshot.http.statusCode)}`,
+              snapshot.http.lastOutcome === 'timeout'
+                ? 'TIMEOUT'
+                : snapshot.http.lastOutcome === 'network-error'
+                  ? 'NETWORK ERROR'
+                  : snapshot.http.statusCode === null
+                    ? '—'
+                    : `HTTP ${formatInteger(snapshot.http.statusCode)}`,
           },
           { label: 'Connection', value: formatStateLabel(snapshot.http.connectionState) },
           { label: 'Throughput', value: formatRate(snapshot.http.throughputTps) },
           { label: 'In-flight', value: formatInteger(snapshot.http.inFlightRequests) },
+          {
+            label: 'Attempts',
+            value: formatInteger(snapshot.http.requestsStartedTotal),
+          },
+          {
+            label: 'Rejected responses',
+            value: formatInteger(
+              Math.max(
+                0,
+                snapshot.http.requestsFailedTotal -
+                  snapshot.http.requestsTimedOutTotal -
+                  snapshot.http.networkErrorsTotal,
+              ),
+            ),
+          },
+          {
+            label: 'Timeouts',
+            value: formatInteger(snapshot.http.requestsTimedOutTotal),
+          },
           { label: 'p95 latency', value: formatMilliseconds(snapshot.http.latencyP95Ms) },
         ],
       }

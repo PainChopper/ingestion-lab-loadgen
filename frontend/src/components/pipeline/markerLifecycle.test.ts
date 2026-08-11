@@ -103,6 +103,7 @@ function telemetry(
       requestsCompletedTotal: 0,
       requestsSucceededTotal: 0,
       requestsFailedTotal: 0,
+      retryAttemptsStartedTotal: 0,
       connectionError: false,
       ...options.http,
     },
@@ -1312,5 +1313,106 @@ describe('MarkerLifecycleController', () => {
       outcome: 'error',
       outcomeVisible: true,
     })
+  })
+
+  it('projects retry attempts from Sender without reverse q2 movement', () => {
+    const empty = telemetry({
+      queue1: {
+        depthBatches: 0,
+        throughputTps: 0,
+        dequeueActive: false,
+        enqueuedBatchesTotal: 0,
+        dequeuedBatchesTotal: 0,
+      },
+      queue2: {
+        depthBatches: 0,
+        throughputTps: 0,
+        dequeueActive: false,
+        enqueuedBatchesTotal: 12,
+        dequeuedBatchesTotal: 12,
+      },
+    })
+    const controller = new MarkerLifecycleController(empty)
+    expect(flow(controller)).toHaveLength(0)
+
+    controller.reconcile(telemetry({
+      queue1: empty.queue1,
+      queue2: empty.queue2,
+      http: {
+        inFlightRequests: 1,
+        requestsStartedTotal: 1,
+        retryAttemptsStartedTotal: 1,
+      },
+    }))
+    const retry = flow(controller).find((marker) => marker.retryAttempt === true)!
+    expect(retry).toMatchObject({
+      stage: 'sender',
+      phase: 0,
+      retryAttempt: true,
+    })
+    expect(flow(controller).some((marker) =>
+      marker.retryAttempt === true && marker.stage === 'queue2'
+    )).toBe(false)
+
+    advanceUntil(controller, () => {
+      const current = controller.getSnapshot().markers.find(
+        (marker) => marker.slotId === retry.slotId,
+      )!
+      return current.stage === 'target' && current.phase === 1
+    })
+    controller.reconcile(telemetry({
+      queue1: empty.queue1,
+      queue2: empty.queue2,
+      http: {
+        requestsStartedTotal: 1,
+        requestsCompletedTotal: 1,
+        requestsFailedTotal: 1,
+        retryAttemptsStartedTotal: 1,
+      },
+    }))
+    expect(controller.getSnapshot().markers.find(
+      (marker) => marker.slotId === retry.slotId,
+    )).toMatchObject({
+      stage: 'target',
+      outcome: 'error',
+      outcomeVisible: true,
+      retryAttempt: true,
+    })
+  })
+
+  it('drops excess retry projection when the shared marker pool is full', () => {
+    const empty = telemetry({
+      queue1: {
+        depthBatches: 0,
+        throughputTps: 0,
+        dequeueActive: false,
+        enqueuedBatchesTotal: 0,
+        dequeuedBatchesTotal: 0,
+      },
+      queue2: {
+        depthBatches: 0,
+        throughputTps: 0,
+        dequeueActive: false,
+        enqueuedBatchesTotal: 0,
+        dequeuedBatchesTotal: 0,
+      },
+    })
+    const controller = new MarkerLifecycleController(empty)
+    controller.reconcile(telemetry({
+      queue1: empty.queue1,
+      queue2: empty.queue2,
+      http: {
+        inFlightRequests: 99,
+        requestsStartedTotal: 99,
+        retryAttemptsStartedTotal: 99,
+      },
+    }))
+
+    expect(controller.getSnapshot().markers).toHaveLength(MAX_PIPELINE_MARKERS)
+    expect(flow(controller)).toHaveLength(MAX_PIPELINE_MARKERS)
+    expect(flow(controller).every((marker) => marker.retryAttempt === true))
+      .toBe(true)
+    expect(flow(controller).every((marker) => marker.stage === 'sender'))
+      .toBe(true)
   })
 })

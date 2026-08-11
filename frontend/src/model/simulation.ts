@@ -1,10 +1,29 @@
-import type { QueueTrend, ThrottlerInstallationMode } from './loadgen'
+import type {
+  HttpLastOutcome,
+  QueueTrend,
+  SenderWorkerStateCounts,
+  ThrottlerInstallationMode,
+} from './loadgen'
 
 export const FIXED_STEP_MS = 10
 export const SNAPSHOT_INTERVAL_MS = 100
+export const RETRY_MAX_ATTEMPTS = 3
+export const RETRY_BACKOFF_BASE_MS = 250
+export const RETRY_BACKOFF_MULTIPLIER = 2
+export const RETRY_JITTER_PERCENT = 20
+export const RETRYABLE_STATUS_CODES = Object.freeze([
+  408,
+  425,
+  429,
+  500,
+  502,
+  503,
+  504,
+])
 
 const RATE_WINDOW_STEPS = 100
 const READER_TRANSACTIONS_PER_WORKER_SECOND = 50_000
+const RETRY_JITTER_FACTORS = [0.8, 0.9, 1, 1.1, 1.2] as const
 
 export interface SimulationConfig {
   readerWorkers: number
@@ -49,14 +68,33 @@ export interface HttpTelemetry {
   readonly requestsCompletedTotal: number
   readonly requestsSucceededTotal: number
   readonly requestsFailedTotal: number
+  readonly responsesRejectedTotal: number
   readonly requestsTimedOutTotal: number
+  readonly networkErrorsTotal: number
   readonly successfulTransactionsTotal: number
-  readonly failedTransactionsTotal: number
+  readonly failedAttemptTransactionsTotal: number
   readonly inFlightRequests: number
   readonly startedTransactionsPerSecond: number
   readonly completedTransactionsPerSecond: number
   readonly succeededTransactionsPerSecond: number
+  readonly rejectedTransactionsPerSecond: number
   readonly latestStatusCode: number | null
+  readonly lastOutcome: HttpLastOutcome
+  readonly latestLatencyMs: number | null
+  readonly latestResponseLatencyMs: number | null
+}
+
+export interface SenderTelemetry {
+  readonly workers: CapacityTelemetry
+  readonly workerStates: SenderWorkerStateCounts
+  readonly retryAttemptsStartedTotal: number
+  readonly retryAttemptedTransactionsPerSecond: number
+  readonly terminalFailedTransactionsPerSecond: number
+  readonly terminalFailedBatchesTotal: number
+  readonly terminalFailedTransactionsTotal: number
+  readonly ambiguousTimeoutTransactionsTotal: number
+  readonly duplicateRiskTransactionsTotal: number
+  readonly ambiguousTerminalTransactionsTotal: number
 }
 
 export interface SimulationTelemetry {
@@ -68,10 +106,46 @@ export interface SimulationTelemetry {
   readonly admittedTransactionsPerSecond: number
   readonly attemptedTransactionsPerSecond: number
   readonly acceptedTransactionsPerSecond: number
+  readonly rejectedTransactionsPerSecond: number
   readonly queue1: QueueTelemetry
   readonly queue2: QueueTelemetry
+  readonly sender: SenderTelemetry
   readonly http: HttpTelemetry
 }
+
+export interface SimulationBatch {
+  readonly sequence: number
+  readonly identity: string
+  readonly transactions: number
+}
+
+export interface SimulationAttemptContext {
+  readonly batch: SimulationBatch
+  readonly attempt: number
+  readonly startedAtMs: number
+  readonly targetDelayMs: number
+  readonly targetErrorRatePercent: number
+  readonly httpTimeoutMs: number
+}
+
+export type SimulationAttemptOutcome =
+  | {
+      readonly kind: 'http-response'
+      readonly statusCode: number
+      readonly latencyMs: number
+    }
+  | {
+      readonly kind: 'timeout'
+      readonly latencyMs: number
+    }
+  | {
+      readonly kind: 'network-error'
+      readonly latencyMs: number
+    }
+
+export type SimulationAttemptOutcomeSource = (
+  context: SimulationAttemptContext,
+) => SimulationAttemptOutcome
 
 interface QueueActivity {
   inputBatches: number
@@ -85,14 +159,26 @@ interface StepActivity {
   queue1: QueueActivity
   queue2: QueueActivity
   httpStartedTransactions: number
+  httpRetryStartedTransactions: number
   httpCompletedTransactions: number
   httpSucceededTransactions: number
+  httpRejectedTransactions: number
+  terminalFailedTransactions: number
 }
 
-interface InFlightRequest {
-  readonly completeAtMs: number
-  readonly transactions: number
-  readonly outcome: 'success' | 'failure' | 'timeout'
+type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
+
+interface SenderWorker {
+  readonly ordinal: number
+  retiring: boolean
+  state: SenderWorkerState
+  batch: SimulationBatch | null
+  attempt: number
+  completeAtMs: number
+  retryAtMs: number
+  outcome: SimulationAttemptOutcome | null
+  attemptLatencyMs: number
+  hadAmbiguousOutcome: boolean
 }
 
 function createQueueActivity(): QueueActivity {
@@ -110,13 +196,49 @@ function createStepActivity(): StepActivity {
     queue1: createQueueActivity(),
     queue2: createQueueActivity(),
     httpStartedTransactions: 0,
+    httpRetryStartedTransactions: 0,
     httpCompletedTransactions: 0,
     httpSucceededTransactions: 0,
+    httpRejectedTransactions: 0,
+    terminalFailedTransactions: 0,
   }
 }
 
-class StatefulQueue {
-  private readonly items: number[] = []
+function createWorker(ordinal: number): SenderWorker {
+  return {
+    ordinal,
+    retiring: false,
+    state: 'idle',
+    batch: null,
+    attempt: 0,
+    completeAtMs: 0,
+    retryAtMs: 0,
+    outcome: null,
+    attemptLatencyMs: 0,
+    hadAmbiguousOutcome: false,
+  }
+}
+
+function roundedStepDuration(durationMs: number): number {
+  const finiteDuration = Number.isFinite(durationMs) ? durationMs : FIXED_STEP_MS
+  return Math.ceil(Math.max(0, finiteDuration) / FIXED_STEP_MS) * FIXED_STEP_MS
+}
+
+export function deterministicRetryDelayMs(
+  batchSequence: number,
+  retryNumber: 1 | 2,
+): number {
+  const nominal = RETRY_BACKOFF_BASE_MS *
+    RETRY_BACKOFF_MULTIPLIER ** (retryNumber - 1)
+  const factorIndex = ((batchSequence + retryNumber) %
+    RETRY_JITTER_FACTORS.length + RETRY_JITTER_FACTORS.length) %
+    RETRY_JITTER_FACTORS.length
+  return roundedStepDuration(nominal * RETRY_JITTER_FACTORS[factorIndex])
+}
+
+class StatefulQueue<TItem> {
+  private readonly items: TItem[] = []
+  private readonly transactionsOf: (item: TItem) => number
   private appliedCapacity: number
   private previewCapacity: number | null = null
   private pendingCapacity: number | null = null
@@ -130,8 +252,12 @@ class StatefulQueue {
   blockedMsTotal = 0
   blockedSenders = 0
 
-  constructor(capacity: number) {
+  constructor(
+    capacity: number,
+    transactionsOf: (item: TItem) => number,
+  ) {
     this.appliedCapacity = capacity
+    this.transactionsOf = transactionsOf
   }
 
   get depthBatches(): number {
@@ -139,7 +265,10 @@ class StatefulQueue {
   }
 
   get queuedTransactions(): number {
-    return this.items.reduce((total, transactions) => total + transactions, 0)
+    return this.items.reduce(
+      (total, item) => total + this.transactionsOf(item),
+      0,
+    )
   }
 
   get capacity(): CapacityTelemetry {
@@ -175,30 +304,30 @@ class StatefulQueue {
     return true
   }
 
-  peek(): number | null {
+  peek(): TItem | null {
     return this.items[0] ?? null
   }
 
-  enqueue(transactions: number, activity: QueueActivity): boolean {
+  enqueue(item: TItem, activity: QueueActivity): boolean {
     if (this.appliedCapacity === 0 || this.depthBatches >= this.appliedCapacity) {
       return false
     }
-    this.items.push(transactions)
-    this.recordInput(transactions, activity)
+    this.items.push(item)
+    this.recordInput(item, activity)
     return true
   }
 
-  dequeue(activity: QueueActivity): number | null {
-    const transactions = this.items.shift()
-    if (transactions === undefined) return null
-    this.recordOutput(transactions, activity)
+  dequeue(activity: QueueActivity): TItem | null {
+    const item = this.items.shift()
+    if (item === undefined) return null
+    this.recordOutput(item, activity)
     this.applyPendingCapacity()
-    return transactions
+    return item
   }
 
-  handoff(transactions: number, activity: QueueActivity): void {
-    this.recordInput(transactions, activity)
-    this.recordOutput(transactions, activity)
+  handoff(item: TItem, activity: QueueActivity): void {
+    this.recordInput(item, activity)
+    this.recordOutput(item, activity)
     this.handoffBatchesTotal += 1
     activity.handoffBatches += 1
   }
@@ -213,14 +342,21 @@ class StatefulQueue {
     } else {
       this.blockedForMs = 0
     }
-
   }
 
-  telemetry(activity: QueueActivity, rateSeconds: number, running: boolean): QueueTelemetry {
-    const inputBatchesPerSecond = rateSeconds === 0 ? 0 : activity.inputBatches / rateSeconds
-    const outputBatchesPerSecond = rateSeconds === 0 ? 0 : activity.outputBatches / rateSeconds
-    const inputTransactionsPerSecond = rateSeconds === 0 ? 0 : activity.inputTransactions / rateSeconds
-    const outputTransactionsPerSecond = rateSeconds === 0 ? 0 : activity.outputTransactions / rateSeconds
+  telemetry(
+    activity: QueueActivity,
+    rateSeconds: number,
+    running: boolean,
+  ): QueueTelemetry {
+    const inputBatchesPerSecond =
+      rateSeconds === 0 ? 0 : activity.inputBatches / rateSeconds
+    const outputBatchesPerSecond =
+      rateSeconds === 0 ? 0 : activity.outputBatches / rateSeconds
+    const inputTransactionsPerSecond =
+      rateSeconds === 0 ? 0 : activity.inputTransactions / rateSeconds
+    const outputTransactionsPerSecond =
+      rateSeconds === 0 ? 0 : activity.outputTransactions / rateSeconds
     const trend: QueueTrend = !running
       ? 'steady'
       : inputTransactionsPerSecond > outputTransactionsPerSecond
@@ -266,14 +402,16 @@ class StatefulQueue {
     this.blockedSenders = 0
   }
 
-  private recordInput(transactions: number, activity: QueueActivity): void {
+  private recordInput(item: TItem, activity: QueueActivity): void {
+    const transactions = this.transactionsOf(item)
     this.enqueuedBatchesTotal += 1
     this.enqueuedTransactionsTotal += transactions
     activity.inputBatches += 1
     activity.inputTransactions += transactions
   }
 
-  private recordOutput(transactions: number, activity: QueueActivity): void {
+  private recordOutput(item: TItem, activity: QueueActivity): void {
+    const transactions = this.transactionsOf(item)
     this.dequeuedBatchesTotal += 1
     this.dequeuedTransactionsTotal += transactions
     activity.outputBatches += 1
@@ -295,22 +433,39 @@ class StatefulQueue {
 export class FixedStepSimulation {
   readonly config: SimulationConfig
 
-  private readonly queue1: StatefulQueue
-  private readonly queue2: StatefulQueue
+  private readonly queue1: StatefulQueue<number>
+  private readonly queue2: StatefulQueue<SimulationBatch>
   private readonly activities: StepActivity[] = []
-  private readonly inFlight: InFlightRequest[] = []
+  private readonly attemptOutcomeSource:
+    | SimulationAttemptOutcomeSource
+    | undefined
+  private workers: SenderWorker[]
   private readerTransactionCredit = 0
   private throttlerTokens = 0
   private throttlerBufferedTransactions = 0
+  private pendingHttpBatch: SimulationBatch | null = null
+  private nextBatchSequence = 0
   private failureCredit = 0
   private latestStatusCode: number | null = null
+  private lastOutcome: HttpLastOutcome = null
+  private latestLatencyMs: number | null = null
+  private latestResponseLatencyMs: number | null = null
   private requestStartedTotal = 0
+  private retryAttemptStartedTotal = 0
   private requestCompletedTotal = 0
   private requestSucceededTotal = 0
   private requestFailedTotal = 0
+  private responseRejectedTotal = 0
   private requestTimedOutTotal = 0
+  private networkErrorTotal = 0
+  private http503ResponseTotal = 0
   private successfulTransactionsTotal = 0
-  private failedTransactionsTotal = 0
+  private failedAttemptTransactionsTotal = 0
+  private terminalFailedBatchesTotal = 0
+  private terminalFailedTransactionsTotal = 0
+  private ambiguousTimeoutTransactionsTotal = 0
+  private duplicateRiskTransactionsTotal = 0
+  private ambiguousTerminalTransactionsTotal = 0
   private elapsedMs = 0
   private limitedMs = 0
 
@@ -318,17 +473,28 @@ export class FixedStepSimulation {
     config: SimulationConfig,
     queue1Capacity: number,
     queue2Capacity: number,
+    attemptOutcomeSource?: SimulationAttemptOutcomeSource,
   ) {
     this.config = { ...config }
-    this.queue1 = new StatefulQueue(queue1Capacity)
-    this.queue2 = new StatefulQueue(queue2Capacity)
+    this.queue1 = new StatefulQueue(queue1Capacity, (transactions) => transactions)
+    this.queue2 = new StatefulQueue(
+      queue2Capacity,
+      (batch) => batch.transactions,
+    )
+    this.attemptOutcomeSource = attemptOutcomeSource
+    this.workers = Array.from(
+      { length: config.senderWorkers },
+      (_, ordinal) => createWorker(ordinal),
+    )
   }
 
   advanceStep(): void {
     this.elapsedMs += FIXED_STEP_MS
     const activity = createStepActivity()
 
-    this.completeRequests(activity)
+    this.completeDueAttempts(activity)
+    this.startDueRetries(activity)
+    this.finalizeSenderScaleDown()
     this.refillThrottlerTokens()
     this.drainQueue2(activity)
     const queue2Blocked = this.flushThrottlerBuffer(activity)
@@ -356,7 +522,11 @@ export class FixedStepSimulation {
   }
 
   updateConfig(values: Partial<SimulationConfig>): void {
+    const senderWorkers = values.senderWorkers
     Object.assign(this.config, values)
+    if (senderWorkers !== undefined) {
+      this.requestSenderWorkerCount(senderWorkers)
+    }
     if (
       values.requestedTps === 0 ||
       values.throttlerInstallationMode !== undefined
@@ -381,19 +551,36 @@ export class FixedStepSimulation {
     this.queue1.resetRuntime()
     this.queue2.resetRuntime()
     this.activities.length = 0
-    this.inFlight.length = 0
+    this.workers = Array.from(
+      { length: this.config.senderWorkers },
+      (_, ordinal) => createWorker(ordinal),
+    )
     this.readerTransactionCredit = 0
     this.throttlerTokens = 0
     this.throttlerBufferedTransactions = 0
+    this.pendingHttpBatch = null
+    this.nextBatchSequence = 0
     this.failureCredit = 0
     this.latestStatusCode = null
+    this.lastOutcome = null
+    this.latestLatencyMs = null
+    this.latestResponseLatencyMs = null
     this.requestStartedTotal = 0
+    this.retryAttemptStartedTotal = 0
     this.requestCompletedTotal = 0
     this.requestSucceededTotal = 0
     this.requestFailedTotal = 0
+    this.responseRejectedTotal = 0
     this.requestTimedOutTotal = 0
+    this.networkErrorTotal = 0
+    this.http503ResponseTotal = 0
     this.successfulTransactionsTotal = 0
-    this.failedTransactionsTotal = 0
+    this.failedAttemptTransactionsTotal = 0
+    this.terminalFailedBatchesTotal = 0
+    this.terminalFailedTransactionsTotal = 0
+    this.ambiguousTimeoutTransactionsTotal = 0
+    this.duplicateRiskTransactionsTotal = 0
+    this.ambiguousTerminalTransactionsTotal = 0
     this.elapsedMs = 0
     this.limitedMs = 0
   }
@@ -404,6 +591,7 @@ export class FixedStepSimulation {
     const queue1 = this.queue1.telemetry(aggregate.queue1, rateSeconds, running)
     const queue2 = this.queue2.telemetry(aggregate.queue2, rateSeconds, running)
     const divisor = rateSeconds === 0 ? 1 : rateSeconds
+    const workerStates = this.workerStateCounts
 
     return {
       elapsedMs: this.elapsedMs,
@@ -412,21 +600,52 @@ export class FixedStepSimulation {
       readerCapacityTps: this.readerCapacityTps,
       readerTransactionsPerSecond: queue1.inputTransactionsPerSecond,
       admittedTransactionsPerSecond: queue1.outputTransactionsPerSecond,
-      attemptedTransactionsPerSecond: queue2.outputTransactionsPerSecond,
+      attemptedTransactionsPerSecond: running
+        ? aggregate.httpStartedTransactions / divisor
+        : 0,
       acceptedTransactionsPerSecond: running
         ? aggregate.httpSucceededTransactions / divisor
         : 0,
+      rejectedTransactionsPerSecond: running
+        ? aggregate.httpRejectedTransactions / divisor
+        : 0,
       queue1,
       queue2,
+      sender: {
+        workers: {
+          applied: this.workers.length,
+          preview: null,
+          pending: this.workers.length === this.config.senderWorkers
+            ? null
+            : this.config.senderWorkers,
+        },
+        workerStates,
+        retryAttemptsStartedTotal: this.retryAttemptStartedTotal,
+        retryAttemptedTransactionsPerSecond: running
+          ? aggregate.httpRetryStartedTransactions / divisor
+          : 0,
+        terminalFailedTransactionsPerSecond: running
+          ? aggregate.terminalFailedTransactions / divisor
+          : 0,
+        terminalFailedBatchesTotal: this.terminalFailedBatchesTotal,
+        terminalFailedTransactionsTotal: this.terminalFailedTransactionsTotal,
+        ambiguousTimeoutTransactionsTotal:
+          this.ambiguousTimeoutTransactionsTotal,
+        duplicateRiskTransactionsTotal: this.duplicateRiskTransactionsTotal,
+        ambiguousTerminalTransactionsTotal:
+          this.ambiguousTerminalTransactionsTotal,
+      },
       http: {
         requestsStartedTotal: this.requestStartedTotal,
         requestsCompletedTotal: this.requestCompletedTotal,
         requestsSucceededTotal: this.requestSucceededTotal,
         requestsFailedTotal: this.requestFailedTotal,
+        responsesRejectedTotal: this.responseRejectedTotal,
         requestsTimedOutTotal: this.requestTimedOutTotal,
+        networkErrorsTotal: this.networkErrorTotal,
         successfulTransactionsTotal: this.successfulTransactionsTotal,
-        failedTransactionsTotal: this.failedTransactionsTotal,
-        inFlightRequests: this.inFlight.length,
+        failedAttemptTransactionsTotal: this.failedAttemptTransactionsTotal,
+        inFlightRequests: workerStates.inFlight,
         startedTransactionsPerSecond: running
           ? aggregate.httpStartedTransactions / divisor
           : 0,
@@ -436,39 +655,163 @@ export class FixedStepSimulation {
         succeededTransactionsPerSecond: running
           ? aggregate.httpSucceededTransactions / divisor
           : 0,
+        rejectedTransactionsPerSecond: running
+          ? aggregate.httpRejectedTransactions / divisor
+          : 0,
         latestStatusCode: this.latestStatusCode,
+        lastOutcome: this.lastOutcome,
+        latestLatencyMs: this.latestLatencyMs,
+        latestResponseLatencyMs: this.latestResponseLatencyMs,
       },
     }
+  }
+
+  get http503ResponsesTotal(): number {
+    return this.http503ResponseTotal
   }
 
   private get readerCapacityTps(): number {
     return this.config.readerWorkers * READER_TRANSACTIONS_PER_WORKER_SECOND
   }
 
-  private completeRequests(activity: StepActivity): void {
-    let writeIndex = 0
-    for (const request of this.inFlight) {
-      if (request.completeAtMs > this.elapsedMs) {
-        this.inFlight[writeIndex] = request
-        writeIndex += 1
+  private get workerStateCounts(): SenderWorkerStateCounts {
+    let inFlight = 0
+    let backoff = 0
+    for (const worker of this.workers) {
+      if (worker.state === 'in-flight') inFlight += 1
+      if (worker.state === 'backoff') backoff += 1
+    }
+    return {
+      idle: this.workers.length - inFlight - backoff,
+      inFlight,
+      backoff,
+    }
+  }
+
+  private completeDueAttempts(activity: StepActivity): void {
+    for (const worker of this.workers) {
+      if (
+        worker.state !== 'in-flight' ||
+        worker.completeAtMs > this.elapsedMs
+      ) {
         continue
       }
-
-      this.requestCompletedTotal += 1
-      activity.httpCompletedTransactions += request.transactions
-      if (request.outcome === 'success') {
-        this.requestSucceededTotal += 1
-        this.successfulTransactionsTotal += request.transactions
-        activity.httpSucceededTransactions += request.transactions
-        this.latestStatusCode = 200
-      } else {
-        this.requestFailedTotal += 1
-        this.failedTransactionsTotal += request.transactions
-        if (request.outcome === 'timeout') this.requestTimedOutTotal += 1
-        this.latestStatusCode = request.outcome === 'timeout' ? 504 : 503
-      }
+      this.completeAttempt(worker, activity)
     }
-    this.inFlight.length = writeIndex
+  }
+
+  private completeAttempt(
+    worker: SenderWorker,
+    activity: StepActivity,
+  ): void {
+    const batch = worker.batch
+    const outcome = worker.outcome
+    if (batch === null || outcome === null) {
+      throw new Error('in-flight worker must own a batch and outcome')
+    }
+
+    this.requestCompletedTotal += 1
+    activity.httpCompletedTransactions += batch.transactions
+    this.latestLatencyMs = worker.attemptLatencyMs
+
+    if (outcome.kind === 'http-response') {
+      this.lastOutcome = 'http-response'
+      this.latestStatusCode = outcome.statusCode
+      this.latestResponseLatencyMs = worker.attemptLatencyMs
+      if (outcome.statusCode >= 200 && outcome.statusCode < 300) {
+        this.requestSucceededTotal += 1
+        this.successfulTransactionsTotal += batch.transactions
+        activity.httpSucceededTransactions += batch.transactions
+        this.releaseWorker(worker)
+        return
+      }
+
+      this.requestFailedTotal += 1
+      this.responseRejectedTotal += 1
+      this.failedAttemptTransactionsTotal += batch.transactions
+      activity.httpRejectedTransactions += batch.transactions
+      if (outcome.statusCode === 503) this.http503ResponseTotal += 1
+      if (
+        RETRYABLE_STATUS_CODES.includes(outcome.statusCode) &&
+        worker.attempt < RETRY_MAX_ATTEMPTS
+      ) {
+        this.scheduleRetry(worker)
+        return
+      }
+      this.failTerminally(worker, activity)
+      return
+    }
+
+    this.requestFailedTotal += 1
+    this.failedAttemptTransactionsTotal += batch.transactions
+    this.latestStatusCode = null
+    worker.hadAmbiguousOutcome = true
+    if (outcome.kind === 'timeout') {
+      this.lastOutcome = 'timeout'
+      this.requestTimedOutTotal += 1
+      this.ambiguousTimeoutTransactionsTotal += batch.transactions
+    } else {
+      this.lastOutcome = 'network-error'
+      this.networkErrorTotal += 1
+    }
+
+    if (worker.attempt < RETRY_MAX_ATTEMPTS) {
+      this.scheduleRetry(worker)
+      return
+    }
+    this.failTerminally(worker, activity)
+  }
+
+  private scheduleRetry(worker: SenderWorker): void {
+    const batch = worker.batch
+    if (batch === null || worker.attempt >= RETRY_MAX_ATTEMPTS) {
+      throw new Error('retry requires an owned batch and remaining attempt')
+    }
+    const retryNumber = worker.attempt as 1 | 2
+    worker.state = 'backoff'
+    worker.retryAtMs =
+      this.elapsedMs + deterministicRetryDelayMs(batch.sequence, retryNumber)
+    worker.completeAtMs = 0
+    worker.outcome = null
+    worker.attemptLatencyMs = 0
+  }
+
+  private failTerminally(
+    worker: SenderWorker,
+    activity: StepActivity,
+  ): void {
+    const batch = worker.batch
+    if (batch === null) throw new Error('terminal failure requires owned batch')
+    this.terminalFailedBatchesTotal += 1
+    this.terminalFailedTransactionsTotal += batch.transactions
+    activity.terminalFailedTransactions += batch.transactions
+    if (worker.hadAmbiguousOutcome) {
+      this.ambiguousTerminalTransactionsTotal += batch.transactions
+    }
+    this.releaseWorker(worker)
+  }
+
+  private releaseWorker(worker: SenderWorker): void {
+    worker.state = 'idle'
+    worker.batch = null
+    worker.attempt = 0
+    worker.completeAtMs = 0
+    worker.retryAtMs = 0
+    worker.outcome = null
+    worker.attemptLatencyMs = 0
+    worker.hadAmbiguousOutcome = false
+  }
+
+  private startDueRetries(activity: StepActivity): void {
+    for (const worker of this.workers) {
+      if (
+        worker.state !== 'backoff' ||
+        worker.retryAtMs > this.elapsedMs
+      ) {
+        continue
+      }
+      this.startAttempt(worker, worker.attempt + 1, activity)
+    }
   }
 
   private refillThrottlerTokens(): void {
@@ -485,35 +828,61 @@ export class FixedStepSimulation {
   }
 
   private drainQueue2(activity: StepActivity): void {
-    while (this.availableRequestSlots > 0) {
-      const transactions = this.queue2.dequeue(activity.queue2)
-      if (transactions === null) return
-      this.startRequest(transactions, activity)
+    for (const worker of this.workers) {
+      if (worker.retiring || worker.state !== 'idle') continue
+      const batch = this.queue2.dequeue(activity.queue2)
+      if (batch === null) return
+      worker.batch = batch
+      worker.hadAmbiguousOutcome = false
+      this.startAttempt(worker, 1, activity)
     }
   }
 
   private flushThrottlerBuffer(activity: StepActivity): boolean {
     let blocked = false
-    while (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
-      const transactions = this.config.httpBatchSize
+    while (
+      this.pendingHttpBatch !== null ||
+      this.throttlerBufferedTransactions >= this.config.httpBatchSize
+    ) {
+      const batch = this.pendingHttpBatch ?? this.createHttpBatch()
+      this.pendingHttpBatch = batch
       if (this.queue2.capacity.applied === 0) {
-        if (this.availableRequestSlots === 0) {
+        const worker = this.nextIdleWorker()
+        if (worker === null) {
           blocked = true
           break
         }
-        this.queue2.handoff(transactions, activity.queue2)
-        this.startRequest(transactions, activity)
-      } else if (!this.queue2.enqueue(transactions, activity.queue2)) {
+        this.queue2.handoff(batch, activity.queue2)
+        worker.batch = batch
+        worker.hadAmbiguousOutcome = false
+        this.startAttempt(worker, 1, activity)
+      } else if (!this.queue2.enqueue(batch, activity.queue2)) {
         blocked = true
         break
       }
-      this.throttlerBufferedTransactions -= transactions
+      this.throttlerBufferedTransactions -= batch.transactions
+      this.pendingHttpBatch = null
     }
     return blocked
   }
 
+  private createHttpBatch(): SimulationBatch {
+    const sequence = this.nextBatchSequence
+    this.nextBatchSequence += 1
+    return {
+      sequence,
+      identity: 'http-batch-' + sequence,
+      transactions: this.config.httpBatchSize,
+    }
+  }
+
   private receiveQueue1(activity: StepActivity): void {
-    if (this.throttlerBufferedTransactions !== 0) return
+    if (
+      this.pendingHttpBatch !== null ||
+      this.throttlerBufferedTransactions >= this.config.httpBatchSize
+    ) {
+      return
+    }
     const transactions = this.queue1.peek()
     if (transactions === null) return
     const installed = this.config.throttlerInstallationMode === 'installed'
@@ -559,21 +928,60 @@ export class FixedStepSimulation {
     return false
   }
 
-  private startRequest(transactions: number, activity: StepActivity): void {
-    const targetLatencyMs = this.config.targetDelayMs + 5
-    const timedOut = targetLatencyMs > this.config.httpTimeoutMs
-    const latencyMs = timedOut ? this.config.httpTimeoutMs : targetLatencyMs
-    const outcome = timedOut
-      ? 'timeout'
-      : this.nextRequestFails()
-        ? 'failure'
-        : 'success'
-    const completeAtMs =
-      this.elapsedMs + Math.ceil(latencyMs / FIXED_STEP_MS) * FIXED_STEP_MS
+  private startAttempt(
+    worker: SenderWorker,
+    attempt: number,
+    activity: StepActivity,
+  ): void {
+    const batch = worker.batch
+    if (batch === null) throw new Error('attempt requires an owned batch')
+    const context: SimulationAttemptContext = {
+      batch,
+      attempt,
+      startedAtMs: this.elapsedMs,
+      targetDelayMs: this.config.targetDelayMs,
+      targetErrorRatePercent: this.config.targetErrorRatePercent,
+      httpTimeoutMs: this.config.httpTimeoutMs,
+    }
+    const selected = this.attemptOutcomeSource?.(context) ??
+      this.defaultAttemptOutcome(context)
+    const latencyMs = roundedStepDuration(selected.latencyMs)
+    const outcome = selected.kind === 'http-response'
+      ? { ...selected, latencyMs }
+      : { ...selected, latencyMs }
 
-    this.inFlight.push({ completeAtMs, transactions, outcome })
+    worker.state = 'in-flight'
+    worker.attempt = attempt
+    worker.completeAtMs = this.elapsedMs + latencyMs
+    worker.retryAtMs = 0
+    worker.outcome = outcome
+    worker.attemptLatencyMs = latencyMs
     this.requestStartedTotal += 1
-    activity.httpStartedTransactions += transactions
+    activity.httpStartedTransactions += batch.transactions
+    if (attempt > 1) {
+      this.retryAttemptStartedTotal += 1
+      activity.httpRetryStartedTransactions += batch.transactions
+      if (worker.hadAmbiguousOutcome) {
+        this.duplicateRiskTransactionsTotal += batch.transactions
+      }
+    }
+  }
+
+  private defaultAttemptOutcome(
+    context: SimulationAttemptContext,
+  ): SimulationAttemptOutcome {
+    const targetLatencyMs = context.targetDelayMs + 5
+    if (targetLatencyMs > context.httpTimeoutMs) {
+      return {
+        kind: 'timeout',
+        latencyMs: context.httpTimeoutMs,
+      }
+    }
+    return {
+      kind: 'http-response',
+      statusCode: this.nextRequestFails() ? 503 : 200,
+      latencyMs: targetLatencyMs,
+    }
   }
 
   private nextRequestFails(): boolean {
@@ -583,11 +991,45 @@ export class FixedStepSimulation {
     return true
   }
 
-  private get availableRequestSlots(): number {
-    return Math.max(
-      0,
-      this.config.senderWorkers - this.inFlight.length,
-    )
+  private nextIdleWorker(): SenderWorker | null {
+    return this.workers.find(
+      (worker) => !worker.retiring && worker.state === 'idle',
+    ) ?? null
+  }
+
+  private requestSenderWorkerCount(requested: number): void {
+    this.workers.forEach((worker) => {
+      worker.retiring = false
+    })
+    if (requested > this.workers.length) {
+      const firstOrdinal = this.workers.length
+      for (let ordinal = firstOrdinal; ordinal < requested; ordinal += 1) {
+        this.workers.push(createWorker(ordinal))
+      }
+      return
+    }
+    if (requested === this.workers.length) return
+
+    const retireCount = this.workers.length - requested
+    for (
+      let index = this.workers.length - retireCount;
+      index < this.workers.length;
+      index += 1
+    ) {
+      this.workers[index].retiring = true
+    }
+    this.finalizeSenderScaleDown()
+  }
+
+  private finalizeSenderScaleDown(): void {
+    const retiring = this.workers.filter((worker) => worker.retiring)
+    if (
+      retiring.length === 0 ||
+      retiring.some((worker) => worker.state !== 'idle')
+    ) {
+      return
+    }
+    this.workers = this.workers.filter((worker) => !worker.retiring)
   }
 
   private aggregateActivity(): StepActivity {
@@ -604,8 +1046,13 @@ export class FixedStepSimulation {
       aggregate.queue2.outputTransactions += activity.queue2.outputTransactions
       aggregate.queue2.handoffBatches += activity.queue2.handoffBatches
       aggregate.httpStartedTransactions += activity.httpStartedTransactions
+      aggregate.httpRetryStartedTransactions +=
+        activity.httpRetryStartedTransactions
       aggregate.httpCompletedTransactions += activity.httpCompletedTransactions
       aggregate.httpSucceededTransactions += activity.httpSucceededTransactions
+      aggregate.httpRejectedTransactions += activity.httpRejectedTransactions
+      aggregate.terminalFailedTransactions +=
+        activity.terminalFailedTransactions
     }
     return aggregate
   }

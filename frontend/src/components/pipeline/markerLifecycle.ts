@@ -44,6 +44,7 @@ export interface PipelineMarkerSlotSnapshot {
   readonly outcome: HttpOutcome | null
   readonly outcomeVisible: boolean
   readonly pulseProgress: number
+  readonly retryAttempt?: boolean
 }
 
 export interface MarkerLifecycleSnapshot {
@@ -71,6 +72,7 @@ export interface HttpMarkerTelemetry {
   readonly requestsCompletedTotal: number
   readonly requestsSucceededTotal: number
   readonly requestsFailedTotal: number
+  readonly retryAttemptsStartedTotal: number
   readonly connectionError: boolean
 }
 
@@ -100,6 +102,7 @@ interface MutableMarkerSlot {
   retirementRemainingMs: number | null
   outcome: HttpOutcome | null
   pulseProgress: number
+  retryAttempt: boolean
 }
 
 type Listener = () => void
@@ -221,6 +224,7 @@ function createSlots(): MutableMarkerSlot[] {
     retirementRemainingMs: null,
     outcome: null,
     pulseProgress: 0,
+    retryAttempt: false,
   }))
 }
 
@@ -254,6 +258,7 @@ export class MarkerLifecycleController {
   private previousRequestsCompletedTotal = 0
   private previousRequestsSucceededTotal = 0
   private previousRequestsFailedTotal = 0
+  private previousRetryAttemptsStartedTotal = 0
   private snapshot: MarkerLifecycleSnapshot
 
   constructor(telemetry: MarkerLifecycleTelemetry) {
@@ -284,7 +289,9 @@ export class MarkerLifecycleController {
       telemetry.http.requestsStartedTotal < this.previousRequestsStartedTotal ||
       telemetry.http.requestsCompletedTotal < this.previousRequestsCompletedTotal ||
       telemetry.http.requestsSucceededTotal < this.previousRequestsSucceededTotal ||
-      telemetry.http.requestsFailedTotal < this.previousRequestsFailedTotal
+      telemetry.http.requestsFailedTotal < this.previousRequestsFailedTotal ||
+      telemetry.http.retryAttemptsStartedTotal <
+        this.previousRetryAttemptsStartedTotal
     )
     if (totalsReset) this.reset()
 
@@ -330,6 +337,7 @@ export class MarkerLifecycleController {
       this.captureOutcomes(telemetry)
       if (this.runState !== 'paused') {
         this.reconcilePool(telemetry)
+        this.captureRetryAttempts(telemetry)
       }
     }
 
@@ -459,7 +467,7 @@ export class MarkerLifecycleController {
   }
 
   private reconcileFamilySlots(target: number): void {
-    let active = this.activeFamilySlots()
+    let active = this.activeBaseFamilySlots()
     if (active.length > target) {
       const ordered = active
         .slice()
@@ -475,11 +483,12 @@ export class MarkerLifecycleController {
       ordered.forEach((slot, index) => {
         if (!survivorIndexes.has(index)) this.retireSlot(slot)
       })
-      active = this.activeFamilySlots()
+      active = this.activeBaseFamilySlots()
     }
 
     const retiring = this.slots
       .filter((slot) => slot.state === 'retiring')
+      .filter((slot) => !slot.retryAttempt)
       .sort((left, right) => lifecycleRank(right) - lifecycleRank(left))
     const reviveCount = Math.min(target - active.length, retiring.length)
     for (const slot of retiring.slice(0, reviveCount)) {
@@ -487,7 +496,7 @@ export class MarkerLifecycleController {
       slot.retirementRemainingMs = null
     }
 
-    active = this.activeFamilySlots()
+    active = this.activeBaseFamilySlots()
     const missing = target - active.length
     for (const position of this.familyHydrationPositions(missing, target)) {
       const slot = this.activateFamily('reader', 0)
@@ -546,7 +555,7 @@ export class MarkerLifecycleController {
       (sum, stage) => sum + Math.max(1, this.stageTravelLengths[stage]),
       0,
     )
-    const occupied = this.activeFamilySlots().map((slot) => {
+    const occupied = this.activeBaseFamilySlots().map((slot) => {
       const stageIndex = FLOW_TRAVEL_STAGES.indexOf(slot.stage)
       if (stageIndex < 0) return 1
       const preceding = FLOW_TRAVEL_STAGES
@@ -652,6 +661,7 @@ export class MarkerLifecycleController {
   private activateFamily(
     stage: MarkerStage,
     phase: number,
+    retryAttempt = false,
   ): MutableMarkerSlot | null {
     const slot = this.inactiveSlot()
     if (slot === null) return null
@@ -664,6 +674,7 @@ export class MarkerLifecycleController {
     slot.retirementRemainingMs = null
     slot.outcome = null
     slot.pulseProgress = 0
+    slot.retryAttempt = retryAttempt
     return slot
   }
 
@@ -857,11 +868,15 @@ export class MarkerLifecycleController {
   }
 
   private completeFamilyLifecycle(slot: MutableMarkerSlot): void {
+    if (slot.retryAttempt) {
+      this.deactivateSlot(slot)
+      return
+    }
     if (
       slot.state === 'retiring' ||
       !this.throughputCadenceActive ||
       this.familyTarget === 0 ||
-      this.activeFamilySlots().length > this.familyTarget
+      this.activeBaseFamilySlots().length > this.familyTarget
     ) {
       this.deactivateSlot(slot)
       return
@@ -874,6 +889,7 @@ export class MarkerLifecycleController {
     slot.retirementRemainingMs = null
     slot.outcome = null
     slot.pulseProgress = 0
+    slot.retryAttempt = false
   }
 
   private deactivateSlot(slot: MutableMarkerSlot): void {
@@ -884,10 +900,17 @@ export class MarkerLifecycleController {
     slot.retirementRemainingMs = null
     slot.outcome = null
     slot.pulseProgress = 0
+    slot.retryAttempt = false
   }
 
   private activeFamilySlots(): MutableMarkerSlot[] {
     return this.slots.filter((slot) => slot.state === 'active')
+  }
+
+  private activeBaseFamilySlots(): MutableMarkerSlot[] {
+    return this.slots.filter(
+      (slot) => slot.state === 'active' && !slot.retryAttempt,
+    )
   }
 
   private familySlots(): MutableMarkerSlot[] {
@@ -918,6 +941,17 @@ export class MarkerLifecycleController {
     const remaining = MAX_PENDING_OUTCOMES - this.pendingOutcomes.length
     for (let index = 0; index < Math.min(successCount, remaining); index += 1) {
       this.pendingOutcomes.push('success')
+    }
+  }
+
+  private captureRetryAttempts(telemetry: MarkerLifecycleTelemetry): void {
+    const retryDelta = Math.max(
+      0,
+      telemetry.http.retryAttemptsStartedTotal -
+        this.previousRetryAttemptsStartedTotal,
+    )
+    for (let index = 0; index < retryDelta; index += 1) {
+      if (this.activateFamily('sender', 0, true) === null) break
     }
   }
 
@@ -997,6 +1031,8 @@ export class MarkerLifecycleController {
     this.previousRequestsCompletedTotal = telemetry.http.requestsCompletedTotal
     this.previousRequestsSucceededTotal = telemetry.http.requestsSucceededTotal
     this.previousRequestsFailedTotal = telemetry.http.requestsFailedTotal
+    this.previousRetryAttemptsStartedTotal =
+      telemetry.http.retryAttemptsStartedTotal
   }
 
   private reset(): void {
@@ -1036,6 +1072,7 @@ export class MarkerLifecycleController {
         outcomeVisible:
           slot.outcome !== null && slot.stage === 'target' && slot.phase >= 1,
         pulseProgress: slot.pulseProgress,
+        retryAttempt: slot.retryAttempt,
       }))),
     })
     this.listeners.forEach((listener) => listener())

@@ -143,15 +143,16 @@ export function PipelineMarkers({
         const outcomeClass = marker.outcomeVisible && marker.outcome !== null
           ? ` pipeline-marker--outcome pipeline-marker--${marker.outcome}`
           : ''
+        const pulseProgress = markers.reducedMotion ? 0 : marker.pulseProgress
         const markerStyle = {
           color: markerColor(marker, snapshot),
           offsetPath: `path("${geometry.path}")`,
           offsetDistance: `${marker.phase * 100}%`,
-          filter: marker.outcomeVisible
-            ? `drop-shadow(0 0 ${2 + marker.pulseProgress * 7}px currentColor)`
+          filter: marker.outcomeVisible && !markers.reducedMotion
+            ? `drop-shadow(0 0 ${2 + pulseProgress * 7}px currentColor)`
             : undefined,
-          opacity: marker.outcomeVisible
-            ? Math.max(0.28, 1 - marker.pulseProgress * 0.72)
+          opacity: marker.outcomeVisible && !markers.reducedMotion
+            ? Math.max(0.28, 1 - pulseProgress * 0.72)
             : undefined,
           transform: jitter.x === 0 && jitter.y === 0
             ? undefined
@@ -169,7 +170,7 @@ export function PipelineMarkers({
               : undefined}
           >
             <circle
-            r={marker.outcomeVisible ? 4 + marker.pulseProgress * 2 : 4}
+            r={marker.outcomeVisible ? 4 + pulseProgress * 2 : 4}
             visibility={marker.state === 'inactive' || !waitingVisible
               ? 'hidden'
               : 'visible'}
@@ -181,6 +182,7 @@ export function PipelineMarkers({
             data-marker-state={marker.state}
             data-marker-phase={marker.phase.toFixed(4)}
             data-marker-outcome={marker.outcome ?? ''}
+            data-marker-retry-attempt={marker.retryAttempt === true}
             data-marker-path={geometry.path}
             data-marker-jitter-x={jitter.x}
             data-marker-jitter-y={jitter.y}

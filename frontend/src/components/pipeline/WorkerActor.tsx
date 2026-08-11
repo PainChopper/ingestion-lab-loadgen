@@ -3,6 +3,8 @@ import type {
   NumericControlSnapshot,
   RunState,
   SelectableId,
+  SenderWorkerState,
+  SenderWorkerStateCounts,
 } from '../../model/loadgen'
 import type { Point, WorkerActorBounds } from './geometry'
 import type { KeyboardEvent } from 'react'
@@ -27,6 +29,7 @@ interface WorkerActorProps {
     readonly height: number
   }
   workers: NumericControlSnapshot
+  workerStates?: SenderWorkerStateCounts
   runState: RunState
   inputPort?: Point
   outputPort: Point
@@ -48,15 +51,17 @@ function WorkerChip({
   x,
   y,
   scale,
-  active,
-}: WorkerChipLayout & { active: boolean }) {
+  state,
+}: WorkerChipLayout & {
+  state: SenderWorkerState | 'active' | 'inactive'
+}) {
   const pinOffsets = [6, 13, 20, 27]
   const chipX = 4
   const chipY = 4
 
   return (
     <g
-      className={active ? undefined : 'pipeline-worker--inactive'}
+      className={`pipeline-worker--${state}`}
       transform={`translate(${x} ${y}) scale(${scale})`}
     >
       <rect
@@ -117,6 +122,7 @@ export function WorkerActor({
   bounds,
   controls,
   workers,
+  workerStates,
   runState,
   inputPort,
   outputPort,
@@ -134,6 +140,17 @@ export function WorkerActor({
   const workerMax = Math.round(workers.max)
   const workerStep = Math.max(1, Math.round(workers.step))
   const centerX = bounds.x + bounds.width / 2
+  const chipState = (index: number): SenderWorkerState | 'active' | 'inactive' => {
+    if (workerStates === undefined) {
+      return runState === 'running' ? 'active' : 'inactive'
+    }
+    if (index < workerStates.inFlight) return 'in-flight'
+    if (index < workerStates.inFlight + workerStates.backoff) return 'backoff'
+    return 'idle'
+  }
+  const actorAriaLabel = workerStates === undefined
+    ? `Inspect ${actor}`
+    : `Inspect ${actor}, ${workerStates.idle} idle, ${workerStates.inFlight} in-flight, ${workerStates.backoff} backoff`
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
@@ -176,7 +193,14 @@ export function WorkerActor({
           >
             <Minus aria-hidden="true" />
           </button>
-          <output id={`${actor}-count`} aria-label={`${title} worker count`}>
+          <output
+            id={`${actor}-count`}
+            aria-label={
+              workers.pending === null
+                ? `${title} worker count, ${layout.workerCount} applied`
+                : `${title} worker count, ${layout.workerCount} applied, ${workers.pending} pending`
+            }
+          >
             {layout.workerCount}
           </output>
           <button
@@ -201,7 +225,7 @@ export function WorkerActor({
         className={`pipeline-actor pipeline-selectable${selected ? ' pipeline-selectable--selected' : ''}`}
         role="button"
         tabIndex={0}
-        aria-label={`Inspect ${actor}`}
+        aria-label={actorAriaLabel}
         aria-pressed={selected}
         data-worker-count={layout.workerCount}
         data-worker-layout={layout.mode}
@@ -222,7 +246,7 @@ export function WorkerActor({
           <WorkerChip
             key={index}
             {...chip}
-            active={runState === 'running'}
+            state={chipState(index)}
           />
         ))}
         {inputPort && (
