@@ -21,10 +21,9 @@ export function SenderActor({
   geometry,
   orientation,
 }: SenderActorProps) {
-  const inFlight =
-    snapshot.inFlightRequests === null
-      ? '—'
-      : `${formatInteger(snapshot.inFlightRequests)} in-flight`
+  const workerSummary =
+    `${formatInteger(snapshot.workerStates.inFlight)} in-flight · ` +
+    `${formatInteger(snapshot.workerStates.backoff)} backoff`
 
   return (
     <WorkerActor
@@ -35,11 +34,12 @@ export function SenderActor({
       bounds={geometry.bounds}
       controls={geometry.controls}
       workers={snapshot.workers}
+      workerStates={snapshot.workerStates}
       runState={snapshot.state}
       inputPort={geometry.ports.input}
       outputPort={geometry.ports.output}
       primaryMetric={formatRate(snapshot.attemptedTps)}
-      secondaryMetric={inFlight}
+      secondaryMetric={workerSummary}
       metricPoints={'metrics' in geometry ? geometry.metrics : undefined}
       orientation={orientation}
       selected={selected}

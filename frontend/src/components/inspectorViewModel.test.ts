@@ -75,7 +75,91 @@ describe('inspector view model', () => {
     const model = getInspectorViewModel(derivedSnapshot(adapter), 'sender')
 
     expect(model?.rows.find((row) => row.label === 'Attempted TPS')?.value).toBe('0 tx/s')
-    expect(model?.rows.find((row) => row.label === 'Retries')?.value).toBe('0')
+    expect(model?.rows.find((row) => row.label === 'Retry attempts')?.value)
+      .toBe('0')
+    expect(model?.rows.find((row) => row.label === 'Worker states')?.value)
+      .toBe('3 idle · 0 in-flight · 0 backoff')
+    expect(model?.rows.find((row) => row.label === 'Retry policy')?.value)
+      .toBe('3 attempts · 250/500 ms · ±20% deterministic jitter')
+    adapter.dispose()
+  })
+
+  it('separates retry attempts, rejections, terminal work, and ambiguity', () => {
+    const adapter = new SimulationAdapter()
+    const base = derivedSnapshot(adapter)
+    const model = getInspectorViewModel({
+      ...base,
+      sender: {
+        ...base.sender,
+        workers: {
+          ...base.sender.workers,
+          applied: 32,
+          pending: 8,
+        },
+        workerStates: { idle: 2, inFlight: 11, backoff: 19 },
+        attemptedTps: 80_000,
+        retryAttemptedTps: 30_000,
+        terminalFailedTps: 10_000,
+        attemptsStartedTotal: 90,
+        retryAttemptsStartedTotal: 60,
+        successfulResponses: 10,
+        failedResponses: 70,
+        timeoutsTotal: 10,
+        terminalFailedBatchesTotal: 20,
+        terminalFailedTransactionsTotal: 20_000,
+        ambiguousTimeoutTransactionsTotal: 10_000,
+        duplicateRiskTransactionsTotal: 8_000,
+        ambiguousTerminalTransactionsTotal: 4_000,
+      },
+    }, 'sender')
+
+    expect(model?.rows).toEqual(expect.arrayContaining([
+      { label: 'Workers', value: '32 applied · 8 pending' },
+      { label: 'Worker states', value: '2 idle · 11 in-flight · 19 backoff' },
+      { label: 'Attempted TPS', value: '80,000 tx/s' },
+      { label: 'Retry TPS', value: '30,000 tx/s' },
+      { label: 'Terminal failed TPS', value: '10,000 tx/s' },
+      { label: 'Attempts', value: '90' },
+      { label: 'Retry attempts', value: '60' },
+      { label: 'Rejected responses', value: '70' },
+      { label: 'Timeouts', value: '10' },
+      { label: 'Terminal failed transactions', value: '20,000' },
+      { label: 'Duplicate-risk transactions', value: '8,000' },
+      { label: 'Ambiguous terminal transactions', value: '4,000' },
+    ]))
+    adapter.dispose()
+  })
+
+  it('shows timeout without inventing an HTTP status or target rejection', () => {
+    const adapter = new SimulationAdapter()
+    const base = derivedSnapshot(adapter)
+    const timeoutSnapshot: LoadgenSnapshot = {
+      ...base,
+      http: {
+        ...base.http,
+        statusCode: null,
+        lastOutcome: 'timeout',
+        requestsFailedTotal: 3,
+        requestsTimedOutTotal: 3,
+      },
+      target: {
+        ...base.target,
+        rejectedTps: 0,
+        http503Responses: 0,
+      },
+    }
+
+    expect(
+      getInspectorViewModel(timeoutSnapshot, 'http')?.rows.find(
+        (row) => row.label === 'Status',
+      )?.value,
+    ).toBe('TIMEOUT')
+    expect(getInspectorViewModel(timeoutSnapshot, 'target')?.rows)
+      .toEqual(expect.arrayContaining([
+        { label: '503 rate', value: '2%' },
+        { label: 'Rejected TPS', value: '0 tx/s' },
+        { label: 'HTTP 503', value: '0' },
+      ]))
     adapter.dispose()
   })
 

@@ -338,4 +338,51 @@ describe('queue flow state derivation', () => {
       [0.8, 'near-limit'],
     ])
   })
+
+  it('derives q2 pressure only from unsent occupancy during retry saturation', () => {
+    const base = baseTelemetry()
+    const deriver = new QueueFlowStateDeriver()
+    const retryHeavy: LoadgenTelemetrySnapshot = {
+      ...base,
+      revision: base.revision + 1,
+      sender: {
+        ...base.sender,
+        workerStates: { idle: 0, inFlight: 12, backoff: 20 },
+        attemptsStartedTotal: 900,
+        retryAttemptsStartedTotal: 600,
+        retries: 600,
+      },
+      queue2: {
+        ...base.queue2,
+        depthBatches: 100,
+        blockedSenders: 1,
+        oldestBlockedSenderMs: 500,
+        capacity: {
+          ...base.queue2.capacity,
+          applied: 100,
+        },
+      },
+    }
+    deriver.derive(base, 0)
+    const saturated = deriver.derive(retryHeavy, 500).queue2
+    expect(saturated).toMatchObject({
+      displayedPressure: 1,
+      flowState: 'backpressure',
+      depthBatches: 100,
+      dequeuedBatchesTotal: base.queue2.dequeuedBatchesTotal,
+    })
+
+    const retryCountersOnly: LoadgenTelemetrySnapshot = {
+      ...retryHeavy,
+      revision: retryHeavy.revision + 1,
+      sender: {
+        ...retryHeavy.sender,
+        attemptsStartedTotal: 9_000,
+        retryAttemptsStartedTotal: 8_000,
+        retries: 8_000,
+      },
+    }
+    expect(deriver.derive(retryCountersOnly, 600).queue2.displayedPressure)
+      .toBe(1)
+  })
 })

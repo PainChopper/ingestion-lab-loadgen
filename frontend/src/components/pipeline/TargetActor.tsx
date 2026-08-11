@@ -17,8 +17,8 @@ export function TargetActor({
   geometry,
 }: TargetActorProps) {
   const { center, labels } = geometry
-  const failurePercent = formatInteger(snapshot.errorRatePercent.applied)
-  const failedTps = formatInteger(snapshot.failedTps)
+  const rejectionPercent = formatInteger(snapshot.errorRatePercent.applied)
+  const rejectedTps = formatInteger(snapshot.rejectedTps)
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
@@ -71,7 +71,7 @@ export function TargetActor({
           {formatRate(snapshot.acceptedTps)}
         </text>
         <text x={labels.failure.x} y={labels.failure.y} textAnchor="middle" className="pipeline-small pipeline-target-secondary pipeline-target-failure">
-          {failurePercent === '—' ? failurePercent : `${failurePercent}%`} failures · {failedTps} failed tx/s
+          {rejectionPercent === '—' ? rejectionPercent : `${rejectionPercent}%`} 503 rate · {rejectedTps} rejected tx/s
         </text>
         <text x={labels.state.x} y={labels.state.y} textAnchor="middle" className="pipeline-small pipeline-target-secondary">
           {snapshot.connectionState}

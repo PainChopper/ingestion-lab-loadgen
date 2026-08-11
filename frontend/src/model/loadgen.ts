@@ -20,6 +20,29 @@ export type ThrottlerInstallationMode = 'installed' | 'bypass'
 
 export type ReaderLimitationReason = 'downstream-backpressure'
 
+export type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
+
+export interface SenderWorkerStateCounts {
+  readonly idle: number
+  readonly inFlight: number
+  readonly backoff: number
+}
+
+export interface RetryPolicySnapshot {
+  readonly maxAttempts: number
+  readonly backoffBaseMs: number
+  readonly backoffMultiplier: number
+  readonly jitterPercent: number
+  readonly retryableStatusCodes: readonly number[]
+  readonly retryTimeouts: boolean
+}
+
+export type HttpLastOutcome =
+  | 'http-response'
+  | 'timeout'
+  | 'network-error'
+  | null
+
 export type QueueTrend = 'rising' | 'steady' | 'falling' | 'unknown'
 
 export type QueueFlowState =
@@ -105,11 +128,23 @@ export interface SenderSnapshot {
   readonly workers: NumericControlSnapshot
   readonly httpBatchSize: NumericControlSnapshot
   readonly timeoutMs: NumericControlSnapshot
+  readonly workerStates: SenderWorkerStateCounts
+  readonly retryPolicy: RetryPolicySnapshot | null
   readonly attemptedTps: number | null
+  readonly retryAttemptedTps: number | null
+  readonly terminalFailedTps: number | null
   readonly inFlightRequests: number | null
+  readonly attemptsStartedTotal: number
+  readonly retryAttemptsStartedTotal: number
   readonly successfulResponses: number | null
   readonly failedResponses: number | null
   readonly retries: number | null
+  readonly timeoutsTotal: number
+  readonly terminalFailedBatchesTotal: number
+  readonly terminalFailedTransactionsTotal: number
+  readonly ambiguousTimeoutTransactionsTotal: number
+  readonly duplicateRiskTransactionsTotal: number
+  readonly ambiguousTerminalTransactionsTotal: number
   readonly state: RunState
 }
 
@@ -117,12 +152,15 @@ export interface HttpSnapshot {
   readonly id: 'http'
   readonly connectionState: ConnectionState
   readonly statusCode: number | null
+  readonly lastOutcome: HttpLastOutcome
   readonly throughputTps: number | null
   readonly inFlightRequests: number | null
   readonly requestsStartedTotal: number
   readonly requestsCompletedTotal: number
   readonly requestsSucceededTotal: number
   readonly requestsFailedTotal: number
+  readonly requestsTimedOutTotal: number
+  readonly networkErrorsTotal: number
   readonly latencyP95Ms: number | null
 }
 
@@ -132,7 +170,7 @@ export interface TargetSnapshot {
   readonly artificialDelayMs: NumericControlSnapshot
   readonly errorRatePercent: NumericControlSnapshot
   readonly acceptedTps: number | null
-  readonly failedTps: number | null
+  readonly rejectedTps: number | null
   readonly latencyP95Ms: number | null
   readonly http200Responses: number | null
   readonly http503Responses: number | null
@@ -181,7 +219,12 @@ export type LoadgenCommand =
   | { type: 'set-target-error-rate'; valuePercent: number }
 
 export interface AdapterError {
-  readonly code: 'invalid-command' | 'disposed' | 'unavailable' | 'internal'
+  readonly code:
+    | 'invalid-command'
+    | 'invalid-state'
+    | 'disposed'
+    | 'unavailable'
+    | 'internal'
   readonly message: string
   readonly retryable: boolean
   readonly details: Readonly<Record<string, unknown>> | null
