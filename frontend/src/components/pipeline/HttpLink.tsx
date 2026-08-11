@@ -13,12 +13,19 @@ interface HttpLinkProps {
 function linkStateClass(
   snapshot: HttpSnapshot,
   presentedStatusCode: number | null,
+  presentedOutcome: HttpSnapshot['lastOutcome'],
 ): string {
   if (snapshot.connectionState === 'error') return 'pipeline-http--error'
   if (snapshot.connectionState === 'disconnected') {
     return 'pipeline-http--stopped'
   }
   if (snapshot.connectionState === 'connecting') return 'pipeline-http--warning'
+  if (
+    presentedOutcome === 'timeout' ||
+    presentedOutcome === 'network-error'
+  ) {
+    return 'pipeline-http--error'
+  }
   if (presentedStatusCode !== null && presentedStatusCode >= 500) {
     return 'pipeline-http--error'
   }
@@ -40,9 +47,17 @@ export function HttpLink({
     ? `M${start.x} ${start.y} V${end.y}`
     : `M${start.x} ${start.y} H${end.x}`
   const isIdle =
-    snapshot.throughputTps === 0 && snapshot.inFlightRequests === 0
+    snapshot.throughputTps === 0 &&
+    snapshot.inFlightRequests === 0
   const presentedStatusCode = isIdle ? null : snapshot.statusCode
-  const status = presentedStatusCode === null ? '—' : presentedStatusCode
+  const presentedOutcome = isIdle ? null : snapshot.lastOutcome
+  const status = presentedOutcome === 'timeout'
+    ? 'TIMEOUT'
+    : presentedOutcome === 'network-error'
+      ? 'NETWORK ERROR'
+      : presentedStatusCode === null
+        ? 'HTTP —'
+        : `HTTP ${presentedStatusCode}`
   const inFlight = formatInteger(snapshot.inFlightRequests)
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -53,7 +68,7 @@ export function HttpLink({
   return (
     <g
       id="http-link"
-      className={`pipeline-http pipeline-selectable ${linkStateClass(snapshot, presentedStatusCode)}${selected ? ' pipeline-selectable--selected' : ''}`}
+      className={`pipeline-http pipeline-selectable ${linkStateClass(snapshot, presentedStatusCode, presentedOutcome)}${selected ? ' pipeline-selectable--selected' : ''}`}
       role="button"
       tabIndex={0}
       aria-label={`Inspect HTTP connection, ${snapshot.connectionState}`}
@@ -82,7 +97,7 @@ export function HttpLink({
         textAnchor="middle"
         className="pipeline-small-strong pipeline-http-status"
       >
-        HTTP {status}
+        {status}
       </text>
       <text x={metrics.x} y={metrics.throughputY} textAnchor="middle" className="pipeline-small pipeline-http-throughput">
         {formatRate(snapshot.throughputTps)}

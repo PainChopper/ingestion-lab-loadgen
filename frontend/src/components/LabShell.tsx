@@ -331,7 +331,7 @@ function InspectorControls({
             }
           />
           <NumericControl
-            label="503 error rate"
+            label="503 rate"
             control={snapshot.target.errorRatePercent}
             onValueChange={(valuePercent) =>
               void adapter.dispatch({
