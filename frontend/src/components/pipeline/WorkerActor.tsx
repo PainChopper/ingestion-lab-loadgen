@@ -5,6 +5,7 @@ import type {
   SelectableId,
   SenderWorkerState,
   SenderWorkerStateCounts,
+  SenderWorkerSlotSnapshot,
 } from '../../model/loadgen'
 import type { Point, WorkerActorBounds } from './geometry'
 import type { KeyboardEvent } from 'react'
@@ -30,6 +31,7 @@ interface WorkerActorProps {
   }
   workers: NumericControlSnapshot
   workerStates?: SenderWorkerStateCounts
+  workerSlots?: readonly SenderWorkerSlotSnapshot[] | null
   runState: RunState
   inputPort?: Point
   outputPort: Point
@@ -52,8 +54,10 @@ function WorkerChip({
   y,
   scale,
   state,
+  slot,
 }: WorkerChipLayout & {
   state: SenderWorkerState | 'active' | 'inactive'
+  slot?: SenderWorkerSlotSnapshot
 }) {
   const pinOffsets = [6, 13, 20, 27]
   const chipX = 4
@@ -63,6 +67,9 @@ function WorkerChip({
     <g
       className={`pipeline-worker--${state}`}
       transform={`translate(${x} ${y}) scale(${scale})`}
+      data-worker-slot-id={slot?.id}
+      data-worker-ordinal={slot?.ordinal}
+      data-worker-state={slot?.state}
     >
       <rect
         x={chipX}
@@ -123,6 +130,7 @@ export function WorkerActor({
   controls,
   workers,
   workerStates,
+  workerSlots,
   runState,
   inputPort,
   outputPort,
@@ -141,12 +149,10 @@ export function WorkerActor({
   const workerStep = Math.max(1, Math.round(workers.step))
   const centerX = bounds.x + bounds.width / 2
   const chipState = (index: number): SenderWorkerState | 'active' | 'inactive' => {
-    if (workerStates === undefined) {
+    if (workerSlots === undefined || workerSlots === null) {
       return runState === 'running' ? 'active' : 'inactive'
     }
-    if (index < workerStates.inFlight) return 'in-flight'
-    if (index < workerStates.inFlight + workerStates.backoff) return 'backoff'
-    return 'idle'
+    return workerSlots[index]?.state ?? 'inactive'
   }
   const actorAriaLabel = workerStates === undefined
     ? `Inspect ${actor}`
@@ -244,9 +250,10 @@ export function WorkerActor({
         />
         {layout.chips.map((chip, index) => (
           <WorkerChip
-            key={index}
+            key={workerSlots?.[index]?.id ?? index}
             {...chip}
             state={chipState(index)}
+            slot={workerSlots?.[index]}
           />
         ))}
         {inputPort && (

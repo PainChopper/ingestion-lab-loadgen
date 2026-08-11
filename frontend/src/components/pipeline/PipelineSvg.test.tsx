@@ -1068,6 +1068,11 @@ describe('PipelineSvg marker wiring', () => {
         sender: {
           ...base.sender,
           workerStates: { idle: 1, inFlight: 1, backoff: 1 },
+          workerSlots: [
+            { id: 'sender-worker-0', ordinal: 0, state: 'backoff' },
+            { id: 'sender-worker-1', ordinal: 1, state: 'idle' },
+            { id: 'sender-worker-2', ordinal: 2, state: 'in-flight' },
+          ],
           inFlightRequests: 1,
         },
       }
@@ -1083,12 +1088,106 @@ describe('PipelineSvg marker wiring', () => {
         .toHaveLength(1)
       expect(sender.querySelectorAll('.pipeline-worker--idle')).toHaveLength(1)
       expect(
+        [...sender.querySelectorAll('[data-worker-slot-id]')].map((slot) => ({
+          id: slot.getAttribute('data-worker-slot-id'),
+          ordinal: slot.getAttribute('data-worker-ordinal'),
+          state: slot.getAttribute('data-worker-state'),
+          className: slot.getAttribute('class'),
+        })),
+      ).toEqual([
+        {
+          id: 'sender-worker-0',
+          ordinal: '0',
+          state: 'backoff',
+          className: 'pipeline-worker--backoff',
+        },
+        {
+          id: 'sender-worker-1',
+          ordinal: '1',
+          state: 'idle',
+          className: 'pipeline-worker--idle',
+        },
+        {
+          id: 'sender-worker-2',
+          ordinal: '2',
+          state: 'in-flight',
+          className: 'pipeline-worker--in-flight',
+        },
+      ])
+      expect(
         getComputedStyle(
           sender.querySelector('.pipeline-worker--backoff .pipeline-worker-led')!,
         ).fill,
       ).toBe('var(--yellow)')
     },
   )
+
+  it('does not synthesize per-slot states when backend slots are unknown', () => {
+    const base = activeSnapshot()
+    const snapshot: LoadgenSnapshot = {
+      ...base,
+      sender: {
+        ...base.sender,
+        workerStates: { idle: 1, inFlight: 1, backoff: 1 },
+        workerSlots: null,
+      },
+    }
+    const view = renderPipeline(snapshot)
+    const sender = view.container.querySelector('#sender-actor')!
+
+    expect(sender.querySelectorAll('[data-worker-slot-id]')).toHaveLength(0)
+    expect(sender.querySelectorAll('.pipeline-worker--active')).toHaveLength(3)
+    expect(sender.querySelectorAll('.pipeline-worker--backoff')).toHaveLength(0)
+  })
+
+  it('keeps a real backoff slot static amber with reduced motion', () => {
+    const matchMedia = vi.mocked(window.matchMedia)
+    const mediaQueryList = (query: string, matches: boolean) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })
+    matchMedia.mockImplementation(
+      (query) => ({
+        ...mediaQueryList(
+          query,
+          query === '(prefers-reduced-motion: reduce)',
+        ),
+      }),
+    )
+
+    try {
+      const base = activeSnapshot()
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        sender: {
+          ...base.sender,
+          workerStates: { idle: 2, inFlight: 0, backoff: 1 },
+          workerSlots: [
+            { id: 'sender-worker-0', ordinal: 0, state: 'idle' },
+            { id: 'sender-worker-1', ordinal: 1, state: 'backoff' },
+            { id: 'sender-worker-2', ordinal: 2, state: 'idle' },
+          ],
+        },
+      }
+      const view = renderPipeline(snapshot)
+      const backoff = view.container.querySelector(
+        '[data-worker-slot-id="sender-worker-1"]',
+      )!
+
+      expect(backoff.classList).toContain('pipeline-worker--backoff')
+      expect(getComputedStyle(backoff).animationName).toBe('none')
+      expect(getComputedStyle(backoff.querySelector('.pipeline-worker-led')!).fill)
+        .toBe('var(--yellow)')
+    } finally {
+      matchMedia.mockImplementation((query) => mediaQueryList(query, false))
+    }
+  })
 
   it('shows timeout as a status without synthetic HTTP 504', () => {
     const base = activeSnapshot()

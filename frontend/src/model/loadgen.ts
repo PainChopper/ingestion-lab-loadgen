@@ -28,6 +28,12 @@ export interface SenderWorkerStateCounts {
   readonly backoff: number
 }
 
+export interface SenderWorkerSlotSnapshot {
+  readonly id: string
+  readonly ordinal: number
+  readonly state: SenderWorkerState
+}
+
 export interface RetryPolicySnapshot {
   readonly maxAttempts: number
   readonly backoffBaseMs: number
@@ -129,6 +135,7 @@ export interface SenderSnapshot {
   readonly httpBatchSize: NumericControlSnapshot
   readonly timeoutMs: NumericControlSnapshot
   readonly workerStates: SenderWorkerStateCounts
+  readonly workerSlots: readonly SenderWorkerSlotSnapshot[] | null
   readonly retryPolicy: RetryPolicySnapshot | null
   readonly attemptedTps: number | null
   readonly retryAttemptedTps: number | null

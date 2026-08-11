@@ -87,6 +87,7 @@ export interface HttpTelemetry {
 export interface SenderTelemetry {
   readonly workers: CapacityTelemetry
   readonly workerStates: SenderWorkerStateCounts
+  readonly workerSlots: readonly SenderWorkerSlotTelemetry[]
   readonly retryAttemptsStartedTotal: number
   readonly retryAttemptedTransactionsPerSecond: number
   readonly terminalFailedTransactionsPerSecond: number
@@ -95,6 +96,12 @@ export interface SenderTelemetry {
   readonly ambiguousTimeoutTransactionsTotal: number
   readonly duplicateRiskTransactionsTotal: number
   readonly ambiguousTerminalTransactionsTotal: number
+}
+
+export interface SenderWorkerSlotTelemetry {
+  readonly id: string
+  readonly ordinal: number
+  readonly state: SenderWorkerState
 }
 
 export interface SimulationTelemetry {
@@ -169,6 +176,7 @@ interface StepActivity {
 type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
 
 interface SenderWorker {
+  readonly id: string
   readonly ordinal: number
   retiring: boolean
   state: SenderWorkerState
@@ -206,6 +214,7 @@ function createStepActivity(): StepActivity {
 
 function createWorker(ordinal: number): SenderWorker {
   return {
+    id: `sender-worker-${ordinal}`,
     ordinal,
     retiring: false,
     state: 'idle',
@@ -440,6 +449,7 @@ export class FixedStepSimulation {
     | SimulationAttemptOutcomeSource
     | undefined
   private workers: SenderWorker[]
+  private nextWorkerIndex = 0
   private readerTransactionCredit = 0
   private throttlerTokens = 0
   private throttlerBufferedTransactions = 0
@@ -486,6 +496,7 @@ export class FixedStepSimulation {
       { length: config.senderWorkers },
       (_, ordinal) => createWorker(ordinal),
     )
+    this.nextWorkerIndex = 0
   }
 
   advanceStep(): void {
@@ -555,6 +566,7 @@ export class FixedStepSimulation {
       { length: this.config.senderWorkers },
       (_, ordinal) => createWorker(ordinal),
     )
+    this.nextWorkerIndex = 0
     this.readerTransactionCredit = 0
     this.throttlerTokens = 0
     this.throttlerBufferedTransactions = 0
@@ -591,7 +603,8 @@ export class FixedStepSimulation {
     const queue1 = this.queue1.telemetry(aggregate.queue1, rateSeconds, running)
     const queue2 = this.queue2.telemetry(aggregate.queue2, rateSeconds, running)
     const divisor = rateSeconds === 0 ? 1 : rateSeconds
-    const workerStates = this.workerStateCounts
+    const workerSlots = this.workerSlots
+    const workerStates = this.workerStateCounts(workerSlots)
 
     return {
       elapsedMs: this.elapsedMs,
@@ -620,6 +633,7 @@ export class FixedStepSimulation {
             : this.config.senderWorkers,
         },
         workerStates,
+        workerSlots,
         retryAttemptsStartedTotal: this.retryAttemptStartedTotal,
         retryAttemptedTransactionsPerSecond: running
           ? aggregate.httpRetryStartedTransactions / divisor
@@ -674,15 +688,25 @@ export class FixedStepSimulation {
     return this.config.readerWorkers * READER_TRANSACTIONS_PER_WORKER_SECOND
   }
 
-  private get workerStateCounts(): SenderWorkerStateCounts {
+  private get workerSlots(): readonly SenderWorkerSlotTelemetry[] {
+    return this.workers.map(({ id, ordinal, state }) => ({
+      id,
+      ordinal,
+      state,
+    }))
+  }
+
+  private workerStateCounts(
+    workerSlots: readonly SenderWorkerSlotTelemetry[],
+  ): SenderWorkerStateCounts {
     let inFlight = 0
     let backoff = 0
-    for (const worker of this.workers) {
-      if (worker.state === 'in-flight') inFlight += 1
-      if (worker.state === 'backoff') backoff += 1
+    for (const slot of workerSlots) {
+      if (slot.state === 'in-flight') inFlight += 1
+      if (slot.state === 'backoff') backoff += 1
     }
     return {
-      idle: this.workers.length - inFlight - backoff,
+      idle: workerSlots.length - inFlight - backoff,
       inFlight,
       backoff,
     }
@@ -828,8 +852,9 @@ export class FixedStepSimulation {
   }
 
   private drainQueue2(activity: StepActivity): void {
-    for (const worker of this.workers) {
-      if (worker.retiring || worker.state !== 'idle') continue
+    while (this.queue2.peek() !== null) {
+      const worker = this.nextIdleWorker()
+      if (worker === null) return
       const batch = this.queue2.dequeue(activity.queue2)
       if (batch === null) return
       worker.batch = batch
@@ -992,9 +1017,14 @@ export class FixedStepSimulation {
   }
 
   private nextIdleWorker(): SenderWorker | null {
-    return this.workers.find(
-      (worker) => !worker.retiring && worker.state === 'idle',
-    ) ?? null
+    for (let offset = 0; offset < this.workers.length; offset += 1) {
+      const index = (this.nextWorkerIndex + offset) % this.workers.length
+      const worker = this.workers[index]
+      if (worker.retiring || worker.state !== 'idle') continue
+      this.nextWorkerIndex = (index + 1) % this.workers.length
+      return worker
+    }
+    return null
   }
 
   private requestSenderWorkerCount(requested: number): void {
@@ -1030,6 +1060,7 @@ export class FixedStepSimulation {
       return
     }
     this.workers = this.workers.filter((worker) => !worker.retiring)
+    this.nextWorkerIndex %= this.workers.length
   }
 
   private aggregateActivity(): StepActivity {
