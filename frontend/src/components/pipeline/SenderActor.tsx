@@ -35,6 +35,7 @@ export function SenderActor({
       controls={geometry.controls}
       workers={snapshot.workers}
       workerStates={snapshot.workerStates}
+      workerSlots={snapshot.workerSlots}
       runState={snapshot.state}
       inputPort={geometry.ports.input}
       outputPort={geometry.ports.output}

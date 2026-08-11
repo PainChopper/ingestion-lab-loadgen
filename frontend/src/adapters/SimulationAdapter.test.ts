@@ -3,6 +3,8 @@ import type {
   LoadgenCommand,
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
+  SenderWorkerSlotSnapshot,
+  SenderWorkerStateCounts,
 } from '../model/loadgen'
 import { QueueFlowStateDeriver } from '../model/queueFlowState'
 import {
@@ -37,6 +39,28 @@ function advanceUntil(
   expect(predicate()).toBe(true)
 }
 
+function workerSlotCounts(
+  slots: readonly SenderWorkerSlotSnapshot[],
+): SenderWorkerStateCounts {
+  return {
+    idle: slots.filter(({ state }) => state === 'idle').length,
+    inFlight: slots.filter(({ state }) => state === 'in-flight').length,
+    backoff: slots.filter(({ state }) => state === 'backoff').length,
+  }
+}
+
+function expectSenderSlotConservation(sender: {
+  readonly workerSlots: readonly SenderWorkerSlotSnapshot[] | null
+  readonly workerStates: SenderWorkerStateCounts
+}): void {
+  const slots = sender.workerSlots ?? []
+  expect(sender.workerSlots).not.toBeNull()
+  expect(workerSlotCounts(slots)).toEqual(sender.workerStates)
+  expect(slots.map(({ ordinal }) => ordinal))
+    .toEqual(slots.map((_, ordinal) => ordinal))
+  expect(new Set(slots.map(({ id }) => id)).size).toBe(slots.length)
+}
+
 describe('SimulationAdapter', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -59,6 +83,9 @@ describe('SimulationAdapter', () => {
     expect(Object.isFrozen(initial.reader.workers)).toBe(true)
     expect(Object.isFrozen(initial.queue2.capacity)).toBe(true)
     expect(Object.isFrozen(initial.target.errorRatePercent)).toBe(true)
+    expect(Object.isFrozen(initial.sender.workerSlots)).toBe(true)
+    expect(Object.isFrozen(initial.sender.workerSlots?.[0])).toBe(true)
+    expectSenderSlotConservation(initial.sender)
 
     unsubscribe()
     await adapter.dispatch({ type: 'run' })
@@ -748,12 +775,14 @@ describe('SimulationAdapter', () => {
       resumed.queue1.dequeuedBatchesTotal,
       resumed.queue2.enqueuedBatchesTotal,
       resumed.http.requestsStartedTotal,
+      resumed.sender.workerSlots,
     ]).toEqual([
       expected.elapsedMs,
       expected.queue1.enqueuedBatchesTotal,
       expected.queue1.dequeuedBatchesTotal,
       expected.queue2.enqueuedBatchesTotal,
       expected.http.requestsStartedTotal,
+      expected.sender.workerSlots,
     ])
 
     await adapter.dispatch({ type: 'pause' })
@@ -765,10 +794,12 @@ describe('SimulationAdapter', () => {
       replay.queue1.enqueuedBatchesTotal,
       replay.queue2.enqueuedBatchesTotal,
       replay.http.requestsStartedTotal,
+      replay.sender.workerSlots,
     ]).toEqual([
       expected.queue1.enqueuedBatchesTotal,
       expected.queue2.enqueuedBatchesTotal,
       expected.http.requestsStartedTotal,
+      expected.sender.workerSlots,
     ])
     adapter.dispose()
   })
@@ -822,6 +853,11 @@ describe('SimulationAdapter', () => {
       inFlight: 1,
       backoff: 0,
     })
+    expect(duringThirdAttempt.sender.workerSlots).toEqual([{
+      id: 'sender-worker-0',
+      ordinal: 0,
+      state: 'in-flight',
+    }])
 
     simulation.advanceStep()
     const accepted = simulation.telemetry(true)
@@ -869,6 +905,98 @@ describe('SimulationAdapter', () => {
     expect(sameStepStarts.slice(1).some(({ attempt }) => attempt === 1))
       .toBe(true)
   })
+
+  it('projects different real slots in backoff with count conservation', () => {
+    const simulation = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      readerWorkers: 7,
+      senderWorkers: 2,
+      requestedTps: 250_000,
+      readBatchSize: 10_000,
+    }, 4, 20, () => ({
+      kind: 'http-response',
+      statusCode: 503,
+      latencyMs: 10,
+    }))
+
+    advanceUntil(
+      simulation,
+      () => simulation.telemetry(true).sender.workerStates.backoff === 2,
+    )
+    const sender = simulation.telemetry(true).sender
+
+    expectSenderSlotConservation(sender)
+    expect(
+      sender.workerSlots
+        .filter(({ state }) => state === 'backoff')
+        .map(({ id }) => id),
+    ).toEqual(['sender-worker-0', 'sender-worker-1'])
+  })
+
+  it('keeps the same real slot identity through backoff and retry', () => {
+    const simulation = new FixedStepSimulation({
+      ...DIRECT_CONFIG,
+      senderWorkers: 2,
+    }, 4, 10, (context) => ({
+      kind: 'http-response',
+      statusCode: context.batch.sequence === 0 && context.attempt === 1
+        ? 503
+        : 200,
+      latencyMs: context.batch.sequence === 1 ? 1_000 : 10,
+    }))
+
+    advanceUntil(
+      simulation,
+      () => simulation.telemetry(true).sender.workerStates.backoff === 1,
+    )
+    const backoffSlot = simulation.telemetry(true).sender.workerSlots.find(
+      ({ state }) => state === 'backoff',
+    )!
+
+    advanceUntil(
+      simulation,
+      () => simulation.telemetry(true).sender.retryAttemptsStartedTotal === 1,
+    )
+    const retrySlot = simulation.telemetry(true).sender.workerSlots.find(
+      ({ id }) => id === backoffSlot.id,
+    )!
+
+    expect(retrySlot).toEqual({ ...backoffSlot, state: 'in-flight' })
+  })
+
+  it.each([0, 10])(
+    'schedules available workers with deterministic round-robin fairness at q2 capacity %i',
+    (queue2Capacity) => {
+      const simulation = new FixedStepSimulation({
+        ...DIRECT_CONFIG,
+        senderWorkers: 3,
+        requestedTps: 1_000,
+      }, 4, queue2Capacity, () => ({
+        kind: 'http-response',
+        statusCode: 200,
+        latencyMs: 10,
+      }))
+      const scheduledOrdinals: number[] = []
+
+      for (let request = 1; request <= 6; request += 1) {
+        advanceUntil(
+          simulation,
+          () => simulation.telemetry(true).http.requestsStartedTotal === request,
+        )
+        scheduledOrdinals.push(
+          simulation.telemetry(true).sender.workerSlots.find(
+            ({ state }) => state === 'in-flight',
+          )!.ordinal,
+        )
+        advanceUntil(
+          simulation,
+          () => simulation.telemetry(true).http.requestsCompletedTotal === request,
+        )
+      }
+
+      expect(scheduledOrdinals).toEqual([0, 1, 2, 0, 1, 2])
+    },
+  )
 
   it('allows documented cross-worker completion reorder after FIFO starts', () => {
     const attempts: SimulationAttemptContext[] = []
@@ -1111,6 +1239,7 @@ describe('SimulationAdapter', () => {
     await vi.advanceTimersByTimeAsync(500)
 
     const beforeScaleDown = adapter.getSnapshot()
+    expectSenderSlotConservation(beforeScaleDown.sender)
     expect(
       beforeScaleDown.sender.workerStates.inFlight +
         beforeScaleDown.sender.workerStates.backoff,
@@ -1118,6 +1247,7 @@ describe('SimulationAdapter', () => {
 
     await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
     const pending = adapter.getSnapshot()
+    expectSenderSlotConservation(pending.sender)
     expect(pending.sender.workers).toMatchObject({ applied: 32, pending: 1 })
     expect(
       pending.sender.workerStates.inFlight + pending.sender.workerStates.backoff,
@@ -1126,6 +1256,7 @@ describe('SimulationAdapter', () => {
     await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 0 })
     await vi.advanceTimersByTimeAsync(2_000)
     const applied = adapter.getSnapshot()
+    expectSenderSlotConservation(applied.sender)
     expect(applied.sender.workers).toMatchObject({ applied: 1, pending: null })
     expect(
       applied.sender.workerStates.idle +
@@ -1133,6 +1264,11 @@ describe('SimulationAdapter', () => {
         applied.sender.workerStates.backoff,
     ).toBe(1)
     expect(applied.sender.terminalFailedBatchesTotal).toBe(0)
+    expect(applied.sender.workerSlots).toEqual([{
+      id: 'sender-worker-0',
+      ordinal: 0,
+      state: expect.stringMatching(/^(idle|in-flight|backoff)$/),
+    }])
     adapter.dispose()
   })
 
