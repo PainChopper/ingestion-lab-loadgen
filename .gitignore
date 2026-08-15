@@ -1,7 +1,3 @@
-# Test files that should not be tracked
-trace_test.go
-*_test.go
-
 # IDE files
 .vscode/
 .idea/
