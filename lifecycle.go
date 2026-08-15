@@ -36,7 +36,7 @@ func (lifecycle *lifecycle) pause() bool {
 }
 
 func (lifecycle *lifecycle) reset() bool {
-	if lifecycle.state == runStateRunning {
+	if lifecycle.state == runStateRunning || lifecycle.state == runStatePaused {
 		lifecycle.state = runStateResetting
 		return true
 	}
