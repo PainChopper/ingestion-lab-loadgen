@@ -42,3 +42,11 @@ func (lifecycle *lifecycle) reset() bool {
 	}
 	return false
 }
+
+func (lifecycle *lifecycle) completeReset() bool {
+	if lifecycle.state == runStateResetting {
+		lifecycle.state = runStateIdle
+		return true
+	}
+	return false
+}
