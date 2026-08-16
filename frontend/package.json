@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --mode simulation",
+    "dev:backend": "vite --mode backend",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "lint": "oxlint",

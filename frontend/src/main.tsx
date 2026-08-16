@@ -2,9 +2,12 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { HttpAdapter } from './adapters/HttpAdapter.ts'
 import { SimulationAdapter } from './adapters/SimulationAdapter.ts'
 
-const adapter = new SimulationAdapter()
+const adapter = import.meta.env.MODE === 'backend'
+  ? new HttpAdapter()
+  : new SimulationAdapter()
 
 window.addEventListener('beforeunload', adapter.dispose, { once: true })
 
