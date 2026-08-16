@@ -147,3 +147,14 @@ func TestResetFromResettingIsNoop(t *testing.T) {
 		t.Errorf("state after reset() from resetting = %v, want %v", state, runStateResetting)
 	}
 }
+
+func TestCompleteResetFromResetting(t *testing.T) {
+	lifecycle := newResettingLifecycle(t)
+	if !lifecycle.completeReset() {
+		t.Error("completeReset() from resetting = false, want true")
+	}
+	state := lifecycle.currentState()
+	if state != runStateIdle {
+		t.Errorf("state after completeReset() from resetting = %v, want %v", state, runStateIdle)
+	}
+}
