@@ -142,7 +142,7 @@ React-модель содержит 11 отправляемых типов ко�
 | `run` | `applyCommand` → lifecycle `run` | Отсутствует |
 | `pause` | `applyCommand` → lifecycle `pause` | Отсутствует |
 | `reset` | `applyCommand` → lifecycle `reset` с проверкой run state | Отсутствует |
-| `set-requested-tps` | `applyCommand` → throttler `setTPS` | Legacy `setTPS` есть, но throttler не подключён |
+| `set-requested-tps` | `applyCommand` → throttler `cmdSetTPS` | Legacy `cmdSetTPS` есть, но throttler не подключён |
 | `set-worker-count` reader | Reader pool configuration | Reader pool отсутствует |
 | `set-worker-count` sender | Sender pool configuration | Sender отсутствует |
 | `set-queue-capacity` | Queue owner configuration с immediate/pending receipt | Runtime-resizable queue отсутствует |
