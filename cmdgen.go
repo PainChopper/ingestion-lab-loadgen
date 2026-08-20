@@ -15,12 +15,14 @@ const (
 	setTPS cmdType = iota
 	getStatus
 	quit
+	getSnapshot
 )
 
 type command struct {
-	kind      cmdType
-	targetTPS int
-	reply     chan statusSnapshot
+	kind          cmdType
+	targetTPS     int
+	reply_old     chan statusSnapshot_old
+	snapshotReply chan statusSnapshot
 }
 
 type controlRequest struct {
@@ -28,14 +30,30 @@ type controlRequest struct {
 	Value  string `json:"value"`  // "100" - transactions per second (TPS)
 }
 
-type statusSnapshot struct {
+type statusSnapshot_old struct {
 	TargetTPS         string `json:"targetTPS"`
 	ActualTPS         string `json:"actualTPS"`
 	TotalTransactions string `json:"totalTransactions"`
 }
 
-func startHttpServer(out chan command, metrics *Metrics) *http.Server {
+type statusSnapshot struct {
+	RunState          runState `json:"runState"`
+	TotalTransactions int64    `json:"totalTransactions"`
+	ReaderWorkers     int      `json:"readerWorkers"`
+	SenderWorkers     int      `json:"senderWorkers"`
+}
+
+const snapshotPath = "/api/loadgen/snapshot"
+
+func newServeMux(commands chan<- command, metrics *Metrics) *http.ServeMux {
+
 	mux := http.NewServeMux()
+	mux.Handle(snapshotPath, snapshotHandler(commands))
+	return mux
+}
+
+func startHttpServer(out chan command, metrics *Metrics) *http.Server {
+	mux := newServeMux(out, metrics)
 
 	controlHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -70,8 +88,8 @@ func startHttpServer(out chan command, metrics *Metrics) *http.Server {
 			return
 		}
 
-		replyChan := make(chan statusSnapshot, 1)
-		cmd := command{kind: getStatus, reply: replyChan}
+		replyChan := make(chan statusSnapshot_old, 1)
+		cmd := command{kind: getStatus, reply_old: replyChan}
 		out <- cmd
 		snapshot := <-replyChan
 		w.Header().Set("Content-Type", "application/json")
