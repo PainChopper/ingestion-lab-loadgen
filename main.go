@@ -17,13 +17,15 @@ const (
 
 var blackHole uint64
 
-type generatorState struct {
+type controlState struct {
 	actualTPS         int64
 	totalTransactions int64
+
+	lifecycle *lifecycle
 }
 
 func main() {
-	gs := generatorState{}
+	state := controlState{lifecycle: newLifecycle()}
 	var consumedSinceTick atomic.Int64
 	throttler := NewTransactionsThrottler(startTPS, bucketBurstPercent)
 
@@ -47,6 +49,10 @@ func main() {
 		consumeBatches(batches, &consumedSinceTick)
 	}()
 
+	if !state.lifecycle.run() {
+		log.Fatal("lifecycle did not enter running state")
+	}
+
 	for {
 		select {
 		case <-consumerDone:
@@ -63,18 +69,28 @@ func main() {
 				}
 				return
 			case getStatus:
-				snapshot := statusSnapshot{
+				snapshot_old := statusSnapshot_old{
 					TargetTPS:         strconv.Itoa(throttler.GetTPS()),
-					ActualTPS:         strconv.Itoa(int(gs.actualTPS)),
-					TotalTransactions: strconv.Itoa(int(gs.totalTransactions)),
+					ActualTPS:         strconv.Itoa(int(state.actualTPS)),
+					TotalTransactions: strconv.Itoa(int(state.totalTransactions)),
 				}
-				cmd.reply <- snapshot
+				cmd.reply_old <- snapshot_old
+
+			case getSnapshot:
+				snapshot := statusSnapshot{
+					RunState:          state.lifecycle.currentState(),
+					TotalTransactions: state.totalTransactions,
+					ReaderWorkers:     1,
+					SenderWorkers:     0,
+				}
+				cmd.snapshotReply <- snapshot
 			}
+
 		case <-metrics:
 			delta := consumedSinceTick.Swap(0)
-			gs.actualTPS = delta * int64(time.Second/windowLength)
-			gs.totalTransactions += delta
-			promMetrics.actualTPS.Set(float64(gs.actualTPS))
+			state.actualTPS = delta * int64(time.Second/windowLength)
+			state.totalTransactions += delta
+			promMetrics.actualTPS.Set(float64(state.actualTPS))
 			promMetrics.transactionsTotal.Add(float64(delta))
 		}
 	}
