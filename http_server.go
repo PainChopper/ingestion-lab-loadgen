@@ -9,25 +9,24 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-type cmdType int
+type requestKind int
 
 const (
-	setTPS cmdType = iota
+	getSnapshot requestKind = iota
+	cmdRun
+	cmdPause
+	cmdReset
+	setTPS
+
 	getStatus
 	quit
-	getSnapshot
 )
 
-type command struct {
-	kind          cmdType
+type request struct {
+	kind          requestKind
 	targetTPS     int
 	reply_old     chan statusSnapshot_old
 	snapshotReply chan statusSnapshot
-}
-
-type controlRequest struct {
-	Action string `json:"action"` // "targetTPS", "quit"
-	Value  string `json:"value"`  // "100" - transactions per second (TPS)
 }
 
 type statusSnapshot_old struct {
@@ -36,25 +35,20 @@ type statusSnapshot_old struct {
 	TotalTransactions string `json:"totalTransactions"`
 }
 
-type statusSnapshot struct {
-	RunState          runState `json:"runState"`
-	TotalTransactions int64    `json:"totalTransactions"`
-	ReaderWorkers     int      `json:"readerWorkers"`
-	SenderWorkers     int      `json:"senderWorkers"`
-}
-
 const snapshotPath = "/api/loadgen/snapshot"
+const commandsPath = "/api/loadgen/commands"
 
-func newServeMux(commands chan<- command, metrics *Metrics) *http.ServeMux {
+func newServeMux(commands chan<- request, metrics *Metrics) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle(snapshotPath, snapshotHandler(commands))
+	mux.Handle(commandsPath, commandsHandler(commands))
 
 	controlHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		req := controlRequest{}
+		req := commandRequest{}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
@@ -67,9 +61,9 @@ func newServeMux(commands chan<- command, metrics *Metrics) *http.ServeMux {
 				http.Error(w, "Invalid TPS format", http.StatusBadRequest)
 				return
 			}
-			commands <- command{kind: setTPS, targetTPS: tps}
+			commands <- request{kind: setTPS, targetTPS: tps}
 		case "quit":
-			commands <- command{kind: quit}
+			commands <- request{kind: quit}
 		default:
 			http.Error(w, "Unknown command", http.StatusBadRequest)
 			return
@@ -83,7 +77,7 @@ func newServeMux(commands chan<- command, metrics *Metrics) *http.ServeMux {
 		}
 
 		replyChan := make(chan statusSnapshot_old, 1)
-		cmd := command{kind: getStatus, reply_old: replyChan}
+		cmd := request{kind: getStatus, reply_old: replyChan}
 		commands <- cmd
 		snapshot := <-replyChan
 		w.Header().Set("Content-Type", "application/json")
@@ -109,7 +103,7 @@ func newServeMux(commands chan<- command, metrics *Metrics) *http.ServeMux {
 	return mux
 }
 
-func startHttpServer(out chan command, metrics *Metrics) *http.Server {
+func startHttpServer(out chan request, metrics *Metrics) *http.Server {
 	mux := newServeMux(out, metrics)
 
 	server := &http.Server{
