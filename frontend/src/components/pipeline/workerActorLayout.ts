@@ -110,10 +110,12 @@ export function getWorkerActorLayout(
     }
   }
 
-  const height = compact
+  const contentHeight = compact
     ? DETAILED_WORKER_LIMIT * bounds.rowHeight + bounds.padding * 2
     : workerCount * bounds.rowHeight + bounds.padding * 2
+  const height = Math.max(contentHeight, bounds.minHeight ?? 0)
   const top = bounds.bottom - height
+  const contentTop = bounds.bottom - contentHeight
 
   if (!compact) {
     return {
@@ -125,7 +127,7 @@ export function getWorkerActorLayout(
       rows: workerCount,
       chips: Array.from({ length: workerCount }, (_, index) => ({
         x: bounds.x + 20,
-        y: top + bounds.padding - 4 + index * bounds.rowHeight,
+        y: contentTop + bounds.padding - 4 + index * bounds.rowHeight,
         width: WORKER_CHIP_WIDTH,
         height: WORKER_CHIP_HEIGHT,
         scale: 1,

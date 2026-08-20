@@ -417,7 +417,178 @@ function expectTextPlacement(
   ])
 }
 
+function withWorkerCount(
+  snapshot: LoadgenSnapshot,
+  count: number,
+): LoadgenSnapshot {
+  const control = (workers: LoadgenSnapshot['reader']['workers']) => ({
+    ...workers,
+    applied: count,
+    preview: null,
+    pending: null,
+    min: 0,
+    max: 32,
+  })
+
+  return {
+    ...snapshot,
+    reader: {
+      ...snapshot.reader,
+      workers: control(snapshot.reader.workers),
+    },
+    sender: {
+      ...snapshot.sender,
+      workers: control(snapshot.sender.workers),
+    },
+  }
+}
+
+function pipelineElement(snapshot: LoadgenSnapshot) {
+  return (
+    <PipelineSvg
+      snapshot={snapshot}
+      selectedId={null}
+      onSelect={vi.fn()}
+      onWorkerCountChange={vi.fn()}
+      onQueueCapacityChange={vi.fn()}
+      requestedTpsPreview={null}
+      onRequestedTpsPreviewChange={vi.fn()}
+      onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
+      onInstallationModeChange={vi.fn().mockResolvedValue(true)}
+    />
+  )
+}
+
 describe('PipelineSvg marker wiring', () => {
+  it('keeps landscape actor bottoms, ports, and link endpoints stable across worker boundaries', () => {
+    const cases = [
+      { count: 0, reader: { top: 355, height: 120 }, sender: { top: 355, height: 120 } },
+      { count: 2, reader: { top: 355, height: 120 }, sender: { top: 355, height: 120 } },
+      { count: 3, reader: { top: 326, height: 149 }, sender: { top: 326, height: 149 } },
+      { count: 7, reader: { top: 170, height: 305 }, sender: { top: 170, height: 305 } },
+      { count: 8, reader: { top: 131, height: 344 }, sender: { top: 170, height: 305 } },
+      { count: 16, reader: { top: -181, height: 656 }, sender: { top: 170, height: 305 } },
+      { count: 32, reader: { top: -805, height: 1280 }, sender: { top: 170, height: 305 } },
+    ] as const
+    const base = activeSnapshot()
+    let snapshot = withWorkerCount(base, cases[0].count)
+    const view = render(pipelineElement(snapshot))
+    let stableEndpointInventory: unknown = null
+
+    for (const testCase of cases) {
+      snapshot = withWorkerCount(base, testCase.count)
+      view.rerender(pipelineElement(snapshot))
+      const geometry = createPipelineGeometry({
+        orientation: 'landscape',
+        readerWorkers: testCase.count,
+        senderWorkers: testCase.count,
+      })
+      const actorCases = [
+        {
+          actor: 'reader' as const,
+          expected: testCase.reader,
+          ports: [geometry.actors.reader.ports.output],
+          mode: 'detailed',
+          columns: 1,
+          rows: testCase.count,
+        },
+        {
+          actor: 'sender' as const,
+          expected: testCase.sender,
+          ports: [
+            geometry.actors.sender.ports.input,
+            geometry.actors.sender.ports.output,
+          ],
+          mode: testCase.count > 7 ? 'compact' : 'detailed',
+          columns: testCase.count > 7 ? 4 : 1,
+          rows: testCase.count > 7
+            ? Math.ceil(testCase.count / 4)
+            : testCase.count,
+        },
+      ]
+
+      for (const actorCase of actorCases) {
+        const actor = view.container.querySelector<SVGGElement>(
+          `#${actorCase.actor}-actor`,
+        )!
+        const box = actor.querySelector<SVGRectElement>(
+          '.pipeline-actor-box',
+        )!
+        const ports = [...actor.querySelectorAll<SVGCircleElement>(
+          '.pipeline-port',
+        )].map((port) => ({
+          x: Number(port.getAttribute('cx')),
+          y: Number(port.getAttribute('cy')),
+        }))
+
+        expect({
+          top: Number(box.getAttribute('y')),
+          height: Number(box.getAttribute('height')),
+        }).toEqual(actorCase.expected)
+        expect(Number(box.getAttribute('y')) +
+          Number(box.getAttribute('height'))).toBe(475)
+        expect(actor.dataset.workerCount).toBe(String(testCase.count))
+        expect(actor.dataset.workerLayout).toBe(actorCase.mode)
+        expect(actor.dataset.workerColumns).toBe(String(actorCase.columns))
+        expect(actor.dataset.workerRows).toBe(String(actorCase.rows))
+        expect(ports).toEqual(actorCase.ports)
+      }
+
+      const queuePaths = Object.values(geometry.queues).map((queue) => {
+        const group = view.container.querySelector(
+          `#queue-${
+            queue === geometry.queues['reader-to-throttler']
+              ? 'reader-to-throttler'
+              : 'throttler-to-sender'
+          }`,
+        )!
+        const paths = [...group.querySelectorAll<SVGPathElement>(
+          '.pipeline-queue-cable, .pipeline-queue-requested-cable',
+        )]
+
+        expect(paths.length).toBeGreaterThan(0)
+        for (const path of paths) {
+          expect(path.getAttribute('d'))
+            .toMatch(new RegExp(`^M${queue.start.x} ${queue.start.y}\\b`))
+          expect(path.getAttribute('d'))
+            .toMatch(new RegExp(`H${queue.end.x}$`))
+        }
+
+        return paths.map((path) => path.getAttribute('d'))
+      })
+      const httpPath = view.container.querySelector<SVGPathElement>(
+        '#http-link .pipeline-http-line',
+      )!
+      expect(httpPath.getAttribute('d')).toBe(
+        `M${geometry.http.start.x} ${geometry.http.start.y} H${geometry.http.end.x}`,
+      )
+
+      const endpointInventory = {
+        readerPorts: actorCases[0].ports,
+        senderPorts: actorCases[1].ports,
+        queuePaths,
+        httpPath: httpPath.getAttribute('d'),
+      }
+      if (stableEndpointInventory === null) {
+        stableEndpointInventory = endpointInventory
+      } else {
+        expect(endpointInventory).toEqual(stableEndpointInventory)
+      }
+
+      const svgChildren = [...view.container.querySelector('svg')!.children]
+      expect(svgChildren.indexOf(
+        view.container.querySelector('#http-link')!,
+      )).toBeLessThan(svgChildren.indexOf(
+        view.container.querySelector('#reader-actor')!,
+      ))
+      expect(svgChildren.indexOf(
+        view.container.querySelector('#queue-throttler-to-sender')!,
+      )).toBeLessThan(svgChildren.indexOf(
+        view.container.querySelector('#sender-actor')!,
+      ))
+    }
+  })
+
   it.each([
     { orientation: 'landscape', installationMode: 'installed' },
     { orientation: 'landscape', installationMode: 'bypass' },
