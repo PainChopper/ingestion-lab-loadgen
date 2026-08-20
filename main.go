@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"runtime"
-	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -27,7 +26,6 @@ type controlState struct {
 func main() {
 	state := controlState{lifecycle: newLifecycle()}
 	var consumedSinceTick atomic.Int64
-	throttler := NewTransactionsThrottler(startTPS, bucketBurstPercent)
 
 	commands := make(chan request, 10)
 	batches, err := produceBatches(dataPath)
@@ -38,10 +36,10 @@ func main() {
 	metricsTicker := time.NewTicker(windowLength)
 	defer metricsTicker.Stop()
 	metrics := metricsTicker.C
-
 	promMetrics := NewMetrics()
 	promMetrics.targetTPS.Set(float64(startTPS))
-	server := startHttpServer(commands, promMetrics)
+
+	startHttpServer(commands, promMetrics)
 
 	consumerDone := make(chan struct{})
 	go func() {
@@ -59,23 +57,6 @@ func main() {
 			return
 		case cmd := <-commands:
 			switch cmd.kind {
-			case setTPS:
-				throttler.setTPS(cmd.targetTPS)
-				promMetrics.targetTPS.Set(float64(cmd.targetTPS))
-			case quit:
-				err := server.Close()
-				if err != nil {
-					return
-				}
-				return
-			case getStatus:
-				snapshot_old := statusSnapshot_old{
-					TargetTPS:         strconv.Itoa(throttler.GetTPS()),
-					ActualTPS:         strconv.Itoa(int(state.actualTPS)),
-					TotalTransactions: strconv.Itoa(int(state.totalTransactions)),
-				}
-				cmd.reply_old <- snapshot_old
-
 			case getSnapshot:
 				snapshot := statusSnapshot{
 					RunState:          state.lifecycle.currentState(),

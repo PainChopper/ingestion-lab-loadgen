@@ -6,8 +6,7 @@ import (
 )
 
 type commandRequest struct {
-	Action string `json:"action"` // "targetTPS", "quit"
-	Value  string `json:"value"`  // "100" - transactions per second (TPS)
+	Action string `json:"action"` // "run", "pause"
 }
 
 func commandsHandler(commands chan<- request) http.Handler {
