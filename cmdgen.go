@@ -46,14 +46,8 @@ type statusSnapshot struct {
 const snapshotPath = "/api/loadgen/snapshot"
 
 func newServeMux(commands chan<- command, metrics *Metrics) *http.ServeMux {
-
 	mux := http.NewServeMux()
 	mux.Handle(snapshotPath, snapshotHandler(commands))
-	return mux
-}
-
-func startHttpServer(out chan command, metrics *Metrics) *http.Server {
-	mux := newServeMux(out, metrics)
 
 	controlHandler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -73,9 +67,9 @@ func startHttpServer(out chan command, metrics *Metrics) *http.Server {
 				http.Error(w, "Invalid TPS format", http.StatusBadRequest)
 				return
 			}
-			out <- command{kind: setTPS, targetTPS: tps}
+			commands <- command{kind: setTPS, targetTPS: tps}
 		case "quit":
-			out <- command{kind: quit}
+			commands <- command{kind: quit}
 		default:
 			http.Error(w, "Unknown command", http.StatusBadRequest)
 			return
@@ -90,7 +84,7 @@ func startHttpServer(out chan command, metrics *Metrics) *http.Server {
 
 		replyChan := make(chan statusSnapshot_old, 1)
 		cmd := command{kind: getStatus, reply_old: replyChan}
-		out <- cmd
+		commands <- cmd
 		snapshot := <-replyChan
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(snapshot)
@@ -111,6 +105,12 @@ func startHttpServer(out chan command, metrics *Metrics) *http.Server {
 
 	fileServer := http.FileServer(http.Dir("./ui"))
 	mux.Handle("/", fileServer)
+
+	return mux
+}
+
+func startHttpServer(out chan command, metrics *Metrics) *http.Server {
+	mux := newServeMux(out, metrics)
 
 	server := &http.Server{
 		Addr:    "127.0.0.1:8080",
