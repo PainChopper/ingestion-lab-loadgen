@@ -8,7 +8,7 @@ import (
 )
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
-	commands := make(chan command)
+	commands := make(chan request)
 	expected := statusSnapshot{RunState: runStateRunning, TotalTransactions: 46, ReaderWorkers: 1, SenderWorkers: 0}
 
 	req := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
@@ -45,7 +45,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 }
 
 func TestSnapshotHandlerRejectsPOST(t *testing.T) {
-	commands := make(chan command)
+	commands := make(chan request)
 
 	req := httptest.NewRequest(http.MethodPost, snapshotPath, nil)
 	rec := httptest.NewRecorder()
@@ -62,7 +62,7 @@ func TestSnapshotHandlerRejectsPOST(t *testing.T) {
 }
 
 func TestServeMuxRoutesSnapshot(t *testing.T) {
-	commands := make(chan command)
+	commands := make(chan request)
 	mux := newServeMux(commands, nil)
 
 	req := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
