@@ -65,7 +65,7 @@
 - полные actor/queue/HTTP/target sections с `null` для неизвестной telemetry и `unavailable` для отсутствующих controls;
 - `GET /api/v1/loadgen/snapshot` и frontend `HttpAdapter`, выполняющий wire-to-view-model mapping.
 
-Legacy `statusSnapshot` использует строковые `targetTPS`, `actualTPS` и `totalTransactions` ([cmdgen.go](../cmdgen.go#L31)). Новый контракт требует числовые значения. Существующий `actualTPS` вычисляется из `consumedSinceTick` один раз в секунду ([main.go](../main.go#L73)) и отражает скорость транзакций, обработанных `consumeTransaction` ([transaction_batch_consumer.go](../transaction_batch_consumer.go#L9)). Его нельзя без переименования точки измерения подставлять в `reader.readTps`, `throttler.admittedTps` или `sender.attemptedTps`.
+Legacy `statusSnapshot_old` использует строковые `targetTPS`, `actualTPS` и `totalTransactions` ([cmdgen.go](../cmdgen.go#L31)). Новый контракт требует числовые значения. Существующий `actualTPS` вычисляется из `consumedSinceTick` один раз в секунду ([main.go](../main.go#L73)) и отражает скорость транзакций, обработанных `consumeTransaction` ([transaction_batch_consumer.go](../transaction_batch_consumer.go#L9)). Его нельзя без переименования точки измерения подставлять в `reader.readTps`, `throttler.admittedTps` или `sender.attemptedTps`.
 
 ## 4. Что сейчас является simulation-only
 
