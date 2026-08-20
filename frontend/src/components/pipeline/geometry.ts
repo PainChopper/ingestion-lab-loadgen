@@ -40,7 +40,7 @@ export interface WorkerActorBounds {
   readonly bottom: number
   readonly rowHeight: number
   readonly padding: number
-  readonly fixedHeight?: number
+  readonly minHeight?: number
 }
 
 export const PIPELINE_VIEW_BOX = Object.freeze({
@@ -54,6 +54,8 @@ export const PIPELINE_VIEW_BOX_VALUE =
 export const FLOW_BASELINE = 415
 export const ACTOR_BOTTOM = 475
 export const PORTRAIT_THROTTLER_LIFT = 48
+export const LANDSCAPE_WORKER_ACTOR_MIN_HEIGHT =
+  2 * (ACTOR_BOTTOM - FLOW_BASELINE)
 
 function roundedPath(
   start: Point,
@@ -93,6 +95,7 @@ export const ACTOR_GEOMETRY = Object.freeze({
       bottom: ACTOR_BOTTOM,
       rowHeight: 39,
       padding: 16,
+      minHeight: LANDSCAPE_WORKER_ACTOR_MIN_HEIGHT,
     } satisfies WorkerActorBounds,
     ports: { output: { x: 150, y: FLOW_BASELINE } satisfies Point },
     title: { x: 90, y: 38, anchor: 'middle' } satisfies TextPlacement,
@@ -123,6 +126,7 @@ export const ACTOR_GEOMETRY = Object.freeze({
       bottom: ACTOR_BOTTOM,
       rowHeight: 39,
       padding: 16,
+      minHeight: LANDSCAPE_WORKER_ACTOR_MIN_HEIGHT,
     } satisfies WorkerActorBounds,
     ports: {
       input: { x: 720, y: FLOW_BASELINE } satisfies Point,
