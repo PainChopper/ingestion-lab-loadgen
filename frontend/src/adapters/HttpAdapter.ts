@@ -10,9 +10,12 @@ import type {
 } from '../model/loadgen'
 
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
+const COMMAND_ENDPOINT = '/api/loadgen/commands'
 const POLL_INTERVAL_MS = 1_000
 const UNAVAILABLE_REASON = 'Недоступно в HTTP snapshot mode'
-const UNAVAILABLE_COMMAND_MESSAGE = 'Команды недоступны в HTTP snapshot mode'
+const UNAVAILABLE_COMMAND_MESSAGE = 'command is not available in the HTTP adapter'
+const DISPOSED_COMMAND_MESSAGE = 'http adapter is disposed'
+const NETWORK_COMMAND_MESSAGE = 'command request failed due to a network error'
 const WIRE_KEYS = Object.freeze([
   'readerWorkers',
   'runState',
@@ -27,6 +30,11 @@ interface WireSnapshot {
   readonly senderWorkers: number
 }
 
+type LifecycleCommand = Extract<
+  LoadgenCommand,
+  { type: 'run' | 'pause' | 'reset' }
+>
+
 function deepFreeze<T>(value: T): T {
   if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
     return value
@@ -36,6 +44,14 @@ function deepFreeze<T>(value: T): T {
     deepFreeze((value as Record<PropertyKey, unknown>)[key])
   }
   return Object.freeze(value)
+}
+
+function isLifecycleCommand(
+  command: LoadgenCommand,
+): command is LifecycleCommand {
+  return command.type === 'run' ||
+    command.type === 'pause' ||
+    command.type === 'reset'
 }
 
 function unavailableControl(unit: string): NumericControlSnapshot {
@@ -277,6 +293,7 @@ export class HttpAdapter implements LoadgenAdapter {
   private activeController: AbortController | null = null
   private requestInFlight = false
   private commandSequence = 0
+  private commandQueue: Promise<void> = Promise.resolve()
   private disposed = false
 
   constructor() {
@@ -300,23 +317,37 @@ export class HttpAdapter implements LoadgenAdapter {
     }
   }
 
-  dispatch = async (command: LoadgenCommand): Promise<CommandReceipt> => {
+  dispatch = (command: LoadgenCommand): Promise<CommandReceipt> => {
     const commandId = `http-local-${++this.commandSequence}`
 
-    return deepFreeze({
-      commandId,
-      commandType: command.type,
-      accepted: false,
-      applyMode: 'unavailable',
-      appliedAtMs: null,
-      snapshotRevision: this.snapshot.revision,
-      error: {
-        code: 'unavailable',
-        message: UNAVAILABLE_COMMAND_MESSAGE,
-        retryable: false,
-        details: null,
-      },
-    })
+    if (!isLifecycleCommand(command)) {
+      return Promise.resolve(this.rejectCommand(
+        commandId,
+        command,
+        'unavailable',
+        UNAVAILABLE_COMMAND_MESSAGE,
+        false,
+      ))
+    }
+
+    if (this.disposed) {
+      return Promise.resolve(this.rejectCommand(
+        commandId,
+        command,
+        'disposed',
+        DISPOSED_COMMAND_MESSAGE,
+        false,
+      ))
+    }
+
+    const receipt = this.commandQueue.then(
+      () => this.sendLifecycleCommand(commandId, command),
+    )
+    this.commandQueue = receipt.then(
+      () => undefined,
+      () => undefined,
+    )
+    return receipt
   }
 
   dispose = (): void => {
@@ -370,6 +401,80 @@ export class HttpAdapter implements LoadgenAdapter {
 
     this.lastKnownWire = wire
     this.publish(createSnapshot(revision, 'connected', wire))
+  }
+
+  private sendLifecycleCommand = async (
+    commandId: string,
+    command: LifecycleCommand,
+  ): Promise<CommandReceipt> => {
+    if (this.disposed) {
+      return this.rejectCommand(
+        commandId,
+        command,
+        'disposed',
+        DISPOSED_COMMAND_MESSAGE,
+        false,
+      )
+    }
+
+    try {
+      const response = await fetch(COMMAND_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: command.type }),
+      })
+
+      if (response.status >= 200 && response.status <= 299) {
+        return deepFreeze({
+          commandId,
+          commandType: command.type,
+          accepted: true,
+          applyMode: 'immediate',
+          appliedAtMs: Date.now(),
+          snapshotRevision: this.snapshot.revision,
+          error: null,
+        })
+      }
+
+      return this.rejectCommand(
+        commandId,
+        command,
+        'unavailable',
+        `command request failed with HTTP status ${response.status}`,
+        response.status >= 500 && response.status <= 599,
+      )
+    } catch {
+      return this.rejectCommand(
+        commandId,
+        command,
+        'unavailable',
+        NETWORK_COMMAND_MESSAGE,
+        true,
+      )
+    }
+  }
+
+  private rejectCommand(
+    commandId: string,
+    command: LoadgenCommand,
+    code: 'disposed' | 'unavailable',
+    message: string,
+    retryable: boolean,
+  ): CommandReceipt {
+    return deepFreeze({
+      commandId,
+      commandType: command.type,
+      accepted: false,
+      applyMode: 'unavailable',
+      appliedAtMs: null,
+      snapshotRevision: this.snapshot.revision,
+      error: {
+        code,
+        message,
+        retryable,
+        details: null,
+      },
+    })
   }
 
   private publish(snapshot: LoadgenTelemetrySnapshot): void {
