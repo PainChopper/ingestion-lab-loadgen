@@ -29,7 +29,7 @@ func main() {
 	var consumedSinceTick atomic.Int64
 	throttler := NewTransactionsThrottler(startTPS, bucketBurstPercent)
 
-	commands := make(chan command, 10)
+	commands := make(chan request, 10)
 	batches, err := produceBatches(dataPath)
 	if err != nil {
 		log.Fatalf("cannot start load generator: %v", err)

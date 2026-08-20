@@ -4,7 +4,7 @@
 
 ## Резюме
 
-Текущий React frontend полностью работает через `SimulationAdapter`; реализации `HttpAdapter` нет ([frontend/src/main.tsx](../frontend/src/main.tsx#L5)). Go backend обслуживает старый каталог `./ui`, legacy endpoints `GET /status` и `POST /control`, которые несовместимы с новым контрактом ([cmdgen.go](../cmdgen.go#L31), [cmdgen.go](../cmdgen.go#L81), [cmdgen.go](../cmdgen.go#L94)).
+Текущий React frontend полностью работает через `SimulationAdapter`; реализации `HttpAdapter` нет ([frontend/src/main.tsx](../frontend/src/main.tsx#L5)). Go backend обслуживает старый каталог `./ui`, legacy endpoints `GET /status` и `POST /control`, которые несовместимы с новым контрактом ([cmdgen.go](../http_server.go#L31), [cmdgen.go](../http_server.go#L81), [cmdgen.go](../http_server.go#L94)).
 
 Главный backend-факт: `targetTPS` хранится и меняется, но не влияет на фактический поток. `produceBatches` подключён напрямую к `consumeBatches`; метод `transactionThrottler.Throttle` нигде не вызывается ([main.go](../main.go#L28), [main.go](../main.go#L31), [main.go](../main.go#L47)). Поэтому текущее значение нельзя честно обозначать как реально применённый предел до включения throttler в pipeline.
 
@@ -65,7 +65,7 @@
 - полные actor/queue/HTTP/target sections с `null` для неизвестной telemetry и `unavailable` для отсутствующих controls;
 - `GET /api/v1/loadgen/snapshot` и frontend `HttpAdapter`, выполняющий wire-to-view-model mapping.
 
-Legacy `statusSnapshot_old` использует строковые `targetTPS`, `actualTPS` и `totalTransactions` ([cmdgen.go](../cmdgen.go#L31)). Новый контракт требует числовые значения. Существующий `actualTPS` вычисляется из `consumedSinceTick` один раз в секунду ([main.go](../main.go#L73)) и отражает скорость транзакций, обработанных `consumeTransaction` ([transaction_batch_consumer.go](../transaction_batch_consumer.go#L9)). Его нельзя без переименования точки измерения подставлять в `reader.readTps`, `throttler.admittedTps` или `sender.attemptedTps`.
+Legacy `statusSnapshot_old` использует строковые `targetTPS`, `actualTPS` и `totalTransactions` ([cmdgen.go](../http_server.go#L31)). Новый контракт требует числовые значения. Существующий `actualTPS` вычисляется из `consumedSinceTick` один раз в секунду ([main.go](../main.go#L73)) и отражает скорость транзакций, обработанных `consumeTransaction` ([transaction_batch_consumer.go](../transaction_batch_consumer.go#L9)). Его нельзя без переименования точки измерения подставлять в `reader.readTps`, `throttler.admittedTps` или `sender.attemptedTps`.
 
 ## 4. Что сейчас является simulation-only
 
@@ -161,7 +161,7 @@ React-модель содержит 11 отправляемых типов ко�
 - публикация нового snapshot происходит после каждой применённой команды и по telemetry ticker;
 - SSE subscribe/unsubscribe обслуживает broadcaster, а не pipeline goroutine.
 
-Сейчас Go понимает только legacy `targetTPS`, `quit` и внутренний `getStatus` ([cmdgen.go](../cmdgen.go#L12)). Текущие React-компоненты игнорируют возвращаемые receipts и ошибки: вызовы `dispatch` выполняются через `void`.
+Сейчас Go понимает только legacy `targetTPS`, `quit` и внутренний `getStatus` ([cmdgen.go](../http_server.go#L12)). Текущие React-компоненты игнорируют возвращаемые receipts и ошибки: вызовы `dispatch` выполняются через `void`.
 
 ## 7. Минимальный порядок вертикальных срезов
 
