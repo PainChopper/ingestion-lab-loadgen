@@ -8,10 +8,9 @@ import (
 )
 
 const (
-	windowLength       = time.Second / 1
-	startTPS           = 100_000
-	bucketBurstPercent = 10
-	dataPath           = "./data/MBD-mini/trx/**/*.parquet"
+	windowLength = time.Second / 1
+	startTPS     = 100_000
+	dataPath     = "./data/MBD-mini/trx/**/*.parquet"
 )
 
 var blackHole uint64

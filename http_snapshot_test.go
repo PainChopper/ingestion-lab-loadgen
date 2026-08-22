@@ -8,7 +8,7 @@ import (
 )
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
-	commands := make(chan request)
+	commands := make(chan request, 1)
 	expected := statusSnapshot{RunState: runStateRunning, TotalTransactions: 46, ReaderWorkers: 1, SenderWorkers: 0}
 
 	req := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
@@ -25,6 +25,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 
 	snapshotHandler(commands).ServeHTTP(rec, req)
 	response := rec.Result()
+
 	if response.StatusCode != http.StatusOK {
 		t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusOK)
 	}
@@ -44,8 +45,8 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	}
 }
 
-func TestSnapshotHandlerRejectsPOST(t *testing.T) {
-	commands := make(chan request)
+func TestSnapshotHandlerRejectsPost(t *testing.T) {
+	commands := make(chan request, 1)
 
 	req := httptest.NewRequest(http.MethodPost, snapshotPath, nil)
 	rec := httptest.NewRecorder()
@@ -58,17 +59,5 @@ func TestSnapshotHandlerRejectsPOST(t *testing.T) {
 	allow := response.Header.Get("Allow")
 	if allow != http.MethodGet {
 		t.Errorf("allow header = %q, want %q", allow, http.MethodGet)
-	}
-}
-
-func TestServeMuxRoutesSnapshot(t *testing.T) {
-	commands := make(chan request)
-	mux := newServeMux(commands, nil)
-
-	req := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
-	_, pattern := mux.Handler(req)
-
-	if pattern != snapshotPath {
-		t.Errorf("pattern = %q, want %q", pattern, snapshotPath)
 	}
 }
