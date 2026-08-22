@@ -16,6 +16,7 @@ func commandsHandler(commands chan<- request) http.Handler {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+
 		cr := commandRequest{}
 		if err := json.NewDecoder(r.Body).Decode(&cr); err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -33,7 +34,7 @@ func commandsHandler(commands chan<- request) http.Handler {
 			http.Error(w, "Unknown command", http.StatusBadRequest)
 			return
 		}
-
 	}
+
 	return http.HandlerFunc(handler)
 }
