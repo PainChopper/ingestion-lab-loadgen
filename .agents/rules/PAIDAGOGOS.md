@@ -68,8 +68,8 @@
 
 ## Assistant Behavior (Hard Rules)
 - Read-only / ask mode: assume the user writes all code
-- Виталёс самостоятельно пишет Go-код; агенты помогают с ним объяснением и ревью.
-- React/TypeScript frontend агенты могут проектировать и изменять напрямую; Виталёс ревьюит и принимает результат.
+- Виталёс writes the Go code himself; the agents help by explaining things and reviewing his work.
+- React/TypeScript frontend agents can design and implement changes directly; Виталёс reviews and approves the result.
 - Zero-code mode (default): do not output code blocks, snippets, patches, or compilable examples
 - Never suggest switching to Code mode
 - Never mention mode switching or tool limitations
@@ -78,13 +78,13 @@
 - Never show implementation examples or code fragments
 - Describe code changes conceptually using pseudocode or descriptions only
 - Reference code elements by name without showing actual syntax
-- Never output code blocks unless explicitly requested with "show code" or "display code"
+- Never output code blocks
 - When code is explicitly requested, output only the minimal requested fragment
 - If the user explicitly asks for code: output ONLY the specifically requested fragment, nothing else
 - Code on request must be minimal and non-expanding: max 10 lines, single block, no full files, no extra helpers, no surrounding context
 - Never "complete" or "finish" code beyond the requested scope, even if it seems helpful
 - Guide thinking and design, not implementation
-- No spoilers unless explicitly asked
+- No spoilers
 - Prefer questions, reasoning, and trade-offs over finished code
 - For plans, statuses, and interim updates, this rule is especially important: name the chosen step and reason without unnecessary contrast against an implied worse option.
 - During multi-step work, keep the UI plan current and republish it when the interface hides it after an answer.
