@@ -14,8 +14,7 @@
 | Роль | Разрешённые изменения |
 |---|---|
 | `LEAD` | Tickets/reports и одобренные agent-rule changes в отдельном agent history repo; product code/tests не меняет. |
-| `PAIDAGOGOS` | Файлы не меняет; ведёт primary user-facing plan/learning loop и использует только узкий read-only осмотр plan/state/code для объяснения. |
-| `TEACHER` | Compatibility alias `PAIDAGOGOS`; полностью применяет его полномочия и ограничения без отдельного контракта. |
+| `TEACHER` | Файлы не меняет; ведёт primary user-facing plan/learning loop и использует только узкий read-only осмотр plan/state/code для объяснения. |
 | `CODER` | Product-код frontend, связанные tests/stories и прямо заказанные process/config files в scope. |
 | `TESTER` | Tests, fixtures и test helpers для уже принятого поведения; product behavior не меняет. |
 | `VERIFIER` | Product- и process-файлы не меняет; собирает evidence и сообщает defects. |
@@ -23,7 +22,7 @@
 
 Git staging, commit, branch, push, merge и другие mutating Git actions выполняй только по прямой просьбе Виталёса и только в разрешённом repository.
 
-`PAIDAGOGOS` и `LEAD` — sibling-роли с разным leadership. Основной маршрут `PAIDAGOGOS → Виталёс`; маршрут `PAIDAGOGOS → LEAD → CODER|TESTER|VERIFIER|ANALYST` открывается только после прямого решения Виталёса делегировать agent work. `PAIDAGOGOS` формулирует bounded outcome и acceptance criteria в разговоре, а ticket, dispatch, durable report, staging, commit, push и reconciliation полностью принадлежат `LEAD` и назначенным им ролям. `TEACHER` сохраняется только как compatibility alias `PAIDAGOGOS`.
+`TEACHER` и `LEAD` — sibling-роли с разным leadership. Основной маршрут `TEACHER → Виталёс`; маршрут `TEACHER → LEAD → CODER|TESTER|VERIFIER|ANALYST` открывается только после прямого решения Виталёса делегировать agent work. `TEACHER` формулирует bounded outcome и acceptance criteria в разговоре, а ticket, dispatch, durable report, staging, commit, push и reconciliation полностью принадлежат `LEAD` и назначенным им ролям.
 
 ## Внутренний dispatch субагентов
 

@@ -2,21 +2,23 @@
 
 Роль задаётся маркером `@<ROLE>` в запросе. Если маркера нет, прямой запрос Виталёса выполняй без назначения себе агентской роли. Если маркер неизвестен — запроси назначение.
 
-При первом запросе с маркером рабочей роли и после каждого сжатия контекста, прежде чем отвечать или действовать, обязательно полностью прочитай:
+При первом запросе с маркером `@<ROLE>` и после каждого сжатия контекста, прежде чем отвечать или действовать, обязательно полностью прочитай файлы, указанные для своей роли ниже.
 
-1. [принципы](.agents/shared/rules/PRINCIPLES.md);
-2. [общие контракты](.agents/shared/rules/COMMON.md);
+Для `@TEACHER` прочитай [TEACHER.md](.agents/rules/TEACHER.md) и [личный контекст](../private-context/TEACHER.private.md). На этом остановись: остальные правила этого файла к этой роли не относятся. Эта роль работает непосредственно с Виталёсом.
+
+Для рабочих ролей прочитай:
+1. [принципы](../ingestion-lab-loadgen-agents/rules/PRINCIPLES.md);
+2. [общие контракты](../ingestion-lab-loadgen-agents/rules/COMMON.md);
 3. файл назначенной роли:
-   - `LEAD` → [LEAD.md](.agents/shared/rules/LEAD.md);
-   - `ANALYST` → [ANALYST.md](.agents/shared/rules/ANALYST.md);
-   - `CODER` → [CODER.md](.agents/shared/rules/CODER.md);
-   - `TESTER` → [TESTER.md](.agents/shared/rules/TESTER.md);
-   - `REVIEWER` → [REVIEWER.md](.agents/shared/rules/REVIEWER.md) и [REVIEW-GO.md](.agents/shared/rules/REVIEW-GO.md).
+   - `LEAD` → [LEAD.md](../ingestion-lab-loadgen-agents/rules/LEAD.md);
+   - `ANALYST` → [ANALYST.md](../ingestion-lab-loadgen-agents/rules/ANALYST.md);
+   - `CODER` → [CODER.md](../ingestion-lab-loadgen-agents/rules/CODER.md);
+   - `TESTER` → [TESTER.md](../ingestion-lab-loadgen-agents/rules/TESTER.md);
+   - `REVIEWER` → [REVIEWER.md](../ingestion-lab-loadgen-agents/rules/REVIEWER.md) и [REVIEW-GO.md](../ingestion-lab-loadgen-agents/rules/REVIEW-GO.md).
 
-Для `@PAIDAGOGOS` и `@TEACHER` вместо рабочих правил прочитай [PAIDAGOGOS.md](.agents/rules/PAIDAGOGOS.md) и [личный контекст](../private-context/PAIDAGOGOS.private.md). Эти роли работают непосредственно с Виталёсом.
 
-Go-код находится в корне этого репозитория; React-код — в `frontend/`. Go-агентам не поручено изменять `frontend/` без прямого указания в задаче.
+Go-код находится в корне этого репозитория; React-код — в `frontend/`. Агентам запрещено изменять `frontend/`.
 
-Для Go-агентов пути `00_STATE.md`, `MAIL/`, `PLANS/`, `ARCHIVE/`, `BUILD/` и `RUNLOGS/` из общих правил находятся внутри `.agents/go-runtime/`. Фронтендовая агентская история в соседнем репозитории к этому состоянию не относится.
+Для Go-агентов пути `00_STATE.md`, `MAIL/`, `PLANS/`, `ARCHIVE/`, `BUILD/` и `RUNLOGS/` из общих правил находятся в соседнем каталоге `../ingestion-lab-loadgen-agents-runtime/`. Фронтендовая агентская история в соседнем репозитории к этому состоянию не относится.
 
 `LEAD` проверяет наличие нужных проектных документов и указывает их в `RequiredReads` по фактической задаче. Применимые установленные навыки указывай в `RequiredSkills`.
