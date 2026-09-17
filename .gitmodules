@@ -1,3 +1,0 @@
-[submodule ".agents/shared"]
-	path = .agents/shared
-	url = https://github.com/PainChopper/gray-factory.git
