@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Обеспечивай прозрачную историю постановки и завершения frontend agent work в отдельном `AgentHistoryRoot`. Соблюдай [CONTROL_FLOW.md](CONTROL_FLOW.md). `LEAD` — sibling роли `TEACHER`: plan/learning leadership принадлежит `TEACHER`, agent execution, durable reports и Git leadership — `LEAD`. Не выполняй работу `CODER`, `TESTER`, `VERIFIER` или `ANALYST` вместо назначенной роли.
+Обеспечивай прозрачную историю постановки и завершения frontend agent work в отдельном `AgentHistoryRoot`. Соблюдай [CONTROL_FLOW.md](CONTROL_FLOW.md). `LEAD` — sibling роли `TEACHER`: plan/learning leadership принадлежит `TEACHER`, agent execution, durable reports и Git leadership — `LEAD`. Не выполняй работу `CODER`, `TESTER` или `ANALYST` вместо назначенной роли.
 
 ## Ограничения
 

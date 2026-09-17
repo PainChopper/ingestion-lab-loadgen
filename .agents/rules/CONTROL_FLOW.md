@@ -17,17 +17,16 @@
 | `TEACHER` | Файлы не меняет; ведёт primary user-facing plan/learning loop и использует только узкий read-only осмотр plan/state/code для объяснения. |
 | `CODER` | Product-код frontend, связанные tests/stories и прямо заказанные process/config files в scope. |
 | `TESTER` | Tests, fixtures и test helpers для уже принятого поведения; product behavior не меняет. |
-| `VERIFIER` | Product- и process-файлы не меняет; собирает evidence и сообщает defects. |
 | `ANALYST` | Работает read-only; описывает requirements, contracts, gaps и варианты. |
 
 Git staging, commit, branch, push, merge и другие mutating Git actions выполняй только по прямой просьбе Виталёса и только в разрешённом repository.
 
-`TEACHER` и `LEAD` — sibling-роли с разным leadership. Основной маршрут `TEACHER → Виталёс`; маршрут `TEACHER → LEAD → CODER|TESTER|VERIFIER|ANALYST` открывается только после прямого решения Виталёса делегировать agent work. `TEACHER` формулирует bounded outcome и acceptance criteria в разговоре, а ticket, dispatch, durable report, staging, commit, push и reconciliation полностью принадлежат `LEAD` и назначенным им ролям.
+`TEACHER` и `LEAD` — sibling-роли с разным leadership. Основной маршрут `TEACHER → Виталёс`; маршрут `TEACHER → LEAD → CODER|TESTER|ANALYST` открывается только после прямого решения Виталёса делегировать agent work. `TEACHER` формулирует bounded outcome и acceptance criteria в разговоре, а ticket, dispatch, durable report, staging, commit, push и reconciliation полностью принадлежат `LEAD` и назначенным им ролям.
 
 ## Внутренний dispatch субагентов
 
-- `CODER`, `TESTER`, `VERIFIER`, `ANALYST` и другие исполнители запускаются только как внутренние субагенты текущей задачи через доступный `spawn_agent`. Namespace конкретной оболочки не является частью архитектурного контракта.
-- Перед запуском `LEAD` сверяет фактическую схему инструмента. Для независимого чистого контекста используй `fork_turns: "none"`, если схема содержит `fork_turns`, либо точное семантически эквивалентное поле доступной оболочки, например `fork_context: false`. Не закрепляй единственный устаревающий синтаксис. Частичный контекст не является независимым; независимым `CODER` и `VERIFIER` передавай чистый контекст.
+- `CODER`, `TESTER`, `ANALYST` и другие исполнители запускаются только как внутренние субагенты текущей задачи через доступный `spawn_agent`. Namespace конкретной оболочки не является частью архитектурного контракта.
+- Перед запуском `LEAD` сверяет фактическую схему инструмента. Для независимого чистого контекста используй `fork_turns: "none"`, если схема содержит `fork_turns`, либо точное семантически эквивалентное поле доступной оболочки, например `fork_context: false`. Не закрепляй единственный устаревающий синтаксис. Частичный контекст не является независимым; независимым исполнителям передавай чистый контекст.
 - `message` содержит полный bounded packet: роль, цель, scope, access mode, точные входные и выходные пути, входные факты, разрешённые и запрещённые изменения, acceptance criteria, обязательные проверки и формат результата.
 - До spawn ledger row содержит stable unique `DispatchId`, unique sibling `TaskName`, ожидаемый `ReportPath` и `Status: PENDING`. `task_name` задаёт это внутреннее имя запуска, а не отдельную пользовательскую задачу.
 - После successful spawn в той же row сохрани returned agent id либо canonical task name и `Status: DISPATCHED`. Durable row progression: `PENDING` → `DISPATCHED` → `TERMINAL_RESULT_RECEIVED` → reconciled actual status/verdict. При parallel launch после каждого successful spawn пересчитай `ActiveDispatches` в ledger order; failed spawn не добавляй.
@@ -138,4 +137,4 @@ Tickets/reports не копируются в product repo. В них допус�
 - Не сохраняй credentials, tokens, полные чувствительные payloads и случайные terminal dumps.
 - Только при необходимости сохраняй investigation logs и screenshots в `docs/agent-runs/<date>-<role>-<slug>/`. Каталог является локальным артефактом и не создаётся заранее.
 - Итог должен быть коротким: статус, изменённые файлы, проверки, `AutomatedVerdict`, `BrowserVerdict`, риски и сознательно не выполненное.
-- Durable report в agent history repo создаётся по lifecycle выше. Для него используй [шаблон результата](../templates/REPORT.md) или [шаблон верификации](../templates/VERIFY.md).
+- Durable report в agent history repo создаётся по lifecycle выше. Для него используй [шаблон результата](../templates/REPORT.md).
