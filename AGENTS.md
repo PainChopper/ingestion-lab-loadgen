@@ -12,7 +12,7 @@
 3. файл назначенной роли:
    - `LEAD` → [LEAD.md](../ingestion-lab-loadgen-agents/rules/LEAD.md);
    - `ANALYST` → [ANALYST.md](../ingestion-lab-loadgen-agents/rules/ANALYST.md);
-   - `CODER` → [CODER.md](../ingestion-lab-loadgen-agents/rules/CODER.md);
+   - `CODER` → [CODER.md](../ingestion-lab-loadgen-agents/rules/CODER.md) и [GO-CODING.md](../ingestion-lab-loadgen-agents/rules/GO-CODING.md);
    - `TESTER` → [TESTER.md](../ingestion-lab-loadgen-agents/rules/TESTER.md);
    - `REVIEWER` → [REVIEWER.md](../ingestion-lab-loadgen-agents/rules/REVIEWER.md) и [REVIEW-GO.md](../ingestion-lab-loadgen-agents/rules/REVIEW-GO.md).
 
