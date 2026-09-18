@@ -24,10 +24,10 @@ type request struct {
 const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
 
-func newServeMux(commands chan<- request, metrics *Metrics) *http.ServeMux {
+func newServeMux(requests chan<- request, metrics *Metrics) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle(snapshotPath, snapshotHandler(commands))
-	mux.Handle(commandsPath, commandsHandler(commands))
+	mux.Handle(snapshotPath, snapshotHandler(requests))
+	mux.Handle(commandsPath, commandsHandler(requests))
 
 	if metrics != nil {
 		mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))
@@ -42,8 +42,8 @@ func newServeMux(commands chan<- request, metrics *Metrics) *http.ServeMux {
 	return mux
 }
 
-func startHttpServer(out chan request, metrics *Metrics) {
-	mux := newServeMux(out, metrics)
+func startHttpServer(requests chan request, metrics *Metrics) {
+	mux := newServeMux(requests, metrics)
 
 	server := &http.Server{
 		Addr:    "127.0.0.1:8080",

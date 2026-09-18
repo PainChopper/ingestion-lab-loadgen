@@ -8,7 +8,7 @@ import (
 func TestRunCommandStartsPipelineOnce(t *testing.T) {
 	var starts int
 	batches := make(chan []Transaction)
-	commands := make(chan request, 3)
+	requests := make(chan request, 3)
 	done := make(chan struct{})
 	consumerStarted := false
 	state := controlState{lifecycle: newLifecycle()}
@@ -18,23 +18,23 @@ func TestRunCommandStartsPipelineOnce(t *testing.T) {
 		return batches, nil
 	}
 	go func() {
-		state.eventLoop(commands, nil, NewMetrics(), produce)
+		state.eventLoop(requests, nil, NewMetrics(), produce)
 		close(done)
 	}()
 	defer func() {
 		if !consumerStarted {
-			close(commands)
+			close(requests)
 			close(batches)
 			<-done
 			return
 		}
 		close(batches)
 		<-done
-		close(commands)
+		close(requests)
 	}()
 
 	reply := make(chan statusSnapshot, 1)
-	commands <- request{kind: getSnapshot, snapshotReply: reply}
+	requests <- request{kind: getSnapshot, snapshotReply: reply}
 	snapshot := <-reply
 	if snapshot.RunState != runStateIdle {
 		t.Fatalf("initial state = %v, want %v", snapshot.RunState, runStateIdle)
@@ -43,8 +43,8 @@ func TestRunCommandStartsPipelineOnce(t *testing.T) {
 		t.Fatalf("initial starts = %v, want 0", starts)
 	}
 
-	commands <- request{kind: cmdRun}
-	commands <- request{kind: getSnapshot, snapshotReply: reply}
+	requests <- request{kind: cmdRun}
+	requests <- request{kind: getSnapshot, snapshotReply: reply}
 	snapshot = <-reply
 	if snapshot.RunState != runStateRunning {
 		t.Fatalf("state after first Run = %v, want %v", snapshot.RunState, runStateRunning)
@@ -53,9 +53,9 @@ func TestRunCommandStartsPipelineOnce(t *testing.T) {
 		t.Fatalf("starts after first Run = %v, want 1", starts)
 	}
 
-	commands <- request{kind: cmdRun}
-	commands <- request{kind: cmdRun}
-	commands <- request{kind: getSnapshot, snapshotReply: reply}
+	requests <- request{kind: cmdRun}
+	requests <- request{kind: cmdRun}
+	requests <- request{kind: getSnapshot, snapshotReply: reply}
 	snapshot = <-reply
 	if snapshot.RunState != runStateRunning {
 		t.Fatalf("state after repeated Run = %v, want %v", snapshot.RunState, runStateRunning)
@@ -68,7 +68,7 @@ func TestRunCommandStartsPipelineOnce(t *testing.T) {
 func TestEventLoopRetriesRunAfterPreparationError(t *testing.T) {
 	var attempts int
 	batches := make(chan []Transaction)
-	commands := make(chan request, 2)
+	requests := make(chan request, 2)
 	done := make(chan struct{})
 	consumerStarted := false
 	state := controlState{lifecycle: newLifecycle()}
@@ -81,24 +81,24 @@ func TestEventLoopRetriesRunAfterPreparationError(t *testing.T) {
 		return batches, nil
 	}
 	go func() {
-		state.eventLoop(commands, nil, NewMetrics(), produce)
+		state.eventLoop(requests, nil, NewMetrics(), produce)
 		close(done)
 	}()
 	defer func() {
 		if !consumerStarted {
-			close(commands)
+			close(requests)
 			close(batches)
 			<-done
 			return
 		}
 		close(batches)
 		<-done
-		close(commands)
+		close(requests)
 	}()
 
 	reply := make(chan statusSnapshot, 1)
-	commands <- request{kind: cmdRun}
-	commands <- request{kind: getSnapshot, snapshotReply: reply}
+	requests <- request{kind: cmdRun}
+	requests <- request{kind: getSnapshot, snapshotReply: reply}
 	snapshot := <-reply
 	if snapshot.RunState != runStateIdle {
 		t.Fatalf("state after failed Run = %v, want %v", snapshot.RunState, runStateIdle)
@@ -107,8 +107,8 @@ func TestEventLoopRetriesRunAfterPreparationError(t *testing.T) {
 		t.Fatalf("attempts after failed Run = %v, want 1", attempts)
 	}
 
-	commands <- request{kind: cmdRun}
-	commands <- request{kind: getSnapshot, snapshotReply: reply}
+	requests <- request{kind: cmdRun}
+	requests <- request{kind: getSnapshot, snapshotReply: reply}
 	snapshot = <-reply
 	if snapshot.RunState != runStateRunning {
 		t.Fatalf("state after retry = %v, want %v", snapshot.RunState, runStateRunning)

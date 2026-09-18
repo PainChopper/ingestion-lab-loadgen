@@ -7,7 +7,7 @@ import (
 )
 
 func (state *controlState) eventLoop(
-	commands <-chan request,
+	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
 	produce func() (<-chan []Transaction, error),
@@ -19,7 +19,7 @@ func (state *controlState) eventLoop(
 		select {
 		case <-consumerDone:
 			return
-		case cmd, ok := <-commands:
+		case cmd, ok := <-requests:
 			if !ok {
 				return
 			}
