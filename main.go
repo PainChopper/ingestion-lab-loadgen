@@ -1,9 +1,7 @@
 package main
 
 import (
-	"log"
 	"runtime"
-	"sync/atomic"
 	"time"
 )
 
@@ -24,13 +22,8 @@ type controlState struct {
 
 func main() {
 	state := controlState{lifecycle: newLifecycle()}
-	var consumedSinceTick atomic.Int64
 
 	commands := make(chan request, 10)
-	batches, err := produceBatches(dataPath)
-	if err != nil {
-		log.Fatalf("cannot start load generator: %v", err)
-	}
 
 	metricsTicker := time.NewTicker(windowLength)
 	defer metricsTicker.Stop()
@@ -40,40 +33,12 @@ func main() {
 
 	startHttpServer(commands, promMetrics)
 
-	consumerDone := make(chan struct{})
-	go func() {
-		defer close(consumerDone)
-		consumeBatches(batches, &consumedSinceTick)
-	}()
-
-	if !state.lifecycle.run() {
-		log.Fatal("lifecycle did not enter running state")
-	}
-
-	for {
-		select {
-		case <-consumerDone:
-			return
-		case cmd := <-commands:
-			switch cmd.kind {
-			case getSnapshot:
-				snapshot := statusSnapshot{
-					RunState:          state.lifecycle.currentState(),
-					TotalTransactions: state.totalTransactions,
-					ReaderWorkers:     1,
-					SenderWorkers:     0,
-				}
-				cmd.snapshotReply <- snapshot
-			}
-
-		case <-metrics:
-			delta := consumedSinceTick.Swap(0)
-			state.actualTPS = delta * int64(time.Second/windowLength)
-			state.totalTransactions += delta
-			promMetrics.actualTPS.Set(float64(state.actualTPS))
-			promMetrics.transactionsTotal.Add(float64(delta))
-		}
-	}
+	state.eventLoop(
+		commands,
+		metrics,
+		promMetrics,
+		func() (<-chan []Transaction, error) { return produceBatches(dataPath) },
+	)
 }
 
 func consumeTransaction(tran *Transaction) {
