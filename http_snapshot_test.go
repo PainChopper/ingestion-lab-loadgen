@@ -8,14 +8,14 @@ import (
 )
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
-	commands := make(chan request, 1)
+	requests := make(chan request, 1)
 	expected := statusSnapshot{RunState: runStateRunning, TotalTransactions: 46, ReaderWorkers: 1, SenderWorkers: 0}
 
 	req := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
 	rec := httptest.NewRecorder()
 
 	fakeStateOwner := func() {
-		cmd := <-commands
+		cmd := <-requests
 		if cmd.kind != getSnapshot {
 			t.Errorf("command kind = %v, want %v", cmd.kind, getSnapshot)
 		}
@@ -23,7 +23,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	}
 	go fakeStateOwner()
 
-	snapshotHandler(commands).ServeHTTP(rec, req)
+	snapshotHandler(requests).ServeHTTP(rec, req)
 	response := rec.Result()
 
 	if response.StatusCode != http.StatusOK {
@@ -46,12 +46,12 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 }
 
 func TestSnapshotHandlerRejectsPost(t *testing.T) {
-	commands := make(chan request, 1)
+	requests := make(chan request, 1)
 
 	req := httptest.NewRequest(http.MethodPost, snapshotPath, nil)
 	rec := httptest.NewRecorder()
 
-	snapshotHandler(commands).ServeHTTP(rec, req)
+	snapshotHandler(requests).ServeHTTP(rec, req)
 	response := rec.Result()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %v, want %v", rec.Code, http.StatusMethodNotAllowed)

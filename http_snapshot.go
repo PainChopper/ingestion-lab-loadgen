@@ -13,7 +13,7 @@ type statusSnapshot struct {
 	SenderWorkers     int      `json:"senderWorkers"`
 }
 
-func snapshotHandler(commands chan<- request) http.Handler {
+func snapshotHandler(requests chan<- request) http.Handler {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -21,7 +21,7 @@ func snapshotHandler(commands chan<- request) http.Handler {
 			return
 		}
 		reply := make(chan statusSnapshot, 1)
-		commands <- request{
+		requests <- request{
 			kind:          getSnapshot,
 			snapshotReply: reply,
 		}

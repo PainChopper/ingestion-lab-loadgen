@@ -23,7 +23,7 @@ type controlState struct {
 func main() {
 	state := controlState{lifecycle: newLifecycle()}
 
-	commands := make(chan request, 10)
+	requests := make(chan request, 10)
 
 	metricsTicker := time.NewTicker(windowLength)
 	defer metricsTicker.Stop()
@@ -31,10 +31,10 @@ func main() {
 	promMetrics := NewMetrics()
 	promMetrics.targetTPS.Set(float64(startTPS))
 
-	startHttpServer(commands, promMetrics)
+	startHttpServer(requests, promMetrics)
 
 	state.eventLoop(
-		commands,
+		requests,
 		metrics,
 		promMetrics,
 		func() (<-chan []Transaction, error) { return produceBatches(dataPath) },
