@@ -24,7 +24,10 @@ func produceBatches(dataPath string) (<-chan []Transaction, error) {
 	batches := make(chan []Transaction, batchReadAheadCapacity)
 	go func(files []string, batches chan<- []Transaction) {
 		defer close(batches)
+
+		// Accumulate rows across files until a batch reaches the target size.
 		accumulator := make([]Transaction, 0, batchSize)
+
 		for {
 			for _, filePath := range files {
 				file, err := os.Open(filePath)
@@ -36,7 +39,6 @@ func produceBatches(dataPath string) (<-chan []Transaction, error) {
 				for {
 					n, err := reader.Read(rows)
 					if n > 0 {
-
 						accumulator = append(accumulator, rows[:n]...)
 						if len(accumulator) >= batchSize {
 							batches <- accumulator[:batchSize]
@@ -50,16 +52,14 @@ func produceBatches(dataPath string) (<-chan []Transaction, error) {
 						panic(fmt.Sprintf("failed to read rows from file %s: %v", filePath, err))
 					}
 				}
-				errReaderClose := reader.Close()
-				if errReaderClose != nil {
-					panic(fmt.Sprintf("failed to close reader for file %s: %v", filePath, errReaderClose))
+
+				if err := reader.Close(); err != nil {
+					panic(fmt.Sprintf("failed to close reader for file %s: %v", filePath, err))
 				}
-				errReaderClose = file.Close()
-				if errReaderClose != nil {
-					panic(fmt.Sprintf("failed to close file %s: %v", filePath, errReaderClose))
+				if err := file.Close(); err != nil {
+					panic(fmt.Sprintf("failed to close file %s: %v", filePath, err))
 				}
 			}
-
 		}
 	}(files, batches)
 
