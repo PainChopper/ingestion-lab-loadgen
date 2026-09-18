@@ -2,45 +2,6 @@ package main
 
 import "testing"
 
-func newRunningLifecycle(t *testing.T) *lifecycle {
-	t.Helper()
-	lifecycle := newLifecycle()
-	if !lifecycle.run() {
-		t.Fatal("setup: run() from idle = false, want true")
-	}
-	state := lifecycle.currentState()
-	if state != runStateRunning {
-		t.Fatalf("setup: state after run() from idle = %v, want %v", state, runStateRunning)
-	}
-	return lifecycle
-}
-
-func newPausedLifecycle(t *testing.T) *lifecycle {
-	t.Helper()
-	lifecycle := newRunningLifecycle(t)
-	if !lifecycle.pause() {
-		t.Fatal("setup: pause() from running = false, want true")
-	}
-	state := lifecycle.currentState()
-	if state != runStatePaused {
-		t.Fatalf("setup: state after pause() from running = %v, want %v", state, runStatePaused)
-	}
-	return lifecycle
-}
-
-func newResettingLifecycle(t *testing.T) *lifecycle {
-	t.Helper()
-	lifecycle := newRunningLifecycle(t)
-	if !lifecycle.reset() {
-		t.Fatal("setup: reset() from running = false, want true")
-	}
-	state := lifecycle.currentState()
-	if state != runStateResetting {
-		t.Fatalf("setup: state after reset() from running = %v, want %v", state, runStateResetting)
-	}
-	return lifecycle
-}
-
 func TestLifecycleInitialState(t *testing.T) {
 	lifecycle := newLifecycle()
 	state := lifecycle.currentState()
@@ -157,4 +118,43 @@ func TestCompleteResetFromResetting(t *testing.T) {
 	if state != runStateIdle {
 		t.Errorf("state after completeReset() from resetting = %v, want %v", state, runStateIdle)
 	}
+}
+
+func newRunningLifecycle(t *testing.T) *lifecycle {
+	t.Helper()
+	lifecycle := newLifecycle()
+	if !lifecycle.run() {
+		t.Fatal("setup: run() from idle = false, want true")
+	}
+	state := lifecycle.currentState()
+	if state != runStateRunning {
+		t.Fatalf("setup: state after run() from idle = %v, want %v", state, runStateRunning)
+	}
+	return lifecycle
+}
+
+func newPausedLifecycle(t *testing.T) *lifecycle {
+	t.Helper()
+	lifecycle := newRunningLifecycle(t)
+	if !lifecycle.pause() {
+		t.Fatal("setup: pause() from running = false, want true")
+	}
+	state := lifecycle.currentState()
+	if state != runStatePaused {
+		t.Fatalf("setup: state after pause() from running = %v, want %v", state, runStatePaused)
+	}
+	return lifecycle
+}
+
+func newResettingLifecycle(t *testing.T) *lifecycle {
+	t.Helper()
+	lifecycle := newRunningLifecycle(t)
+	if !lifecycle.reset() {
+		t.Fatal("setup: reset() from running = false, want true")
+	}
+	state := lifecycle.currentState()
+	if state != runStateResetting {
+		t.Fatalf("setup: state after reset() from running = %v, want %v", state, runStateResetting)
+	}
+	return lifecycle
 }
