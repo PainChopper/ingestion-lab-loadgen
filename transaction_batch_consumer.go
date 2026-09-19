@@ -1,12 +1,28 @@
 package main
 
-import "sync/atomic"
+import (
+	"context"
+	"sync/atomic"
+)
 
 const progressEvery int64 = 500
 
-func consumeBatches(batches <-chan []Transaction, consumedSinceTick *atomic.Int64) {
+func consumeBatches(ctx context.Context, batches <-chan []Transaction, consumedSinceTick *atomic.Int64) {
 	var pending int64
-	for batch := range batches {
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		var batch []Transaction
+		select {
+		case <-ctx.Done():
+			return
+		case next, ok := <-batches:
+			if !ok {
+				return
+			}
+			batch = next
+		}
 		for i := range batch {
 			consumeTransaction(&batch[i])
 			pending++
