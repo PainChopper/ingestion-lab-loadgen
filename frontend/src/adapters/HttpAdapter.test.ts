@@ -20,6 +20,8 @@ interface TestWireSnapshot {
   readonly senderWorkers: number
   readonly readerReadTps: number
   readonly readerReadBatchSize: number
+  readonly throttlerRequestedTps: number
+  readonly throttlerInstallationMode: 'installed' | 'bypass'
   readonly readerRowsRead: number
   readonly readerSource: string | null
   readonly readerChannelCapacity: number
@@ -64,11 +66,26 @@ const VALID_WIRE: TestWireSnapshot = {
       unit: 'batches',
       mutability: 'idle-only',
     },
+    throttlerRequestedTps: {
+      default: 200,
+      min: 0,
+      max: 400,
+      step: 25,
+      unit: 'transactions/s',
+      mutability: 'immediate',
+    },
+    throttlerInstallationMode: {
+      default: 'installed',
+      allowed: ['installed', 'bypass'],
+      mutability: 'immediate',
+    },
   },
   readerWorkers: 1,
   senderWorkers: 0,
   readerReadTps: 3_500.5,
   readerReadBatchSize: 50_000,
+  throttlerRequestedTps: 200,
+  throttlerInstallationMode: 'installed',
   readerRowsRead: 14_000,
   readerSource: 'MBD-mini/trx/part/input.parquet',
   readerChannelCapacity: 8,
@@ -204,6 +221,25 @@ function readBatchSizeControl(
   }
 }
 
+function requestedTpsControl(
+  value: number | null,
+  policy: LoadgenPolicySnapshot['throttlerRequestedTps'] | null,
+  connectionState: ConnectionState,
+): NumericControlSnapshot {
+  if (policy === null) return control('transactions/s')
+
+  return {
+    applied: value,
+    preview: null,
+    pending: null,
+    min: policy.min,
+    max: policy.max,
+    step: policy.step,
+    unit: policy.unit,
+    applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
+  }
+}
+
 function neutralChannel(
   id: ChannelTelemetrySnapshot['id'],
   from: ChannelTelemetrySnapshot['from'],
@@ -310,13 +346,21 @@ function expectedSnapshot(
     },
     throttler: {
       id: 'throttler',
-      requestedTps: control('tx/s'),
+      requestedTps: requestedTpsControl(
+        wire?.throttlerRequestedTps ?? null,
+        wire?.policy.throttlerRequestedTps ?? null,
+        connectionState,
+      ),
       installationMode: {
-        applied: null,
+        applied: wire?.throttlerInstallationMode ?? null,
         pending: null,
-        applyMode: 'unavailable',
-        writable: false,
-        unavailableReason: 'Недоступно в HTTP snapshot mode',
+        applyMode: connectionState === 'connected' && wire !== null
+          ? 'immediate'
+          : 'unavailable',
+        writable: connectionState === 'connected' && wire !== null,
+        unavailableReason: connectionState === 'connected' && wire !== null
+          ? null
+          : 'Недоступно в HTTP snapshot mode',
       },
       admittedTps: null,
       limitedMs: null,
@@ -424,6 +468,40 @@ const malformedCases: ReadonlyArray<{
           allowed: [0, 2, 2],
         },
       },
+    }),
+  },
+  {
+    name: 'missing throttler requested TPS policy',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      policy: (() => {
+        const { throttlerRequestedTps: _requestedTps, ...policy } = VALID_WIRE.policy
+        return policy
+      })(),
+    }),
+  },
+  {
+    name: 'unknown throttler installation mode policy field',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      policy: {
+        ...VALID_WIRE.policy,
+        throttlerInstallationMode: {
+          ...VALID_WIRE.policy.throttlerInstallationMode,
+          unknown: true,
+        },
+      },
+    }),
+  },
+  {
+    name: 'wrong-type requested TPS value',
+    result: async () => mockResponse({ ...VALID_WIRE, throttlerRequestedTps: '200' }),
+  },
+  {
+    name: 'unknown applied installation mode',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      throttlerInstallationMode: 'removed',
     }),
   },
   { name: 'null body', result: async () => mockResponse(null) },
@@ -563,7 +641,7 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('maps only the twenty-four valid wire fields into a fresh frozen snapshot', async () => {
+  it('maps only the exact valid wire fields into a fresh frozen snapshot', async () => {
     fetchMock.mockResolvedValueOnce(mockResponse(
       VALID_WIRE,
       { contentType: 'application/json; charset=utf-8' },
@@ -600,6 +678,22 @@ describe('HttpAdapter', () => {
       min: 0,
       max: 0,
       applyMode: 'unavailable',
+    })
+    expect(snapshot.throttler).toMatchObject({
+      requestedTps: {
+        applied: 200,
+        min: 0,
+        max: 400,
+        step: 25,
+        unit: 'transactions/s',
+        applyMode: 'immediate',
+      },
+      installationMode: {
+        applied: 'installed',
+        applyMode: 'immediate',
+        writable: true,
+        unavailableReason: null,
+      },
     })
     expect(snapshot.readerChannel).toEqual({
       ...neutralChannel('reader-to-throttler', 'reader', 'throttler'),
@@ -994,6 +1088,86 @@ describe('HttpAdapter', () => {
     expect(commandFetchCalls()[0]?.[1]).toMatchObject({
       body: '{"action":"set-reader-channel-capacity","value":8192}',
     })
+    adapter.dispose()
+  })
+
+  it.each(['idle', 'running', 'paused'] as const)(
+    'sends immediate throttler controls in $state and leaves applied state to snapshots',
+    async (runState) => {
+      const wire: TestWireSnapshot = {
+        ...VALID_WIRE,
+        runState,
+        throttlerRequestedTps: 0,
+      }
+      fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+        ? Promise.resolve(mockCommandResponse())
+        : Promise.resolve(mockResponse(wire)))
+      const adapter = new HttpAdapter()
+
+      await flushPoll()
+      expect(adapter.getSnapshot().throttler.requestedTps).toMatchObject({
+        applied: 0,
+        min: 0,
+        max: 400,
+        step: 25,
+        applyMode: 'immediate',
+      })
+
+      const [tpsReceipt, modeReceipt] = await Promise.all([
+        adapter.dispatch({ type: 'set-requested-tps', value: 400 }),
+        adapter.dispatch({
+          type: 'set-throttler-installation-mode',
+          value: 'bypass',
+        }),
+      ])
+
+      expect([tpsReceipt, modeReceipt].map(({ accepted }) => accepted))
+        .toEqual([true, true])
+      expect(commandFetchCalls().map(([, init]) =>
+        (init as RequestInit).body,
+      )).toEqual([
+        '{"action":"set-requested-tps","value":400}',
+        '{"action":"set-throttler-installation-mode","value":"bypass"}',
+      ])
+      expect(adapter.getSnapshot().throttler).toMatchObject({
+        requestedTps: { applied: 0 },
+        installationMode: { applied: 'installed' },
+      })
+      adapter.dispose()
+    },
+  )
+
+  it.each([
+    { type: 'set-requested-tps', value: 25 } as const,
+    { type: 'set-throttler-installation-mode', value: 'bypass' } as const,
+  ])('does not send buffered $type after snapshot invalidation', async (command) => {
+    const firstCommand = deferred<Response>()
+    let snapshotRequests = 0
+    fetchMock.mockImplementation((input) => {
+      if (input === COMMAND_ENDPOINT) return firstCommand.promise
+      snapshotRequests += 1
+      return Promise.resolve(mockResponse(
+        snapshotRequests === 1
+          ? { ...VALID_WIRE, runState: 'running' }
+          : { ...VALID_WIRE, throttlerRequestedTps: '25' },
+      ))
+    })
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    const first = adapter.dispatch({ type: 'set-requested-tps', value: 25 })
+    await Promise.resolve()
+    const buffered = adapter.dispatch(command)
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPoll()
+    firstCommand.resolve(mockCommandResponse())
+
+    await expect(first).resolves.toMatchObject({ accepted: true })
+    await expect(buffered).resolves.toMatchObject({
+      accepted: false,
+      error: { code: 'unavailable', retryable: false },
+    })
+    expect(commandFetchCalls()).toHaveLength(1)
     adapter.dispose()
   })
 

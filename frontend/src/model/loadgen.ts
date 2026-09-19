@@ -88,6 +88,14 @@ export interface AllowedControlPolicySnapshot {
 export interface LoadgenPolicySnapshot {
   readonly readerReadBatchSize: RangeControlPolicySnapshot
   readonly readerChannelCapacity: AllowedControlPolicySnapshot
+  readonly throttlerRequestedTps: RangeControlPolicySnapshot
+  readonly throttlerInstallationMode: InstallationModePolicySnapshot
+}
+
+export interface InstallationModePolicySnapshot {
+  readonly default: ThrottlerInstallationMode
+  readonly allowed: readonly ThrottlerInstallationMode[]
+  readonly mutability: string
 }
 
 export interface InstallationModeControlSnapshot {

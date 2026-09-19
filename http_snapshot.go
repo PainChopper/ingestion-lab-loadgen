@@ -11,6 +11,8 @@ type statusSnapshot struct {
 	TotalTransactions                        int64          `json:"totalTransactions"`
 	ReaderWorkers                            int            `json:"readerWorkers"`
 	ReaderReadBatchSize                      int            `json:"readerReadBatchSize"`
+	ThrottlerRequestedTPS                    int            `json:"throttlerRequestedTps"`
+	ThrottlerInstallationMode                string         `json:"throttlerInstallationMode"`
 	SenderWorkers                            int            `json:"senderWorkers"`
 	ElapsedMs                                int64          `json:"elapsedMs"`
 	StartError                               *string        `json:"startError"`

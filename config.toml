@@ -1,4 +1,4 @@
-schema_version = 1
+schema_version = 2
 
 [source]
 path = 'D:\.DEV\ingestion-lab\ingestion-lab-loadgen\data\MBD-mini\trx\fold=*\*.parquet'
@@ -18,3 +18,16 @@ default = 2
 allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 unit = "batches"
 mutability = "idle-only"
+
+[throttler.requested_tps]
+default = 200
+min = 0
+max = 400
+step = 25
+unit = "transactions/s"
+mutability = "immediate"
+
+[throttler.installation_mode]
+default = "installed"
+allowed = ["installed", "bypass"]
+mutability = "immediate"

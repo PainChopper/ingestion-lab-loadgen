@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 )
@@ -19,10 +21,27 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			return
 		}
 
-		cr := commandRequest{}
-		if err := json.NewDecoder(r.Body).Decode(&cr); err != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
+		}
+		cr := commandRequest{}
+		if err := json.NewDecoder(bytes.NewReader(body)).Decode(&cr); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+		if cr.Action == "set-requested-tps" || cr.Action == "set-throttler-installation-mode" {
+			decoder := json.NewDecoder(bytes.NewReader(body))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&cr); err != nil {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
 		}
 
 		switch cr.Action {
@@ -70,6 +89,32 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			}
 			reply := make(chan commandResult, 1)
 			commands <- request{kind: cmdSetReaderChannelCapacity, value: value, commandReply: reply}
+			if result := <-reply; result.status == commandConflict {
+				w.WriteHeader(http.StatusConflict)
+			}
+		case "set-requested-tps":
+			var value int
+			if len(cr.Value) == 0 || string(cr.Value) == "null" {
+				http.Error(w, "Invalid requested TPS", http.StatusBadRequest)
+				return
+			}
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !policy.Throttler.RequestedTPS.contains(value) {
+				http.Error(w, "Invalid requested TPS", http.StatusBadRequest)
+				return
+			}
+			reply := make(chan commandResult, 1)
+			commands <- request{kind: cmdSetRequestedTPS, value: value, commandReply: reply}
+			if result := <-reply; result.status == commandConflict {
+				w.WriteHeader(http.StatusConflict)
+			}
+		case "set-throttler-installation-mode":
+			var value string
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !policy.Throttler.InstallationMode.contains(value) {
+				http.Error(w, "Invalid throttler installation mode", http.StatusBadRequest)
+				return
+			}
+			reply := make(chan commandResult, 1)
+			commands <- request{kind: cmdSetThrottlerInstallationMode, textValue: value, commandReply: reply}
 			if result := <-reply; result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
