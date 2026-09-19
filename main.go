@@ -20,6 +20,7 @@ type controlState struct {
 	elapsedBeforeRun  time.Duration
 	runStartedAt      time.Time
 	startError        *string
+	reader            readerTelemetry
 
 	lifecycle *lifecycle
 }
@@ -42,7 +43,7 @@ func main() {
 		metrics,
 		promMetrics,
 		func(ctx context.Context) (<-chan []Transaction, error) {
-			return produceBatches(ctx, dataPath)
+			return produceBatches(ctx, dataPath, &state.reader)
 		},
 	)
 }

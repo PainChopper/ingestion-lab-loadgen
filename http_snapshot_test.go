@@ -11,6 +11,7 @@ import (
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	requests := make(chan request, 1)
 	startError := "failed to start"
+	source := "data/part/input.parquet"
 	expected := statusSnapshot{
 		RunState:          runStateRunning,
 		TotalTransactions: 46,
@@ -18,6 +19,9 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		SenderWorkers:     0,
 		ElapsedMs:         1234,
 		StartError:        &startError,
+		ReaderReadTPS:     123.5,
+		ReaderRowsRead:    47,
+		ReaderSource:      &source,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
@@ -68,8 +72,10 @@ func TestSnapshotHandlerIncludesZeroElapsedAndNullStartError(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if string(body["elapsedMs"]) != "0" || string(body["startError"]) != "null" {
-		t.Errorf("elapsedMs = %s, startError = %s", body["elapsedMs"], body["startError"])
+	if string(body["elapsedMs"]) != "0" || string(body["startError"]) != "null" ||
+		string(body["readerReadTps"]) != "0" || string(body["readerRowsRead"]) != "0" ||
+		string(body["readerSource"]) != "null" {
+		t.Errorf("idle snapshot body = %v", body)
 	}
 }
 

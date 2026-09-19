@@ -10,7 +10,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-func produceBatches(ctx context.Context, dataPath string) (<-chan []Transaction, error) {
+func produceBatches(ctx context.Context, dataPath string, telemetry *readerTelemetry) (<-chan []Transaction, error) {
 	const batchReadAheadCapacity = 2
 	const batchSize = 50_000
 
@@ -59,6 +59,7 @@ func produceBatches(ctx context.Context, dataPath string) (<-chan []Transaction,
 						}
 						n, err := reader.Read(rows)
 						if n > 0 {
+							telemetry.recordRead(n, filePath)
 							accumulator = append(accumulator, rows[:n]...)
 							if len(accumulator) >= batchSize {
 								select {

@@ -18,6 +18,9 @@ const DISPOSED_COMMAND_MESSAGE = 'http adapter is disposed'
 const NETWORK_COMMAND_MESSAGE = 'command request failed due to a network error'
 const WIRE_KEYS = Object.freeze([
   'elapsedMs',
+  'readerReadTps',
+  'readerRowsRead',
+  'readerSource',
   'readerWorkers',
   'runState',
   'senderWorkers',
@@ -32,6 +35,9 @@ interface WireSnapshot {
   readonly totalTransactions: number
   readonly readerWorkers: number
   readonly senderWorkers: number
+  readonly readerReadTps: number
+  readonly readerRowsRead: number
+  readonly readerSource: string | null
 }
 
 type LifecycleCommand = Extract<
@@ -137,11 +143,11 @@ function createSnapshot(
       id: 'reader',
       workers: workerControl(wire?.readerWorkers ?? null),
       readBatchSize: unavailableControl('tx'),
-      readTps: null,
+      readTps: wire?.readerReadTps ?? null,
       configuredCapacityTps: null,
       limitationReason: null,
-      rowsRead: null,
-      source: null,
+      rowsRead: wire?.readerRowsRead ?? null,
+      source: wire?.readerSource ?? null,
       state: runState,
     },
     throttler: {
@@ -230,6 +236,10 @@ function isWireInteger(value: unknown): value is number {
     value >= 0
 }
 
+function isWireNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 function decodeWireSnapshot(value: unknown): WireSnapshot {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('snapshot body must be an object')
@@ -241,7 +251,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     keys.length !== WIRE_KEYS.length ||
     keys.some((key, index) => key !== WIRE_KEYS[index])
   ) {
-    throw new Error('snapshot body must contain exactly six wire keys')
+    throw new Error('snapshot body must contain exactly nine wire keys')
   }
 
   if (
@@ -255,15 +265,25 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     !isWireInteger(record.elapsedMs) ||
     !isWireInteger(record.totalTransactions) ||
     !isWireInteger(record.readerWorkers) ||
-    !isWireInteger(record.senderWorkers)
+    !isWireInteger(record.senderWorkers) ||
+    !isWireInteger(record.readerRowsRead)
   ) {
     throw new Error('snapshot counters must be nonnegative safe integers')
+  }
+  if (!isWireNumber(record.readerReadTps)) {
+    throw new Error('snapshot readerReadTps must be a nonnegative finite number')
   }
   if (
     record.startError !== null &&
     (typeof record.startError !== 'string' || record.startError.length === 0)
   ) {
     throw new Error('snapshot startError must be null or a nonempty string')
+  }
+  if (
+    record.readerSource !== null &&
+    (typeof record.readerSource !== 'string' || record.readerSource.length === 0)
+  ) {
+    throw new Error('snapshot readerSource must be null or a nonempty string')
   }
 
   return {
@@ -273,6 +293,9 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     totalTransactions: record.totalTransactions,
     readerWorkers: record.readerWorkers,
     senderWorkers: record.senderWorkers,
+    readerReadTps: record.readerReadTps,
+    readerRowsRead: record.readerRowsRead,
+    readerSource: record.readerSource,
   }
 }
 

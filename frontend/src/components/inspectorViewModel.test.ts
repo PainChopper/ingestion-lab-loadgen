@@ -173,6 +173,8 @@ describe('inspector view model', () => {
         readTps: 50_000,
         configuredCapacityTps: 350_000,
         limitationReason: 'downstream-backpressure',
+        rowsRead: 14_000,
+        source: 'MBD-mini/trx/part/input.parquet',
       },
     }, 'reader')
 
@@ -180,6 +182,8 @@ describe('inspector view model', () => {
       { label: 'Actual Read TPS', value: '50,000 tx/s' },
       { label: 'Configured capacity', value: '350,000 tx/s' },
       { label: 'Capacity state', value: 'Downstream limited' },
+      { label: 'Rows read', value: '14,000' },
+      { label: 'Source', value: 'MBD-mini/trx/part/input.parquet' },
     ]))
     adapter.dispose()
   })
