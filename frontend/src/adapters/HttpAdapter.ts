@@ -3,16 +3,12 @@ import type {
   CommandReceipt,
   ConnectionState,
   LoadgenCommand,
+  LoadgenPolicySnapshot,
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
   QueueTelemetrySnapshot,
   RunState,
 } from '../model/loadgen'
-import {
-  isQueue1Capacity,
-  QUEUE1_CAPACITY_VALUES,
-} from '../model/queue1Capacity'
-
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
 const COMMAND_ENDPOINT = '/api/loadgen/commands'
 const POLL_INTERVAL_MS = 1_000
@@ -22,6 +18,7 @@ const DISPOSED_COMMAND_MESSAGE = 'http adapter is disposed'
 const NETWORK_COMMAND_MESSAGE = 'command request failed due to a network error'
 const WIRE_KEYS = Object.freeze([
   'elapsedMs',
+  'policy',
   'queue1BlockedMs',
   'queue1BlockedSenders',
   'queue1Capacity',
@@ -52,6 +49,7 @@ interface WireSnapshot {
   readonly elapsedMs: number
   readonly startError: string | null
   readonly totalTransactions: number
+  readonly policy: LoadgenPolicySnapshot
   readonly readerWorkers: number
   readonly senderWorkers: number
   readonly readerReadTps: number
@@ -176,6 +174,7 @@ function neutralQueue(
 
 function queue1CapacityControl(
   value: number,
+  policy: LoadgenPolicySnapshot['queue1Capacity'],
   connectionState: ConnectionState,
   runState: RunState,
 ): NumericControlSnapshot {
@@ -183,10 +182,10 @@ function queue1CapacityControl(
     applied: value,
     preview: null,
     pending: null,
-    min: 0,
-    max: QUEUE1_CAPACITY_VALUES.at(-1)!,
+    min: policy.allowed[0]!,
+    max: policy.allowed.at(-1)!,
     step: 1,
-    unit: 'batches',
+    unit: policy.unit,
     applyMode: connectionState === 'connected' && runState === 'idle'
       ? 'immediate'
       : 'unavailable',
@@ -209,6 +208,7 @@ function queue1(
     ...queue,
     capacity: queue1CapacityControl(
       wire.queue1Capacity,
+      wire.policy.queue1Capacity,
       connectionState,
       runState,
     ),
@@ -246,11 +246,13 @@ function createSnapshot(
     elapsedMs: wire?.elapsedMs ?? 0,
     startError: wire?.startError ?? null,
     totalTransactions: wire?.totalTransactions ?? 0,
+    policy: wire?.policy ?? null,
     reader: {
       id: 'reader',
       workers: workerControl(wire?.readerWorkers ?? null),
       readBatchSize: readBatchSizeControl(
         wire?.readerReadBatchSize ?? null,
+        wire?.policy.readerReadBatchSize ?? null,
         connectionState,
         runState,
       ),
@@ -347,11 +349,82 @@ function isWireNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
-function isReadBatchSize(value: unknown): value is number {
+function isRangeValue(
+  value: unknown,
+  policy: LoadgenPolicySnapshot['readerReadBatchSize'],
+): value is number {
   return isWireInteger(value) &&
-    value >= 1_000 &&
-    value <= 100_000 &&
-    value % 1_000 === 0
+    value >= policy.min &&
+    value <= policy.max &&
+    (value - policy.min) % policy.step === 0
+}
+
+function isExactObject(
+  value: unknown,
+  keys: readonly string[],
+): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const actual = Object.keys(value).sort()
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index])
+}
+
+function decodePolicy(value: unknown): LoadgenPolicySnapshot {
+  if (!isExactObject(value, ['queue1Capacity', 'readerReadBatchSize'])) {
+    throw new Error('snapshot policy must contain exactly reader and queue1 controls')
+  }
+  const reader = value.readerReadBatchSize
+  if (!isExactObject(reader, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
+    throw new Error('snapshot reader policy is invalid')
+  }
+  if (
+    !isWireInteger(reader.default) || !isWireInteger(reader.min) ||
+    !isWireInteger(reader.max) || !isWireInteger(reader.step) ||
+    reader.min <= 0 || reader.max < reader.min || reader.step <= 0 ||
+    reader.unit !== 'transactions' || reader.mutability !== 'idle-only'
+  ) {
+    throw new Error('snapshot reader policy is invalid')
+  }
+  const readerPolicy = {
+    default: reader.default,
+    min: reader.min,
+    max: reader.max,
+    step: reader.step,
+    unit: reader.unit,
+    mutability: reader.mutability,
+  }
+  if (!isRangeValue(readerPolicy.default, readerPolicy)) {
+    throw new Error('snapshot reader policy default is invalid')
+  }
+
+  const queue1 = value.queue1Capacity
+  if (!isExactObject(queue1, ['allowed', 'default', 'mutability', 'unit'])) {
+    throw new Error('snapshot queue1 policy is invalid')
+  }
+  if (
+    !Array.isArray(queue1.allowed) || queue1.allowed.length === 0 ||
+    !queue1.allowed.every(isWireInteger) || queue1.unit !== 'batches' ||
+    queue1.mutability !== 'idle-only'
+  ) {
+    throw new Error('snapshot queue1 policy is invalid')
+  }
+  const allowed = Object.freeze([...queue1.allowed])
+  if (
+    allowed.some((entry, index) => index > 0 && entry <= allowed[index - 1]!) ||
+    !isWireInteger(queue1.default) || !allowed.includes(queue1.default)
+  ) {
+    throw new Error('snapshot queue1 policy values are invalid')
+  }
+  return Object.freeze({
+    readerReadBatchSize: Object.freeze(readerPolicy),
+    queue1Capacity: Object.freeze({
+      default: queue1.default,
+      allowed,
+      unit: queue1.unit,
+      mutability: queue1.mutability,
+    }),
+  })
 }
 
 function decodeWireSnapshot(value: unknown): WireSnapshot {
@@ -365,7 +438,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     keys.length !== WIRE_KEYS.length ||
     keys.some((key, index) => key !== WIRE_KEYS[index])
   ) {
-    throw new Error('snapshot body must contain exactly twenty-four wire keys')
+    throw new Error('snapshot body must contain exactly twenty-five wire keys')
   }
 
   if (
@@ -375,13 +448,15 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   ) {
     throw new Error('snapshot runState is invalid')
   }
+  const policy = decodePolicy(record.policy)
   if (
     !isWireInteger(record.elapsedMs) ||
     !isWireInteger(record.totalTransactions) ||
     !isWireInteger(record.readerWorkers) ||
     !isWireInteger(record.senderWorkers) ||
     !isWireInteger(record.readerRowsRead) ||
-    !isQueue1Capacity(record.queue1Capacity) ||
+    !isWireInteger(record.queue1Capacity) ||
+    !policy.queue1Capacity.allowed.includes(record.queue1Capacity) ||
     !isWireInteger(record.queue1EnqueuedBatchesTotal) ||
     !isWireInteger(record.queue1EnqueuedTransactionsTotal) ||
     !isWireInteger(record.queue1DequeuedBatchesTotal) ||
@@ -405,7 +480,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   ) {
     throw new Error('snapshot queue1 rates must be nonnegative finite numbers')
   }
-  if (!isReadBatchSize(record.readerReadBatchSize)) {
+  if (!isRangeValue(record.readerReadBatchSize, policy.readerReadBatchSize)) {
     throw new Error('snapshot readerReadBatchSize is invalid')
   }
   if (
@@ -426,6 +501,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     elapsedMs: record.elapsedMs,
     startError: record.startError,
     totalTransactions: record.totalTransactions,
+    policy,
     readerWorkers: record.readerWorkers,
     senderWorkers: record.senderWorkers,
     readerReadTps: record.readerReadTps,
@@ -451,33 +527,46 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
 
 function readBatchSizeControl(
   value: number | null,
+  policy: LoadgenPolicySnapshot['readerReadBatchSize'] | null,
   connectionState: ConnectionState,
   runState: RunState,
 ): NumericControlSnapshot {
+  if (policy === null) return unavailableControl('transactions')
+
   return {
     applied: value,
     preview: null,
     pending: null,
-    min: 1_000,
-    max: 100_000,
-    step: 1_000,
-    unit: 'tx',
+    min: policy.min,
+    max: policy.max,
+    step: policy.step,
+    unit: policy.unit,
     applyMode: connectionState === 'connected' && runState === 'idle'
       ? 'immediate'
       : 'unavailable',
   }
 }
 
-function canDispatchQueue1Capacity(
+function canDispatchPolicyCommand(
   command: SupportedCommand,
-  connectionState: ConnectionState,
-  runState: RunState,
+  snapshot: LoadgenTelemetrySnapshot,
 ): boolean {
-  return command.type !== 'set-queue-capacity' ||
-    (command.queue === 'reader-to-throttler' &&
-      isQueue1Capacity(command.value) &&
-      connectionState === 'connected' &&
-      runState === 'idle')
+  const policy = snapshot.policy
+  if (command.type === 'reset') return true
+  if (snapshot.connectionState === 'error') return false
+  if (command.type === 'run' || command.type === 'pause') {
+    return snapshot.connectionState === 'connecting' || policy !== null
+  }
+  if (
+    snapshot.connectionState !== 'connected' ||
+    policy === null ||
+    snapshot.runState !== 'idle'
+  ) return false
+  if (command.type === 'set-read-batch-size') {
+    return isRangeValue(command.value, policy.readerReadBatchSize)
+  }
+  return command.queue === 'reader-to-throttler' &&
+    policy.queue1Capacity.allowed.includes(command.value)
 }
 
 async function decodeResponse(response: Response): Promise<WireSnapshot> {
@@ -571,26 +660,7 @@ export class HttpAdapter implements LoadgenAdapter {
       ))
     }
 
-    if (
-      command.type === 'set-read-batch-size' &&
-      (!isReadBatchSize(command.value) ||
-        this.snapshot.connectionState !== 'connected' ||
-        this.snapshot.runState !== 'idle')
-    ) {
-      return Promise.resolve(this.rejectCommand(
-        commandId,
-        command,
-        'unavailable',
-        UNAVAILABLE_COMMAND_MESSAGE,
-        false,
-      ))
-    }
-
-    if (!canDispatchQueue1Capacity(
-      command,
-      this.snapshot.connectionState,
-      this.snapshot.runState,
-    )) {
+    if (!canDispatchPolicyCommand(command, this.snapshot)) {
       return Promise.resolve(this.rejectCommand(
         commandId,
         command,
@@ -677,11 +747,7 @@ export class HttpAdapter implements LoadgenAdapter {
       )
     }
 
-    if (!canDispatchQueue1Capacity(
-      command,
-      this.snapshot.connectionState,
-      this.snapshot.runState,
-    )) {
+    if (!canDispatchPolicyCommand(command, this.snapshot)) {
       return this.rejectCommand(
         commandId,
         command,

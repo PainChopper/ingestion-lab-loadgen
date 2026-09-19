@@ -156,6 +156,7 @@ function freezeSnapshot(
     elapsedMs: telemetry.elapsedMs,
     startError: null,
     totalTransactions: telemetry.totalTransactions,
+    policy: null,
     reader: Object.freeze({
       id: 'reader',
       workers: numericControl(

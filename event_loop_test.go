@@ -13,7 +13,7 @@ import (
 
 func TestElapsedMsUsesRunStartAndAccumulatedTime(t *testing.T) {
 	start := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
-	state := controlState{lifecycle: newLifecycle()}
+	state := newTestControlState(t)
 	if got := state.elapsedMs(start); got != 0 {
 		t.Fatalf("idle elapsed = %d, want 0", got)
 	}
@@ -280,7 +280,7 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 func TestResetDuringRunReturnsConflictAndPreservesPipeline(t *testing.T) {
 	var starts int
 	requests, batches, metrics := startEventLoopForTest(t, func() { starts++ })
-	handler := commandsHandler(requests)
+	handler := commandsHandler(requests, testPolicy(t))
 	runRequest := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"run"}`))
 	handler.ServeHTTP(httptest.NewRecorder(), runRequest)
 	waitForState(t, requests, runStateRunning)
@@ -316,7 +316,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests := make(chan request, 3)
 	metrics := make(chan time.Time)
 	batches := make(chan []Transaction)
-	state := controlState{lifecycle: newLifecycle()}
+	state := newTestControlState(t)
 	produce := func(ctx context.Context, _ int, _ int) (<-chan []Transaction, error) {
 		go func() {
 			defer close(batches)
@@ -340,7 +340,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 	requests <- request{kind: cmdRun}
 	waitForState(t, requests, runStateRunning)
-	queue := make(chan []Transaction, defaultQueue1Capacity)
+	queue := make(chan []Transaction, state.policy.Queue1.Capacity.Default)
 	state.queue1.start(queue, 2)
 	if !state.queue1.send(context.Background(), queue, make([]Transaction, 2)) {
 		t.Fatal("queue send failed")
@@ -383,7 +383,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
 	if snapshot.ReaderReadTPS != 0 || snapshot.ReaderRowsRead != 0 || snapshot.ReaderSource != nil ||
-		snapshot.Queue1Capacity != defaultQueue1Capacity || snapshot.Queue1DepthBatches != 0 ||
+		snapshot.Queue1Capacity != state.policy.Queue1.Capacity.Default || snapshot.Queue1DepthBatches != 0 ||
 		snapshot.Queue1QueuedTransactions != 0 || snapshot.Queue1BlockedSenders != 0 ||
 		snapshot.Queue1OldestBlockedSenderMs != 0 || snapshot.Queue1BlockedMs != 0 ||
 		snapshot.Queue1EnqueuedBatchesTotal != 0 || snapshot.Queue1EnqueuedTransactionsTotal != 0 ||
@@ -422,7 +422,7 @@ func startCustomEventLoopForTest(
 	t.Helper()
 
 	done := make(chan struct{})
-	state := controlState{lifecycle: newLifecycle()}
+	state := newTestControlState(t)
 	go func() {
 		defer close(done)
 		state.eventLoop(requests, metrics, NewMetrics(), produce)

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import type { NumericControlSnapshot } from '../../model/loadgen'
-import { QUEUE1_CAPACITY_VALUES } from '../../model/queue1Capacity'
 import {
   buildQueueCablePath,
   buildPortraitQueueCablePath,
@@ -19,6 +18,7 @@ import {
 const smallRange = { min: 0, max: 12, step: 1 }
 const largeRange = { min: 0, max: 160, step: 10 }
 const queue1Range = { min: 0, max: 8_192, step: 1 }
+const policyAllowed = [0, 1, 2, 8, 64, 512, 8_192] as const
 
 function capacityControl(
   applied: number,
@@ -102,42 +102,42 @@ describe('queue cable capacity geometry', () => {
       queue1Range,
       415,
       240,
-      QUEUE1_CAPACITY_VALUES,
+      policyAllowed,
     )
 
-    expect(ticks.map((tick) => tick.value)).toEqual(QUEUE1_CAPACITY_VALUES)
+    expect(ticks.map((tick) => tick.value)).toEqual(policyAllowed)
     ticks.forEach((tick, index) => {
-      expect(tick.y).toBeCloseTo(415 - index * 240 / 14, 12)
+      expect(tick.y).toBeCloseTo(415 - index * 240 / 6, 12)
     })
     expect(capacityToCableY(
       8_192,
       queue1Range,
       415,
       240,
-      QUEUE1_CAPACITY_VALUES,
+      policyAllowed,
     )).toBe(175)
     expect(cableYToCapacity(
-      415 - 4 * 240 / 14,
+      415 - 3 * 240 / 6,
       queue1Range,
       415,
       240,
-      QUEUE1_CAPACITY_VALUES,
+      policyAllowed,
     )).toBe(8)
     expect(capacityFromVerticalDrag(
       2,
-      -2 * 240 / 14,
+      -2 * 240 / 6,
       queue1Range,
       240,
-      QUEUE1_CAPACITY_VALUES,
-    )).toBe(8)
+      policyAllowed,
+    )).toBe(64)
     expect(['ArrowUp', 'PageUp', 'PageDown', 'Home', 'End'].map((key) =>
       capacityFromKeyboard(
         key,
         2,
         queue1Range,
-        QUEUE1_CAPACITY_VALUES,
+        policyAllowed,
       ),
-    )).toEqual([4, 64, 0, 0, 8_192])
+    )).toEqual([8, 8_192, 0, 0, 8_192])
   })
 
   it('distinguishes applied, pending, and local preview capacity', () => {

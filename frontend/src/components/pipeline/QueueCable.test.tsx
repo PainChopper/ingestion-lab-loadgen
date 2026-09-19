@@ -7,7 +7,6 @@ import userEvent from '@testing-library/user-event'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type { QueueSnapshot, SelectableId } from '../../model/loadgen'
-import { QUEUE1_CAPACITY_VALUES } from '../../model/queue1Capacity'
 import { QueueFlowStateDeriver } from '../../model/queueFlowState'
 import { QUEUE_CABLE_ENDPOINTS } from './geometry'
 import {
@@ -202,20 +201,20 @@ describe('QueueCable mounted behavior', () => {
     const onCapacityChange = vi.fn()
     const view = renderCable(queue, {
       onCapacityChange,
-      capacityValues: QUEUE1_CAPACITY_VALUES,
+      capacityValues: [0, 1, 2, 8, 64, 512, 8_192],
     })
     const slider = screen.getByRole('slider')
 
     expect(slider.textContent).toBe('2')
     expect([...view.container.querySelectorAll(
       '.pipeline-queue-scale__label',
-    )].map((label) => label.textContent)).toEqual(['0', '64', '8,192'])
+    )].map((label) => label.textContent)).toEqual(['0', '8', '8,192'])
 
     await user.click(slider)
     await user.keyboard('{ArrowUp}{PageUp}{Home}{End}')
 
     expect(onCapacityChange.mock.calls.map((call) => call[1]))
-      .toEqual([4, 64, 0, 8_192])
+      .toEqual([8, 8_192, 0, 8_192])
     adapter.dispose()
   })
 

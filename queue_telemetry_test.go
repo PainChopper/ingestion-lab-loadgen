@@ -7,14 +7,15 @@ import (
 )
 
 func TestQueue1TelemetryReportsBufferedBatchesAndTransactions(t *testing.T) {
-	batches := make(chan []Transaction, defaultQueue1Capacity)
+	policy := testPolicy(t)
+	batches := make(chan []Transaction, policy.Queue1.Capacity.Default)
 	batches <- make([]Transaction, 3)
 	batches <- make([]Transaction, 3)
 
 	var telemetry queue1Telemetry
 	telemetry.start(batches, 3)
 	measurements := telemetry.snapshot(time.Now())
-	if measurements.capacity != defaultQueue1Capacity || measurements.depthBatches != 2 ||
+	if measurements.capacity != policy.Queue1.Capacity.Default || measurements.depthBatches != 2 ||
 		measurements.queuedTransactions != 6 || measurements.blockedSenders != 0 ||
 		measurements.oldestBlockedSenderMs != 0 || measurements.blockedMs != 0 {
 		t.Fatalf("queue measurements = %+v", measurements)

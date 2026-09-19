@@ -4,7 +4,6 @@ import type {
   SelectableId,
   ThrottlerInstallationMode,
 } from '../../model/loadgen'
-import { QUEUE1_CAPACITY_VALUES } from '../../model/queue1Capacity'
 import { useMemo } from 'react'
 import { HttpLink } from './HttpLink'
 import { PipelineMarkers } from './PipelineMarkers'
@@ -89,7 +88,7 @@ export function PipelineSvg({
         onCapacityChange={onQueueCapacityChange}
         orientation={orientation}
         capacityValues={snapshot.adapterKind === 'http'
-          ? QUEUE1_CAPACITY_VALUES
+          ? snapshot.policy?.queue1Capacity.allowed
           : undefined}
       />
       <QueueCable

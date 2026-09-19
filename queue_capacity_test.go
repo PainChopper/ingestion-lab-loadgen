@@ -39,7 +39,7 @@ func TestQueue1CapacityValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(commands).ServeHTTP(recorder, request)
+				commandsHandler(commands, testPolicy(t)).ServeHTTP(recorder, request)
 			}()
 
 			if test.want == http.StatusOK {
@@ -71,13 +71,13 @@ func TestQueue1CapacityValidation(t *testing.T) {
 func TestValidQueue1CapacityAcceptsOnlyConfiguredSteps(t *testing.T) {
 	validValues := []int{0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048, 4_096, 8_192}
 	for _, value := range validValues {
-		if !validQueue1Capacity(value) {
+		if !validQueue1Capacity(testPolicy(t), value) {
 			t.Errorf("value %d is rejected", value)
 		}
 	}
 
 	for _, value := range []int{math.MinInt, -1, 3, 8_193, 16_384} {
-		if validQueue1Capacity(value) {
+		if validQueue1Capacity(testPolicy(t), value) {
 			t.Errorf("value %d is accepted", value)
 		}
 	}
@@ -90,12 +90,12 @@ func TestQueue1CapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *testing
 			metrics := make(chan time.Time)
 			startedCapacities := make(chan int, 2)
 			producedCapacities := make(chan int, 2)
-			state := controlState{lifecycle: newLifecycle()}
+			state := newTestControlState(t)
 			produce := func(ctx context.Context, _ int, queue1Capacity int) (<-chan []Transaction, error) {
 				startedCapacities <- queue1Capacity
 				batches := make(chan []Transaction, queue1Capacity)
 				producedCapacities <- cap(batches)
-				state.queue1.start(batches, defaultReadBatchSize)
+				state.queue1.start(batches, state.policy.Reader.ReadBatchSize.Default)
 				go func() {
 					defer close(batches)
 					<-ctx.Done()
@@ -115,7 +115,7 @@ func TestQueue1CapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *testing
 					t.Error("event loop did not stop")
 				}
 			})
-			commands := commandsHandler(requests)
+			commands := commandsHandler(requests, state.policy)
 			snapshot := func() statusSnapshot {
 				t.Helper()
 				recorder := httptest.NewRecorder()
@@ -135,8 +135,8 @@ func TestQueue1CapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *testing
 				}
 			}
 
-			if got := snapshot().Queue1Capacity; got != defaultQueue1Capacity {
-				t.Fatalf("default capacity = %d, want %d", got, defaultQueue1Capacity)
+			if got := snapshot().Queue1Capacity; got != state.policy.Queue1.Capacity.Default {
+				t.Fatalf("default capacity = %d, want %d", got, state.policy.Queue1.Capacity.Default)
 			}
 			post(`{"action":"set-queue-capacity","value":`+strconv.Itoa(capacity)+`}`, http.StatusOK)
 			if got := snapshot().Queue1Capacity; got != capacity {

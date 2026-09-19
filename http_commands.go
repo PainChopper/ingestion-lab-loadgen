@@ -11,7 +11,7 @@ type commandRequest struct {
 	Value  json.RawMessage `json:"value"`
 }
 
-func commandsHandler(commands chan<- request) http.Handler {
+func commandsHandler(commands chan<- request, policy policy) http.Handler {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -49,7 +49,7 @@ func commandsHandler(commands chan<- request) http.Handler {
 			}
 		case "set-read-batch-size":
 			var value int
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReadBatchSize(value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReadBatchSize(policy, value) {
 				http.Error(w, "Invalid read batch size", http.StatusBadRequest)
 				return
 			}
@@ -64,7 +64,7 @@ func commandsHandler(commands chan<- request) http.Handler {
 				http.Error(w, "Invalid queue capacity", http.StatusBadRequest)
 				return
 			}
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !validQueue1Capacity(value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !validQueue1Capacity(policy, value) {
 				http.Error(w, "Invalid queue capacity", http.StatusBadRequest)
 				return
 			}
