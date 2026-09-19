@@ -33,21 +33,27 @@ func (state *controlState) eventLoop(
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
-				if state.lifecycle.currentState() != runStateIdle {
-					continue
+				switch state.lifecycle.currentState() {
+				case runStateIdle:
+					batches, err := produce()
+					if err != nil {
+						log.Printf("cannot start load generator: %v", err)
+						continue
+					}
+					state.lifecycle.run()
+					consumerDone = make(chan struct{})
+					go func() {
+						defer close(consumerDone)
+						consumeBatches(batches, &consumedSinceTick)
+					}()
+				case runStatePaused:
+					state.lifecycle.run()
 				}
-				batches, err := produce()
-				if err != nil {
-					log.Printf("cannot start load generator: %v", err)
-					continue
-				}
-				state.lifecycle.run()
-				consumerDone = make(chan struct{})
-				go func() {
-					defer close(consumerDone)
-					consumeBatches(batches, &consumedSinceTick)
-				}()
 			case cmdPause:
+				if state.lifecycle.currentState() != runStateRunning {
+					continue
+				}
+				state.lifecycle.pause()
 			case cmdReset:
 			}
 
