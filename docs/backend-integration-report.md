@@ -32,19 +32,19 @@
 | Run badge, Run/Pause/Reset | `run.state` | Будущий lifecycle owner в control loop | Lifecycle отсутствует; legacy pipeline стартует при запуске процесса | V3 |
 | Elapsed | `run.elapsedMs` | Будущий active run clock | Активное время без пауз не измеряется | V3 |
 | Total | `run.totalTransactions` | `generatorState.totalTransactions`, обновляемый metrics tick ([main.go](../main.go#L20), [main.go](../main.go#L74)) | Можно отдать немедленно; legacy JSON использует строку | V1 |
-| Requested TPS | `throttler.requestedTps` | `transactionThrottler.GetTPS` ([transaction_throttler.go](../transaction_throttler.go#L43)) | Значение доступно, но пока не ограничивает pipeline | V1 display, V2 control |
-| Reader workers | `reader.workers` | Одна producer goroutine ([transaction_batch_producer.go](../transaction_batch_producer.go#L25)) | `applied=1`, `applyMode=unavailable` | V1 |
-| Read batch size | `reader.readBatchSize` | Константа `50000` ([transaction_batch_producer.go](../transaction_batch_producer.go#L14)) | Можно показать read-only | V1 |
+| Requested TPS | `throttler.requestedTps` | `transactionThrottler.GetTPS` ([transaction_throttler.go](../throttler.go#L43)) | Значение доступно, но пока не ограничивает pipeline | V1 display, V2 control |
+| Reader workers | `reader.workers` | Одна producer goroutine ([transaction_batch_producer.go](../producer.go#L25)) | `applied=1`, `applyMode=unavailable` | V1 |
+| Read batch size | `reader.readBatchSize` | Константа `50000` ([transaction_batch_producer.go](../producer.go#L14)) | Можно показать read-only | V1 |
 | Reader read TPS | `reader.readTps` | Будущая точка учёта после фактического чтения rows | Точного измерения нет; legacy `actualTPS` имеет другую семантику | V4 |
 | Rows read | `reader.rowsReadTotal` | Будущий reader owner | `totalTransactions` считается после consumer и не является rows-read counter | V4 |
-| Current sources | `reader.currentSources` | Producer владеет локальным `filePath` ([transaction_batch_producer.go](../transaction_batch_producer.go#L29)) | Известен glob `dataPath`, но активные файлы не публикуются | V4 |
+| Current sources | `reader.currentSources` | Producer владеет локальным `filePath` ([transaction_batch_producer.go](../producer.go#L29)) | Известен glob `dataPath`, но активные файлы не публикуются | V4 |
 | Admitted TPS | `throttler.admittedTps` | Будущая точка учёта на выходе throttler | Нет данных, потому что throttler выключен из тракта | V2 |
 | Limiting/limited totals | `throttler.limiting`, `limitedTransactionsTotal`, `limitedMsTotal` | Throttler owner | Измерений ожидания нет | V2 |
-| Queue 1 capacity | `queues[reader-to-throttler].capacity` | Текущий `batches` channel имеет capacity 2 ([transaction_batch_producer.go](../transaction_batch_producer.go#L13)) | Возможна только временная read-only проекция; channel ведёт сразу в black-hole consumer | V4 |
+| Queue 1 capacity | `queues[reader-to-throttler].capacity` | Текущий `batches` channel имеет capacity 2 ([transaction_batch_producer.go](../producer.go#L13)) | Возможна только временная read-only проекция; channel ведёт сразу в black-hole consumer | V4 |
 | Queue 1 depth | `queues[reader-to-throttler].depthBatches` | Можно сэмплировать `len(batches)` | Это мгновенная приблизительная глубина legacy channel, не контрактная очередь reader-to-throttler | V4 |
 | Queue 1 queued transactions | `queues[reader-to-throttler].queuedTransactions` | Будущий queue owner | Нельзя получить из channel без дополнительного учёта размеров batch | V4 |
 | Queue counters/rates | `enqueued*`, `dequeued*`, `inputTps`, `outputTps`, `throughputTps` | Точки учёта enqueue/dequeue | Сейчас отсутствуют | V4 |
-| Queue blocked state | `blockedSenders`, `oldestBlockedSenderMs`, `blockedMsTotal`, `flowState` | Queue owner или инструментированный send wrapper | Producer может блокироваться на send, но ожидание не измеряется ([transaction_batch_producer.go](../transaction_batch_producer.go#L42)) | V4 |
+| Queue blocked state | `blockedSenders`, `oldestBlockedSenderMs`, `blockedMsTotal`, `flowState` | Queue owner или инструментированный send wrapper | Producer может блокироваться на send, но ожидание не измеряется ([transaction_batch_producer.go](../producer.go#L42)) | V4 |
 | Queue 2 | `queues[throttler-to-sender].*` | Будущая очередь между throttler и sender | Стадия и очередь отсутствуют | V5 |
 | Sender controls | `sender.workers`, `httpBatchSize`, `timeoutMs` | Будущий sender pool owner | Controls unavailable | V5 |
 | Sender telemetry | `sender.attemptedTps`, `inFlightRequests`, response/retry totals | Sender pool owner | HTTP sender отсутствует | V5 |
@@ -65,7 +65,7 @@
 - полные actor/queue/HTTP/target sections с `null` для неизвестной telemetry и `unavailable` для отсутствующих controls;
 - `GET /api/v1/loadgen/snapshot` и frontend `HttpAdapter`, выполняющий wire-to-view-model mapping.
 
-Legacy `statusSnapshot_old` использует строковые `targetTPS`, `actualTPS` и `totalTransactions` ([cmdgen.go](../http_server.go#L31)). Новый контракт требует числовые значения. Существующий `actualTPS` вычисляется из `consumedSinceTick` один раз в секунду ([main.go](../main.go#L73)) и отражает скорость транзакций, обработанных `consumeTransaction` ([transaction_batch_consumer.go](../transaction_batch_consumer.go#L9)). Его нельзя без переименования точки измерения подставлять в `reader.readTps`, `throttler.admittedTps` или `sender.attemptedTps`.
+Legacy `statusSnapshot_old` использует строковые `targetTPS`, `actualTPS` и `totalTransactions` ([cmdgen.go](../http_server.go#L31)). Новый контракт требует числовые значения. Существующий `actualTPS` вычисляется из `consumedSinceTick` один раз в секунду ([main.go](../main.go#L73)) и отражает скорость транзакций, обработанных `consumeTransaction` ([transaction_batch_consumer.go](../consumer.go#L9)). Его нельзя без переименования точки измерения подставлять в `reader.readTps`, `throttler.admittedTps` или `sender.attemptedTps`.
 
 ## 4. Что сейчас является simulation-only
 
