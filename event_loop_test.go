@@ -1,6 +1,10 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,36 +79,199 @@ func TestPauseStopsConsumptionUntilRun(t *testing.T) {
 	}
 }
 
+func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.T) {
+	requests := make(chan request, 3)
+	metrics := make(chan time.Time)
+	firstBatches := make(chan []Transaction, 1)
+	firstProducerReady := make(chan struct{})
+	firstBatchQueued := make(chan struct{})
+	freshBatches := make(chan []Transaction)
+	var starts int
+
+	produce := func(ctx context.Context) (<-chan []Transaction, error) {
+		starts++
+		if starts == 1 {
+			go func() {
+				defer close(firstBatches)
+				select {
+				case <-firstProducerReady:
+				case <-ctx.Done():
+					return
+				}
+				select {
+				case firstBatches <- []Transaction{{}}:
+				case <-ctx.Done():
+					return
+				}
+				close(firstBatchQueued)
+				select {
+				case firstBatches <- []Transaction{{}}:
+				case <-ctx.Done():
+				}
+			}()
+			return firstBatches, nil
+		}
+
+		go func() {
+			defer close(freshBatches)
+			<-ctx.Done()
+		}()
+		return freshBatches, nil
+	}
+
+	startCustomEventLoopForTest(t, requests, metrics, produce)
+	requests <- request{kind: cmdRun}
+	firstBatches <- []Transaction{{}}
+	waitForTransactions(t, requests, metrics, 1)
+
+	requests <- request{kind: cmdPause}
+	waitForState(t, requests, runStatePaused)
+	close(firstProducerReady)
+	select {
+	case <-firstBatchQueued:
+	case <-time.After(time.Second):
+		t.Fatal("producer did not fill its queue after Pause")
+	}
+
+	resetReply := make(chan commandResult, 1)
+	requests <- request{kind: cmdReset, commandReply: resetReply}
+	select {
+	case result := <-resetReply:
+		if result.status != commandAccepted {
+			t.Fatalf("reset status = %v, want %v", result.status, commandAccepted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Reset did not complete")
+	}
+	select {
+	case _, ok := <-firstBatches:
+		if ok {
+			t.Fatal("old producer queue retained a batch after Reset")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("old producer channel was not closed after Reset")
+	}
+	waitForState(t, requests, runStateIdle)
+	waitForTransactions(t, requests, metrics, 0)
+	requests <- request{kind: cmdReset, commandReply: resetReply}
+	select {
+	case result := <-resetReply:
+		if result.status != commandAccepted {
+			t.Fatalf("second reset status = %v, want %v", result.status, commandAccepted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second Reset did not complete")
+	}
+	waitForState(t, requests, runStateIdle)
+
+	requests <- request{kind: cmdRun}
+	waitForState(t, requests, runStateRunning)
+	if starts != 2 {
+		t.Fatalf("producer starts after Reset and Run = %v, want 2", starts)
+	}
+	select {
+	case freshBatches <- []Transaction{{}}:
+	case <-time.After(time.Second):
+		t.Fatal("fresh producer batch was not consumed")
+	}
+	waitForTransactions(t, requests, metrics, 1)
+}
+
+func TestResetDuringRunReturnsConflictAndPreservesPipeline(t *testing.T) {
+	var starts int
+	requests, batches, metrics := startEventLoopForTest(t, func() { starts++ })
+	handler := commandsHandler(requests)
+	runRequest := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"run"}`))
+	handler.ServeHTTP(httptest.NewRecorder(), runRequest)
+	waitForState(t, requests, runStateRunning)
+
+	select {
+	case batches <- []Transaction{{}}:
+	case <-time.After(time.Second):
+		t.Fatal("first batch was not consumed")
+	}
+	waitForTransactions(t, requests, metrics, 1)
+
+	resetRecorder := httptest.NewRecorder()
+	resetRequest := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"reset"}`))
+	handler.ServeHTTP(resetRecorder, resetRequest)
+	if resetRecorder.Code != http.StatusConflict {
+		t.Fatalf("Reset status code = %v, want %v", resetRecorder.Code, http.StatusConflict)
+	}
+	waitForState(t, requests, runStateRunning)
+	waitForTransactions(t, requests, metrics, 1)
+	if starts != 1 {
+		t.Fatalf("producer starts after rejected Reset = %v, want 1", starts)
+	}
+
+	select {
+	case batches <- []Transaction{{}}:
+	case <-time.After(time.Second):
+		t.Fatal("consumer stopped after rejected Reset")
+	}
+	waitForTransactions(t, requests, metrics, 2)
+}
+
 func startEventLoopForTest(t *testing.T, onProduce func()) (chan<- request, chan<- []Transaction, chan<- time.Time) {
 	t.Helper()
 
 	requests := make(chan request, 3)
 	batches := make(chan []Transaction)
 	metrics := make(chan time.Time)
-	done := make(chan struct{})
-	state := controlState{lifecycle: newLifecycle()}
-
-	produce := func() (<-chan []Transaction, error) {
+	produce := func(ctx context.Context) (<-chan []Transaction, error) {
 		onProduce()
+		go func() {
+			defer close(batches)
+			<-ctx.Done()
+		}()
 		return batches, nil
 	}
+	startCustomEventLoopForTest(t, requests, metrics, produce)
 
+	return requests, batches, metrics
+}
+
+func startCustomEventLoopForTest(
+	t *testing.T,
+	requests chan request,
+	metrics <-chan time.Time,
+	produce func(context.Context) (<-chan []Transaction, error),
+) {
+	t.Helper()
+
+	done := make(chan struct{})
+	state := controlState{lifecycle: newLifecycle()}
 	go func() {
 		defer close(done)
 		state.eventLoop(requests, metrics, NewMetrics(), produce)
 	}()
-
 	t.Cleanup(func() {
 		close(requests)
-		close(batches)
 		select {
 		case <-done:
 		case <-time.After(time.Second):
 			t.Error("event loop did not stop")
 		}
 	})
+}
 
-	return requests, batches, metrics
+func waitForState(t *testing.T, requests chan<- request, want runState) {
+	t.Helper()
+
+	reply := make(chan statusSnapshot, 1)
+	select {
+	case requests <- request{kind: getSnapshot, snapshotReply: reply}:
+	case <-time.After(time.Second):
+		t.Fatalf("state did not reach %v", want)
+	}
+	select {
+	case snapshot := <-reply:
+		if snapshot.RunState != want {
+			t.Fatalf("state = %v, want %v", snapshot.RunState, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("state did not reach %v", want)
+	}
 }
 
 func waitForTransactions(t *testing.T, requests chan<- request, metrics chan<- time.Time, want int64) {

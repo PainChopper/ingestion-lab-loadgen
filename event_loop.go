@@ -11,16 +11,22 @@ func (state *controlState) eventLoop(
 	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
-	produce func() (<-chan []Transaction, error),
+	produce func(context.Context) (<-chan []Transaction, error),
 ) {
 	var consumedSinceTick atomic.Int64
 	var batches <-chan []Transaction
 	var cancelConsumer context.CancelFunc
 	var consumerDone <-chan struct{}
+	var cancelProducer context.CancelFunc
 	defer func() {
 		if cancelConsumer != nil {
 			cancelConsumer()
 			<-consumerDone
+		}
+		if cancelProducer != nil {
+			cancelProducer()
+			for range batches {
+			}
 		}
 	}()
 
@@ -43,12 +49,15 @@ func (state *controlState) eventLoop(
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
 				if state.lifecycle.currentState() == runStateIdle {
+					producerContext, cancel := context.WithCancel(context.Background())
 					var err error
-					batches, err = produce()
+					batches, err = produce(producerContext)
 					if err != nil {
+						cancel()
 						log.Printf("cannot start load generator: %v", err)
 						continue
 					}
+					cancelProducer = cancel
 				}
 				if state.lifecycle.run() {
 					cancelConsumer, consumerDone = startConsumer(batches, &consumedSinceTick)
@@ -68,6 +77,25 @@ func (state *controlState) eventLoop(
 				promMetrics.actualTPS.Set(0)
 				state.lifecycle.pause()
 			case cmdReset:
+				result := commandResult{status: commandAccepted}
+				switch state.lifecycle.currentState() {
+				case runStatePaused:
+					state.lifecycle.reset()
+					cancelProducer()
+					for range batches {
+					}
+					batches = nil
+					cancelProducer = nil
+					state.resetProgress(&consumedSinceTick, promMetrics)
+					state.lifecycle.completeReset()
+				case runStateIdle:
+					state.resetProgress(&consumedSinceTick, promMetrics)
+				default:
+					result.status = commandConflict
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- result
+				}
 			}
 
 		case <-metrics:
@@ -78,6 +106,13 @@ func (state *controlState) eventLoop(
 			promMetrics.transactionsTotal.Add(float64(delta))
 		}
 	}
+}
+
+func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMetrics *Metrics) {
+	consumedSinceTick.Store(0)
+	state.totalTransactions = 0
+	state.actualTPS = 0
+	promMetrics.actualTPS.Set(0)
 }
 
 func startConsumer(

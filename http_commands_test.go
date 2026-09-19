@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCommandsHandlerDispatches(t *testing.T) {
@@ -24,12 +25,30 @@ func TestCommandsHandlerDispatches(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
 			rec := httptest.NewRecorder()
 
-			commandsHandler(commands).ServeHTTP(rec, req)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				commandsHandler(commands).ServeHTTP(rec, req)
+			}()
+
+			var cmd request
+			select {
+			case cmd = <-commands:
+			case <-time.After(time.Second):
+				t.Fatal("command was not dispatched")
+			}
+			if test.expectedKind == cmdReset {
+				cmd.commandReply <- commandResult{status: commandAccepted}
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("command handler did not return")
+			}
 			response := rec.Result()
 			if response.StatusCode != http.StatusOK {
 				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusOK)
 			}
-			cmd := <-commands
 
 			if cmd.kind != test.expectedKind {
 				t.Errorf("command kind = %v, want %v", cmd.kind, test.expectedKind)
