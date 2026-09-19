@@ -506,6 +506,107 @@ func TestResetWhileZeroTPSHoldsBatchCompletes(t *testing.T) {
 	}
 }
 
+func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
+	requests, batches, metrics := startEventLoopForTest(t, func() {})
+	snapshotReply := make(chan statusSnapshot, 1)
+	snapshot := func() statusSnapshot {
+		t.Helper()
+		requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+		return <-snapshotReply
+	}
+	initial := snapshot()
+	if initial.SenderChannelCapacity != 0 || initial.SenderChannelSentBatchesTotal != 0 ||
+		initial.ThrottlerAdmittedTPS != 0 {
+		t.Fatalf("initial Sender channel = %+v", initial)
+	}
+
+	reply := make(chan commandResult, 1)
+	requests <- request{kind: cmdSetThrottlerInstallationMode, textValue: throttlerBypass, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("set bypass = %+v", result)
+	}
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("Run = %+v", result)
+	}
+	if first := snapshot(); first.ThrottlerAdmittedTPS != 0 || first.SenderChannelInputTransactionsPerSecond != 0 {
+		t.Fatalf("pre-window Sender rate = %+v", first)
+	}
+	batches <- make([]Transaction, 2)
+	waitForSenderHandoff(t, requests, 1)
+	metrics <- time.Now()
+	active := snapshot()
+	if active.SenderChannelCapacity != 0 || active.SenderChannelDepthBatches != 0 ||
+		active.SenderChannelBufferedTransactions != 0 || active.SenderChannelSentBatchesTotal != 1 ||
+		active.SenderChannelSentTransactionsTotal != 2 || active.SenderChannelReceivedBatchesTotal != 1 ||
+		active.SenderChannelReceivedTransactionsTotal != 2 || active.SenderChannelInputBatchesPerSecond != 1 ||
+		active.SenderChannelInputTransactionsPerSecond != 2 || active.SenderChannelOutputBatchesPerSecond != 1 ||
+		active.SenderChannelOutputTransactionsPerSecond != 2 || active.ThrottlerAdmittedTPS != active.SenderChannelInputTransactionsPerSecond {
+		t.Fatalf("active Sender channel = %+v", active)
+	}
+
+	requests <- request{kind: cmdPause}
+	waitForState(t, requests, runStatePaused)
+	batches <- []Transaction{{}}
+	waitForReaderReceives(t, requests, 2)
+	metrics <- time.Now()
+	paused := snapshot()
+	if paused.SenderChannelSentBatchesTotal != 1 || paused.SenderChannelReceivedBatchesTotal != 1 ||
+		paused.SenderChannelBlockedSenders != 0 || paused.SenderChannelDepthBatches != 0 ||
+		paused.ThrottlerAdmittedTPS != 0 || paused.SenderChannelInputTransactionsPerSecond != 0 ||
+		paused.SenderChannelOutputTransactionsPerSecond != 0 {
+		t.Fatalf("paused Sender channel = %+v", paused)
+	}
+
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("resumed Run = %+v", result)
+	}
+	waitForSenderHandoff(t, requests, 2)
+	metrics <- time.Now()
+	resumed := snapshot()
+	if resumed.SenderChannelSentBatchesTotal != 2 || resumed.SenderChannelReceivedBatchesTotal != 2 ||
+		resumed.ThrottlerAdmittedTPS != 1 || resumed.SenderChannelInputTransactionsPerSecond != 1 {
+		t.Fatalf("resumed Sender channel = %+v", resumed)
+	}
+
+	requests <- request{kind: cmdPause}
+	waitForState(t, requests, runStatePaused)
+	requests <- request{kind: cmdReset, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("Reset = %+v", result)
+	}
+	reset := snapshot()
+	if reset.RunState != runStateIdle || reset.SenderChannelCapacity != 0 ||
+		reset.SenderChannelDepthBatches != 0 || reset.SenderChannelBufferedTransactions != 0 ||
+		reset.SenderChannelBlockedSenders != 0 || reset.SenderChannelOldestBlockedSenderMs != 0 ||
+		reset.SenderChannelBlockedMs != 0 || reset.SenderChannelSentBatchesTotal != 0 ||
+		reset.SenderChannelSentTransactionsTotal != 0 || reset.SenderChannelReceivedBatchesTotal != 0 ||
+		reset.SenderChannelReceivedTransactionsTotal != 0 || reset.SenderChannelInputBatchesPerSecond != 0 ||
+		reset.SenderChannelInputTransactionsPerSecond != 0 || reset.SenderChannelOutputBatchesPerSecond != 0 ||
+		reset.SenderChannelOutputTransactionsPerSecond != 0 || reset.ThrottlerAdmittedTPS != 0 {
+		t.Fatalf("Sender channel after Reset = %+v", reset)
+	}
+}
+
+func waitForSenderHandoff(t *testing.T, requests chan<- request, want int64) {
+	t.Helper()
+	reply := make(chan statusSnapshot, 1)
+	deadline := time.After(time.Second)
+	for {
+		requests <- request{kind: getSnapshot, snapshotReply: reply}
+		got := <-reply
+		if got.SenderChannelSentBatchesTotal == want && got.SenderChannelReceivedBatchesTotal == want {
+			return
+		}
+		select {
+		case <-time.After(time.Millisecond):
+		case <-deadline:
+			t.Fatalf("Sender handoff did not reach %d: %+v", want, got)
+		}
+	}
+}
+
 func startEventLoopForTest(t *testing.T, onProduce func()) (chan<- request, chan<- []Transaction, chan<- time.Time) {
 	t.Helper()
 

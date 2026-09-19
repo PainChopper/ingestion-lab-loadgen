@@ -10,10 +10,11 @@ import (
 func TestConsumeBatchesCountsTransactions(t *testing.T) {
 	batches := make(chan []Transaction)
 	var consumed atomic.Int64
+	var senderChannel readerChannelTelemetry
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		consumeBatches(context.Background(), batches, &consumed)
+		consumeBatches(context.Background(), batches, &senderChannel, &consumed)
 	}()
 
 	batch := make([]Transaction, 2)
@@ -27,5 +28,15 @@ func TestConsumeBatchesCountsTransactions(t *testing.T) {
 
 	if got := consumed.Load(); got != 2 {
 		t.Fatalf("consumed transactions = %d, want 2", got)
+	}
+	got := senderChannel.snapshot(time.Now())
+	if got.receivedBatchesTotal != 1 || got.receivedTransactionsTotal != 2 ||
+		got.outputBatchesPerSecond != 0 || got.outputTransactionsPerSecond != 0 {
+		t.Fatalf("Sender channel receives before sample = %+v", got)
+	}
+	senderChannel.sample(time.Second)
+	got = senderChannel.snapshot(time.Now())
+	if got.outputBatchesPerSecond != 1 || got.outputTransactionsPerSecond != 2 {
+		t.Fatalf("Sender channel output window = %+v", got)
 	}
 }

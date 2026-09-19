@@ -41,8 +41,23 @@ const WIRE_KEYS = Object.freeze([
   'readerWorkers',
   'runState',
   'senderWorkers',
+  'senderChannelBlockedMs',
+  'senderChannelBlockedSenders',
+  'senderChannelCapacity',
+  'senderChannelDepthBatches',
+  'senderChannelReceivedBatchesTotal',
+  'senderChannelReceivedTransactionsTotal',
+  'senderChannelSentBatchesTotal',
+  'senderChannelSentTransactionsTotal',
+  'senderChannelInputBatchesPerSecond',
+  'senderChannelInputTransactionsPerSecond',
+  'senderChannelOldestBlockedSenderMs',
+  'senderChannelOutputBatchesPerSecond',
+  'senderChannelOutputTransactionsPerSecond',
+  'senderChannelBufferedTransactions',
   'startError',
   'totalTransactions',
+  'throttlerAdmittedTps',
   'throttlerInstallationMode',
   'throttlerRequestedTps',
 ].sort())
@@ -58,6 +73,7 @@ interface WireSnapshot {
   readonly readerReadTps: number
   readonly readerReadBatchSize: number
   readonly throttlerRequestedTps: number
+  readonly throttlerAdmittedTps: number
   readonly throttlerInstallationMode: ThrottlerInstallationMode
   readonly readerRowsRead: number
   readonly readerSource: string | null
@@ -75,6 +91,20 @@ interface WireSnapshot {
   readonly readerChannelInputTransactionsPerSecond: number
   readonly readerChannelOutputBatchesPerSecond: number
   readonly readerChannelOutputTransactionsPerSecond: number
+  readonly senderChannelCapacity: number
+  readonly senderChannelSentBatchesTotal: number
+  readonly senderChannelSentTransactionsTotal: number
+  readonly senderChannelReceivedBatchesTotal: number
+  readonly senderChannelReceivedTransactionsTotal: number
+  readonly senderChannelDepthBatches: number
+  readonly senderChannelBufferedTransactions: number
+  readonly senderChannelBlockedSenders: number
+  readonly senderChannelOldestBlockedSenderMs: number
+  readonly senderChannelBlockedMs: number
+  readonly senderChannelInputBatchesPerSecond: number
+  readonly senderChannelInputTransactionsPerSecond: number
+  readonly senderChannelOutputBatchesPerSecond: number
+  readonly senderChannelOutputTransactionsPerSecond: number
 }
 
 type SupportedCommand = Extract<
@@ -240,6 +270,36 @@ function readerChannel(
   }
 }
 
+function senderChannel(wire: WireSnapshot | null): ChannelTelemetrySnapshot {
+  const channel = neutralChannel(
+    'throttler-to-sender',
+    'throttler',
+    'sender',
+  )
+  if (wire === null) return channel
+
+  return {
+    ...channel,
+    capacity: fixedControl(wire.senderChannelCapacity, 'batches'),
+    depthBatches: wire.senderChannelDepthBatches,
+    bufferedTransactions: wire.senderChannelBufferedTransactions,
+    sentBatchesTotal: wire.senderChannelSentBatchesTotal,
+    sentTransactionsTotal: wire.senderChannelSentTransactionsTotal,
+    receivedBatchesTotal: wire.senderChannelReceivedBatchesTotal,
+    receivedTransactionsTotal: wire.senderChannelReceivedTransactionsTotal,
+    inputBatchesPerSecond: wire.senderChannelInputBatchesPerSecond,
+    inputTransactionsPerSecond: wire.senderChannelInputTransactionsPerSecond,
+    outputBatchesPerSecond: wire.senderChannelOutputBatchesPerSecond,
+    outputTransactionsPerSecond: wire.senderChannelOutputTransactionsPerSecond,
+    inputTps: wire.senderChannelInputTransactionsPerSecond,
+    outputTps: wire.senderChannelOutputTransactionsPerSecond,
+    throughputTps: wire.senderChannelOutputTransactionsPerSecond,
+    blockedSenders: wire.senderChannelBlockedSenders,
+    oldestBlockedSenderMs: wire.senderChannelOldestBlockedSenderMs,
+    blockedMs: wire.senderChannelBlockedMs,
+  }
+}
+
 function createSnapshot(
   revision: number,
   connectionState: ConnectionState,
@@ -290,16 +350,12 @@ function createSnapshot(
           ? null
           : UNAVAILABLE_REASON,
       },
-      admittedTps: null,
+      admittedTps: wire?.throttlerAdmittedTps ?? null,
       limitedMs: null,
       state: runState,
     },
     readerChannel: readerChannel(wire, connectionState, runState),
-    senderChannel: neutralChannel(
-      'throttler-to-sender',
-      'throttler',
-      'sender',
-    ),
+    senderChannel: senderChannel(wire),
     sender: {
       id: 'sender',
       workers: workerControl(wire?.senderWorkers ?? null),
@@ -524,7 +580,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     keys.length !== WIRE_KEYS.length ||
     keys.some((key, index) => key !== WIRE_KEYS[index])
   ) {
-    throw new Error('snapshot body must contain exactly twenty-five wire keys')
+    throw new Error('snapshot body must contain exactly forty-two wire keys')
   }
 
   if (
@@ -540,6 +596,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     !isWireInteger(record.totalTransactions) ||
     !isWireInteger(record.readerWorkers) ||
     !isRangeValue(record.throttlerRequestedTps, policy.throttlerRequestedTps) ||
+    !isWireNumber(record.throttlerAdmittedTps) ||
     (record.throttlerInstallationMode !== 'installed' &&
       record.throttlerInstallationMode !== 'bypass') ||
     !policy.throttlerInstallationMode.allowed.includes(record.throttlerInstallationMode) ||
@@ -555,7 +612,17 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     !isWireInteger(record.readerChannelBufferedTransactions) ||
     !isWireInteger(record.readerChannelBlockedSenders) ||
     !isWireInteger(record.readerChannelOldestBlockedSenderMs) ||
-    !isWireInteger(record.readerChannelBlockedMs)
+    !isWireInteger(record.readerChannelBlockedMs) ||
+    record.senderChannelCapacity !== 0 ||
+    !isWireInteger(record.senderChannelSentBatchesTotal) ||
+    !isWireInteger(record.senderChannelSentTransactionsTotal) ||
+    !isWireInteger(record.senderChannelReceivedBatchesTotal) ||
+    !isWireInteger(record.senderChannelReceivedTransactionsTotal) ||
+    !isWireInteger(record.senderChannelDepthBatches) ||
+    !isWireInteger(record.senderChannelBufferedTransactions) ||
+    !isWireInteger(record.senderChannelBlockedSenders) ||
+    !isWireInteger(record.senderChannelOldestBlockedSenderMs) ||
+    !isWireInteger(record.senderChannelBlockedMs)
   ) {
     throw new Error('snapshot counters must be nonnegative safe integers')
   }
@@ -569,6 +636,14 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     !isWireNumber(record.readerChannelOutputTransactionsPerSecond)
   ) {
     throw new Error('snapshot readerChannel rates must be nonnegative finite numbers')
+  }
+  if (
+    !isWireNumber(record.senderChannelInputBatchesPerSecond) ||
+    !isWireNumber(record.senderChannelInputTransactionsPerSecond) ||
+    !isWireNumber(record.senderChannelOutputBatchesPerSecond) ||
+    !isWireNumber(record.senderChannelOutputTransactionsPerSecond)
+  ) {
+    throw new Error('snapshot senderChannel rates must be nonnegative finite numbers')
   }
   if (!isRangeValue(record.readerReadBatchSize, policy.readerReadBatchSize)) {
     throw new Error('snapshot readerReadBatchSize is invalid')
@@ -597,6 +672,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     readerReadTps: record.readerReadTps,
     readerReadBatchSize: record.readerReadBatchSize,
     throttlerRequestedTps: record.throttlerRequestedTps,
+    throttlerAdmittedTps: record.throttlerAdmittedTps,
     throttlerInstallationMode: record.throttlerInstallationMode,
     readerRowsRead: record.readerRowsRead,
     readerSource: record.readerSource,
@@ -614,6 +690,20 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     readerChannelInputTransactionsPerSecond: record.readerChannelInputTransactionsPerSecond,
     readerChannelOutputBatchesPerSecond: record.readerChannelOutputBatchesPerSecond,
     readerChannelOutputTransactionsPerSecond: record.readerChannelOutputTransactionsPerSecond,
+    senderChannelCapacity: record.senderChannelCapacity,
+    senderChannelSentBatchesTotal: record.senderChannelSentBatchesTotal,
+    senderChannelSentTransactionsTotal: record.senderChannelSentTransactionsTotal,
+    senderChannelReceivedBatchesTotal: record.senderChannelReceivedBatchesTotal,
+    senderChannelReceivedTransactionsTotal: record.senderChannelReceivedTransactionsTotal,
+    senderChannelDepthBatches: record.senderChannelDepthBatches,
+    senderChannelBufferedTransactions: record.senderChannelBufferedTransactions,
+    senderChannelBlockedSenders: record.senderChannelBlockedSenders,
+    senderChannelOldestBlockedSenderMs: record.senderChannelOldestBlockedSenderMs,
+    senderChannelBlockedMs: record.senderChannelBlockedMs,
+    senderChannelInputBatchesPerSecond: record.senderChannelInputBatchesPerSecond,
+    senderChannelInputTransactionsPerSecond: record.senderChannelInputTransactionsPerSecond,
+    senderChannelOutputBatchesPerSecond: record.senderChannelOutputBatchesPerSecond,
+    senderChannelOutputTransactionsPerSecond: record.senderChannelOutputTransactionsPerSecond,
   }
 }
 
@@ -707,7 +797,6 @@ export class HttpAdapter implements LoadgenAdapter {
     'connecting',
     null,
   )
-  private lastKnownWire: WireSnapshot | null = null
   private timer: ReturnType<typeof setInterval> | null
   private activeController: AbortController | null = null
   private requestInFlight = false
@@ -824,11 +913,10 @@ export class HttpAdapter implements LoadgenAdapter {
 
     const revision = this.snapshot.revision + 1
     if (failed || wire === null) {
-      this.publish(createSnapshot(revision, 'error', this.lastKnownWire))
+      this.publish(createSnapshot(revision, 'error', null))
       return
     }
 
-    this.lastKnownWire = wire
     this.publish(createSnapshot(revision, 'connected', wire))
   }
 

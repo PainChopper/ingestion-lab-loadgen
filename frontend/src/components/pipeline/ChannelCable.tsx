@@ -201,7 +201,7 @@ export function ChannelCable({
   )
   const centerY = (start.y + end.y) / 2
   const disabled = control.applyMode === 'unavailable'
-  const flowActive = snapshot.id === 'reader-to-throttler' && (
+  const flowActive = (
     snapshot.inputTransactionsPerSecond > 0 ||
     snapshot.outputTransactionsPerSecond > 0
   )

@@ -23,6 +23,7 @@ type controlState struct {
 	startError                      *string
 	reader                          readerTelemetry
 	readerChannel                   readerChannelTelemetry
+	senderChannel                   readerChannelTelemetry
 	configuredReadBatchSize         int
 	configuredReaderChannelCapacity int
 	readerChannelCapacityConfigured bool

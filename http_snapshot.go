@@ -12,6 +12,7 @@ type statusSnapshot struct {
 	ReaderWorkers                            int            `json:"readerWorkers"`
 	ReaderReadBatchSize                      int            `json:"readerReadBatchSize"`
 	ThrottlerRequestedTPS                    int            `json:"throttlerRequestedTps"`
+	ThrottlerAdmittedTPS                     float64        `json:"throttlerAdmittedTps"`
 	ThrottlerInstallationMode                string         `json:"throttlerInstallationMode"`
 	SenderWorkers                            int            `json:"senderWorkers"`
 	ElapsedMs                                int64          `json:"elapsedMs"`
@@ -33,6 +34,20 @@ type statusSnapshot struct {
 	ReaderChannelInputTransactionsPerSecond  float64        `json:"readerChannelInputTransactionsPerSecond"`
 	ReaderChannelOutputBatchesPerSecond      float64        `json:"readerChannelOutputBatchesPerSecond"`
 	ReaderChannelOutputTransactionsPerSecond float64        `json:"readerChannelOutputTransactionsPerSecond"`
+	SenderChannelCapacity                    int            `json:"senderChannelCapacity"`
+	SenderChannelDepthBatches                int            `json:"senderChannelDepthBatches"`
+	SenderChannelBufferedTransactions        int            `json:"senderChannelBufferedTransactions"`
+	SenderChannelBlockedSenders              int            `json:"senderChannelBlockedSenders"`
+	SenderChannelOldestBlockedSenderMs       int64          `json:"senderChannelOldestBlockedSenderMs"`
+	SenderChannelBlockedMs                   int64          `json:"senderChannelBlockedMs"`
+	SenderChannelSentBatchesTotal            int64          `json:"senderChannelSentBatchesTotal"`
+	SenderChannelSentTransactionsTotal       int64          `json:"senderChannelSentTransactionsTotal"`
+	SenderChannelReceivedBatchesTotal        int64          `json:"senderChannelReceivedBatchesTotal"`
+	SenderChannelReceivedTransactionsTotal   int64          `json:"senderChannelReceivedTransactionsTotal"`
+	SenderChannelInputBatchesPerSecond       float64        `json:"senderChannelInputBatchesPerSecond"`
+	SenderChannelInputTransactionsPerSecond  float64        `json:"senderChannelInputTransactionsPerSecond"`
+	SenderChannelOutputBatchesPerSecond      float64        `json:"senderChannelOutputBatchesPerSecond"`
+	SenderChannelOutputTransactionsPerSecond float64        `json:"senderChannelOutputTransactionsPerSecond"`
 	Policy                                   policySnapshot `json:"policy"`
 }
 
