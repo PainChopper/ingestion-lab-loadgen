@@ -163,16 +163,17 @@ func TestPauseStopsConsumptionUntilRun(t *testing.T) {
 	secondBatch := []Transaction{{}}
 	select {
 	case batches <- secondBatch:
-		t.Fatal("second batch was consumed during Pause")
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("Throttler did not accept the second batch during Pause")
+	}
+	waitForReaderReceives(t, requests, 2)
+	metrics <- time.Now()
+	requests <- request{kind: getSnapshot, snapshotReply: reply}
+	if snapshot := <-reply; snapshot.TotalTransactions != 1 || snapshot.RunState != runStatePaused {
+		t.Fatalf("paused snapshot = %+v, want one consumed transaction", snapshot)
 	}
 
 	requests <- request{kind: cmdRun}
-	select {
-	case batches <- secondBatch:
-	case <-time.After(time.Second):
-		t.Fatal("second batch was not consumed after Run")
-	}
 	waitForTransactions(t, requests, metrics, 2)
 	if starts != 1 {
 		t.Fatalf("producer starts = %v, want 1", starts)
@@ -231,6 +232,15 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 	case <-firstBatchBuffered:
 	case <-time.After(time.Second):
 		t.Fatal("producer did not fill its readerChannel after Pause")
+	}
+	waitForReaderReceives(t, requests, 2)
+	deadline := time.After(time.Second)
+	for len(firstBatches) != 1 {
+		select {
+		case <-time.After(time.Millisecond):
+		case <-deadline:
+			t.Fatal("producer did not buffer a batch behind blocked Throttler")
+		}
 	}
 
 	resetReply := make(chan commandResult, 1)
@@ -479,6 +489,28 @@ func waitForTransactions(t *testing.T, requests chan<- request, metrics chan<- t
 			}
 		case <-deadline:
 			t.Fatalf("transactions did not reach %d", want)
+		}
+	}
+}
+
+func waitForReaderReceives(t *testing.T, requests chan<- request, want int64) {
+	t.Helper()
+
+	reply := make(chan statusSnapshot, 1)
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case requests <- request{kind: getSnapshot, snapshotReply: reply}:
+		case <-deadline:
+			t.Fatalf("Reader channel receives did not reach %d", want)
+		}
+		select {
+		case snapshot := <-reply:
+			if snapshot.ReaderChannelReceivedBatchesTotal == want {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("Reader channel receives did not reach %d", want)
 		}
 	}
 }

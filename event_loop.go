@@ -15,8 +15,11 @@ func (state *controlState) eventLoop(
 ) {
 	var consumedSinceTick atomic.Int64
 	var batches <-chan []Transaction
+	var senderBatches <-chan []Transaction
 	var cancelConsumer context.CancelFunc
 	var consumerDone <-chan struct{}
+	var cancelThrottler context.CancelFunc
+	var throttlerDone <-chan struct{}
 	var cancelProducer context.CancelFunc
 	defer func() {
 		if cancelConsumer != nil {
@@ -25,7 +28,17 @@ func (state *controlState) eventLoop(
 		}
 		if cancelProducer != nil {
 			cancelProducer()
+		}
+		if cancelThrottler != nil {
+			cancelThrottler()
+			<-throttlerDone
+		}
+		if batches != nil {
 			for range batches {
+			}
+		}
+		if senderBatches != nil {
+			for range senderBatches {
 			}
 		}
 	}()
@@ -91,11 +104,14 @@ func (state *controlState) eventLoop(
 						continue
 					}
 					cancelProducer = cancel
+					throttlerContext, cancel := context.WithCancel(context.Background())
+					cancelThrottler = cancel
+					senderBatches, throttlerDone = startThrottler(throttlerContext, batches, &state.readerChannel)
 				}
 				if state.lifecycle.run() {
 					state.runStartedAt = time.Now()
 					state.startError = nil
-					cancelConsumer, consumerDone = startConsumer(batches, &consumedSinceTick, &state.readerChannel)
+					cancelConsumer, consumerDone = startConsumer(senderBatches, &consumedSinceTick)
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- commandResult{}
@@ -121,10 +137,17 @@ func (state *controlState) eventLoop(
 				case runStatePaused:
 					state.lifecycle.reset()
 					cancelProducer()
+					cancelThrottler()
+					<-throttlerDone
 					for range batches {
 					}
+					for range senderBatches {
+					}
 					batches = nil
+					senderBatches = nil
 					cancelProducer = nil
+					cancelThrottler = nil
+					throttlerDone = nil
 					state.resetProgress(&consumedSinceTick, promMetrics)
 					state.lifecycle.completeReset()
 				case runStateIdle:
@@ -203,13 +226,12 @@ func (state *controlState) pauseElapsed(now time.Time) {
 func startConsumer(
 	batches <-chan []Transaction,
 	consumedSinceTick *atomic.Int64,
-	readerChannelTelemetry *readerChannelTelemetry,
 ) (context.CancelFunc, <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		consumeBatches(ctx, batches, consumedSinceTick, readerChannelTelemetry)
+		consumeBatches(ctx, batches, consumedSinceTick)
 	}()
 	return cancel, done
 }
