@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"runtime"
 	"time"
 )
@@ -37,7 +38,9 @@ func main() {
 		requests,
 		metrics,
 		promMetrics,
-		func() (<-chan []Transaction, error) { return produceBatches(dataPath) },
+		func(ctx context.Context) (<-chan []Transaction, error) {
+			return produceBatches(ctx, dataPath)
+		},
 	)
 }
 

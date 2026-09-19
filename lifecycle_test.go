@@ -67,12 +67,12 @@ func TestRunFromPaused(t *testing.T) {
 
 func TestResetFromRunning(t *testing.T) {
 	lifecycle := newRunningLifecycle(t)
-	if !lifecycle.reset() {
-		t.Error("reset() from running = false, want true")
+	if lifecycle.reset() {
+		t.Error("reset() from running = true, want false")
 	}
 	state := lifecycle.currentState()
-	if state != runStateResetting {
-		t.Errorf("state after reset() from running = %v, want %v", state, runStateResetting)
+	if state != runStateRunning {
+		t.Errorf("state after reset() from running = %v, want %v", state, runStateRunning)
 	}
 }
 
@@ -148,9 +148,9 @@ func newPausedLifecycle(t *testing.T) *lifecycle {
 
 func newResettingLifecycle(t *testing.T) *lifecycle {
 	t.Helper()
-	lifecycle := newRunningLifecycle(t)
+	lifecycle := newPausedLifecycle(t)
 	if !lifecycle.reset() {
-		t.Fatal("setup: reset() from running = false, want true")
+		t.Fatal("setup: reset() from paused = false, want true")
 	}
 	state := lifecycle.currentState()
 	if state != runStateResetting {

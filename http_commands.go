@@ -6,7 +6,7 @@ import (
 )
 
 type commandRequest struct {
-	Action string `json:"action"` // "run", "pause"
+	Action string `json:"action"`
 }
 
 func commandsHandler(commands chan<- request) http.Handler {
@@ -29,7 +29,11 @@ func commandsHandler(commands chan<- request) http.Handler {
 		case "pause":
 			commands <- request{kind: cmdPause}
 		case "reset":
-			commands <- request{kind: cmdReset}
+			reply := make(chan commandResult, 1)
+			commands <- request{kind: cmdReset, commandReply: reply}
+			if result := <-reply; result.status == commandConflict {
+				w.WriteHeader(http.StatusConflict)
+			}
 		default:
 			http.Error(w, "Unknown command", http.StatusBadRequest)
 			return

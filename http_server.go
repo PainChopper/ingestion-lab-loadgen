@@ -19,6 +19,18 @@ const (
 type request struct {
 	kind          requestKind
 	snapshotReply chan statusSnapshot
+	commandReply  chan commandResult
+}
+
+type commandStatus int
+
+const (
+	commandAccepted commandStatus = iota
+	commandConflict
+)
+
+type commandResult struct {
+	status commandStatus
 }
 
 const snapshotPath = "/api/loadgen/snapshot"
