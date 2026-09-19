@@ -10,7 +10,7 @@
 1. [принципы](../ingestion-lab-loadgen-agents/rules/PRINCIPLES.md);
 2. [общие контракты](../ingestion-lab-loadgen-agents/rules/COMMON.md);
 3. файл назначенной роли:
-   - `LEAD` → [LEAD.md](../ingestion-lab-loadgen-agents/rules/LEAD.md), так же учти, что код должен быть не только корректным и эффективным, но и идиоматичным;
+   - `LEAD` → [LEAD.md](../ingestion-lab-loadgen-agents/rules/LEAD.md), подключи personal context skill, также учти, что код должен быть не только корректным и эффективным, но и идиоматичным;
    - `ANALYST` → [ANALYST.md](../ingestion-lab-loadgen-agents/rules/ANALYST.md);
    - `CODER` → [CODER.md](../ingestion-lab-loadgen-agents/rules/CODER.md) и [GO-CODING.md](../ingestion-lab-loadgen-agents/rules/GO-CODING.md);
    - `TESTER` → [TESTER.md](../ingestion-lab-loadgen-agents/rules/TESTER.md);
