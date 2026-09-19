@@ -5,17 +5,17 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from 'react'
 import type {
-  QueueId,
-  QueueSnapshot,
+  ChannelId,
+  ChannelSnapshot,
   SelectableId,
 } from '../../model/loadgen'
-import { queuePressureColor } from '../../model/queueFlowState'
+import { channelPressureColor } from '../../model/channelFlowState'
 import {
   formatInteger,
   formatMilliseconds,
   formatRate,
 } from './formatters'
-import type { PipelineQueueGeometry, Point } from './geometry'
+import type { PipelineChannelGeometry, Point } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
   capacityFromKeyboard,
@@ -23,19 +23,19 @@ import {
   capacityToCableY,
   type CapacityValues,
   getCapacityTicks,
-  getQueueCableGeometryPresentation,
-  PORTRAIT_QUEUE_CABLE_MAX_LIFT,
-  QUEUE_CABLE_MAX_LIFT,
-} from './queueCableGeometry'
+  getChannelCableGeometryPresentation,
+  PORTRAIT_CHANNEL_CABLE_MAX_LIFT,
+  CHANNEL_CABLE_MAX_LIFT,
+} from './channelCableGeometry'
 
-interface QueueCableProps {
-  snapshot: QueueSnapshot
-  geometry?: PipelineQueueGeometry
+interface ChannelCableProps {
+  snapshot: ChannelSnapshot
+  geometry?: PipelineChannelGeometry
   start?: Point
   end?: Point
   selected: boolean
   onSelect: (id: SelectableId) => void
-  onCapacityChange: (queue: QueueId, value: number) => void
+  onCapacityChange: (channel: ChannelId, value: number) => void
   orientation?: PipelineOrientation
   capacityValues?: CapacityValues
 }
@@ -44,11 +44,11 @@ interface DragSession {
   readonly pointerId: number
   readonly pointerAxis: number
   readonly capacity: number
-  readonly control: QueueSnapshot['capacity']
+  readonly control: ChannelSnapshot['capacity']
   readonly handle: SVGGElement
   readonly svg: SVGSVGElement
-  readonly queue: QueueId
-  readonly commit: (queue: QueueId, value: number) => void
+  readonly channel: ChannelId
+  readonly commit: (channel: ChannelId, value: number) => void
   readonly orientation: PipelineOrientation
 }
 
@@ -60,8 +60,8 @@ interface DragListeners {
 }
 
 // oxlint-disable-next-line react/only-export-components -- Directly tested UI presentation.
-export function getQueueCablePresentation(
-  snapshot: QueueSnapshot,
+export function getChannelCablePresentation(
+  snapshot: ChannelSnapshot,
   start: Point,
   end: Point,
   dragPreview: number | null = null,
@@ -69,9 +69,9 @@ export function getQueueCablePresentation(
   capacityValues?: CapacityValues,
 ) {
   const maxLift = orientation === 'portrait'
-    ? PORTRAIT_QUEUE_CABLE_MAX_LIFT
-    : QUEUE_CABLE_MAX_LIFT
-  const geometry = getQueueCableGeometryPresentation(
+    ? PORTRAIT_CHANNEL_CABLE_MAX_LIFT
+    : CHANNEL_CABLE_MAX_LIFT
+  const geometry = getChannelCableGeometryPresentation(
     snapshot.capacity,
     start,
     end,
@@ -147,7 +147,7 @@ function removeDragListeners(listeners: DragListeners) {
   window.removeEventListener('keydown', listeners.keyDown, true)
 }
 
-export function QueueCable({
+export function ChannelCable({
   snapshot,
   geometry,
   start: startProp,
@@ -157,7 +157,7 @@ export function QueueCable({
   onCapacityChange,
   orientation = 'landscape',
   capacityValues,
-}: QueueCableProps) {
+}: ChannelCableProps) {
   const start = geometry?.start ?? startProp ?? { x: 0, y: 0 }
   const end = geometry?.end ?? endProp ?? start
   const metrics = geometry?.metrics ?? {
@@ -179,7 +179,7 @@ export function QueueCable({
   const dragSession = useRef<DragSession | null>(null)
   const dragListeners = useRef<DragListeners | null>(null)
   const control = snapshot.capacity
-  const presentation = getQueueCablePresentation(
+  const presentation = getChannelCablePresentation(
     snapshot,
     start,
     end,
@@ -191,8 +191,8 @@ export function QueueCable({
   const centerX = (start.x + end.x) / 2
   const portrait = orientation === 'portrait'
   const maxLift = portrait
-    ? PORTRAIT_QUEUE_CABLE_MAX_LIFT
-    : QUEUE_CABLE_MAX_LIFT
+    ? PORTRAIT_CHANNEL_CABLE_MAX_LIFT
+    : CHANNEL_CABLE_MAX_LIFT
   const ticks = getCapacityTicks(
     control,
     portrait ? start.x : start.y,
@@ -205,8 +205,8 @@ export function QueueCable({
     snapshot.inputTransactionsPerSecond > 0 ||
     snapshot.outputTransactionsPerSecond > 0
   )
-  const queueStyle = {
-    '--pipeline-queue-pressure-color': queuePressureColor(
+  const channelStyle = {
+    '--pipeline-channel-pressure-color': channelPressureColor(
       snapshot.displayedPressure,
     ),
   } as CSSProperties
@@ -267,7 +267,7 @@ export function QueueCable({
       control,
       handle: event.currentTarget,
       svg,
-      queue: snapshot.id,
+      channel: snapshot.id,
       commit: onCapacityChange,
       orientation,
     }
@@ -293,7 +293,7 @@ export function QueueCable({
           closedSession !== null &&
           nextCapacity !== closedSession.capacity
         ) {
-          closedSession.commit(closedSession.queue, nextCapacity)
+          closedSession.commit(closedSession.channel, nextCapacity)
         }
       },
       pointerCancel: (pointerEvent) => cancelDrag(pointerEvent.pointerId),
@@ -350,26 +350,26 @@ export function QueueCable({
 
   return (
     <g
-      id={`queue-${snapshot.id}`}
-      className={`pipeline-queue pipeline-selectable pipeline-queue--${snapshot.flowState}${flowActive ? ' pipeline-queue--flow-active' : ''}${selected ? ' pipeline-selectable--selected' : ''}`}
+      id={`channel-${snapshot.id}`}
+      className={`pipeline-channel pipeline-selectable pipeline-channel--${snapshot.flowState}${flowActive ? ' pipeline-channel--flow-active' : ''}${selected ? ' pipeline-selectable--selected' : ''}`}
       role="button"
       tabIndex={0}
-      aria-label={`Inspect ${snapshot.from} to ${snapshot.to} queue`}
+      aria-label={`Inspect ${snapshot.from} to ${snapshot.to} channel`}
       aria-pressed={selected}
       data-pressure={snapshot.displayedPressure.toFixed(2)}
       data-input-active={snapshot.inputTransactionsPerSecond > 0}
       data-output-active={snapshot.outputTransactionsPerSecond > 0}
-      style={queueStyle}
+      style={channelStyle}
       onClick={() => onSelect(snapshot.id)}
       onKeyDown={handleSelectionKeyDown}
     >
-      <g className="pipeline-queue-scale" aria-hidden="true">
+      <g className="pipeline-channel-scale" aria-hidden="true">
         <line
           x1={portrait ? start.x - maxLift : centerX}
           y1={portrait ? centerY : start.y - maxLift}
           x2={portrait ? start.x : centerX}
           y2={portrait ? centerY : start.y}
-          className="pipeline-queue-scale__line"
+          className="pipeline-channel-scale__line"
         />
         {ticks.map((tick) => (
           <g key={tick.value}>
@@ -378,14 +378,14 @@ export function QueueCable({
               y1={portrait ? centerY - (tick.major ? 5 : 3) : tick.y}
               x2={portrait ? tick.y : centerX + (tick.major ? 5 : 3)}
               y2={portrait ? centerY + (tick.major ? 5 : 3) : tick.y}
-              className="pipeline-queue-scale__tick"
+              className="pipeline-channel-scale__tick"
             />
             {tick.major && (
               <text
                 x={portrait ? tick.y : centerX + 10}
                 y={portrait ? centerY + 18 : tick.y + 4}
                 textAnchor={portrait ? 'middle' : undefined}
-                className="pipeline-queue-scale__label"
+                className="pipeline-channel-scale__label"
               >
                 {formatInteger(tick.value)}
               </text>
@@ -401,24 +401,24 @@ export function QueueCable({
       />
       <path
         d={presentation.cablePath}
-        className="pipeline-queue-cable"
+        className="pipeline-channel-cable"
       />
       {presentation.requestedPath !== null && (
         <path
           d={presentation.requestedPath}
-          className={`pipeline-queue-requested-cable pipeline-queue-requested-cable--${capacity.requestState}`}
+          className={`pipeline-channel-requested-cable pipeline-channel-requested-cable--${capacity.requestState}`}
           aria-hidden="true"
         />
       )}
 
       {presentation.appliedMarker !== null && (
         <g
-          className={`pipeline-queue-capacity-applied pipeline-queue-capacity-applied--${snapshot.flowState}`}
+          className={`pipeline-channel-capacity-applied pipeline-channel-capacity-applied--${snapshot.flowState}`}
           transform={portrait
             ? `translate(${presentation.appliedMarker.x} ${centerY - 28})`
             : `translate(${centerX - 50} ${presentation.appliedMarker.y})`}
           role="status"
-          aria-label={`${snapshot.from} to ${snapshot.to} queue applied capacity ${formatInteger(presentation.appliedMarker.capacity)} batches`}
+          aria-label={`${snapshot.from} to ${snapshot.to} channel applied capacity ${formatInteger(presentation.appliedMarker.capacity)} batches`}
           data-capacity={presentation.appliedMarker.capacity}
         >
           <line x1={portrait ? 0 : 30} y1={portrait ? 9 : 0} x2={portrait ? 0 : 50} y2={portrait ? 28 : 0} />
@@ -433,7 +433,7 @@ export function QueueCable({
         x={metrics.x}
         y={metrics.throughputY}
         textAnchor="middle"
-        className="pipeline-small-strong pipeline-queue-metric"
+        className="pipeline-small-strong pipeline-channel-metric"
       >
         {formatRate(snapshot.throughputTps)}
       </text>
@@ -441,7 +441,7 @@ export function QueueCable({
         x={metrics.x}
         y={metrics.depthY}
         textAnchor="middle"
-        className="pipeline-small pipeline-queue-metric"
+        className="pipeline-small pipeline-channel-metric"
       >
         {presentation.depth}
       </text>
@@ -450,7 +450,7 @@ export function QueueCable({
           x={metrics.x}
           y={metrics.waitingY}
           textAnchor="middle"
-          className="pipeline-queue-wait-status"
+          className="pipeline-channel-wait-status"
         >
           {presentation.waitingUpstream}
         </text>
@@ -460,7 +460,7 @@ export function QueueCable({
           x={metrics.x}
           y={metrics.requestY}
           textAnchor="middle"
-          className={`pipeline-queue-capacity-status pipeline-queue-capacity-status--${capacity.requestState}`}
+          className={`pipeline-channel-capacity-status pipeline-channel-capacity-status--${capacity.requestState}`}
         >
           {capacity.requestState === 'pending' ? 'Pending' : 'Preview'}{' '}
           {formatInteger(capacity.candidate)} batches
@@ -468,11 +468,11 @@ export function QueueCable({
       )}
 
       <g
-        className={`pipeline-queue-handle pipeline-queue-handle--${snapshot.flowState}${presentation.handleState === null ? '' : ` pipeline-queue-handle--${presentation.handleState}`}${disabled ? ' pipeline-queue-handle--disabled' : ''}`}
+        className={`pipeline-channel-handle pipeline-channel-handle--${snapshot.flowState}${presentation.handleState === null ? '' : ` pipeline-channel-handle--${presentation.handleState}`}${disabled ? ' pipeline-channel-handle--disabled' : ''}`}
         role="slider"
         aria-orientation={portrait ? 'horizontal' : 'vertical'}
         tabIndex={disabled ? -1 : 0}
-        aria-label={`${snapshot.from} to ${snapshot.to} queue capacity`}
+        aria-label={`${snapshot.from} to ${snapshot.to} channel capacity`}
         aria-valuemin={control.min}
         aria-valuemax={control.max}
         aria-valuenow={capacity.candidate}
@@ -488,7 +488,7 @@ export function QueueCable({
         onKeyDown={handleKeyDown}
       >
         <rect
-          className="pipeline-queue-handle__body"
+          className="pipeline-channel-handle__body"
           x="-18"
           y="-12"
           width="36"
@@ -497,7 +497,7 @@ export function QueueCable({
         />
         {capacity.requestState === 'preview' && (
           <rect
-            className="pipeline-queue-handle__request-ring"
+            className="pipeline-channel-handle__request-ring"
             x="-21"
             y="-15"
             width="42"
@@ -506,7 +506,7 @@ export function QueueCable({
           />
         )}
         <rect
-          className="pipeline-queue-handle__focus-ring"
+          className="pipeline-channel-handle__focus-ring"
           x="-24"
           y="-18"
           width="48"
@@ -516,7 +516,7 @@ export function QueueCable({
         <text
           y="4"
           textAnchor="middle"
-          className="pipeline-queue-handle__value"
+          className="pipeline-channel-handle__value"
         >
           {formatInteger(presentation.handleCapacity)}
         </text>

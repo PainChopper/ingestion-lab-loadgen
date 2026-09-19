@@ -20,7 +20,7 @@ import {
 } from '../model/simulation'
 import type {
   CapacityTelemetry,
-  QueueTelemetry,
+  ChannelTelemetry,
   SimulationTelemetry,
 } from '../model/simulation'
 
@@ -38,8 +38,8 @@ const CONTROL_RANGES = Object.freeze({
   readerWorkers: Object.freeze({ min: 1, max: 7, step: 1 }),
   senderWorkers: Object.freeze({ min: 1, max: 32, step: 1 }),
   requestedTps: Object.freeze({ min: 0, max: 250_000, step: 5_000 }),
-  queue1Capacity: Object.freeze({ min: 0, max: 12, step: 1 }),
-  queue2Capacity: Object.freeze({ min: 0, max: 160, step: 10 }),
+  readerChannelCapacity: Object.freeze({ min: 0, max: 12, step: 1 }),
+  senderChannelCapacity: Object.freeze({ min: 0, max: 160, step: 10 }),
   readBatchSize: Object.freeze({ min: 1_000, max: 100_000, step: 1_000 }),
   httpBatchSize: Object.freeze({ min: 100, max: 10_000, step: 100 }),
   httpTimeoutMs: Object.freeze({ min: 10, max: 5_000, step: 10 }),
@@ -97,8 +97,8 @@ function normalizeNumericValue(value: number, range: NumericRange): number {
   return Math.min(range.max, Math.max(range.min, stepped))
 }
 
-function freezeQueueSnapshot(
-  queue: QueueTelemetry,
+function freezeChannelSnapshot(
+  channel: ChannelTelemetry,
   identity: {
     readonly id: 'reader-to-throttler' | 'throttler-to-sender'
     readonly from: 'reader' | 'throttler'
@@ -110,26 +110,26 @@ function freezeQueueSnapshot(
     id: identity.id,
     from: identity.from,
     to: identity.to,
-    capacity: capacityControl(queue.capacity, identity.range),
-    enqueuedBatchesTotal: queue.enqueuedBatchesTotal,
-    enqueuedTransactionsTotal: queue.enqueuedTransactionsTotal,
-    dequeuedBatchesTotal: queue.dequeuedBatchesTotal,
-    dequeuedTransactionsTotal: queue.dequeuedTransactionsTotal,
-    depthBatches: queue.depthBatches,
-    queuedTransactions: queue.queuedTransactions,
-    handoffBatches: queue.handoffBatches,
-    handoffBatchesTotal: queue.handoffBatchesTotal,
-    blockedSenders: queue.blockedSenders,
-    oldestBlockedSenderMs: queue.oldestBlockedSenderMs,
-    inputBatchesPerSecond: Math.round(queue.inputBatchesPerSecond),
-    outputBatchesPerSecond: Math.round(queue.outputBatchesPerSecond),
-    inputTransactionsPerSecond: Math.round(queue.inputTransactionsPerSecond),
-    outputTransactionsPerSecond: Math.round(queue.outputTransactionsPerSecond),
-    inputTps: Math.round(queue.inputTransactionsPerSecond),
-    outputTps: Math.round(queue.outputTransactionsPerSecond),
-    throughputTps: Math.round(queue.outputTransactionsPerSecond),
-    blockedMs: Math.floor(queue.blockedMsTotal),
-    trend: queue.trend,
+    capacity: capacityControl(channel.capacity, identity.range),
+    sentBatchesTotal: channel.sentBatchesTotal,
+    sentTransactionsTotal: channel.sentTransactionsTotal,
+    receivedBatchesTotal: channel.receivedBatchesTotal,
+    receivedTransactionsTotal: channel.receivedTransactionsTotal,
+    depthBatches: channel.depthBatches,
+    bufferedTransactions: channel.bufferedTransactions,
+    handoffBatches: channel.handoffBatches,
+    handoffBatchesTotal: channel.handoffBatchesTotal,
+    blockedSenders: channel.blockedSenders,
+    oldestBlockedSenderMs: channel.oldestBlockedSenderMs,
+    inputBatchesPerSecond: Math.round(channel.inputBatchesPerSecond),
+    outputBatchesPerSecond: Math.round(channel.outputBatchesPerSecond),
+    inputTransactionsPerSecond: Math.round(channel.inputTransactionsPerSecond),
+    outputTransactionsPerSecond: Math.round(channel.outputTransactionsPerSecond),
+    inputTps: Math.round(channel.inputTransactionsPerSecond),
+    outputTps: Math.round(channel.outputTransactionsPerSecond),
+    throughputTps: Math.round(channel.outputTransactionsPerSecond),
+    blockedMs: Math.floor(channel.blockedMsTotal),
+    trend: channel.trend,
   })
 }
 
@@ -143,7 +143,7 @@ function freezeSnapshot(
   const readerCapacityTps = Math.round(telemetry.readerCapacityTps)
   const readerReadTps = Math.round(telemetry.readerTransactionsPerSecond)
   const readerLimitationReason = running &&
-      telemetry.queue1.blockedSenders > 0 &&
+      telemetry.readerChannel.blockedSenders > 0 &&
       readerReadTps < readerCapacityTps
     ? 'downstream-backpressure'
     : null
@@ -172,7 +172,7 @@ function freezeSnapshot(
       readTps: readerReadTps,
       configuredCapacityTps: readerCapacityTps,
       limitationReason: readerLimitationReason,
-      rowsRead: telemetry.queue1.enqueuedTransactionsTotal,
+      rowsRead: telemetry.readerChannel.sentTransactionsTotal,
       source: 'events.parquet',
       state: state.runState,
     }),
@@ -194,17 +194,17 @@ function freezeSnapshot(
       limitedMs: Math.floor(telemetry.limitedMs),
       state: state.runState,
     }),
-    queue1: freezeQueueSnapshot(telemetry.queue1, {
+    readerChannel: freezeChannelSnapshot(telemetry.readerChannel, {
       id: 'reader-to-throttler',
       from: 'reader',
       to: 'throttler',
-      range: CONTROL_RANGES.queue1Capacity,
+      range: CONTROL_RANGES.readerChannelCapacity,
     }),
-    queue2: freezeQueueSnapshot(telemetry.queue2, {
+    senderChannel: freezeChannelSnapshot(telemetry.senderChannel, {
       id: 'throttler-to-sender',
       from: 'throttler',
       to: 'sender',
-      range: CONTROL_RANGES.queue2Capacity,
+      range: CONTROL_RANGES.senderChannelCapacity,
     }),
     sender: Object.freeze({
       id: 'sender',
@@ -412,18 +412,19 @@ export class SimulationAdapter implements LoadgenAdapter {
           normalizeNumericValue(command.value, workerRange),
         )
         break
-      case 'set-queue-capacity': {
+      case 'set-reader-channel-capacity':
+      case 'set-sender-channel-capacity': {
         if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber(commandId, command, 'queue capacity')
+          return this.rejectInvalidNumber(commandId, command, 'channel capacity')
         }
         changed = this.advanceToNow()
-        const queue = command.queue === 'reader-to-throttler' ? 1 : 2
-        const range = queue === 1
-          ? CONTROL_RANGES.queue1Capacity
-          : CONTROL_RANGES.queue2Capacity
+        const channel = command.type === 'set-reader-channel-capacity' ? 1 : 2
+        const range = channel === 1
+          ? CONTROL_RANGES.readerChannelCapacity
+          : CONTROL_RANGES.senderChannelCapacity
         changed =
-          this.simulation.requestQueueCapacity(
-            queue,
+          this.simulation.requestChannelCapacity(
+            channel,
             normalizeNumericValue(command.value, range),
           ) || changed
         break
@@ -555,11 +556,11 @@ export class SimulationAdapter implements LoadgenAdapter {
     const changed =
       this.state.runState !== 'idle' ||
       telemetry.elapsedMs !== 0 ||
-      telemetry.queue1.enqueuedBatchesTotal !== 0 ||
-      telemetry.queue2.enqueuedBatchesTotal !== 0 ||
+      telemetry.readerChannel.sentBatchesTotal !== 0 ||
+      telemetry.senderChannel.sentBatchesTotal !== 0 ||
       telemetry.http.requestsStartedTotal !== 0 ||
-      telemetry.queue1.capacity.pending !== null ||
-      telemetry.queue2.capacity.pending !== null
+      telemetry.readerChannel.capacity.pending !== null ||
+      telemetry.senderChannel.capacity.pending !== null
 
     this.state.runState = 'idle'
     this.simulation.reset()

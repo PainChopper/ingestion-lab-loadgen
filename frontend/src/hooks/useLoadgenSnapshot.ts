@@ -1,10 +1,10 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
-import { QueueFlowStateDeriver } from '../model/queueFlowState'
+import { ChannelFlowStateDeriver } from '../model/channelFlowState'
 
 export function useLoadgenSnapshot(adapter: LoadgenAdapter) {
   const derivation = useMemo(
-    () => ({ adapter, deriver: new QueueFlowStateDeriver() }),
+    () => ({ adapter, deriver: new ChannelFlowStateDeriver() }),
     [adapter],
   )
   const subscribe = useCallback(

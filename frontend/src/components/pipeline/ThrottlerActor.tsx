@@ -10,12 +10,12 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from 'react'
 import type {
-  QueueSnapshot,
+  ChannelSnapshot,
   SelectableId,
   ThrottlerInstallationMode,
   ThrottlerSnapshot,
 } from '../../model/loadgen'
-import { queuePressureColor } from '../../model/queueFlowState'
+import { channelPressureColor } from '../../model/channelFlowState'
 import { formatRate } from './formatters'
 import { ACTOR_GEOMETRY, type PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
@@ -36,7 +36,7 @@ import {
 
 interface ThrottlerActorProps {
   snapshot: ThrottlerSnapshot
-  upstreamQueue: QueueSnapshot
+  upstreamChannel: ChannelSnapshot
   previewTps: number | null
   selected: boolean
   onSelect: (id: SelectableId) => void
@@ -51,15 +51,15 @@ interface ThrottlerActorProps {
 
 const HOLD_DELAY_MS = 420
 const HOLD_REPEAT_MS = 120
-function flowColor(queue: QueueSnapshot): string {
-  if (queue.flowState === 'connection-error') return 'var(--red)'
-  if (queue.flowState === 'stopped') return 'var(--muted)'
-  return queuePressureColor(queue.displayedPressure)
+function flowColor(channel: ChannelSnapshot): string {
+  if (channel.flowState === 'connection-error') return 'var(--red)'
+  if (channel.flowState === 'stopped') return 'var(--muted)'
+  return channelPressureColor(channel.displayedPressure)
 }
 
 export function ThrottlerActor({
   snapshot,
-  upstreamQueue,
+  upstreamChannel,
   previewTps,
   selected,
   onSelect,
@@ -401,7 +401,7 @@ export function ThrottlerActor({
   const rangeIndex = candidateIndex ?? appliedIndex
   const rangeText = `${openingPercent(rangeIndex)}% open, ${candidateState}; applied ${openingPercent(appliedIndex)}% open`
   const valveStyle = {
-    '--pipeline-valve-flow-color': flowColor(upstreamQueue),
+    '--pipeline-valve-flow-color': flowColor(upstreamChannel),
   } as CSSProperties
   const apertureClipId = 'throttler-valve-aperture-clip'
 

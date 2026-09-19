@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
-import type { LoadgenSnapshot, QueueSnapshot } from '../../model/loadgen'
-import { queuePressureColor } from '../../model/queueFlowState'
+import type { LoadgenSnapshot, ChannelSnapshot } from '../../model/loadgen'
+import { channelPressureColor } from '../../model/channelFlowState'
 import type {
   MarkerLifecycleSnapshot,
   MarkerStage,
@@ -26,10 +26,10 @@ interface PipelineMarkersProps {
   readonly geometry?: PipelineGeometry
 }
 
-function queueMarkerColor(queue: QueueSnapshot): string {
-  if (queue.flowState === 'connection-error') return 'var(--red)'
-  if (queue.flowState === 'stopped') return 'var(--muted)'
-  return queuePressureColor(queue.displayedPressure)
+function channelMarkerColor(channel: ChannelSnapshot): string {
+  if (channel.flowState === 'connection-error') return 'var(--red)'
+  if (channel.flowState === 'stopped') return 'var(--muted)'
+  return channelPressureColor(channel.displayedPressure)
 }
 
 function markerColor(
@@ -39,8 +39,8 @@ function markerColor(
   if (marker.outcomeVisible && marker.outcome !== null) {
     return marker.outcome === 'success' ? 'var(--green)' : 'var(--red)'
   }
-  if (marker.stage === 'queue1') return queueMarkerColor(snapshot.queue1)
-  if (marker.stage === 'queue2') return queueMarkerColor(snapshot.queue2)
+  if (marker.stage === 'readerChannel') return channelMarkerColor(snapshot.readerChannel)
+  if (marker.stage === 'senderChannel') return channelMarkerColor(snapshot.senderChannel)
   if (marker.stage === 'reader') return 'var(--cyan)'
   if (marker.stage === 'target') return 'var(--purple)'
   if (marker.stage === 'http') return 'var(--green)'
@@ -61,9 +61,9 @@ export function PipelineMarkers({
   const valveOpeningIndex = markers.valveOpeningIndex
   const stagePaths = Object.fromEntries(([
     'reader',
-    'queue1',
+    'readerChannel',
     'throttler',
-    'queue2',
+    'senderChannel',
     'sender',
     'http',
     'target',
@@ -71,21 +71,21 @@ export function PipelineMarkers({
     stage,
     getMarkerStagePathGeometry(
       stage,
-      snapshot.queue1.capacity,
-      snapshot.queue2.capacity,
+      snapshot.readerChannel.capacity,
+      snapshot.senderChannel.capacity,
       valveOpeningIndex,
       resolvedGeometry,
     ),
   ])) as Record<MarkerStage, ReturnType<typeof getMarkerStagePathGeometry>>
   const waitingMarkers = markers.markers
-    .filter((marker) => marker.stage === 'throttler' && marker.queued)
+    .filter((marker) => marker.stage === 'throttler' && marker.buffered)
     .sort((left, right) =>
       right.phase - left.phase ||
       Number(left.familyId?.split('-').at(-1)) -
         Number(right.familyId?.split('-').at(-1))
     )
   const waitingTarget = Math.min(
-    Math.max(0, Math.floor(snapshot.queue1.depthBatches ?? 0)),
+    Math.max(0, Math.floor(snapshot.readerChannel.depthBatches ?? 0)),
     MAX_VISIBLE_WAITING_FAMILIES,
   )
   const visibleWaitingIds = new Set(
@@ -130,7 +130,7 @@ export function PipelineMarkers({
       </defs>
       {markers.markers.map((marker) => {
         const geometry = stagePaths[marker.stage]
-        const jitter = marker.queued && marker.stage === 'throttler'
+        const jitter = marker.buffered && marker.stage === 'throttler'
           ? markerWaitingOffset(
             marker.familyId ?? '',
             marker.slotId,
@@ -139,7 +139,7 @@ export function PipelineMarkers({
           )
           : { x: 0, y: 0 }
         const waitingVisible = marker.stage !== 'throttler' ||
-          !marker.queued || visibleWaitingIds.has(marker.slotId)
+          !marker.buffered || visibleWaitingIds.has(marker.slotId)
         const outcomeClass = marker.outcomeVisible && marker.outcome !== null
           ? ` pipeline-marker--outcome pipeline-marker--${marker.outcome}`
           : ''
@@ -174,7 +174,7 @@ export function PipelineMarkers({
             visibility={marker.state === 'inactive' || !waitingVisible
               ? 'hidden'
               : 'visible'}
-            className={`pipeline-marker pipeline-marker--${marker.state} pipeline-marker--stage-${marker.stage}${marker.queued ? ' pipeline-marker--queued' : ''}${outcomeClass}`}
+            className={`pipeline-marker pipeline-marker--${marker.state} pipeline-marker--stage-${marker.stage}${marker.buffered ? ' pipeline-marker--buffered' : ''}${outcomeClass}`}
             style={markerStyle}
             data-marker-id={marker.slotId}
             data-family-id={marker.familyId ?? ''}

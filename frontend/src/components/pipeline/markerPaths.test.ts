@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { NumericControlSnapshot, QueueId } from '../../model/loadgen'
-import { createPipelineGeometry, QUEUE_CABLE_ENDPOINTS } from './geometry'
-import { buildQueueCablePath, capacityToCableY } from './queueCableGeometry'
+import type { NumericControlSnapshot, ChannelId } from '../../model/loadgen'
+import { createPipelineGeometry, CHANNEL_CABLE_ENDPOINTS } from './geometry'
+import { buildChannelCablePath, capacityToCableY } from './channelCableGeometry'
 import {
   getMarkerStagePathGeometry,
-  getQueueMarkerPathGeometry,
+  getChannelMarkerPathGeometry,
   getValveMarkerPathGeometry,
   pointAtValvePathPhase,
   VALVE_WAITING_STOP_X,
@@ -35,19 +35,19 @@ function capacityControl(
 
 describe('marker paths', () => {
   it('joins every lifecycle stage at the exact next endpoint', () => {
-    const queue1 = capacityControl(10, 12, 1)
-    const queue2 = capacityControl(160, 160, 10)
+    const readerChannel = capacityControl(10, 12, 1)
+    const senderChannel = capacityControl(160, 160, 10)
     const stages: readonly MarkerStage[] = [
       'reader',
-      'queue1',
+      'readerChannel',
       'throttler',
-      'queue2',
+      'senderChannel',
       'sender',
       'http',
       'target',
     ]
     const paths = stages.map((stage) =>
-      getMarkerStagePathGeometry(stage, queue1, queue2)
+      getMarkerStagePathGeometry(stage, readerChannel, senderChannel)
     )
 
     for (let index = 0; index < paths.length - 1; index += 1) {
@@ -58,21 +58,21 @@ describe('marker paths', () => {
 
   it('uses canonical endpoints and follows the committed candidate capacity', () => {
     const cases: ReadonlyArray<{
-      queueId: QueueId
+      channelId: ChannelId
       applied: number
       candidate: number
       max: number
       step: number
     }> = [
       {
-        queueId: 'reader-to-throttler',
+        channelId: 'reader-to-throttler',
         applied: 10,
         candidate: 0,
         max: 12,
         step: 1,
       },
       {
-        queueId: 'throttler-to-sender',
+        channelId: 'throttler-to-sender',
         applied: 160,
         candidate: 50,
         max: 160,
@@ -81,13 +81,13 @@ describe('marker paths', () => {
     ]
 
     for (const testCase of cases) {
-      const endpoints = QUEUE_CABLE_ENDPOINTS[testCase.queueId]
-      const canonical = getQueueMarkerPathGeometry(
-        testCase.queueId,
+      const endpoints = CHANNEL_CABLE_ENDPOINTS[testCase.channelId]
+      const canonical = getChannelMarkerPathGeometry(
+        testCase.channelId,
         capacityControl(testCase.applied, testCase.max, testCase.step),
       )
-      const pending = getQueueMarkerPathGeometry(
-        testCase.queueId,
+      const pending = getChannelMarkerPathGeometry(
+        testCase.channelId,
         capacityControl(
           testCase.applied,
           testCase.max,
@@ -95,8 +95,8 @@ describe('marker paths', () => {
           testCase.candidate,
         ),
       )
-      const afterApply = getQueueMarkerPathGeometry(
-        testCase.queueId,
+      const afterApply = getChannelMarkerPathGeometry(
+        testCase.channelId,
         capacityControl(testCase.candidate, testCase.max, testCase.step),
       )
       const appliedTopY = capacityToCableY(
@@ -113,10 +113,10 @@ describe('marker paths', () => {
       )
 
       expect(canonical.cablePath).toBe(
-        buildQueueCablePath(endpoints.start, endpoints.end, appliedTopY),
+        buildChannelCablePath(endpoints.start, endpoints.end, appliedTopY),
       )
       expect(pending.cablePath).toBe(
-        buildQueueCablePath(endpoints.start, endpoints.end, candidateTopY),
+        buildChannelCablePath(endpoints.start, endpoints.end, candidateTopY),
       )
       expect(pending).toEqual(afterApply)
       expect(afterApply).not.toEqual(canonical)
@@ -148,13 +148,13 @@ describe('marker paths', () => {
   })
 
   it('joins portrait stages at top and bottom ports through upright valve elbows', () => {
-    const queue1 = capacityControl(10, 12, 1)
-    const queue2 = capacityControl(160, 160, 10)
+    const readerChannel = capacityControl(10, 12, 1)
+    const senderChannel = capacityControl(160, 160, 10)
     const stages: readonly MarkerStage[] = [
       'reader',
-      'queue1',
+      'readerChannel',
       'throttler',
-      'queue2',
+      'senderChannel',
       'sender',
       'http',
       'target',
@@ -167,7 +167,7 @@ describe('marker paths', () => {
           senderWorkers,
         })
         const paths = stages.map((stage) =>
-          getMarkerStagePathGeometry(stage, queue1, queue2, 11, geometry)
+          getMarkerStagePathGeometry(stage, readerChannel, senderChannel, 11, geometry)
         )
         for (let index = 0; index < paths.length - 1; index += 1) {
           expect(paths[index].end).toEqual(paths[index + 1].start)
@@ -181,7 +181,7 @@ describe('marker paths', () => {
       senderWorkers: 32,
     })
     const paths = stages.map((stage) =>
-      getMarkerStagePathGeometry(stage, queue1, queue2, 11, geometry)
+      getMarkerStagePathGeometry(stage, readerChannel, senderChannel, 11, geometry)
     )
     expect(paths[1].start).toEqual({ x: 240, y: 246 })
     expect(paths[1].end).toEqual({ x: 240, y: 445 })
@@ -198,8 +198,8 @@ describe('marker paths', () => {
   it.each([1120, 1440, 1920])(
     'joins landscape stages at content width %i',
     (landscapeContentWidth) => {
-      const queue1 = capacityControl(10, 12, 1)
-      const queue2 = capacityControl(160, 160, 10)
+      const readerChannel = capacityControl(10, 12, 1)
+      const senderChannel = capacityControl(160, 160, 10)
       const geometry = createPipelineGeometry({
         orientation: 'landscape',
         landscapeContentWidth,
@@ -208,15 +208,15 @@ describe('marker paths', () => {
       })
       const stages: readonly MarkerStage[] = [
         'reader',
-        'queue1',
+        'readerChannel',
         'throttler',
-        'queue2',
+        'senderChannel',
         'sender',
         'http',
         'target',
       ]
       const paths = stages.map((stage) =>
-        getMarkerStagePathGeometry(stage, queue1, queue2, 11, geometry)
+        getMarkerStagePathGeometry(stage, readerChannel, senderChannel, 11, geometry)
       )
 
       for (let index = 0; index < paths.length - 1; index += 1) {

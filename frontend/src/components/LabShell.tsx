@@ -10,8 +10,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import type {
   LoadgenSnapshot,
-  QueueFlowState,
-  QueueId,
+  ChannelFlowState,
+  ChannelId,
   SelectableId,
   ThrottlerInstallationMode,
 } from '../model/loadgen'
@@ -41,8 +41,8 @@ interface RequestedTpsControlProps {
   onRequestedTpsChange: (value: number) => Promise<boolean>
 }
 
-const QUEUE_STATES: ReadonlyArray<{
-  state: QueueFlowState
+const CHANNEL_STATES: ReadonlyArray<{
+  state: ChannelFlowState
   label: string
 }> = [
   { state: 'normal', label: 'Normal flow' },
@@ -152,7 +152,7 @@ interface PipelineViewportProps {
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
-  onQueueCapacityChange: (queue: QueueId, value: number) => void
+  onChannelCapacityChange: (channel: ChannelId, value: number) => void
   requestedTpsPreview: number | null
   onRequestedTpsPreviewChange: (value: number | null) => void
   onRequestedTpsChange: (value: number) => Promise<boolean>
@@ -167,7 +167,7 @@ function PipelineViewport({
   selectedId,
   onSelect,
   onWorkerCountChange,
-  onQueueCapacityChange,
+  onChannelCapacityChange,
   requestedTpsPreview,
   onRequestedTpsPreviewChange,
   onRequestedTpsChange,
@@ -227,7 +227,7 @@ function PipelineViewport({
           selectedId={selectedId}
           onSelect={onSelect}
           onWorkerCountChange={onWorkerCountChange}
-          onQueueCapacityChange={onQueueCapacityChange}
+          onChannelCapacityChange={onChannelCapacityChange}
           requestedTpsPreview={requestedTpsPreview}
           onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
           onRequestedTpsChange={onRequestedTpsChange}
@@ -426,7 +426,7 @@ interface WorkspaceProps extends SnapshotProps, RequestedTpsControlProps {
   onSelect: (id: SelectableId) => void
   onClearSelection: () => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
-  onQueueCapacityChange: (queue: QueueId, value: number) => void
+  onChannelCapacityChange: (channel: ChannelId, value: number) => void
   onInstallationModeChange: (
     value: ThrottlerInstallationMode,
   ) => Promise<boolean>
@@ -440,7 +440,7 @@ function Workspace({
   onSelect,
   onClearSelection,
   onWorkerCountChange,
-  onQueueCapacityChange,
+  onChannelCapacityChange,
   requestedTpsPreview,
   onRequestedTpsPreviewChange,
   onRequestedTpsChange,
@@ -454,7 +454,7 @@ function Workspace({
         selectedId={selectedId}
         onSelect={onSelect}
         onWorkerCountChange={onWorkerCountChange}
-        onQueueCapacityChange={onQueueCapacityChange}
+        onChannelCapacityChange={onChannelCapacityChange}
         requestedTpsPreview={requestedTpsPreview}
         onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
         onRequestedTpsChange={onRequestedTpsChange}
@@ -474,12 +474,12 @@ function Workspace({
   )
 }
 
-function QueueStateLegend() {
+function ChannelStateLegend() {
   return (
-    <footer className="queue-legend" aria-label="Queue states">
-      <strong>QUEUE STATES</strong>
-      <div className="queue-legend-items">
-        {QUEUE_STATES.map(({ state, label }) => (
+    <footer className="channel-legend" aria-label="Channel states">
+      <strong>CHANNEL STATES</strong>
+      <div className="channel-legend-items">
+        {CHANNEL_STATES.map(({ state, label }) => (
           <span key={state} className="legend-item">
             <i className={`legend-swatch legend-swatch--${state}`} />
             {label}
@@ -552,8 +552,12 @@ export function LabShell({ adapter }: AdapterProps) {
   const handleWorkerCountChange = (actor: WorkerActorId, value: number) => {
     void adapter.dispatch({ type: 'set-worker-count', actor, value })
   }
-  const handleQueueCapacityChange = (queue: QueueId, value: number) => {
-    void adapter.dispatch({ type: 'set-queue-capacity', queue, value })
+  const handleChannelCapacityChange = (channel: ChannelId, value: number) => {
+    void adapter.dispatch(
+      channel === 'reader-to-throttler'
+        ? { type: 'set-reader-channel-capacity', value }
+        : { type: 'set-sender-channel-capacity', value },
+    )
   }
 
   return (
@@ -576,14 +580,14 @@ export function LabShell({ adapter }: AdapterProps) {
         onSelect={setSelectedId}
         onClearSelection={() => setSelectedId(null)}
         onWorkerCountChange={handleWorkerCountChange}
-        onQueueCapacityChange={handleQueueCapacityChange}
+        onChannelCapacityChange={handleChannelCapacityChange}
         requestedTpsPreview={requestedTpsPreview}
         onRequestedTpsPreviewChange={handleRequestedTpsPreviewChange}
         onRequestedTpsChange={handleRequestedTpsChange}
         onInstallationModeChange={handleInstallationModeChange}
         orientation={orientation}
       />
-      <QueueStateLegend />
+      <ChannelStateLegend />
     </section>
   )
 }

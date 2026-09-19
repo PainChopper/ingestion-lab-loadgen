@@ -1,4 +1,4 @@
-import type { QueueId } from '../../model/loadgen'
+import type { ChannelId } from '../../model/loadgen'
 import type { PipelineOrientation } from './pipelineLayout'
 import { getPortraitWorkerGridMetrics } from './workerActorLayout'
 
@@ -152,12 +152,12 @@ export const ACTOR_GEOMETRY = Object.freeze({
   },
 })
 
-export interface QueueCableEndpoints {
+export interface ChannelCableEndpoints {
   readonly start: Point
   readonly end: Point
 }
 
-export interface PipelineQueueGeometry extends QueueCableEndpoints {
+export interface PipelineChannelGeometry extends ChannelCableEndpoints {
   readonly metrics: {
     readonly x: number
     readonly throughputY: number
@@ -167,8 +167,8 @@ export interface PipelineQueueGeometry extends QueueCableEndpoints {
   }
 }
 
-export const QUEUE_CABLE_ENDPOINTS: Readonly<
-  Record<QueueId, QueueCableEndpoints>
+export const CHANNEL_CABLE_ENDPOINTS: Readonly<
+  Record<ChannelId, ChannelCableEndpoints>
 > = Object.freeze({
   'reader-to-throttler': {
     start: ACTOR_GEOMETRY.reader.ports.output,
@@ -317,7 +317,7 @@ function landscapeGeometry(contentWidth: number) {
     },
     markerPoint: { x: 962 + targetOffset, y: FLOW_BASELINE },
   }
-  const queues: Record<QueueId, PipelineQueueGeometry> = {
+  const channels: Record<ChannelId, PipelineChannelGeometry> = {
     'reader-to-throttler': {
       start: reader.ports.output,
       end: throttler.ports.input,
@@ -356,7 +356,7 @@ function landscapeGeometry(contentWidth: number) {
       sender,
       target,
     },
-    queues,
+    channels,
     http: {
       start: sender.ports.output,
       end: target.ports.input,
@@ -574,7 +574,7 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
     },
     markerPoint: { x: 240, y: targetTop + 43 } satisfies Point,
   }
-  const queues: Record<QueueId, PipelineQueueGeometry> = {
+  const channels: Record<ChannelId, PipelineChannelGeometry> = {
     'reader-to-throttler': {
       start: reader.ports.output,
       end: throttler.ports.input,
@@ -608,7 +608,7 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
     },
     stationDelta: 0,
     actors: { reader, throttler, sender, target },
-    queues,
+    channels,
     http: {
       start: sender.ports.output,
       end: target.ports.input,

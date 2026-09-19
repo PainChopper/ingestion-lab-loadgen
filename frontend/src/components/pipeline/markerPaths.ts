@@ -1,4 +1,4 @@
-import type { NumericControlSnapshot, QueueId } from '../../model/loadgen'
+import type { NumericControlSnapshot, ChannelId } from '../../model/loadgen'
 import {
   createPipelineGeometry,
   type PipelineGeometry,
@@ -6,15 +6,15 @@ import {
 } from './geometry'
 import type { MarkerStage } from './markerLifecycle'
 import {
-  getQueueCableGeometryPresentation,
-} from './queueCableGeometry'
+  getChannelCableGeometryPresentation,
+} from './channelCableGeometry'
 import {
   VALVE_APERTURE,
   VALVE_FLANGES,
   valvePassageCenterY,
 } from './throttlerValve'
 
-export interface QueueMarkerPathGeometry {
+export interface ChannelMarkerPathGeometry {
   readonly cablePath: string
   readonly cableLength: number
   readonly cableY: number
@@ -173,13 +173,13 @@ function clampPhase(phase: number): number {
   return Math.min(1, Math.max(0, phase))
 }
 
-export function getQueueMarkerPathGeometry(
-  queueId: QueueId,
+export function getChannelMarkerPathGeometry(
+  channelId: ChannelId,
   control: NumericControlSnapshot,
   geometry: PipelineGeometry = DEFAULT_PIPELINE_GEOMETRY,
-): QueueMarkerPathGeometry {
-  const endpoints = geometry.queues[queueId]
-  const presentationGeometry = getQueueCableGeometryPresentation(
+): ChannelMarkerPathGeometry {
+  const endpoints = geometry.channels[channelId]
+  const presentationGeometry = getChannelCableGeometryPresentation(
     control,
     endpoints.start,
     endpoints.end,
@@ -210,24 +210,24 @@ export function getHttpTraversalLength(
 
 export function getMarkerStagePathGeometry(
   stage: MarkerStage,
-  queue1Control: NumericControlSnapshot,
-  queue2Control: NumericControlSnapshot,
+  readerChannelControl: NumericControlSnapshot,
+  senderChannelControl: NumericControlSnapshot,
   valveOpeningIndex = 11,
   geometry: PipelineGeometry = DEFAULT_PIPELINE_GEOMETRY,
 ): MarkerStagePathGeometry {
-  if (stage === 'queue1' || stage === 'queue2') {
-    const queueId: QueueId = stage === 'queue1'
+  if (stage === 'readerChannel' || stage === 'senderChannel') {
+    const channelId: ChannelId = stage === 'readerChannel'
       ? 'reader-to-throttler'
       : 'throttler-to-sender'
-    const queue = getQueueMarkerPathGeometry(
-      queueId,
-      stage === 'queue1' ? queue1Control : queue2Control,
+    const channel = getChannelMarkerPathGeometry(
+      channelId,
+      stage === 'readerChannel' ? readerChannelControl : senderChannelControl,
       geometry,
     )
-    const endpoints = geometry.queues[queueId]
+    const endpoints = geometry.channels[channelId]
     return {
-      path: queue.cablePath,
-      length: queue.cableLength,
+      path: channel.cablePath,
+      length: channel.cableLength,
       start: endpoints.start,
       end: endpoints.end,
     }

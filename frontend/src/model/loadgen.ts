@@ -1,8 +1,8 @@
 export type ActorId = 'reader' | 'throttler' | 'sender' | 'target'
 
-export type QueueId = 'reader-to-throttler' | 'throttler-to-sender'
+export type ChannelId = 'reader-to-throttler' | 'throttler-to-sender'
 
-export type SelectableId = ActorId | QueueId | 'http'
+export type SelectableId = ActorId | ChannelId | 'http'
 
 export type AdapterKind = 'simulation' | 'http'
 
@@ -49,9 +49,9 @@ export type HttpLastOutcome =
   | 'network-error'
   | null
 
-export type QueueTrend = 'rising' | 'steady' | 'falling' | 'unknown'
+export type ChannelTrend = 'rising' | 'steady' | 'falling' | 'unknown'
 
-export type QueueFlowState =
+export type ChannelFlowState =
   | 'normal'
   | 'near-limit'
   | 'backpressure'
@@ -87,7 +87,7 @@ export interface AllowedControlPolicySnapshot {
 
 export interface LoadgenPolicySnapshot {
   readonly readerReadBatchSize: RangeControlPolicySnapshot
-  readonly queue1Capacity: AllowedControlPolicySnapshot
+  readonly readerChannelCapacity: AllowedControlPolicySnapshot
 }
 
 export interface InstallationModeControlSnapshot {
@@ -119,17 +119,17 @@ export interface ThrottlerSnapshot {
   readonly state: RunState
 }
 
-export interface QueueTelemetrySnapshot {
-  readonly id: QueueId
+export interface ChannelTelemetrySnapshot {
+  readonly id: ChannelId
   readonly from: ActorId
   readonly to: ActorId
   readonly capacity: NumericControlSnapshot
-  readonly enqueuedBatchesTotal: number
-  readonly enqueuedTransactionsTotal: number
-  readonly dequeuedBatchesTotal: number
-  readonly dequeuedTransactionsTotal: number
+  readonly sentBatchesTotal: number
+  readonly sentTransactionsTotal: number
+  readonly receivedBatchesTotal: number
+  readonly receivedTransactionsTotal: number
   readonly depthBatches: number | null
-  readonly queuedTransactions: number | null
+  readonly bufferedTransactions: number | null
   readonly handoffBatches: number
   readonly handoffBatchesTotal: number
   readonly blockedSenders: number
@@ -142,12 +142,12 @@ export interface QueueTelemetrySnapshot {
   readonly outputTps: number | null
   readonly throughputTps: number | null
   readonly blockedMs: number | null
-  readonly trend: QueueTrend
+  readonly trend: ChannelTrend
 }
 
-export interface QueueSnapshot extends QueueTelemetrySnapshot {
+export interface ChannelSnapshot extends ChannelTelemetrySnapshot {
   readonly displayedPressure: number
-  readonly flowState: QueueFlowState
+  readonly flowState: ChannelFlowState
 }
 
 export interface SenderSnapshot {
@@ -216,8 +216,8 @@ export interface LoadgenTelemetrySnapshot {
   readonly policy: LoadgenPolicySnapshot | null
   readonly reader: ReaderSnapshot
   readonly throttler: ThrottlerSnapshot
-  readonly queue1: QueueTelemetrySnapshot
-  readonly queue2: QueueTelemetrySnapshot
+  readonly readerChannel: ChannelTelemetrySnapshot
+  readonly senderChannel: ChannelTelemetrySnapshot
   readonly sender: SenderSnapshot
   readonly http: HttpSnapshot
   readonly target: TargetSnapshot
@@ -225,10 +225,10 @@ export interface LoadgenTelemetrySnapshot {
 
 export interface LoadgenSnapshot extends Omit<
   LoadgenTelemetrySnapshot,
-  'queue1' | 'queue2'
+  'readerChannel' | 'senderChannel'
 > {
-  readonly queue1: QueueSnapshot
-  readonly queue2: QueueSnapshot
+  readonly readerChannel: ChannelSnapshot
+  readonly senderChannel: ChannelSnapshot
 }
 
 export type LoadgenCommand =
@@ -241,7 +241,8 @@ export type LoadgenCommand =
       value: ThrottlerInstallationMode
     }
   | { type: 'set-worker-count'; actor: 'reader' | 'sender'; value: number }
-  | { type: 'set-queue-capacity'; queue: QueueId; value: number }
+  | { type: 'set-reader-channel-capacity'; value: number }
+  | { type: 'set-sender-channel-capacity'; value: number }
   | { type: 'set-read-batch-size'; value: number }
   | { type: 'set-http-batch-size'; value: number }
   | { type: 'set-http-timeout'; valueMs: number }

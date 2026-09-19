@@ -17,16 +17,16 @@ export interface CapacityTick {
   readonly major: boolean
 }
 
-export type QueueCapacityRequestState = 'preview' | 'pending' | null
+export type ChannelCapacityRequestState = 'preview' | 'pending' | null
 
-export interface QueueCapacityPresentation {
+export interface ChannelCapacityPresentation {
   readonly applied: number
   readonly candidate: number
-  readonly requestState: QueueCapacityRequestState
+  readonly requestState: ChannelCapacityRequestState
 }
 
-export interface QueueCableGeometryPresentation {
-  readonly capacity: QueueCapacityPresentation
+export interface ChannelCableGeometryPresentation {
+  readonly capacity: ChannelCapacityPresentation
   readonly cableY: number
   readonly sliderY: number
   readonly cableX: number
@@ -37,9 +37,9 @@ export interface QueueCableGeometryPresentation {
   readonly markerPathLength: number
 }
 
-export const QUEUE_CABLE_MAX_MARKERS = 24
-export const QUEUE_CABLE_MAX_LIFT = 240
-export const PORTRAIT_QUEUE_CABLE_MAX_LIFT = 140
+export const CHANNEL_CABLE_MAX_MARKERS = 24
+export const CHANNEL_CABLE_MAX_LIFT = 240
+export const PORTRAIT_CHANNEL_CABLE_MAX_LIFT = 140
 
 function decimalPlaces(value: number): number {
   const [, fraction = ''] = String(value).split('.')
@@ -88,11 +88,11 @@ function capacityIndex(
   return values.indexOf(normalizeCapacity(value, range, values))
 }
 
-export function getQueueCapacityPresentation(
+export function getChannelCapacityPresentation(
   control: NumericControlSnapshot,
   localPreview: number | null = null,
   values?: CapacityValues,
-): QueueCapacityPresentation {
+): ChannelCapacityPresentation {
   const applied = normalizeCapacity(
     control.applied ?? control.min,
     control,
@@ -254,15 +254,15 @@ export function capacityFromKeyboard(
   return normalizeCapacity(nextCapacity, range, values)
 }
 
-export function buildQueueCablePath(
+export function buildChannelCablePath(
   start: Point,
   end: Point,
   topY: number,
 ): string {
-  return `M${formatCoordinate(start.x)} ${formatCoordinate(start.y)} ${buildQueueCableCommands(start, end, topY)}`
+  return `M${formatCoordinate(start.x)} ${formatCoordinate(start.y)} ${buildChannelCableCommands(start, end, topY)}`
 }
 
-export function buildPortraitQueueCablePath(
+export function buildPortraitChannelCablePath(
   start: Point,
   end: Point,
   leftX: number,
@@ -314,7 +314,7 @@ function quadraticBezierLength(
   return sum / (segments * 3)
 }
 
-export function getQueueCablePathLength(
+export function getChannelCablePathLength(
   start: Point,
   end: Point,
   topY: number,
@@ -376,7 +376,7 @@ export function getQueueCablePathLength(
     lineLength(points.fourthCurveEnd, points.end)
 }
 
-export function getPortraitQueueCablePathLength(
+export function getPortraitChannelCablePathLength(
   start: Point,
   end: Point,
   leftX: number,
@@ -398,7 +398,7 @@ export function getPortraitQueueCablePathLength(
   return straight + quarterCurve * 4
 }
 
-function buildQueueCableCommands(
+function buildChannelCableCommands(
   start: Point,
   end: Point,
   topY: number,
@@ -429,18 +429,18 @@ function buildQueueCableCommands(
   ].join(' ')
 }
 
-export function getQueueCableGeometryPresentation(
+export function getChannelCableGeometryPresentation(
   control: NumericControlSnapshot,
   start: Point,
   end: Point,
   localPreview: number | null = null,
   orientation: PipelineOrientation = 'landscape',
   maxLift = orientation === 'portrait'
-    ? PORTRAIT_QUEUE_CABLE_MAX_LIFT
-    : QUEUE_CABLE_MAX_LIFT,
+    ? PORTRAIT_CHANNEL_CABLE_MAX_LIFT
+    : CHANNEL_CABLE_MAX_LIFT,
   values?: CapacityValues,
-): QueueCableGeometryPresentation {
-  const capacity = getQueueCapacityPresentation(control, localPreview, values)
+): ChannelCableGeometryPresentation {
+  const capacity = getChannelCapacityPresentation(control, localPreview, values)
   if (orientation === 'portrait') {
     const appliedX = capacityToCableY(
       capacity.applied,
@@ -460,7 +460,7 @@ export function getQueueCableGeometryPresentation(
       localPreview === null && capacity.requestState === 'pending'
         ? candidateX
         : appliedX
-    const cablePath = buildPortraitQueueCablePath(start, end, cableX)
+    const cablePath = buildPortraitChannelCablePath(start, end, cableX)
     return {
       capacity,
       cableY: start.y,
@@ -471,9 +471,9 @@ export function getQueueCableGeometryPresentation(
       requestedPath:
         localPreview === null
           ? null
-          : buildPortraitQueueCablePath(start, end, candidateX),
+          : buildPortraitChannelCablePath(start, end, candidateX),
       markerPath: cablePath,
-      markerPathLength: getPortraitQueueCablePathLength(start, end, cableX),
+      markerPathLength: getPortraitChannelCablePathLength(start, end, cableX),
     }
   }
 
@@ -481,14 +481,14 @@ export function getQueueCableGeometryPresentation(
     capacity.applied,
     control,
     start.y,
-    QUEUE_CABLE_MAX_LIFT,
+    CHANNEL_CABLE_MAX_LIFT,
     values,
   )
   const candidateY = capacityToCableY(
     capacity.candidate,
     control,
     start.y,
-    QUEUE_CABLE_MAX_LIFT,
+    CHANNEL_CABLE_MAX_LIFT,
     values,
   )
   const cableY =
@@ -496,7 +496,7 @@ export function getQueueCableGeometryPresentation(
       ? candidateY
       : appliedY
   const sliderY = candidateY
-  const cablePath = buildQueueCablePath(start, end, cableY)
+  const cablePath = buildChannelCablePath(start, end, cableY)
 
   return {
     capacity,
@@ -508,9 +508,9 @@ export function getQueueCableGeometryPresentation(
     requestedPath:
       localPreview === null
         ? null
-        : buildQueueCablePath(start, end, sliderY),
+        : buildChannelCablePath(start, end, sliderY),
     markerPath: cablePath,
-    markerPathLength: getQueueCablePathLength(start, end, cableY),
+    markerPathLength: getChannelCablePathLength(start, end, cableY),
   }
 }
 
@@ -553,7 +553,7 @@ export function getCapacityTicks(
     }))
 }
 
-export function getQueueMarkerCount(
+export function getChannelMarkerCount(
   depthBatches: number | null,
   capacity: number,
 ): number {
@@ -564,7 +564,7 @@ export function getQueueMarkerCount(
 
   const density = Math.max(
     1,
-    Math.ceil((depth / capacity) * QUEUE_CABLE_MAX_MARKERS),
+    Math.ceil((depth / capacity) * CHANNEL_CABLE_MAX_MARKERS),
   )
-  return Math.min(depth, density, QUEUE_CABLE_MAX_MARKERS)
+  return Math.min(depth, density, CHANNEL_CABLE_MAX_MARKERS)
 }

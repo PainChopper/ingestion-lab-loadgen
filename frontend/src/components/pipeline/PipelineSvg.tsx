@@ -1,6 +1,6 @@
 import type {
   LoadgenSnapshot,
-  QueueId,
+  ChannelId,
   SelectableId,
   ThrottlerInstallationMode,
 } from '../../model/loadgen'
@@ -11,7 +11,7 @@ import {
   createPipelineGeometry,
   type PipelineGeometry,
 } from './geometry'
-import { QueueCable } from './QueueCable'
+import { ChannelCable } from './ChannelCable'
 import { ReaderActor } from './ReaderActor'
 import { SenderActor } from './SenderActor'
 import { TargetActor } from './TargetActor'
@@ -28,7 +28,7 @@ interface PipelineSvgProps {
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
-  onQueueCapacityChange: (queue: QueueId, value: number) => void
+  onChannelCapacityChange: (channel: ChannelId, value: number) => void
   requestedTpsPreview: number | null
   onRequestedTpsPreviewChange: (value: number | null) => void
   onRequestedTpsChange: (value: number) => Promise<boolean>
@@ -44,7 +44,7 @@ export function PipelineSvg({
   selectedId,
   onSelect,
   onWorkerCountChange,
-  onQueueCapacityChange,
+  onChannelCapacityChange,
   requestedTpsPreview,
   onRequestedTpsPreviewChange,
   onRequestedTpsChange,
@@ -61,8 +61,8 @@ export function PipelineSvg({
     [geometry, orientation, snapshot.reader.workers, snapshot.sender.workers],
   )
   const markers = usePipelineMarkerLifecycle(snapshot, resolvedGeometry)
-  const queue1Geometry = resolvedGeometry.queues[snapshot.queue1.id]
-  const queue2Geometry = resolvedGeometry.queues[snapshot.queue2.id]
+  const readerChannelGeometry = resolvedGeometry.channels[snapshot.readerChannel.id]
+  const senderChannelGeometry = resolvedGeometry.channels[snapshot.senderChannel.id]
   const throttlerTransform = resolvedGeometry.actors.throttler.transform
 
   return (
@@ -80,23 +80,23 @@ export function PipelineSvg({
         onSelect={onSelect}
         geometry={resolvedGeometry}
       />
-      <QueueCable
-        snapshot={snapshot.queue1}
-        geometry={queue1Geometry}
-        selected={selectedId === snapshot.queue1.id}
+      <ChannelCable
+        snapshot={snapshot.readerChannel}
+        geometry={readerChannelGeometry}
+        selected={selectedId === snapshot.readerChannel.id}
         onSelect={onSelect}
-        onCapacityChange={onQueueCapacityChange}
+        onCapacityChange={onChannelCapacityChange}
         orientation={orientation}
         capacityValues={snapshot.adapterKind === 'http'
-          ? snapshot.policy?.queue1Capacity.allowed
+          ? snapshot.policy?.readerChannelCapacity.allowed
           : undefined}
       />
-      <QueueCable
-        snapshot={snapshot.queue2}
-        geometry={queue2Geometry}
-        selected={selectedId === snapshot.queue2.id}
+      <ChannelCable
+        snapshot={snapshot.senderChannel}
+        geometry={senderChannelGeometry}
+        selected={selectedId === snapshot.senderChannel.id}
         onSelect={onSelect}
-        onCapacityChange={onQueueCapacityChange}
+        onCapacityChange={onChannelCapacityChange}
         orientation={orientation}
       />
       <ellipse
@@ -127,7 +127,7 @@ export function PipelineSvg({
       />
       <ThrottlerActor
         snapshot={snapshot.throttler}
-        upstreamQueue={snapshot.queue1}
+        upstreamChannel={snapshot.readerChannel}
         previewTps={requestedTpsPreview}
         selected={selectedId === snapshot.throttler.id}
         onSelect={onSelect}

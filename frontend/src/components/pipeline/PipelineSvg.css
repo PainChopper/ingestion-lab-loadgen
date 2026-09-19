@@ -29,18 +29,18 @@
   font-size: 11px;
 }
 
-.pipeline-svg--portrait .pipeline-queue-metric.pipeline-small-strong {
+.pipeline-svg--portrait .pipeline-channel-metric.pipeline-small-strong {
   font-size: 15px;
   font-weight: 700;
 }
 
-.pipeline-svg--portrait .pipeline-queue-metric.pipeline-small {
+.pipeline-svg--portrait .pipeline-channel-metric.pipeline-small {
   font-size: 13px;
   font-weight: 600;
 }
 
-.pipeline-svg--portrait .pipeline-queue-wait-status,
-.pipeline-svg--portrait .pipeline-queue-capacity-status {
+.pipeline-svg--portrait .pipeline-channel-wait-status,
+.pipeline-svg--portrait .pipeline-channel-capacity-status {
   font-size: 12px;
   font-weight: 700;
 }
@@ -82,7 +82,7 @@
   text-transform: none;
 }
 
-.pipeline-svg--portrait .pipeline-queue-handle__value {
+.pipeline-svg--portrait .pipeline-channel-handle__value {
   font-size: 11px;
   font-weight: 750;
 }
@@ -109,8 +109,8 @@
   filter: drop-shadow(0 0 3px rgba(39, 199, 234, 0.42));
 }
 
-.pipeline-queue.pipeline-selectable--selected .pipeline-queue-cable,
-.pipeline-queue.pipeline-selectable:focus-visible .pipeline-queue-cable,
+.pipeline-channel.pipeline-selectable--selected .pipeline-channel-cable,
+.pipeline-channel.pipeline-selectable:focus-visible .pipeline-channel-cable,
 .pipeline-http.pipeline-selectable--selected .pipeline-http-line,
 .pipeline-http.pipeline-selectable:focus-visible .pipeline-http-line {
   stroke-width: 3.8;
@@ -604,22 +604,22 @@
   fill: currentColor;
 }
 
-.pipeline-queue {
-  color: var(--pipeline-queue-pressure-color, #79d957);
+.pipeline-channel {
+  color: var(--pipeline-channel-pressure-color, #79d957);
   transition: color 100ms linear;
 }
 
-.pipeline-queue--stopped {
+.pipeline-channel--stopped {
   color: var(--muted);
   transition: none;
 }
 
-.pipeline-queue--connection-error {
+.pipeline-channel--connection-error {
   color: var(--red);
   transition: none;
 }
 
-.pipeline-queue-cable {
+.pipeline-channel-cable {
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -628,11 +628,11 @@
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue--connection-error .pipeline-queue-cable {
+.pipeline-channel--connection-error .pipeline-channel-cable {
   stroke-dasharray: 15 10;
 }
 
-.pipeline-queue-requested-cable {
+.pipeline-channel-requested-cable {
   fill: none;
   opacity: 0.84;
   pointer-events: none;
@@ -643,27 +643,27 @@
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-requested-cable--preview {
+.pipeline-channel-requested-cable--preview {
   opacity: 0.92;
   stroke: var(--cyan);
 }
 
-.pipeline-queue-requested-cable--pending {
+.pipeline-channel-requested-cable--pending {
   stroke: var(--yellow);
 }
 
-.pipeline-queue-scale {
+.pipeline-channel-scale {
   color: #66899f;
 }
 
-.pipeline-queue-scale__line,
-.pipeline-queue-scale__tick {
+.pipeline-channel-scale__line,
+.pipeline-channel-scale__tick {
   stroke: currentColor;
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-scale__label {
+.pipeline-channel-scale__label {
   fill: currentColor;
   font-size: 9px;
   font-variant-numeric: tabular-nums;
@@ -682,7 +682,7 @@
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-marker--queued {
+.pipeline-marker--buffered {
   opacity: 0.58;
   stroke: currentColor;
 }
@@ -701,60 +701,60 @@
   transition: none;
 }
 
-.pipeline-queue-handle {
+.pipeline-channel-handle {
   cursor: ns-resize;
   outline: none;
   touch-action: none;
 }
 
 .pipeline-svg--portrait
-  .pipeline-queue-handle:not(.pipeline-queue-handle--disabled) {
+  .pipeline-channel-handle:not(.pipeline-channel-handle--disabled) {
   cursor: ew-resize;
 }
 
-.pipeline-queue-handle {
-  --pipeline-queue-handle-state-color: currentColor;
+.pipeline-channel-handle {
+  --pipeline-channel-handle-state-color: currentColor;
 }
 
-.pipeline-queue-handle--pending {
-  --pipeline-queue-handle-state-color: var(--yellow);
+.pipeline-channel-handle--pending {
+  --pipeline-channel-handle-state-color: var(--yellow);
 }
 
-.pipeline-queue-handle--preview {
-  --pipeline-queue-handle-state-color: var(--cyan);
+.pipeline-channel-handle--preview {
+  --pipeline-channel-handle-state-color: var(--cyan);
 }
 
-.pipeline-queue-handle__body {
+.pipeline-channel-handle__body {
   fill: color-mix(
     in srgb,
-    var(--pipeline-queue-handle-state-color) 14%,
+    var(--pipeline-channel-handle-state-color) 14%,
     var(--navy-850)
   );
   fill-opacity: 1;
-  stroke: var(--pipeline-queue-handle-state-color);
+  stroke: var(--pipeline-channel-handle-state-color);
   stroke-width: 1.4;
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-handle--connection-error .pipeline-queue-handle__body {
+.pipeline-channel-handle--connection-error .pipeline-channel-handle__body {
   stroke-dasharray: 6 3;
 }
 
-.pipeline-queue-handle__request-ring,
-.pipeline-queue-handle__focus-ring {
+.pipeline-channel-handle__request-ring,
+.pipeline-channel-handle__focus-ring {
   fill: none;
   opacity: 0;
   pointer-events: none;
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-handle__focus-ring {
+.pipeline-channel-handle__focus-ring {
   stroke: var(--cyan);
   stroke-width: 2;
 }
 
-.pipeline-queue-handle__value {
-  fill: var(--pipeline-queue-handle-state-color);
+.pipeline-channel-handle__value {
+  fill: var(--pipeline-channel-handle-state-color);
   font-size: 10px;
   font-weight: 750;
   font-variant-numeric: tabular-nums;
@@ -762,49 +762,49 @@
   user-select: none;
 }
 
-.pipeline-queue-handle:focus-visible .pipeline-queue-handle__focus-ring {
+.pipeline-channel-handle:focus-visible .pipeline-channel-handle__focus-ring {
   opacity: 1;
 }
 
-.pipeline-queue-handle--disabled {
-  --pipeline-queue-handle-state-color: var(--muted);
+.pipeline-channel-handle--disabled {
+  --pipeline-channel-handle-state-color: var(--muted);
   color: var(--muted);
   cursor: default;
   opacity: 1;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .pipeline-queue--flow-active .pipeline-queue-cable {
+  .pipeline-channel--flow-active .pipeline-channel-cable {
     stroke-dasharray: 8 6;
-    animation: pipeline-queue-flow 700ms linear infinite;
+    animation: pipeline-channel-flow 700ms linear infinite;
   }
 }
 
-@keyframes pipeline-queue-flow {
+@keyframes pipeline-channel-flow {
   to {
     stroke-dashoffset: -14;
   }
 }
 
-.pipeline-queue-handle--preview .pipeline-queue-handle__request-ring {
+.pipeline-channel-handle--preview .pipeline-channel-handle__request-ring {
   stroke: var(--cyan);
   stroke-dasharray: 2 2;
   stroke-width: 1.5;
   opacity: 1;
 }
 
-.pipeline-queue-capacity-applied {
+.pipeline-channel-capacity-applied {
   pointer-events: none;
 }
 
-.pipeline-queue-capacity-applied line {
+.pipeline-channel-capacity-applied line {
   stroke: currentColor;
   stroke-dasharray: 3 2;
   stroke-width: 1.2;
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-capacity-applied rect {
+.pipeline-channel-capacity-applied rect {
   fill: var(--navy-950);
   stroke: currentColor;
   stroke-dasharray: 3 2;
@@ -812,35 +812,35 @@
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-queue-capacity-applied text {
+.pipeline-channel-capacity-applied text {
   fill: currentColor;
   font-size: 9px;
   font-variant-numeric: tabular-nums;
   font-weight: 750;
 }
 
-.pipeline-queue-metric {
+.pipeline-channel-metric {
   fill: currentColor;
 }
 
-.pipeline-queue-capacity-status {
+.pipeline-channel-capacity-status {
   font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-.pipeline-queue-wait-status {
+.pipeline-channel-wait-status {
   fill: currentColor;
   font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 
-.pipeline-queue-capacity-status--preview {
+.pipeline-channel-capacity-status--preview {
   fill: var(--cyan);
 }
 
-.pipeline-queue-capacity-status--pending {
+.pipeline-channel-capacity-status--pending {
   fill: var(--yellow);
 }
 
