@@ -1,55 +1,36 @@
 package main
 
-import (
-	"context"
-	"sync/atomic"
-	"time"
+import "context"
 
-	"golang.org/x/time/rate"
-)
-
-type throttlerParams struct {
-	tps int
-}
-type transactionThrottler struct {
-	tps          atomic.Int32
-	burstPercent atomic.Int32
-	limiter      atomic.Pointer[rate.Limiter]
-}
-
-func NewTransactionsThrottler(tps, burstPercent int) *transactionThrottler {
-	t := &transactionThrottler{}
-	t.tps.Store(int32(tps))
-	t.burstPercent.Store(int32(burstPercent))
-	t.resetLimiter()
-	return t
-}
-
-func (t *transactionThrottler) Throttle(trans <-chan *Transaction) <-chan *Transaction {
-	c := make(chan *Transaction, 1000)
+func startThrottler(
+	ctx context.Context,
+	readerBatches <-chan []Transaction,
+	readerChannel *readerChannelTelemetry,
+) (<-chan []Transaction, <-chan struct{}) {
+	senderBatches := make(chan []Transaction)
+	done := make(chan struct{})
 	go func() {
-		defer close(c)
-		for tran := range trans {
-			for t.tps.Load() == 0 {
-				time.Sleep(100 * time.Millisecond)
+		defer close(done)
+		defer close(senderBatches)
+		for {
+			var batch []Transaction
+			select {
+			case <-ctx.Done():
+				return
+			case next, ok := <-readerBatches:
+				if !ok {
+					return
+				}
+				batch = next
+				readerChannel.recordReceive(len(batch))
 			}
-			t.limiter.Load().Wait(context.Background())
-			c <- tran
+
+			select {
+			case <-ctx.Done():
+				return
+			case senderBatches <- batch:
+			}
 		}
 	}()
-	return c
-}
-
-func (t *transactionThrottler) GetTPS() int {
-	return int(t.tps.Load())
-}
-
-func (t *transactionThrottler) setTPS(tps int) {
-	t.tps.Store(int32(tps))
-	t.resetLimiter()
-}
-
-func (t *transactionThrottler) resetLimiter() {
-	newLimiter := rate.NewLimiter(rate.Limit(t.tps.Load()), int(t.tps.Load()*t.burstPercent.Load()/100))
-	t.limiter.Store(newLimiter)
+	return senderBatches, done
 }
