@@ -19,3 +19,5 @@
 
 Go-код находится в корне этого репозитория; React-код — в `frontend/`. Агентам запрещено изменять `frontend/`.
 Пути 00_STATE.md, MAIL/, PLANS/, ARCHIVE/, BUILD/ и RUNLOGS/ из общих правил находятся в соседнем каталоге ../ingestion-lab-loadgen-agents-runtime/.
+
+Все временные процессы и артефакты проверок запускаются и сохраняются только в ../ingestion-lab-loadgen-agents-runtime/: включая Playwright state, browser snapshots, console logs, fixtures, build output и run logs. В checkout проекта нельзя создавать временные каталоги инструментов, включая `.playwright-cli`.

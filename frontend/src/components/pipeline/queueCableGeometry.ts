@@ -9,6 +9,8 @@ export type CapacityRange = Pick<
   'min' | 'max' | 'step'
 >
 
+export type CapacityValues = readonly number[]
+
 export interface CapacityTick {
   readonly value: number
   readonly y: number
@@ -51,8 +53,18 @@ function formatCoordinate(value: number): string {
 export function normalizeCapacity(
   value: number,
   range: CapacityRange,
+  values?: CapacityValues,
 ): number {
   if (!Number.isFinite(value)) return range.min
+
+  if (values !== undefined && values.length > 0) {
+    const bounded = Math.min(range.max, Math.max(range.min, value))
+    return values.reduce((closest, candidate) =>
+      Math.abs(candidate - bounded) < Math.abs(closest - bounded)
+        ? candidate
+        : closest,
+    )
+  }
 
   const step = range.step > 0 ? range.step : 1
   const bounded = Math.min(range.max, Math.max(range.min, value))
@@ -68,14 +80,27 @@ export function normalizeCapacity(
   )
 }
 
+function capacityIndex(
+  value: number,
+  range: CapacityRange,
+  values: CapacityValues,
+): number {
+  return values.indexOf(normalizeCapacity(value, range, values))
+}
+
 export function getQueueCapacityPresentation(
   control: NumericControlSnapshot,
   localPreview: number | null = null,
+  values?: CapacityValues,
 ): QueueCapacityPresentation {
-  const applied = normalizeCapacity(control.applied ?? control.min, control)
+  const applied = normalizeCapacity(
+    control.applied ?? control.min,
+    control,
+    values,
+  )
   const candidateSource =
     localPreview ?? control.preview ?? control.pending ?? applied
-  const candidate = normalizeCapacity(candidateSource, control)
+  const candidate = normalizeCapacity(candidateSource, control, values)
 
   if (candidate === applied) {
     return { applied, candidate, requestState: null }
@@ -83,7 +108,7 @@ export function getQueueCapacityPresentation(
 
   const pendingMatchesCandidate =
     control.pending !== null &&
-    normalizeCapacity(control.pending, control) === candidate
+    normalizeCapacity(control.pending, control, values) === candidate
 
   return {
     applied,
@@ -98,11 +123,17 @@ export function capacityToCableY(
   range: CapacityRange,
   baseline: number,
   maxLift: number,
+  values?: CapacityValues,
 ): number {
+  if (values !== undefined && values.length > 1 && maxLift > 0) {
+    const index = capacityIndex(capacity, range, values)
+    return baseline - (index / (values.length - 1)) * maxLift
+  }
+
   const span = range.max - range.min
   if (span <= 0 || maxLift <= 0) return baseline
 
-  const normalized = normalizeCapacity(capacity, range)
+  const normalized = normalizeCapacity(capacity, range, values)
   const ratio = (normalized - range.min) / span
   return baseline - ratio * maxLift
 }
@@ -112,11 +143,21 @@ export function cableYToCapacity(
   range: CapacityRange,
   baseline: number,
   maxLift: number,
+  values?: CapacityValues,
 ): number {
+  if (values !== undefined && values.length > 1 && maxLift > 0) {
+    const ratio = Math.min(1, Math.max(0, (baseline - y) / maxLift))
+    return values[Math.round(ratio * (values.length - 1))]!
+  }
+
   if (maxLift <= 0 || range.max <= range.min) return range.min
 
   const ratio = Math.min(1, Math.max(0, (baseline - y) / maxLift))
-  return normalizeCapacity(range.min + ratio * (range.max - range.min), range)
+  return normalizeCapacity(
+    range.min + ratio * (range.max - range.min),
+    range,
+    values,
+  )
 }
 
 export function capacityFromVerticalDrag(
@@ -124,21 +165,66 @@ export function capacityFromVerticalDrag(
   pointerDeltaY: number,
   range: CapacityRange,
   maxLift: number,
+  values?: CapacityValues,
 ): number {
+  if (values !== undefined && values.length > 1 && maxLift > 0) {
+    const initialIndex = capacityIndex(initialCapacity, range, values)
+    const indexDelta = Math.round(
+      (-pointerDeltaY / maxLift) * (values.length - 1),
+    )
+    const nextIndex = Math.min(
+      values.length - 1,
+      Math.max(0, initialIndex + indexDelta),
+    )
+    return values[nextIndex]!
+  }
+
   if (maxLift <= 0 || range.max <= range.min) {
-    return normalizeCapacity(initialCapacity, range)
+    return normalizeCapacity(initialCapacity, range, values)
   }
 
   const capacityDelta =
     (-pointerDeltaY / maxLift) * (range.max - range.min)
-  return normalizeCapacity(initialCapacity + capacityDelta, range)
+  return normalizeCapacity(initialCapacity + capacityDelta, range, values)
 }
 
 export function capacityFromKeyboard(
   key: string,
   currentCapacity: number,
   range: CapacityRange,
+  values?: CapacityValues,
 ): number | null {
+  if (values !== undefined && values.length > 0) {
+    const currentIndex = capacityIndex(currentCapacity, range, values)
+    let nextIndex: number
+    switch (key) {
+      case 'ArrowUp':
+      case 'ArrowRight':
+        nextIndex = currentIndex + 1
+        break
+      case 'ArrowDown':
+      case 'ArrowLeft':
+        nextIndex = currentIndex - 1
+        break
+      case 'PageUp':
+        nextIndex = currentIndex + 5
+        break
+      case 'PageDown':
+        nextIndex = currentIndex - 5
+        break
+      case 'Home':
+        nextIndex = 0
+        break
+      case 'End':
+        nextIndex = values.length - 1
+        break
+      default:
+        return null
+    }
+
+    return values[Math.min(values.length - 1, Math.max(0, nextIndex))]!
+  }
+
   let nextCapacity: number
   switch (key) {
     case 'ArrowUp':
@@ -165,7 +251,7 @@ export function capacityFromKeyboard(
       return null
   }
 
-  return normalizeCapacity(nextCapacity, range)
+  return normalizeCapacity(nextCapacity, range, values)
 }
 
 export function buildQueueCablePath(
@@ -352,20 +438,23 @@ export function getQueueCableGeometryPresentation(
   maxLift = orientation === 'portrait'
     ? PORTRAIT_QUEUE_CABLE_MAX_LIFT
     : QUEUE_CABLE_MAX_LIFT,
+  values?: CapacityValues,
 ): QueueCableGeometryPresentation {
-  const capacity = getQueueCapacityPresentation(control, localPreview)
+  const capacity = getQueueCapacityPresentation(control, localPreview, values)
   if (orientation === 'portrait') {
     const appliedX = capacityToCableY(
       capacity.applied,
       control,
       start.x,
       maxLift,
+      values,
     )
     const candidateX = capacityToCableY(
       capacity.candidate,
       control,
       start.x,
       maxLift,
+      values,
     )
     const cableX =
       localPreview === null && capacity.requestState === 'pending'
@@ -393,12 +482,14 @@ export function getQueueCableGeometryPresentation(
     control,
     start.y,
     QUEUE_CABLE_MAX_LIFT,
+    values,
   )
   const candidateY = capacityToCableY(
     capacity.candidate,
     control,
     start.y,
     QUEUE_CABLE_MAX_LIFT,
+    values,
   )
   const cableY =
     localPreview === null && capacity.requestState === 'pending'
@@ -427,19 +518,30 @@ export function getCapacityTicks(
   range: CapacityRange,
   baseline: number,
   maxLift: number,
+  values?: CapacityValues,
 ): readonly CapacityTick[] {
+  if (values !== undefined && values.length > 0) {
+    const middleIndex = Math.floor(values.length / 2)
+    return values.map((value, index) => ({
+      value,
+      y: capacityToCableY(value, range, baseline, maxLift, values),
+      major:
+        index === 0 || index === middleIndex || index === values.length - 1,
+    }))
+  }
+
   const step = range.step > 0 ? range.step : 1
   const stepCount = Math.max(1, Math.round((range.max - range.min) / step))
   const tickStride = Math.max(1, Math.ceil(stepCount / 20))
   const middleIndex = Math.round(stepCount / 2)
-  const values = new Set<number>([range.min, range.max])
+  const tickValues = new Set<number>([range.min, range.max])
 
   for (let index = tickStride; index < stepCount; index += tickStride) {
-    values.add(normalizeCapacity(range.min + index * step, range))
+    tickValues.add(normalizeCapacity(range.min + index * step, range))
   }
-  values.add(normalizeCapacity(range.min + middleIndex * step, range))
+  tickValues.add(normalizeCapacity(range.min + middleIndex * step, range))
 
-  return [...values]
+  return [...tickValues]
     .sort((left, right) => left - right)
     .map((value) => ({
       value,

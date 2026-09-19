@@ -199,7 +199,10 @@ function neutralQueue(
   }
 }
 
-function queue1(wire: TestWireSnapshot | null): QueueTelemetrySnapshot {
+function queue1(
+  wire: TestWireSnapshot | null,
+  connectionState: ConnectionState,
+): QueueTelemetrySnapshot {
   const queue = neutralQueue(
     'reader-to-throttler',
     'reader',
@@ -212,6 +215,10 @@ function queue1(wire: TestWireSnapshot | null): QueueTelemetrySnapshot {
     capacity: {
       ...control('batches', wire.queue1Capacity),
       min: 0,
+      max: 8_192,
+      applyMode: connectionState === 'connected' && wire.runState === 'idle'
+        ? 'immediate'
+        : 'unavailable',
     },
     depthBatches: wire.queue1DepthBatches,
     queuedTransactions: wire.queue1QueuedTransactions,
@@ -265,7 +272,7 @@ function expectedSnapshot(
       limitedMs: null,
       state: runState,
     },
-    queue1: queue1(wire),
+    queue1: queue1(wire, connectionState),
     queue2: neutralQueue(
       'throttler-to-sender',
       'throttler',
@@ -526,7 +533,7 @@ describe('HttpAdapter', () => {
     })
     expect(snapshot.queue1).toEqual({
       ...neutralQueue('reader-to-throttler', 'reader', 'throttler'),
-      capacity: { ...control('batches', 8), min: 0 },
+      capacity: { ...control('batches', 8), min: 0, max: 8_192 },
       depthBatches: 6,
       queuedTransactions: 300_000,
       blockedSenders: 1,
@@ -537,8 +544,8 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it.each([0, 2])(
-    'maps fixed queue1 capacity %i to the zero-based geometry range',
+  it.each([0, 1, 2, 8_192])(
+    'maps queue1 capacity %i to the discrete HTTP control range',
     async (queue1Capacity) => {
       const wire = { ...VALID_WIRE, queue1Capacity }
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
@@ -551,7 +558,7 @@ describe('HttpAdapter', () => {
         preview: null,
         pending: null,
         min: 0,
-        max: queue1Capacity,
+        max: 8_192,
         step: 1,
         unit: 'batches',
         applyMode: 'unavailable',
@@ -613,7 +620,7 @@ describe('HttpAdapter', () => {
       readerReadBatchSize: 25_000,
       readerRowsRead: 28_000,
       readerSource: 'MBD-mini/trx/part/recovered.parquet',
-      queue1Capacity: 12,
+      queue1Capacity: 16,
       queue1DepthBatches: 4,
       queue1QueuedTransactions: 100_000,
       queue1BlockedSenders: 0,
@@ -829,6 +836,122 @@ describe('HttpAdapter', () => {
     },
   )
 
+  it('sends an idle queue1 capacity through the existing command queue', async () => {
+    const idleWire: TestWireSnapshot = {
+      ...VALID_WIRE,
+      runState: 'idle',
+      queue1Capacity: 2,
+    }
+    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+      ? Promise.resolve(mockCommandResponse())
+      : Promise.resolve(mockResponse(idleWire)))
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    expect(adapter.getSnapshot().queue1.capacity).toEqual({
+      applied: 2,
+      preview: null,
+      pending: null,
+      min: 0,
+      max: 8_192,
+      step: 1,
+      unit: 'batches',
+      applyMode: 'immediate',
+    })
+
+    const receipt = await adapter.dispatch({
+      type: 'set-queue-capacity',
+      queue: 'reader-to-throttler',
+      value: 8_192,
+    })
+
+    expect(receipt).toMatchObject({
+      accepted: true,
+      commandType: 'set-queue-capacity',
+      applyMode: 'immediate',
+      snapshotRevision: 1,
+      error: null,
+    })
+    expect(commandFetchCalls()).toHaveLength(1)
+    expect(commandFetchCalls()[0]?.[1]).toMatchObject({
+      body: '{"action":"set-queue-capacity","value":8192}',
+    })
+    adapter.dispose()
+  })
+
+  it.each([
+    { state: 'running' as const, value: 2 },
+    { state: 'paused' as const, value: 2 },
+    { state: 'idle' as const, value: 3 },
+  ])(
+    'rejects queue1 capacity $value locally in $state',
+    async ({ state, value }) => {
+      const wire: TestWireSnapshot = { ...VALID_WIRE, runState: state }
+      fetchMock.mockResolvedValueOnce(mockResponse(wire))
+      const adapter = new HttpAdapter()
+
+      await flushPoll()
+      const receipt = await adapter.dispatch({
+        type: 'set-queue-capacity',
+        queue: 'reader-to-throttler',
+        value,
+      })
+
+      expect(receipt).toMatchObject({
+        accepted: false,
+        applyMode: 'unavailable',
+        error: { code: 'unavailable', retryable: false },
+      })
+      expect(commandFetchCalls()).toHaveLength(0)
+      expect(adapter.getSnapshot().queue1.capacity).toMatchObject({
+        applied: 8,
+        applyMode: state === 'idle' ? 'immediate' : 'unavailable',
+      })
+      adapter.dispose()
+    },
+  )
+
+  it('does not send a queued queue1 capacity after the snapshot enters Run', async () => {
+    const idleWire: TestWireSnapshot = { ...VALID_WIRE, runState: 'idle' }
+    const runningWire: TestWireSnapshot = {
+      ...VALID_WIRE,
+      runState: 'running',
+    }
+    const runResponse = deferred<Response>()
+    let snapshotRequests = 0
+    fetchMock.mockImplementation((input) => {
+      if (input === COMMAND_ENDPOINT) return runResponse.promise
+
+      snapshotRequests += 1
+      return Promise.resolve(mockResponse(
+        snapshotRequests === 1 ? idleWire : runningWire,
+      ))
+    })
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    const runReceipt = adapter.dispatch({ type: 'run' })
+    await Promise.resolve()
+    const capacityReceipt = adapter.dispatch({
+      type: 'set-queue-capacity',
+      queue: 'reader-to-throttler',
+      value: 4,
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPoll()
+    expect(adapter.getSnapshot().runState).toBe('running')
+
+    runResponse.resolve(mockCommandResponse())
+    await expect(runReceipt).resolves.toMatchObject({ accepted: true })
+    await expect(capacityReceipt).resolves.toMatchObject({
+      accepted: false,
+      error: { code: 'unavailable', retryable: false },
+    })
+    expect(commandFetchCalls()).toHaveLength(1)
+    adapter.dispose()
+  })
+
   it('accepts 204 without a response body and leaves snapshot authority intact', async () => {
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? Promise.resolve(mockCommandResponse(204))
@@ -876,7 +999,6 @@ describe('HttpAdapter', () => {
       { type: 'set-throttler-installation-mode', value: 'bypass' },
       { type: 'set-worker-count', actor: 'reader', value: 2 },
       { type: 'set-worker-count', actor: 'sender', value: 3 },
-      { type: 'set-queue-capacity', queue: 'reader-to-throttler', value: 4 },
       { type: 'set-http-batch-size', value: 1_000 },
       { type: 'set-http-timeout', valueMs: 500 },
       { type: 'set-target-delay', valueMs: 40 },

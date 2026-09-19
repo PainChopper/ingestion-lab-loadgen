@@ -14,6 +14,7 @@ func produceBatches(
 	ctx context.Context,
 	dataPath string,
 	batchSize int,
+	queue1Capacity int,
 	telemetry *readerTelemetry,
 	queueTelemetry *queue1Telemetry,
 ) (<-chan []Transaction, error) {
@@ -25,7 +26,7 @@ func produceBatches(
 		return nil, fmt.Errorf("no files found matching pattern: %s", dataPath)
 	}
 
-	batches := make(chan []Transaction, batchReadAheadCapacity)
+	batches := make(chan []Transaction, queue1Capacity)
 	queueTelemetry.start(batches, batchSize)
 	go func(files []string, batches chan<- []Transaction) {
 		defer close(batches)

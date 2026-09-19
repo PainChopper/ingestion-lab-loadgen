@@ -58,6 +58,21 @@ func commandsHandler(commands chan<- request) http.Handler {
 			if result := <-reply; result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
+		case "set-queue-capacity":
+			var value int
+			if string(cr.Value) == "null" {
+				http.Error(w, "Invalid queue capacity", http.StatusBadRequest)
+				return
+			}
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !validQueue1Capacity(value) {
+				http.Error(w, "Invalid queue capacity", http.StatusBadRequest)
+				return
+			}
+			reply := make(chan commandResult, 1)
+			commands <- request{kind: cmdSetQueueCapacity, value: value, commandReply: reply}
+			if result := <-reply; result.status == commandConflict {
+				w.WriteHeader(http.StatusConflict)
+			}
 		default:
 			http.Error(w, "Unknown command", http.StatusBadRequest)
 			return

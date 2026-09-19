@@ -8,6 +8,10 @@ import type {
   QueueTelemetrySnapshot,
   RunState,
 } from '../model/loadgen'
+import {
+  isQueue1Capacity,
+  QUEUE1_CAPACITY_VALUES,
+} from '../model/queue1Capacity'
 
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
 const COMMAND_ENDPOINT = '/api/loadgen/commands'
@@ -56,7 +60,14 @@ interface WireSnapshot {
 
 type SupportedCommand = Extract<
   LoadgenCommand,
-  { type: 'run' | 'pause' | 'reset' | 'set-read-batch-size' }
+  {
+    type:
+      | 'run'
+      | 'pause'
+      | 'reset'
+      | 'set-queue-capacity'
+      | 'set-read-batch-size'
+  }
 >
 
 function deepFreeze<T>(value: T): T {
@@ -76,6 +87,7 @@ function isSupportedCommand(
   return command.type === 'run' ||
     command.type === 'pause' ||
     command.type === 'reset' ||
+    command.type === 'set-queue-capacity' ||
     command.type === 'set-read-batch-size'
 }
 
@@ -146,20 +158,30 @@ function neutralQueue(
   }
 }
 
-function fixedQueueCapacityControl(value: number): NumericControlSnapshot {
+function queue1CapacityControl(
+  value: number,
+  connectionState: ConnectionState,
+  runState: RunState,
+): NumericControlSnapshot {
   return {
     applied: value,
     preview: null,
     pending: null,
     min: 0,
-    max: value,
+    max: QUEUE1_CAPACITY_VALUES.at(-1)!,
     step: 1,
     unit: 'batches',
-    applyMode: 'unavailable',
+    applyMode: connectionState === 'connected' && runState === 'idle'
+      ? 'immediate'
+      : 'unavailable',
   }
 }
 
-function queue1(wire: WireSnapshot | null): QueueTelemetrySnapshot {
+function queue1(
+  wire: WireSnapshot | null,
+  connectionState: ConnectionState,
+  runState: RunState,
+): QueueTelemetrySnapshot {
   const queue = neutralQueue(
     'reader-to-throttler',
     'reader',
@@ -169,7 +191,11 @@ function queue1(wire: WireSnapshot | null): QueueTelemetrySnapshot {
 
   return {
     ...queue,
-    capacity: fixedQueueCapacityControl(wire.queue1Capacity),
+    capacity: queue1CapacityControl(
+      wire.queue1Capacity,
+      connectionState,
+      runState,
+    ),
     depthBatches: wire.queue1DepthBatches,
     queuedTransactions: wire.queue1QueuedTransactions,
     blockedSenders: wire.queue1BlockedSenders,
@@ -222,7 +248,7 @@ function createSnapshot(
       limitedMs: null,
       state: runState,
     },
-    queue1: queue1(wire),
+    queue1: queue1(wire, connectionState, runState),
     queue2: neutralQueue(
       'throttler-to-sender',
       'throttler',
@@ -328,7 +354,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     !isWireInteger(record.readerWorkers) ||
     !isWireInteger(record.senderWorkers) ||
     !isWireInteger(record.readerRowsRead) ||
-    !isWireInteger(record.queue1Capacity) ||
+    !isQueue1Capacity(record.queue1Capacity) ||
     !isWireInteger(record.queue1DepthBatches) ||
     !isWireInteger(record.queue1QueuedTransactions) ||
     !isWireInteger(record.queue1BlockedSenders) ||
@@ -393,6 +419,18 @@ function readBatchSizeControl(
       ? 'immediate'
       : 'unavailable',
   }
+}
+
+function canDispatchQueue1Capacity(
+  command: SupportedCommand,
+  connectionState: ConnectionState,
+  runState: RunState,
+): boolean {
+  return command.type !== 'set-queue-capacity' ||
+    (command.queue === 'reader-to-throttler' &&
+      isQueue1Capacity(command.value) &&
+      connectionState === 'connected' &&
+      runState === 'idle')
 }
 
 async function decodeResponse(response: Response): Promise<WireSnapshot> {
@@ -501,6 +539,20 @@ export class HttpAdapter implements LoadgenAdapter {
       ))
     }
 
+    if (!canDispatchQueue1Capacity(
+      command,
+      this.snapshot.connectionState,
+      this.snapshot.runState,
+    )) {
+      return Promise.resolve(this.rejectCommand(
+        commandId,
+        command,
+        'unavailable',
+        UNAVAILABLE_COMMAND_MESSAGE,
+        false,
+      ))
+    }
+
     const receipt = this.commandQueue.then(
       () => this.sendCommand(commandId, command),
     )
@@ -578,12 +630,27 @@ export class HttpAdapter implements LoadgenAdapter {
       )
     }
 
+    if (!canDispatchQueue1Capacity(
+      command,
+      this.snapshot.connectionState,
+      this.snapshot.runState,
+    )) {
+      return this.rejectCommand(
+        commandId,
+        command,
+        'unavailable',
+        UNAVAILABLE_COMMAND_MESSAGE,
+        false,
+      )
+    }
+
     try {
       const response = await fetch(COMMAND_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
-          command.type === 'set-read-batch-size'
+          command.type === 'set-read-batch-size' ||
+            command.type === 'set-queue-capacity'
             ? { action: command.type, value: command.value }
             : { action: command.type },
         ),
