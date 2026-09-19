@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"sync/atomic"
 	"time"
@@ -13,7 +14,15 @@ func (state *controlState) eventLoop(
 	produce func() (<-chan []Transaction, error),
 ) {
 	var consumedSinceTick atomic.Int64
-	var consumerDone chan struct{}
+	var batches <-chan []Transaction
+	var cancelConsumer context.CancelFunc
+	var consumerDone <-chan struct{}
+	defer func() {
+		if cancelConsumer != nil {
+			cancelConsumer()
+			<-consumerDone
+		}
+	}()
 
 	for {
 		select {
@@ -33,26 +42,30 @@ func (state *controlState) eventLoop(
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
-				switch state.lifecycle.currentState() {
-				case runStateIdle:
-					batches, err := produce()
+				if state.lifecycle.currentState() == runStateIdle {
+					var err error
+					batches, err = produce()
 					if err != nil {
 						log.Printf("cannot start load generator: %v", err)
 						continue
 					}
-					state.lifecycle.run()
-					consumerDone = make(chan struct{})
-					go func() {
-						defer close(consumerDone)
-						consumeBatches(batches, &consumedSinceTick)
-					}()
-				case runStatePaused:
-					state.lifecycle.run()
+				}
+				if state.lifecycle.run() {
+					cancelConsumer, consumerDone = startConsumer(batches, &consumedSinceTick)
 				}
 			case cmdPause:
 				if state.lifecycle.currentState() != runStateRunning {
 					continue
 				}
+				cancelConsumer()
+				<-consumerDone
+				cancelConsumer = nil
+				consumerDone = nil
+				delta := consumedSinceTick.Swap(0)
+				state.totalTransactions += delta
+				promMetrics.transactionsTotal.Add(float64(delta))
+				state.actualTPS = 0
+				promMetrics.actualTPS.Set(0)
 				state.lifecycle.pause()
 			case cmdReset:
 			}
@@ -65,4 +78,17 @@ func (state *controlState) eventLoop(
 			promMetrics.transactionsTotal.Add(float64(delta))
 		}
 	}
+}
+
+func startConsumer(
+	batches <-chan []Transaction,
+	consumedSinceTick *atomic.Int64,
+) (context.CancelFunc, <-chan struct{}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		consumeBatches(ctx, batches, consumedSinceTick)
+	}()
+	return cancel, done
 }

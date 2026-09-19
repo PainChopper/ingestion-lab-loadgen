@@ -1,8 +1,8 @@
 package main
 
 import (
-	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestRunCommandStartsPipelineOnce(t *testing.T) {
@@ -10,7 +10,7 @@ func TestRunCommandStartsPipelineOnce(t *testing.T) {
 	onProduce := func() {
 		starts++
 	}
-	requests := startEventLoopForTest(t, onProduce)
+	requests, _, _ := startEventLoopForTest(t, onProduce)
 
 	reply := make(chan statusSnapshot, 1)
 	requests <- request{kind: cmdRun}
@@ -34,67 +34,102 @@ func TestRunCommandStartsPipelineOnce(t *testing.T) {
 	}
 }
 
-func TestPauseCommand(t *testing.T) {
+func TestPauseStopsConsumptionUntilRun(t *testing.T) {
 	var starts int
-	onProduce := func() {
-		starts++
-	}
-	requests := startEventLoopForTest(t, onProduce)
+	requests, batches, metrics := startEventLoopForTest(t, func() { starts++ })
 
-	reply := make(chan statusSnapshot, 1)
 	requests <- request{kind: cmdRun}
+	select {
+	case batches <- []Transaction{{}}:
+	case <-time.After(time.Second):
+		t.Fatal("first batch was not received after Run")
+	}
+	waitForTransactions(t, requests, metrics, 1)
+
+	// The snapshot reply confirms that Pause was handled before the next batch.
+	reply := make(chan statusSnapshot, 1)
 	requests <- request{kind: cmdPause}
 	requests <- request{kind: getSnapshot, snapshotReply: reply}
-	pausedSnapshot := <-reply
-	if pausedSnapshot.RunState != runStatePaused {
-		t.Fatalf("state after Pause = %v, want %v", pausedSnapshot.RunState, runStatePaused)
+	select {
+	case <-reply:
+	case <-time.After(time.Second):
+		t.Fatal("Pause was not handled")
 	}
-	if starts != 1 {
-		t.Fatalf("starts after Run and Pause = %v, want 1", starts)
+
+	secondBatch := []Transaction{{}}
+	select {
+	case batches <- secondBatch:
+		t.Fatal("second batch was consumed during Pause")
+	case <-time.After(250 * time.Millisecond):
 	}
 
 	requests <- request{kind: cmdRun}
-	requests <- request{kind: getSnapshot, snapshotReply: reply}
-	resumedSnapshot := <-reply
-	if resumedSnapshot.RunState != runStateRunning {
-		t.Fatalf("state after Resume  = %v, want %v", resumedSnapshot.RunState, runStateRunning)
+	select {
+	case batches <- secondBatch:
+	case <-time.After(time.Second):
+		t.Fatal("second batch was not consumed after Run")
 	}
+	waitForTransactions(t, requests, metrics, 2)
 	if starts != 1 {
-		t.Fatalf("starts after Run and Pause and Run = %v, want 1", starts)
+		t.Fatalf("producer starts = %v, want 1", starts)
 	}
 }
 
-func startEventLoopForTest(t *testing.T, onProduce func()) chan<- request {
+func startEventLoopForTest(t *testing.T, onProduce func()) (chan<- request, chan<- []Transaction, chan<- time.Time) {
 	t.Helper()
 
 	requests := make(chan request, 3)
 	batches := make(chan []Transaction)
+	metrics := make(chan time.Time)
 	done := make(chan struct{})
-	var consumerStarted atomic.Bool
 	state := controlState{lifecycle: newLifecycle()}
 
 	produce := func() (<-chan []Transaction, error) {
 		onProduce()
-		consumerStarted.Store(true)
 		return batches, nil
 	}
 
 	go func() {
 		defer close(done)
-		state.eventLoop(requests, nil, NewMetrics(), produce)
+		state.eventLoop(requests, metrics, NewMetrics(), produce)
 	}()
 
 	t.Cleanup(func() {
-		if !consumerStarted.Load() {
-			close(requests)
-			close(batches)
-			<-done
-			return
-		}
-		close(batches)
-		<-done
 		close(requests)
+		close(batches)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("event loop did not stop")
+		}
 	})
 
-	return requests
+	return requests, batches, metrics
+}
+
+func waitForTransactions(t *testing.T, requests chan<- request, metrics chan<- time.Time, want int64) {
+	t.Helper()
+
+	reply := make(chan statusSnapshot, 1)
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case metrics <- time.Now():
+		case <-deadline:
+			t.Fatalf("transactions did not reach %d", want)
+		}
+		select {
+		case requests <- request{kind: getSnapshot, snapshotReply: reply}:
+		case <-deadline:
+			t.Fatalf("transactions did not reach %d", want)
+		}
+		select {
+		case snapshot := <-reply:
+			if snapshot.TotalTransactions == want {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("transactions did not reach %d", want)
+		}
+	}
 }
