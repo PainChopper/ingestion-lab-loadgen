@@ -73,7 +73,7 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	requests := make(chan request, 3)
 	metrics := make(chan time.Time)
 	startedSizes := make(chan int, 2)
-	produce := func(ctx context.Context, size int) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, size int, _ int) (<-chan []Transaction, error) {
 		startedSizes <- size
 		batches := make(chan []Transaction)
 		go func() {

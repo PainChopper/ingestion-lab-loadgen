@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type { QueueSnapshot, SelectableId } from '../../model/loadgen'
+import { QUEUE1_CAPACITY_VALUES } from '../../model/queue1Capacity'
 import { QueueFlowStateDeriver } from '../../model/queueFlowState'
 import { QUEUE_CABLE_ENDPOINTS } from './geometry'
 import {
@@ -57,6 +58,7 @@ function renderCable(
   options: {
     onSelect?: (id: SelectableId) => void
     onCapacityChange?: (id: QueueSnapshot['id'], value: number) => void
+    capacityValues?: readonly number[]
   } = {},
 ) {
   const endpoints = QUEUE_CABLE_ENDPOINTS[snapshot.id]
@@ -69,6 +71,7 @@ function renderCable(
         selected={false}
         onSelect={options.onSelect ?? (() => undefined)}
         onCapacityChange={options.onCapacityChange ?? (() => undefined)}
+        capacityValues={options.capacityValues}
       />
     </svg>,
   )
@@ -141,6 +144,41 @@ describe('QueueCable mounted behavior', () => {
       )
       view.unmount()
     }
+    adapter.dispose()
+  })
+
+  it('shows and selects queue1 HTTP capacities by discrete scale index', async () => {
+    const user = userEvent.setup()
+    const adapter = new SimulationAdapter()
+    const source = derivedSnapshot(adapter).queue1
+    const queue = {
+      ...source,
+      capacity: {
+        ...source.capacity,
+        applied: 2,
+        min: 0,
+        max: 8_192,
+        step: 1,
+        applyMode: 'immediate' as const,
+      },
+    }
+    const onCapacityChange = vi.fn()
+    const view = renderCable(queue, {
+      onCapacityChange,
+      capacityValues: QUEUE1_CAPACITY_VALUES,
+    })
+    const slider = screen.getByRole('slider')
+
+    expect(slider.textContent).toBe('2')
+    expect([...view.container.querySelectorAll(
+      '.pipeline-queue-scale__label',
+    )].map((label) => label.textContent)).toEqual(['0', '64', '8,192'])
+
+    await user.click(slider)
+    await user.keyboard('{ArrowUp}{PageUp}{Home}{End}')
+
+    expect(onCapacityChange.mock.calls.map((call) => call[1]))
+      .toEqual([4, 64, 0, 8_192])
     adapter.dispose()
   })
 

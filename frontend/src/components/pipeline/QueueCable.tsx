@@ -21,6 +21,7 @@ import {
   capacityFromKeyboard,
   capacityFromVerticalDrag,
   capacityToCableY,
+  type CapacityValues,
   getCapacityTicks,
   getQueueCableGeometryPresentation,
   PORTRAIT_QUEUE_CABLE_MAX_LIFT,
@@ -36,6 +37,7 @@ interface QueueCableProps {
   onSelect: (id: SelectableId) => void
   onCapacityChange: (queue: QueueId, value: number) => void
   orientation?: PipelineOrientation
+  capacityValues?: CapacityValues
 }
 
 interface DragSession {
@@ -64,6 +66,7 @@ export function getQueueCablePresentation(
   end: Point,
   dragPreview: number | null = null,
   orientation: PipelineOrientation = 'landscape',
+  capacityValues?: CapacityValues,
 ) {
   const maxLift = orientation === 'portrait'
     ? PORTRAIT_QUEUE_CABLE_MAX_LIFT
@@ -75,6 +78,7 @@ export function getQueueCablePresentation(
     dragPreview,
     orientation,
     maxLift,
+    capacityValues,
   )
   const { capacity } = geometry
   const waitingUpstream =
@@ -97,12 +101,14 @@ export function getQueueCablePresentation(
               snapshot.capacity,
               start.y,
               maxLift,
+              capacityValues,
             ),
             x: capacityToCableY(
               capacity.applied,
               snapshot.capacity,
               start.x,
               maxLift,
+              capacityValues,
             ),
           }
         : null,
@@ -150,6 +156,7 @@ export function QueueCable({
   onSelect,
   onCapacityChange,
   orientation = 'landscape',
+  capacityValues,
 }: QueueCableProps) {
   const start = geometry?.start ?? startProp ?? { x: 0, y: 0 }
   const end = geometry?.end ?? endProp ?? start
@@ -178,6 +185,7 @@ export function QueueCable({
     end,
     dragPreview,
     orientation,
+    capacityValues,
   )
   const { capacity } = presentation
   const centerX = (start.x + end.x) / 2
@@ -189,6 +197,7 @@ export function QueueCable({
     control,
     portrait ? start.x : start.y,
     maxLift,
+    capacityValues,
   )
   const centerY = (start.y + end.y) / 2
   const disabled = control.applyMode === 'unavailable'
@@ -210,6 +219,7 @@ export function QueueCable({
         : pointerInSvg(session.svg, clientX, clientY).y) - session.pointerAxis,
       session.control,
       maxLift,
+      capacityValues,
     )
 
   const closeDragSession = (pointerId?: number): DragSession | null => {
@@ -318,6 +328,7 @@ export function QueueCable({
       event.key,
       capacity.candidate,
       control,
+      capacityValues,
     )
     if (nextCapacity === null) return
 

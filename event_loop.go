@@ -11,7 +11,7 @@ func (state *controlState) eventLoop(
 	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
-	produce func(context.Context, int) (<-chan []Transaction, error),
+	produce func(context.Context, int, int) (<-chan []Transaction, error),
 ) {
 	var consumedSinceTick atomic.Int64
 	var batches <-chan []Transaction
@@ -42,6 +42,9 @@ func (state *controlState) eventLoop(
 			case getSnapshot:
 				reader := state.reader.snapshot()
 				queue1 := state.queue1.snapshot(time.Now())
+				if state.lifecycle.currentState() == runStateIdle {
+					queue1.capacity = state.queue1Capacity()
+				}
 				snapshot := statusSnapshot{
 					RunState:                    state.lifecycle.currentState(),
 					TotalTransactions:           state.totalTransactions,
@@ -66,7 +69,7 @@ func (state *controlState) eventLoop(
 					state.reader.startInterval(time.Now())
 					producerContext, cancel := context.WithCancel(context.Background())
 					var err error
-					batches, err = produce(producerContext, state.readBatchSize())
+					batches, err = produce(producerContext, state.readBatchSize(), state.queue1Capacity())
 					if err != nil {
 						cancel()
 						state.reader.reset()
@@ -131,6 +134,17 @@ func (state *controlState) eventLoop(
 					result.status = commandConflict
 				} else {
 					state.configuredReadBatchSize = cmd.value
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- result
+				}
+			case cmdSetQueueCapacity:
+				result := commandResult{status: commandAccepted}
+				if state.lifecycle.currentState() != runStateIdle || !validQueue1Capacity(cmd.value) {
+					result.status = commandConflict
+				} else {
+					state.configuredQueue1Capacity = cmd.value
+					state.queue1CapacityConfigured = true
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result

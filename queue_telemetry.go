@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-const batchReadAheadCapacity = 2
-
 type queue1Measurements struct {
 	capacity              int
 	depthBatches          int
@@ -59,9 +57,7 @@ func (q *queue1Telemetry) snapshot(now time.Time) queue1Measurements {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	measurements := queue1Measurements{
-		capacity: batchReadAheadCapacity,
-	}
+	measurements := queue1Measurements{}
 	totalBlocked := q.blockedMs
 	if q.batches != nil {
 		measurements.capacity = cap(q.batches)

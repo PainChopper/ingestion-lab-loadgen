@@ -1,6 +1,6 @@
 # SEC2.4 — idle-only capacity первой очереди
 
-Статус: планируется; реализация не запущена.
+Статус: завершено и принято.
 
 ## Цель
 
@@ -15,6 +15,9 @@
 - Выбранное значение применяется при следующем запуске и сохраняется через Reset. Snapshot всегда показывает фактическую capacity текущей очереди или выбранную capacity в idle.
 - Вторая очередь, Throttler, runtime reconfiguration и изменение capacity активного канала не входят.
 
-## Маршрут
+## Выполненный маршрут
 
-Backend CODER → frontend CODER (другой исполнитель) → read-only REVIEWER. TESTER только при конкретном непокрытом browser-вопросе. Каждый кодер сохраняет свои проверки в runtime; коммит/push выполняется только по указанию владельца.
+- Backend реализовал real capacity, HTTP validation и lifecycle; Go/race integration проверки прошли.
+- Frontend подключил HTTP command и индексный cable; tests/build/lint прошли.
+- Независимое Go-ревью нашло и закрыло MinInt validation defect; frontend review одобрило интеграцию.
+- Browser smoke подтвердил `0`, `1`, `8192`, lifecycle capacity-control и Reset; процессы запускались скрыто и были остановлены.

@@ -7,14 +7,14 @@ import (
 )
 
 func TestQueue1TelemetryReportsBufferedBatchesAndTransactions(t *testing.T) {
-	batches := make(chan []Transaction, batchReadAheadCapacity)
+	batches := make(chan []Transaction, defaultQueue1Capacity)
 	batches <- make([]Transaction, 3)
 	batches <- make([]Transaction, 3)
 
 	var telemetry queue1Telemetry
 	telemetry.start(batches, 3)
 	measurements := telemetry.snapshot(time.Now())
-	if measurements.capacity != batchReadAheadCapacity || measurements.depthBatches != 2 ||
+	if measurements.capacity != defaultQueue1Capacity || measurements.depthBatches != 2 ||
 		measurements.queuedTransactions != 6 || measurements.blockedSenders != 0 ||
 		measurements.oldestBlockedSenderMs != 0 || measurements.blockedMs != 0 {
 		t.Fatalf("queue measurements = %+v", measurements)
@@ -107,7 +107,7 @@ func TestQueue1TelemetryRecordsCancelledBlockedSendAndReset(t *testing.T) {
 
 	telemetry.reset()
 	reset := telemetry.snapshot(time.Now())
-	if reset.capacity != batchReadAheadCapacity || reset.depthBatches != 0 ||
+	if reset.capacity != 0 || reset.depthBatches != 0 ||
 		reset.queuedTransactions != 0 || reset.blockedSenders != 0 ||
 		reset.oldestBlockedSenderMs != 0 || reset.blockedMs != 0 {
 		t.Fatalf("reset queue measurements = %+v", reset)

@@ -42,7 +42,7 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 	metrics := make(chan time.Time)
 	batches := make(chan []Transaction)
 	var starts int
-	produce := func(ctx context.Context, _ int) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, _ int, _ int) (<-chan []Transaction, error) {
 		starts++
 		switch starts {
 		case 1:
@@ -188,7 +188,7 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 	freshBatches := make(chan []Transaction)
 	var starts int
 
-	produce := func(ctx context.Context, _ int) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, _ int, _ int) (<-chan []Transaction, error) {
 		starts++
 		if starts == 1 {
 			go func() {
@@ -317,7 +317,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	metrics := make(chan time.Time)
 	batches := make(chan []Transaction)
 	state := controlState{lifecycle: newLifecycle()}
-	produce := func(ctx context.Context, _ int) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, _ int, _ int) (<-chan []Transaction, error) {
 		go func() {
 			defer close(batches)
 			<-ctx.Done()
@@ -340,7 +340,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 	requests <- request{kind: cmdRun}
 	waitForState(t, requests, runStateRunning)
-	queue := make(chan []Transaction, batchReadAheadCapacity)
+	queue := make(chan []Transaction, defaultQueue1Capacity)
 	queue <- make([]Transaction, 2)
 	state.queue1.start(queue, 2)
 	state.reader.recordRead(2, filepath.Join("data", "first.parquet"))
@@ -369,7 +369,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
 	if snapshot.ReaderReadTPS != 0 || snapshot.ReaderRowsRead != 0 || snapshot.ReaderSource != nil ||
-		snapshot.Queue1Capacity != batchReadAheadCapacity || snapshot.Queue1DepthBatches != 0 ||
+		snapshot.Queue1Capacity != defaultQueue1Capacity || snapshot.Queue1DepthBatches != 0 ||
 		snapshot.Queue1QueuedTransactions != 0 || snapshot.Queue1BlockedSenders != 0 ||
 		snapshot.Queue1OldestBlockedSenderMs != 0 || snapshot.Queue1BlockedMs != 0 {
 		t.Fatalf("snapshot after Reset = %+v, want zero measurements", snapshot)
@@ -382,7 +382,7 @@ func startEventLoopForTest(t *testing.T, onProduce func()) (chan<- request, chan
 	requests := make(chan request, 3)
 	batches := make(chan []Transaction)
 	metrics := make(chan time.Time)
-	produce := func(ctx context.Context, _ int) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, _ int, _ int) (<-chan []Transaction, error) {
 		onProduce()
 		go func() {
 			defer close(batches)
@@ -399,7 +399,7 @@ func startCustomEventLoopForTest(
 	t *testing.T,
 	requests chan request,
 	metrics <-chan time.Time,
-	produce func(context.Context, int) (<-chan []Transaction, error),
+	produce func(context.Context, int, int) (<-chan []Transaction, error),
 ) {
 	t.Helper()
 
