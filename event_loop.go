@@ -41,17 +41,24 @@ func (state *controlState) eventLoop(
 			switch cmd.kind {
 			case getSnapshot:
 				reader := state.reader.snapshot()
+				queue1 := state.queue1.snapshot(time.Now())
 				snapshot := statusSnapshot{
-					RunState:            state.lifecycle.currentState(),
-					TotalTransactions:   state.totalTransactions,
-					ReaderWorkers:       1,
-					ReaderReadBatchSize: state.readBatchSize(),
-					SenderWorkers:       0,
-					ElapsedMs:           state.elapsedMs(time.Now()),
-					StartError:          state.startError,
-					ReaderReadTPS:       reader.readTPS,
-					ReaderRowsRead:      reader.rowsRead,
-					ReaderSource:        reader.source,
+					RunState:                    state.lifecycle.currentState(),
+					TotalTransactions:           state.totalTransactions,
+					ReaderWorkers:               1,
+					ReaderReadBatchSize:         state.readBatchSize(),
+					SenderWorkers:               0,
+					ElapsedMs:                   state.elapsedMs(time.Now()),
+					StartError:                  state.startError,
+					ReaderReadTPS:               reader.readTPS,
+					ReaderRowsRead:              reader.rowsRead,
+					ReaderSource:                reader.source,
+					Queue1Capacity:              queue1.capacity,
+					Queue1DepthBatches:          queue1.depthBatches,
+					Queue1QueuedTransactions:    queue1.queuedTransactions,
+					Queue1BlockedSenders:        queue1.blockedSenders,
+					Queue1OldestBlockedSenderMs: queue1.oldestBlockedSenderMs,
+					Queue1BlockedMs:             queue1.blockedMs,
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
@@ -143,6 +150,7 @@ func (state *controlState) eventLoop(
 
 func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMetrics *Metrics) {
 	state.reader.reset()
+	state.queue1.reset()
 	consumedSinceTick.Store(0)
 	state.totalTransactions = 0
 	state.actualTPS = 0

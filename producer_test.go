@@ -25,8 +25,9 @@ func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var telemetry readerTelemetry
+	var queueTelemetry queue1Telemetry
 	telemetry.startInterval(time.Now())
-	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), defaultReadBatchSize, &telemetry)
+	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), defaultReadBatchSize, &telemetry, &queueTelemetry)
 	if err != nil {
 		t.Fatalf("start producer: %v", err)
 	}
@@ -66,7 +67,8 @@ func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var telemetry readerTelemetry
-	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), 1000, &telemetry)
+	var queueTelemetry queue1Telemetry
+	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), 1000, &telemetry, &queueTelemetry)
 	if err != nil {
 		t.Fatalf("start producer: %v", err)
 	}

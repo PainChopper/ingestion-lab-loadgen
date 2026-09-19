@@ -18,6 +18,12 @@ const DISPOSED_COMMAND_MESSAGE = 'http adapter is disposed'
 const NETWORK_COMMAND_MESSAGE = 'command request failed due to a network error'
 const WIRE_KEYS = Object.freeze([
   'elapsedMs',
+  'queue1BlockedMs',
+  'queue1BlockedSenders',
+  'queue1Capacity',
+  'queue1DepthBatches',
+  'queue1OldestBlockedSenderMs',
+  'queue1QueuedTransactions',
   'readerReadBatchSize',
   'readerReadTps',
   'readerRowsRead',
@@ -40,6 +46,12 @@ interface WireSnapshot {
   readonly readerReadBatchSize: number
   readonly readerRowsRead: number
   readonly readerSource: string | null
+  readonly queue1Capacity: number
+  readonly queue1DepthBatches: number
+  readonly queue1QueuedTransactions: number
+  readonly queue1BlockedSenders: number
+  readonly queue1OldestBlockedSenderMs: number
+  readonly queue1BlockedMs: number
 }
 
 type SupportedCommand = Extract<
@@ -81,7 +93,14 @@ function unavailableControl(unit: string): NumericControlSnapshot {
 }
 
 function workerControl(value: number | null): NumericControlSnapshot {
-  if (value === null) return unavailableControl('workers')
+  return fixedControl(value, 'workers')
+}
+
+function fixedControl(
+  value: number | null,
+  unit: string,
+): NumericControlSnapshot {
+  if (value === null) return unavailableControl(unit)
 
   return {
     applied: value,
@@ -90,7 +109,7 @@ function workerControl(value: number | null): NumericControlSnapshot {
     min: value,
     max: value,
     step: 1,
-    unit: 'workers',
+    unit,
     applyMode: 'unavailable',
   }
 }
@@ -124,6 +143,38 @@ function neutralQueue(
     throughputTps: null,
     blockedMs: null,
     trend: 'unknown',
+  }
+}
+
+function fixedQueueCapacityControl(value: number): NumericControlSnapshot {
+  return {
+    applied: value,
+    preview: null,
+    pending: null,
+    min: 0,
+    max: value,
+    step: 1,
+    unit: 'batches',
+    applyMode: 'unavailable',
+  }
+}
+
+function queue1(wire: WireSnapshot | null): QueueTelemetrySnapshot {
+  const queue = neutralQueue(
+    'reader-to-throttler',
+    'reader',
+    'throttler',
+  )
+  if (wire === null) return queue
+
+  return {
+    ...queue,
+    capacity: fixedQueueCapacityControl(wire.queue1Capacity),
+    depthBatches: wire.queue1DepthBatches,
+    queuedTransactions: wire.queue1QueuedTransactions,
+    blockedSenders: wire.queue1BlockedSenders,
+    oldestBlockedSenderMs: wire.queue1OldestBlockedSenderMs,
+    blockedMs: wire.queue1BlockedMs,
   }
 }
 
@@ -171,11 +222,7 @@ function createSnapshot(
       limitedMs: null,
       state: runState,
     },
-    queue1: neutralQueue(
-      'reader-to-throttler',
-      'reader',
-      'throttler',
-    ),
+    queue1: queue1(wire),
     queue2: neutralQueue(
       'throttler-to-sender',
       'throttler',
@@ -265,7 +312,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     keys.length !== WIRE_KEYS.length ||
     keys.some((key, index) => key !== WIRE_KEYS[index])
   ) {
-    throw new Error('snapshot body must contain exactly ten wire keys')
+    throw new Error('snapshot body must contain exactly sixteen wire keys')
   }
 
   if (
@@ -280,7 +327,13 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     !isWireInteger(record.totalTransactions) ||
     !isWireInteger(record.readerWorkers) ||
     !isWireInteger(record.senderWorkers) ||
-    !isWireInteger(record.readerRowsRead)
+    !isWireInteger(record.readerRowsRead) ||
+    !isWireInteger(record.queue1Capacity) ||
+    !isWireInteger(record.queue1DepthBatches) ||
+    !isWireInteger(record.queue1QueuedTransactions) ||
+    !isWireInteger(record.queue1BlockedSenders) ||
+    !isWireInteger(record.queue1OldestBlockedSenderMs) ||
+    !isWireInteger(record.queue1BlockedMs)
   ) {
     throw new Error('snapshot counters must be nonnegative safe integers')
   }
@@ -314,6 +367,12 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     readerReadBatchSize: record.readerReadBatchSize,
     readerRowsRead: record.readerRowsRead,
     readerSource: record.readerSource,
+    queue1Capacity: record.queue1Capacity,
+    queue1DepthBatches: record.queue1DepthBatches,
+    queue1QueuedTransactions: record.queue1QueuedTransactions,
+    queue1BlockedSenders: record.queue1BlockedSenders,
+    queue1OldestBlockedSenderMs: record.queue1OldestBlockedSenderMs,
+    queue1BlockedMs: record.queue1BlockedMs,
   }
 }
 

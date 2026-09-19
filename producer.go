@@ -10,9 +10,13 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-func produceBatches(ctx context.Context, dataPath string, batchSize int, telemetry *readerTelemetry) (<-chan []Transaction, error) {
-	const batchReadAheadCapacity = 2
-
+func produceBatches(
+	ctx context.Context,
+	dataPath string,
+	batchSize int,
+	telemetry *readerTelemetry,
+	queueTelemetry *queue1Telemetry,
+) (<-chan []Transaction, error) {
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to glob path: %w", err)
@@ -22,6 +26,7 @@ func produceBatches(ctx context.Context, dataPath string, batchSize int, telemet
 	}
 
 	batches := make(chan []Transaction, batchReadAheadCapacity)
+	queueTelemetry.start(batches, batchSize)
 	go func(files []string, batches chan<- []Transaction) {
 		defer close(batches)
 
@@ -61,10 +66,9 @@ func produceBatches(ctx context.Context, dataPath string, batchSize int, telemet
 							telemetry.recordRead(n, filePath)
 							accumulator = append(accumulator, rows[:n]...)
 							if len(accumulator) >= batchSize {
-								select {
-								case batches <- accumulator[:batchSize]:
+								if queueTelemetry.send(ctx, batches, accumulator[:batchSize]) {
 									accumulator = append(make([]Transaction, 0, batchSize), accumulator[batchSize:]...)
-								case <-ctx.Done():
+								} else {
 									return
 								}
 							}

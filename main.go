@@ -21,6 +21,7 @@ type controlState struct {
 	runStartedAt            time.Time
 	startError              *string
 	reader                  readerTelemetry
+	queue1                  queue1Telemetry
 	configuredReadBatchSize int
 
 	lifecycle *lifecycle
@@ -44,7 +45,7 @@ func main() {
 		metrics,
 		promMetrics,
 		func(ctx context.Context, batchSize int) (<-chan []Transaction, error) {
-			return produceBatches(ctx, dataPath, batchSize, &state.reader)
+			return produceBatches(ctx, dataPath, batchSize, &state.reader, &state.queue1)
 		},
 	)
 }
