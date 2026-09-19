@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-func TestConsumeBatchesRecordsDequeueAtReceive(t *testing.T) {
+func TestConsumeBatchesRecordsReceiveAtReceive(t *testing.T) {
 	batches := make(chan []Transaction)
 	var consumed atomic.Int64
-	var telemetry queue1Telemetry
+	var telemetry readerChannelTelemetry
 	telemetry.start(batches, 2)
 	done := make(chan struct{})
 	go func() {
@@ -29,7 +29,7 @@ func TestConsumeBatchesRecordsDequeueAtReceive(t *testing.T) {
 
 	telemetry.sample(time.Second)
 	got := telemetry.snapshot(time.Now())
-	if got.dequeuedBatchesTotal != 1 || got.dequeuedTransactionsTotal != 2 ||
+	if got.receivedBatchesTotal != 1 || got.receivedTransactionsTotal != 2 ||
 		got.outputBatchesPerSecond != 1 || got.outputTransactionsPerSecond != 2 ||
 		consumed.Load() != 2 {
 		t.Fatalf("consumer measurements = %+v, consumed = %d", got, consumed.Load())

@@ -7,31 +7,31 @@ import (
 )
 
 type statusSnapshot struct {
-	RunState                          runState       `json:"runState"`
-	TotalTransactions                 int64          `json:"totalTransactions"`
-	ReaderWorkers                     int            `json:"readerWorkers"`
-	ReaderReadBatchSize               int            `json:"readerReadBatchSize"`
-	SenderWorkers                     int            `json:"senderWorkers"`
-	ElapsedMs                         int64          `json:"elapsedMs"`
-	StartError                        *string        `json:"startError"`
-	ReaderReadTPS                     float64        `json:"readerReadTps"`
-	ReaderRowsRead                    int64          `json:"readerRowsRead"`
-	ReaderSource                      *string        `json:"readerSource"`
-	Queue1Capacity                    int            `json:"queue1Capacity"`
-	Queue1DepthBatches                int            `json:"queue1DepthBatches"`
-	Queue1QueuedTransactions          int            `json:"queue1QueuedTransactions"`
-	Queue1BlockedSenders              int            `json:"queue1BlockedSenders"`
-	Queue1OldestBlockedSenderMs       int64          `json:"queue1OldestBlockedSenderMs"`
-	Queue1BlockedMs                   int64          `json:"queue1BlockedMs"`
-	Queue1EnqueuedBatchesTotal        int64          `json:"queue1EnqueuedBatchesTotal"`
-	Queue1EnqueuedTransactionsTotal   int64          `json:"queue1EnqueuedTransactionsTotal"`
-	Queue1DequeuedBatchesTotal        int64          `json:"queue1DequeuedBatchesTotal"`
-	Queue1DequeuedTransactionsTotal   int64          `json:"queue1DequeuedTransactionsTotal"`
-	Queue1InputBatchesPerSecond       float64        `json:"queue1InputBatchesPerSecond"`
-	Queue1InputTransactionsPerSecond  float64        `json:"queue1InputTransactionsPerSecond"`
-	Queue1OutputBatchesPerSecond      float64        `json:"queue1OutputBatchesPerSecond"`
-	Queue1OutputTransactionsPerSecond float64        `json:"queue1OutputTransactionsPerSecond"`
-	Policy                            policySnapshot `json:"policy"`
+	RunState                                 runState       `json:"runState"`
+	TotalTransactions                        int64          `json:"totalTransactions"`
+	ReaderWorkers                            int            `json:"readerWorkers"`
+	ReaderReadBatchSize                      int            `json:"readerReadBatchSize"`
+	SenderWorkers                            int            `json:"senderWorkers"`
+	ElapsedMs                                int64          `json:"elapsedMs"`
+	StartError                               *string        `json:"startError"`
+	ReaderReadTPS                            float64        `json:"readerReadTps"`
+	ReaderRowsRead                           int64          `json:"readerRowsRead"`
+	ReaderSource                             *string        `json:"readerSource"`
+	ReaderChannelCapacity                    int            `json:"readerChannelCapacity"`
+	ReaderChannelDepthBatches                int            `json:"readerChannelDepthBatches"`
+	ReaderChannelBufferedTransactions        int            `json:"readerChannelBufferedTransactions"`
+	ReaderChannelBlockedSenders              int            `json:"readerChannelBlockedSenders"`
+	ReaderChannelOldestBlockedSenderMs       int64          `json:"readerChannelOldestBlockedSenderMs"`
+	ReaderChannelBlockedMs                   int64          `json:"readerChannelBlockedMs"`
+	ReaderChannelSentBatchesTotal            int64          `json:"readerChannelSentBatchesTotal"`
+	ReaderChannelSentTransactionsTotal       int64          `json:"readerChannelSentTransactionsTotal"`
+	ReaderChannelReceivedBatchesTotal        int64          `json:"readerChannelReceivedBatchesTotal"`
+	ReaderChannelReceivedTransactionsTotal   int64          `json:"readerChannelReceivedTransactionsTotal"`
+	ReaderChannelInputBatchesPerSecond       float64        `json:"readerChannelInputBatchesPerSecond"`
+	ReaderChannelInputTransactionsPerSecond  float64        `json:"readerChannelInputTransactionsPerSecond"`
+	ReaderChannelOutputBatchesPerSecond      float64        `json:"readerChannelOutputBatchesPerSecond"`
+	ReaderChannelOutputTransactionsPerSecond float64        `json:"readerChannelOutputTransactionsPerSecond"`
+	Policy                                   policySnapshot `json:"policy"`
 }
 
 func snapshotHandler(requests chan<- request) http.Handler {

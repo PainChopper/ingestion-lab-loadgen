@@ -15,7 +15,7 @@ const (
 	cmdPause
 	cmdReset
 	cmdSetReadBatchSize
-	cmdSetQueueCapacity
+	cmdSetReaderChannelCapacity
 )
 
 type request struct {

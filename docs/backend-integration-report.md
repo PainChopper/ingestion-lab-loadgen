@@ -12,15 +12,15 @@
 
 ## 1. Что UI уже умеет отображать
 
-Верхняя панель отображает run state, Run/Pause, Reset, elapsed time, total transactions и requested TPS ([frontend/src/components/LabShell.tsx](../frontend/src/components/LabShell.tsx#L56)). Pipeline показывает reader и sender workers, reader/read TPS, throttler requested/admitted TPS, две очереди, HTTP link и target ([frontend/src/components/pipeline/PipelineSvg.tsx](../frontend/src/components/pipeline/PipelineSvg.tsx#L44)). Inspector показывает подробные rates, counters, latency, blocked state и controls выбранного объекта ([frontend/src/components/inspectorViewModel.ts](../frontend/src/components/inspectorViewModel.ts#L91)).
+Верхняя панель отображает run state, Run/Pause, Reset, elapsed time, total transactions и requested TPS ([frontend/src/components/LabShell.tsx](../frontend/src/components/LabShell.tsx#L56)). Pipeline показывает reader и sender workers, reader/read TPS, throttler requested/admitted TPS, две канал, HTTP link и target ([frontend/src/components/pipeline/PipelineSvg.tsx](../frontend/src/components/pipeline/PipelineSvg.tsx#L44)). Inspector показывает подробные rates, counters, latency, blocked state и controls выбранного объекта ([frontend/src/components/inspectorViewModel.ts](../frontend/src/components/inspectorViewModel.ts#L91)).
 
-Очередь использует разные поля для разных визуальных задач:
+канал использует разные поля для разных визуальных задач:
 
 - форма кабеля зависит от `capacity` и `depthBatches`;
 - цвет зависит от `flowState`;
 - плотность движущихся маркеров зависит от `throughputTps`;
-- активность marker lifecycle определяется также batch rates, handoff и монотонными enqueue/dequeue counters ([frontend/src/components/pipeline/usePipelineMarkerLifecycle.ts](../frontend/src/components/pipeline/usePipelineMarkerLifecycle.ts#L39));
-- capacity, pending/preview, throughput, depth и blocked sender выводятся непосредственно рядом с кабелем ([frontend/src/components/pipeline/QueueCable.tsx](../frontend/src/components/pipeline/QueueCable.tsx#L300)).
+- активность marker lifecycle определяется также batch rates, handoff и монотонными send/receive counters ([frontend/src/components/pipeline/usePipelineMarkerLifecycle.ts](../frontend/src/components/pipeline/usePipelineMarkerLifecycle.ts#L39));
+- capacity, pending/preview, throughput, depth и blocked sender выводятся непосредственно рядом с кабелем ([frontend/src/components/pipeline/channel cable.tsx](../frontend/src/components/pipeline/channel cable.tsx#L300)).
 
 ## 2. Практическая таблица wire-полей и Go-владельцев
 
@@ -40,12 +40,12 @@
 | Current sources | `reader.currentSources` | Producer владеет локальным `filePath` ([transaction_batch_producer.go](../producer.go#L29)) | Известен glob `dataPath`, но активные файлы не публикуются | V4 |
 | Admitted TPS | `throttler.admittedTps` | Будущая точка учёта на выходе throttler | Нет данных, потому что throttler выключен из тракта | V2 |
 | Limiting/limited totals | `throttler.limiting`, `limitedTransactionsTotal`, `limitedMsTotal` | Throttler owner | Измерений ожидания нет | V2 |
-| Queue 1 capacity | `queues[reader-to-throttler].capacity` | Текущий `batches` channel имеет capacity 2 ([transaction_batch_producer.go](../producer.go#L13)) | Возможна только временная read-only проекция; channel ведёт сразу в black-hole consumer | V4 |
-| Queue 1 depth | `queues[reader-to-throttler].depthBatches` | Можно сэмплировать `len(batches)` | Это мгновенная приблизительная глубина legacy channel, не контрактная очередь reader-to-throttler | V4 |
-| Queue 1 queued transactions | `queues[reader-to-throttler].queuedTransactions` | Будущий queue owner | Нельзя получить из channel без дополнительного учёта размеров batch | V4 |
-| Queue counters/rates | `enqueued*`, `dequeued*`, `inputTps`, `outputTps`, `throughputTps` | Точки учёта enqueue/dequeue | Сейчас отсутствуют | V4 |
-| Queue blocked state | `blockedSenders`, `oldestBlockedSenderMs`, `blockedMsTotal`, `flowState` | Queue owner или инструментированный send wrapper | Producer может блокироваться на send, но ожидание не измеряется ([transaction_batch_producer.go](../producer.go#L42)) | V4 |
-| Queue 2 | `queues[throttler-to-sender].*` | Будущая очередь между throttler и sender | Стадия и очередь отсутствуют | V5 |
+| Reader channel capacity | `channels[reader-to-throttler].capacity` | Текущий `batches` channel имеет capacity 2 ([transaction_batch_producer.go](../producer.go#L13)) | Возможна только временная read-only проекция; channel ведёт сразу в black-hole consumer | V4 |
+| Reader channel depth | `channels[reader-to-throttler].depthBatches` | Можно сэмплировать `len(batches)` | Это мгновенная приблизительная глубина legacy channel, не контрактная канал reader-to-throttler | V4 |
+| Reader channel buffered transactions | `channels[reader-to-throttler].bufferedTransactions` | Будущий readerChannel owner | Нельзя получить из channel без дополнительного учёта размеров batch | V4 |
+| Reader channel counters/rates | `sent*`, `received*`, `inputTps`, `outputTps`, `throughputTps` | Точки учёта send/receive | Сейчас отсутствуют | V4 |
+| Reader channel blocked state | `blockedSenders`, `oldestBlockedSenderMs`, `blockedMsTotal`, `flowState` | Reader channel owner или инструментированный send wrapper | Producer может блокироваться на send, но ожидание не измеряется ([transaction_batch_producer.go](../producer.go#L42)) | V4 |
+| Sender channel | `channels[throttler-to-sender].*` | Будущая канал между throttler и sender | Стадия и канал отсутствуют | V5 |
 | Sender controls | `sender.workers`, `httpBatchSize`, `timeoutMs` | Будущий sender pool owner | Controls unavailable | V5 |
 | Sender telemetry | `sender.attemptedTps`, `inFlightRequests`, response/retry totals | Sender pool owner | HTTP sender отсутствует | V5 |
 | HTTP link | `http.lastStatusCode`, `throughputTps`, `inFlightRequests`, request totals, `latencyP95Ms` | HTTP client/instrumentation owner | Connection disconnected; измерения неизвестны | V5 |
@@ -62,7 +62,7 @@
 - фиксированные `reader.workers.applied=1` и `reader.readBatchSize.applied=50000` с `applyMode=unavailable`;
 - сохранённый configured requested TPS, с явной оговоркой, что он ещё не является эффективным throttling limit;
 - известный source glob как диагностическую информацию, но не как `currentSources`;
-- полные actor/queue/HTTP/target sections с `null` для неизвестной telemetry и `unavailable` для отсутствующих controls;
+- полные actor/channel/HTTP/target sections с `null` для неизвестной telemetry и `unavailable` для отсутствующих controls;
 - `GET /api/v1/loadgen/snapshot` и frontend `HttpAdapter`, выполняющий wire-to-view-model mapping.
 
 Legacy `statusSnapshot_old` использует строковые `targetTPS`, `actualTPS` и `totalTransactions` ([cmdgen.go](../http_server.go#L31)). Новый контракт требует числовые значения. Существующий `actualTPS` вычисляется из `consumedSinceTick` один раз в секунду ([main.go](../main.go#L73)) и отражает скорость транзакций, обработанных `consumeTransaction` ([transaction_batch_consumer.go](../consumer.go#L9)). Его нельзя без переименования точки измерения подставлять в `reader.readTps`, `throttler.admittedTps` или `sender.attemptedTps`.
@@ -74,27 +74,27 @@ Legacy `statusSnapshot_old` использует строковые `targetTPS`,
 - изменяемое число reader workers;
 - runtime read batch size;
 - admitted/limited throttler telemetry;
-- runtime queue capacity и вся точная queue telemetry;
-- вторая очередь;
+- runtime reader channel capacity и вся точная readerChannel telemetry;
+- вторая канал;
 - sender workers, HTTP batch size и timeout;
 - attempted TPS, in-flight requests, responses и retries;
 - HTTP status, throughput, request counters и p95 latency;
 - target endpoint и target telemetry;
 - artificial delay и error rate target emulator.
 
-Simulation генерирует endpoint, target latency, HTTP outcomes, queue telemetry и retries независимо от Go ([frontend/src/adapters/SimulationAdapter.ts](../frontend/src/adapters/SimulationAdapter.ts#L173)). При подключении backend нельзя заменять неизвестные значения синтетическим нулём: по контракту `0` означает измеренное отсутствие активности, а `null` означает отсутствие измерения ([docs/frontend-backend-contract.md](frontend-backend-contract.md#L44)).
+Simulation генерирует endpoint, target latency, HTTP outcomes, readerChannel telemetry и retries независимо от Go ([frontend/src/adapters/SimulationAdapter.ts](../frontend/src/adapters/SimulationAdapter.ts#L173)). При подключении backend нельзя заменять неизвестные значения синтетическим нулём: по контракту `0` означает измеренное отсутствие активности, а `null` означает отсутствие измерения ([docs/frontend-backend-contract.md](frontend-backend-contract.md#L44)).
 
 ## 5. Специальная проверка семантик
 
 ### Capacity 0
 
-Контракт определяет capacity `0` как unbuffered rendezvous: depth и queued transactions равны нулю, но throughput может быть высоким ([docs/frontend-backend-contract.md](frontend-backend-contract.md#L170)). Simulation реализует это отдельным прямым `handoff` для обеих очередей ([frontend/src/model/simulation.ts](../frontend/src/model/simulation.ts#L506), [frontend/src/model/simulation.ts](../frontend/src/model/simulation.ts#L536)) и проверяет тестом ([frontend/src/adapters/SimulationAdapter.test.ts](../frontend/src/adapters/SimulationAdapter.test.ts#L376)).
+Контракт определяет capacity `0` как unbuffered rendezvous: depth и buffered transactions равны нулю, но throughput может быть высоким ([docs/frontend-backend-contract.md](frontend-backend-contract.md#L170)). Simulation реализует это отдельным прямым `handoff` для обеих канал ([frontend/src/model/simulation.ts](../frontend/src/model/simulation.ts#L506), [frontend/src/model/simulation.ts](../frontend/src/model/simulation.ts#L536)) и проверяет тестом ([frontend/src/adapters/SimulationAdapter.test.ts](../frontend/src/adapters/SimulationAdapter.test.ts#L376)).
 
-Текущий Go channel имеет фиксированную capacity 2. Новый unbuffered channel даст правильный rendezvous, но существующий channel нельзя resize во время работы. Семантика уменьшения capacity ниже depth с pending/after-drain требует отдельного queue owner/event loop либо собственной bounded queue, которая сериализует enqueue, dequeue и configuration changes.
+Текущий Go channel имеет фиксированную capacity 2. Новый unbuffered channel даст правильный rendezvous, но существующий channel нельзя resize во время работы. Семантика уменьшения capacity ниже depth с pending/after-drain требует отдельного readerChannel owner/event loop либо собственной bounded channel, которая сериализует send, receive и configuration changes.
 
 ### Blocked senders
 
-`blockedSenders` по документу означает точное число goroutine, прямо сейчас ожидающих отправки. Значения `len==cap` или `depth==capacity` этого не доказывают: очередь может быть полной, пока ни один sender ещё не начал send.
+`blockedSenders` по документу означает точное число goroutine, прямо сейчас ожидающих отправки. Значения `len==cap` или `depth==capacity` этого не доказывают: канал может быть полной, пока ни один sender ещё не начал send.
 
 Simulation хранит только boolean `0/1`, то есть «upstream stage не смог передать», а не точное число goroutine ([frontend/src/model/simulation.ts](../frontend/src/model/simulation.ts#L210)). `oldestBlockedSenderMs` там является длительностью непрерывного simulated blockage, а `flowState=backpressure` включается после 300 ms. Реальному backend нужны регистрация начала и завершения каждого ожидания, current count, timestamp старейшего активного ожидания и накопление blocked duration.
 
@@ -112,13 +112,13 @@ Simulation трактует каждый sender worker как один concurren
 
 Simulation использует последовательные точки измерения:
 
-- queue 1 input как `reader.readTps`;
-- queue 1 output как `throttler.admittedTps`;
-- queue 2 output как `sender.attemptedTps`;
+- readerChannel input как `reader.readTps`;
+- readerChannel output как `throttler.admittedTps`;
+- senderChannel output как `sender.attemptedTps`;
 - HTTP started transactions как HTTP link throughput;
 - HTTP succeeded transactions как target accepted TPS ([frontend/src/model/simulation.ts](../frontend/src/model/simulation.ts#L423)).
 
-Эту схему стоит сохранить в Go, рассчитывая все display rates по одному окну. Prometheus counters остаются источником benchmark-анализа. Simulation использует фиксированное окно 1 s, но делит на полную секунду даже до накопления 100 шагов; первые значения поэтому занижены. Кроме того, её `limitedMs` увеличивается при reader saturation и любом queue blockage ([frontend/src/model/simulation.ts](../frontend/src/model/simulation.ts#L366)), тогда как документ требует считать throttler limiting только когда причиной ограничения является сам throttler.
+Эту схему стоит сохранить в Go, рассчитывая все display rates по одному окну. Prometheus counters остаются источником benchmark-анализа. Simulation использует фиксированное окно 1 s, но делит на полную секунду даже до накопления 100 шагов; первые значения поэтому занижены. Кроме того, её `limitedMs` увеличивается при reader saturation и любом channel blockage ([frontend/src/model/simulation.ts](../frontend/src/model/simulation.ts#L366)), тогда как документ требует считать throttler limiting только когда причиной ограничения является сам throttler.
 
 ### SSE
 
@@ -145,7 +145,7 @@ React-модель содержит 11 отправляемых типов ко�
 | `set-requested-tps` | `applyCommand` → throttler `cmdSetTPS` | Legacy `cmdSetTPS` есть, но throttler не подключён |
 | `set-worker-count` reader | Reader pool configuration | Reader pool отсутствует |
 | `set-worker-count` sender | Sender pool configuration | Sender отсутствует |
-| `set-queue-capacity` | Queue owner configuration с immediate/pending receipt | Runtime-resizable queue отсутствует |
+| `set-reader-channel-capacity` | Reader channel owner configuration с immediate/pending receipt | Runtime-resizable channel отсутствует |
 | `set-read-batch-size` | Reader owner configuration | Значение является локальной константой |
 | `set-http-batch-size` | Sender owner configuration новых requests | Sender отсутствует |
 | `set-http-timeout` | Sender owner configuration новых requests | Sender отсутствует |
@@ -168,9 +168,9 @@ React-модель содержит 11 отправляемых типов ко�
 1. **V0 — нормализация контракта.** Зафиксировать отдельные Go wire DTO и frontend wire-to-view-model mapper. Не сериализовать TypeScript view model напрямую.
 2. **V1 — read-only snapshot.** Реализовать полный `GET /api/v1/loadgen/snapshot`, заполняющий total и фиксированные controls, остальные значения возвращать как unavailable/null. Добавить `HttpAdapter` и загрузку snapshot после reload.
 3. **V2 — эффективный TPS control.** Включить throttler в реальный pipeline, добавить `set-requested-tps`, command envelope, receipt, snapshot/control revisions и семантику TPS `0`.
-4. **V3 — lifecycle.** Ввести общий context, control-owned `run/pause/reset`, active elapsed time, сохранение queues/counters на pause и запрет reset во время running.
-5. **V4 — reader и первая очередь.** Добавить точные reader counters, source ownership, enqueue/dequeue accounting, blocked waits, unbuffered capacity `0` и pending decrease after drain.
-6. **V5 — sender, вторая очередь и HTTP.** Реализовать sender pool, bounded concurrency, HTTP batch/timeout, in-flight, outcomes, retries, latency и target-derived telemetry.
+4. **V3 — lifecycle.** Ввести общий context, control-owned `run/pause/reset`, active elapsed time, сохранение channels/counters на pause и запрет reset во время running.
+5. **V4 — reader и первая канал.** Добавить точные reader counters, source ownership, send/receive accounting, blocked waits, unbuffered capacity `0` и pending decrease after drain.
+6. **V5 — sender, вторая канал и HTTP.** Реализовать sender pool, bounded concurrency, HTTP batch/timeout, in-flight, outcomes, retries, latency и target-derived telemetry.
 7. **V6 — SSE и optional emulator controls.** Подключить full-snapshot broadcaster и `EventSource`; target delay/error делать writable только при реально запущенном emulator.
 
 SSE технически можно добавить раньше V5, но после V1-V3 уже будет устойчивый snapshot publisher, revisions и немедленная публикация после команд. Это уменьшает количество временных transport-решений.
@@ -178,7 +178,7 @@ SSE технически можно добавить раньше V5, но по�
 ## 8. Расхождения документа и фактического frontend
 
 1. Документ задаёт `schemaVersion`, `snapshotRevision`, `controlRevision`, `observedAt`, `samplePeriodMs`, `rateWindowMs` и вложенный объект `run`; frontend имеет `revision` и плоские `runState`, `elapsedMs`, `totalTransactions` ([frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L122)).
-2. Документ задаёт массив `queues`; frontend использует отдельные `queue1` и `queue2`.
+2. Документ задаёт массив `channels`; frontend использует отдельные `readerChannel` и `senderChannel`.
 3. Имена расходятся: `rowsRead`/`rowsReadTotal`, `source`/`currentSources`, `limitedMs`/`limitedMsTotal`, `blockedMs`/`blockedMsTotal`, `statusCode`/`lastStatusCode`, response/retry counters без/с суффиксом `Total`.
 4. Frontend одновременно содержит `inputTransactionsPerSecond`/`outputTransactionsPerSecond` и дублирующие `inputTps`/`outputTps`; документ определяет только один набор transaction rates.
 5. Frontend `ApplyMode` не содержит `after-drain`; `NumericControlSnapshot` не содержит `writable` и `unavailableReason` ([frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L17), [frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L28)).
@@ -189,7 +189,7 @@ SSE технически можно добавить раньше V5, но по�
 10. Frontend `RunState` не поддерживает `stopping` и `failed` ([frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L15)).
 11. Simulation разрешает `reset` во время running и переводит run в idle, хотя документ требует отклонять такой reset ([frontend/src/adapters/SimulationAdapter.ts](../frontend/src/adapters/SimulationAdapter.ts#L302), [docs/frontend-backend-contract.md](frontend-backend-contract.md#L261)).
 12. Simulation нормализует, округляет и ограничивает numeric commands вместо backend-style validation rejection ([frontend/src/adapters/SimulationAdapter.ts](../frontend/src/adapters/SimulationAdapter.ts#L78)).
-13. Документ требует `null` для неизвестной telemetry, но queue и HTTP counters во frontend типизированы только как `number` ([frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L57), [frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L97)).
+13. Документ требует `null` для неизвестной telemetry, но readerChannel и HTTP counters во frontend типизированы только как `number` ([frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L57), [frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L97)).
 14. Numeric controls блокируются только через `applyMode=unavailable`, а не через документированное поле `writable` ([frontend/src/components/NumericControl.tsx](../frontend/src/components/NumericControl.tsx#L51)).
 15. Pipeline worker buttons не учитывают ни `applyMode`, ни `writable`; они используют локальные пределы 1-7.
 16. Команда `set-target-endpoint` присутствует в документе и отсутствует во frontend.

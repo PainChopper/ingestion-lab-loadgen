@@ -14,9 +14,9 @@ func produceBatches(
 	ctx context.Context,
 	dataPath string,
 	batchSize int,
-	queue1Capacity int,
+	readerChannelCapacity int,
 	telemetry *readerTelemetry,
-	queueTelemetry *queue1Telemetry,
+	readerChannelTelemetry *readerChannelTelemetry,
 ) (<-chan []Transaction, error) {
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
@@ -26,8 +26,8 @@ func produceBatches(
 		return nil, fmt.Errorf("no files found matching pattern: %s", dataPath)
 	}
 
-	batches := make(chan []Transaction, queue1Capacity)
-	queueTelemetry.start(batches, batchSize)
+	batches := make(chan []Transaction, readerChannelCapacity)
+	readerChannelTelemetry.start(batches, batchSize)
 	go func(files []string, batches chan<- []Transaction) {
 		defer close(batches)
 
@@ -67,7 +67,7 @@ func produceBatches(
 							telemetry.recordRead(n, filePath)
 							accumulator = append(accumulator, rows[:n]...)
 							if len(accumulator) >= batchSize {
-								if queueTelemetry.send(ctx, batches, accumulator[:batchSize]) {
+								if readerChannelTelemetry.send(ctx, batches, accumulator[:batchSize]) {
 									accumulator = append(make([]Transaction, 0, batchSize), accumulator[batchSize:]...)
 								} else {
 									return

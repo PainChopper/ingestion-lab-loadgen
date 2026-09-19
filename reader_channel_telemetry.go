@@ -6,24 +6,24 @@ import (
 	"time"
 )
 
-type queue1Measurements struct {
+type readerChannelMeasurements struct {
 	capacity                    int
 	depthBatches                int
-	queuedTransactions          int
+	bufferedTransactions        int
 	blockedSenders              int
 	oldestBlockedSenderMs       int64
 	blockedMs                   int64
-	enqueuedBatchesTotal        int64
-	enqueuedTransactionsTotal   int64
-	dequeuedBatchesTotal        int64
-	dequeuedTransactionsTotal   int64
+	sentBatchesTotal            int64
+	sentTransactionsTotal       int64
+	receivedBatchesTotal        int64
+	receivedTransactionsTotal   int64
 	inputBatchesPerSecond       float64
 	inputTransactionsPerSecond  float64
 	outputBatchesPerSecond      float64
 	outputTransactionsPerSecond float64
 }
 
-type queue1Telemetry struct {
+type readerChannelTelemetry struct {
 	mu sync.Mutex
 
 	batches   <-chan []Transaction
@@ -32,10 +32,10 @@ type queue1Telemetry struct {
 	blockedAt time.Time
 	blockedMs time.Duration
 
-	enqueuedBatchesTotal        int64
-	enqueuedTransactionsTotal   int64
-	dequeuedBatchesTotal        int64
-	dequeuedTransactionsTotal   int64
+	sentBatchesTotal            int64
+	sentTransactionsTotal       int64
+	receivedBatchesTotal        int64
+	receivedTransactionsTotal   int64
 	inputBatchesSinceTick       int64
 	inputTransactionsSinceTick  int64
 	outputBatchesSinceTick      int64
@@ -46,18 +46,18 @@ type queue1Telemetry struct {
 	outputTransactionsPerSecond float64
 }
 
-func (q *queue1Telemetry) start(batches <-chan []Transaction, batchSize int) {
+func (q *readerChannelTelemetry) start(batches <-chan []Transaction, batchSize int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.batches = batches
 	q.batchSize = batchSize
 }
 
-func (q *queue1Telemetry) send(ctx context.Context, batches chan<- []Transaction, batch []Transaction) bool {
+func (q *readerChannelTelemetry) send(ctx context.Context, batches chan<- []Transaction, batch []Transaction) bool {
 	if len(batches) != cap(batches) {
 		select {
 		case batches <- batch:
-			q.recordEnqueue(len(batch))
+			q.recordSend(len(batch))
 			return true
 		case <-ctx.Done():
 			return false
@@ -68,7 +68,7 @@ func (q *queue1Telemetry) send(ctx context.Context, batches chan<- []Transaction
 	select {
 	case batches <- batch:
 		q.finishBlocked(time.Now())
-		q.recordEnqueue(len(batch))
+		q.recordSend(len(batch))
 		return true
 	case <-ctx.Done():
 		q.finishBlocked(time.Now())
@@ -76,16 +76,16 @@ func (q *queue1Telemetry) send(ctx context.Context, batches chan<- []Transaction
 	}
 }
 
-func (q *queue1Telemetry) snapshot(now time.Time) queue1Measurements {
+func (q *readerChannelTelemetry) snapshot(now time.Time) readerChannelMeasurements {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	measurements := queue1Measurements{}
+	measurements := readerChannelMeasurements{}
 	totalBlocked := q.blockedMs
 	if q.batches != nil {
 		measurements.capacity = cap(q.batches)
 		measurements.depthBatches = len(q.batches)
-		measurements.queuedTransactions = measurements.depthBatches * q.batchSize
+		measurements.bufferedTransactions = measurements.depthBatches * q.batchSize
 	}
 	if !q.blockedAt.IsZero() {
 		measurements.blockedSenders = 1
@@ -96,10 +96,10 @@ func (q *queue1Telemetry) snapshot(now time.Time) queue1Measurements {
 		}
 	}
 	measurements.blockedMs = totalBlocked.Milliseconds()
-	measurements.enqueuedBatchesTotal = q.enqueuedBatchesTotal
-	measurements.enqueuedTransactionsTotal = q.enqueuedTransactionsTotal
-	measurements.dequeuedBatchesTotal = q.dequeuedBatchesTotal
-	measurements.dequeuedTransactionsTotal = q.dequeuedTransactionsTotal
+	measurements.sentBatchesTotal = q.sentBatchesTotal
+	measurements.sentTransactionsTotal = q.sentTransactionsTotal
+	measurements.receivedBatchesTotal = q.receivedBatchesTotal
+	measurements.receivedTransactionsTotal = q.receivedTransactionsTotal
 	measurements.inputBatchesPerSecond = q.inputBatchesPerSecond
 	measurements.inputTransactionsPerSecond = q.inputTransactionsPerSecond
 	measurements.outputBatchesPerSecond = q.outputBatchesPerSecond
@@ -107,25 +107,25 @@ func (q *queue1Telemetry) snapshot(now time.Time) queue1Measurements {
 	return measurements
 }
 
-func (q *queue1Telemetry) recordEnqueue(transactions int) {
+func (q *readerChannelTelemetry) recordSend(transactions int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.enqueuedBatchesTotal++
-	q.enqueuedTransactionsTotal += int64(transactions)
+	q.sentBatchesTotal++
+	q.sentTransactionsTotal += int64(transactions)
 	q.inputBatchesSinceTick++
 	q.inputTransactionsSinceTick += int64(transactions)
 }
 
-func (q *queue1Telemetry) recordDequeue(transactions int) {
+func (q *readerChannelTelemetry) recordReceive(transactions int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.dequeuedBatchesTotal++
-	q.dequeuedTransactionsTotal += int64(transactions)
+	q.receivedBatchesTotal++
+	q.receivedTransactionsTotal += int64(transactions)
 	q.outputBatchesSinceTick++
 	q.outputTransactionsSinceTick += int64(transactions)
 }
 
-func (q *queue1Telemetry) sample(window time.Duration) {
+func (q *readerChannelTelemetry) sample(window time.Duration) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	seconds := window.Seconds()
@@ -139,17 +139,17 @@ func (q *queue1Telemetry) sample(window time.Duration) {
 	q.outputTransactionsSinceTick = 0
 }
 
-func (q *queue1Telemetry) reset() {
+func (q *readerChannelTelemetry) reset() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.batches = nil
 	q.batchSize = 0
 	q.blockedAt = time.Time{}
 	q.blockedMs = 0
-	q.enqueuedBatchesTotal = 0
-	q.enqueuedTransactionsTotal = 0
-	q.dequeuedBatchesTotal = 0
-	q.dequeuedTransactionsTotal = 0
+	q.sentBatchesTotal = 0
+	q.sentTransactionsTotal = 0
+	q.receivedBatchesTotal = 0
+	q.receivedTransactionsTotal = 0
 	q.inputBatchesSinceTick = 0
 	q.inputTransactionsSinceTick = 0
 	q.outputBatchesSinceTick = 0
@@ -160,13 +160,13 @@ func (q *queue1Telemetry) reset() {
 	q.outputTransactionsPerSecond = 0
 }
 
-func (q *queue1Telemetry) startBlocked(now time.Time) {
+func (q *readerChannelTelemetry) startBlocked(now time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.blockedAt = now
 }
 
-func (q *queue1Telemetry) finishBlocked(now time.Time) {
+func (q *readerChannelTelemetry) finishBlocked(now time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.blockedAt.IsZero() {
