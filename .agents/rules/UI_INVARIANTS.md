@@ -15,12 +15,12 @@
 - Запоздалая receipt или старый snapshot не откатывает более новое UI-состояние. Порядок определяется `serverInstanceId`, revisions и `commandId` согласно контракту.
 - Commit, cancel, disabled и read-only semantics должны быть явными и одинаковыми для pointer и keyboard.
 
-## Очереди, геометрия и flow-state
+## Каналы, геометрия и flow-state
 
 - Capacity `0` означает rendezvous: глубина и накопленные transactions равны нулю, throughput может быть ненулевым.
 - Applied cable, pending/preview ghost, marker path и их endpoints используют одну согласованную геометрию.
 - Изменения layout, SVG viewBox, coordinates, transforms, z-index и marker travel проверяются как единое визуальное поведение.
-- Цвет, motion и pressure indication следуют принятой queue `flowState` specification. Компонент не выводит состояние из случайного локального порога.
+- Цвет, motion и pressure indication следуют принятой channel `flowState` specification. Компонент не выводит состояние из случайного локального порога.
 - Визуальная скорость и число markers являются ограниченной проекцией telemetry, а не точным числом или скоростью реальных transactions.
 - Responsive layout не должен скрывать controls, обрезать inspector или создавать неуправляемый overflow на согласованных viewport-ах.
 

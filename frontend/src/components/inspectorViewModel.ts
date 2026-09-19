@@ -1,7 +1,7 @@
 import type {
   LoadgenSnapshot,
   NumericControlSnapshot,
-  QueueSnapshot,
+  ChannelSnapshot,
   SelectableId,
 } from '../model/loadgen'
 import {
@@ -9,7 +9,7 @@ import {
   formatMilliseconds,
   formatRate,
 } from './pipeline/formatters'
-import { getQueueCapacityPresentation } from './pipeline/queueCableGeometry'
+import { getChannelCapacityPresentation } from './pipeline/channelCableGeometry'
 
 export interface InspectorRow {
   readonly label: string
@@ -38,56 +38,56 @@ export function formatStateLabel(value: string): string {
     .join(' ')
 }
 
-function queueViewModel(queue: QueueSnapshot): InspectorViewModel {
-  const capacity = getQueueCapacityPresentation(queue.capacity)
+function channelViewModel(channel: ChannelSnapshot): InspectorViewModel {
+  const capacity = getChannelCapacityPresentation(channel.capacity)
   const appliedCapacity = formatControl({
-    ...queue.capacity,
+    ...channel.capacity,
     applied: capacity.applied,
   })
-  const depth = formatInteger(queue.depthBatches)
+  const depth = formatInteger(channel.depthBatches)
   const capacityChange =
     capacity.requestState === null
       ? []
       : [{
           label: 'Capacity change',
-          value: `${capacity.requestState === 'pending' ? 'Pending' : 'Preview'} ${formatInteger(capacity.candidate)} ${queue.capacity.unit}`,
+          value: `${capacity.requestState === 'pending' ? 'Pending' : 'Preview'} ${formatInteger(capacity.candidate)} ${channel.capacity.unit}`,
         }]
 
   return {
-    id: queue.id,
-    title: queue.id === 'reader-to-throttler' ? 'QUEUE 1' : 'QUEUE 2',
-    kind: `${formatStateLabel(queue.from)} to ${formatStateLabel(queue.to)}`,
+    id: channel.id,
+    title: channel.id === 'reader-to-throttler' ? 'Reader channel' : 'Sender channel',
+    kind: `${formatStateLabel(channel.from)} to ${formatStateLabel(channel.to)}`,
     rows: [
-      { label: 'Throughput', value: formatRate(queue.throughputTps) },
-      { label: 'Input rate', value: formatRate(queue.inputTps) },
-      { label: 'Output rate', value: formatRate(queue.outputTps) },
+      { label: 'Throughput', value: formatRate(channel.throughputTps) },
+      { label: 'Input rate', value: formatRate(channel.inputTps) },
+      { label: 'Output rate', value: formatRate(channel.outputTps) },
       {
         label: 'Depth / capacity',
         value: `${depth} / ${appliedCapacity}`,
       },
       {
         label: 'Pressure',
-        value: `${Math.round(queue.displayedPressure * 100)}%`,
+        value: `${Math.round(channel.displayedPressure * 100)}%`,
       },
       ...capacityChange,
-      { label: 'Queued tx', value: formatInteger(queue.queuedTransactions) },
+      { label: 'Buffered tx', value: formatInteger(channel.bufferedTransactions) },
       {
         label: 'Waiting upstream now',
-        value: formatInteger(queue.blockedSenders),
+        value: formatInteger(channel.blockedSenders),
       },
       {
         label: 'Oldest current wait',
         value:
-          queue.blockedSenders > 0
-            ? formatMilliseconds(queue.oldestBlockedSenderMs)
+          channel.blockedSenders > 0
+            ? formatMilliseconds(channel.oldestBlockedSenderMs)
             : '—',
       },
       {
         label: 'Accumulated blocked time',
-        value: formatMilliseconds(queue.blockedMs),
+        value: formatMilliseconds(channel.blockedMs),
       },
-      { label: 'Trend', value: formatStateLabel(queue.trend) },
-      { label: 'Flow state', value: formatStateLabel(queue.flowState) },
+      { label: 'Trend', value: formatStateLabel(channel.trend) },
+      { label: 'Flow state', value: formatStateLabel(channel.flowState) },
     ],
   }
 }
@@ -250,9 +250,9 @@ export function getInspectorViewModel(
       }
     }
     case 'reader-to-throttler':
-      return queueViewModel(snapshot.queue1)
+      return channelViewModel(snapshot.readerChannel)
     case 'throttler-to-sender':
-      return queueViewModel(snapshot.queue2)
+      return channelViewModel(snapshot.senderChannel)
     case 'http':
       return {
         id: selectedId,

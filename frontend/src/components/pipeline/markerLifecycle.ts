@@ -1,14 +1,14 @@
-import type { QueueId, RunState } from '../../model/loadgen'
+import type { ChannelId, RunState } from '../../model/loadgen'
 import {
-  getQueueMarkerCount,
-  QUEUE_CABLE_MAX_MARKERS,
-} from './queueCableGeometry'
+  getChannelMarkerCount,
+  CHANNEL_CABLE_MAX_MARKERS,
+} from './channelCableGeometry'
 
-export const MAX_QUEUE_DEPTH_FAMILIES = QUEUE_CABLE_MAX_MARKERS
+export const MAX_CHANNEL_DEPTH_FAMILIES = CHANNEL_CABLE_MAX_MARKERS
 export const MIN_FLOW_MARKERS = 3
 export const MAX_FLOW_MARKERS = 12
 export const MAX_HTTP_ATTEMPT_MARKERS = 3
-export const MAX_PIPELINE_MARKERS = MAX_QUEUE_DEPTH_FAMILIES * 2 + MAX_FLOW_MARKERS
+export const MAX_PIPELINE_MARKERS = MAX_CHANNEL_DEPTH_FAMILIES * 2 + MAX_FLOW_MARKERS
 export const MAX_PENDING_OUTCOMES = MAX_PIPELINE_MARKERS
 export const MAX_VISIBLE_WAITING_FAMILIES = 8
 
@@ -27,9 +27,9 @@ export type MarkerSlotState = 'inactive' | 'active' | 'retiring'
 export type HttpOutcome = 'success' | 'error'
 export type MarkerStage =
   | 'reader'
-  | 'queue1'
+  | 'readerChannel'
   | 'throttler'
-  | 'queue2'
+  | 'senderChannel'
   | 'sender'
   | 'http'
   | 'target'
@@ -40,7 +40,7 @@ export interface PipelineMarkerSlotSnapshot {
   readonly state: MarkerSlotState
   readonly stage: MarkerStage
   readonly phase: number
-  readonly queued: boolean
+  readonly buffered: boolean
   readonly outcome: HttpOutcome | null
   readonly outcomeVisible: boolean
   readonly pulseProgress: number
@@ -55,15 +55,15 @@ export interface MarkerLifecycleSnapshot {
   readonly markers: readonly PipelineMarkerSlotSnapshot[]
 }
 
-export interface QueueMarkerTelemetry {
-  readonly id: QueueId
+export interface ChannelMarkerTelemetry {
+  readonly id: ChannelId
   readonly depthBatches: number | null
   readonly appliedCapacity: number
   readonly throughputTps: number | null
-  readonly dequeueActive: boolean
+  readonly receiveActive: boolean
   readonly blocked: boolean
-  readonly enqueuedBatchesTotal: number
-  readonly dequeuedBatchesTotal: number
+  readonly sentBatchesTotal: number
+  readonly receivedBatchesTotal: number
 }
 
 export interface HttpMarkerTelemetry {
@@ -82,8 +82,8 @@ export interface MarkerLifecycleTelemetry {
   readonly valveOpeningIndex: number
   readonly valvePreAdmissionStopPhase: number
   readonly valveExitPhase: number
-  readonly queue1: QueueMarkerTelemetry
-  readonly queue2: QueueMarkerTelemetry
+  readonly readerChannel: ChannelMarkerTelemetry
+  readonly senderChannel: ChannelMarkerTelemetry
   readonly http: HttpMarkerTelemetry
   readonly stageTravelLengths: Readonly<Record<MarkerStage, number>>
 }
@@ -109,9 +109,9 @@ type Listener = () => void
 
 export const MARKER_STAGE_ORDER: readonly MarkerStage[] = [
   'reader',
-  'queue1',
+  'readerChannel',
   'throttler',
-  'queue2',
+  'senderChannel',
   'sender',
   'http',
   'target',
@@ -180,11 +180,11 @@ export function valveAdmissionIntervalMs(openingIndex: number): number {
     )
 }
 
-export function getQueueDepthFamilyTarget(
+export function getChannelDepthFamilyTarget(
   depthBatches: number | null,
   appliedCapacity: number,
 ): number {
-  return getQueueMarkerCount(depthBatches, appliedCapacity)
+  return getChannelMarkerCount(depthBatches, appliedCapacity)
 }
 
 export function getFlowMarkerTarget(throughputTps: number | null): number {
@@ -239,21 +239,21 @@ export class MarkerLifecycleController {
   private initialized = false
   private familyTarget = 0
   private throughputCadenceActive = false
-  private queue1DequeueActive = false
-  private queue2DequeueActive = false
+  private readerChannelReceiveActive = false
+  private senderChannelReceiveActive = false
   private valveOpeningIndex = 0
   private valvePreAdmissionStopPhase = PRE_VALVE_STOP_PHASE
   private valveAdmissionElapsedMs = 0
   private motionElapsedMs = 0
   private reducedMotionElapsedMs = 0
   private connectionError = false
-  private queue1DepthTarget = 0
-  private queue2DepthTarget = 0
+  private readerChannelDepthTarget = 0
+  private senderChannelDepthTarget = 0
   private stageTravelLengths: Readonly<Record<MarkerStage, number>>
-  private previousQueue1EnqueuedTotal = 0
-  private previousQueue1DequeuedTotal = 0
-  private previousQueue2EnqueuedTotal = 0
-  private previousQueue2DequeuedTotal = 0
+  private previousReaderChannelSentTotal = 0
+  private previousReaderChannelReceivedTotal = 0
+  private previousSenderChannelSentTotal = 0
+  private previousSenderChannelReceivedTotal = 0
   private previousRequestsStartedTotal = 0
   private previousRequestsCompletedTotal = 0
   private previousRequestsSucceededTotal = 0
@@ -282,10 +282,10 @@ export class MarkerLifecycleController {
 
   reconcile(telemetry: MarkerLifecycleTelemetry): void {
     const totalsReset = this.initialized && (
-      telemetry.queue1.enqueuedBatchesTotal < this.previousQueue1EnqueuedTotal ||
-      telemetry.queue1.dequeuedBatchesTotal < this.previousQueue1DequeuedTotal ||
-      telemetry.queue2.enqueuedBatchesTotal < this.previousQueue2EnqueuedTotal ||
-      telemetry.queue2.dequeuedBatchesTotal < this.previousQueue2DequeuedTotal ||
+      telemetry.readerChannel.sentBatchesTotal < this.previousReaderChannelSentTotal ||
+      telemetry.readerChannel.receivedBatchesTotal < this.previousReaderChannelReceivedTotal ||
+      telemetry.senderChannel.sentBatchesTotal < this.previousSenderChannelSentTotal ||
+      telemetry.senderChannel.receivedBatchesTotal < this.previousSenderChannelReceivedTotal ||
       telemetry.http.requestsStartedTotal < this.previousRequestsStartedTotal ||
       telemetry.http.requestsCompletedTotal < this.previousRequestsCompletedTotal ||
       telemetry.http.requestsSucceededTotal < this.previousRequestsSucceededTotal ||
@@ -297,8 +297,8 @@ export class MarkerLifecycleController {
 
     this.runState = telemetry.runState
     this.reducedMotion = telemetry.reducedMotion
-    this.queue1DequeueActive = (telemetry.queue1.throughputTps ?? 0) > 0
-    this.queue2DequeueActive = (telemetry.queue2.throughputTps ?? 0) > 0
+    this.readerChannelReceiveActive = (telemetry.readerChannel.throughputTps ?? 0) > 0
+    this.senderChannelReceiveActive = (telemetry.senderChannel.throughputTps ?? 0) > 0
     if (!this.initialized || telemetry.runState !== 'paused') {
       const nextValveOpeningIndex = clamp(
         Math.round(telemetry.valveOpeningIndex),
@@ -319,13 +319,13 @@ export class MarkerLifecycleController {
       this.valvePreAdmissionStopPhase = nextStopPhase
     }
     this.connectionError = telemetry.http.connectionError
-    this.queue1DepthTarget = getQueueDepthFamilyTarget(
-      telemetry.queue1.depthBatches,
-      telemetry.queue1.appliedCapacity,
+    this.readerChannelDepthTarget = getChannelDepthFamilyTarget(
+      telemetry.readerChannel.depthBatches,
+      telemetry.readerChannel.appliedCapacity,
     )
-    this.queue2DepthTarget = getQueueDepthFamilyTarget(
-      telemetry.queue2.depthBatches,
-      telemetry.queue2.appliedCapacity,
+    this.senderChannelDepthTarget = getChannelDepthFamilyTarget(
+      telemetry.senderChannel.depthBatches,
+      telemetry.senderChannel.appliedCapacity,
     )
     this.throughputCadenceActive = this.maximumThroughput(telemetry) > 0
     this.stageTravelLengths = telemetry.stageTravelLengths
@@ -429,8 +429,8 @@ export class MarkerLifecycleController {
   private maximumThroughput(telemetry: MarkerLifecycleTelemetry): number {
     return Math.max(
       0,
-      telemetry.queue1.throughputTps ?? 0,
-      telemetry.queue2.throughputTps ?? 0,
+      telemetry.readerChannel.throughputTps ?? 0,
+      telemetry.senderChannel.throughputTps ?? 0,
     )
   }
 
@@ -452,14 +452,14 @@ export class MarkerLifecycleController {
   private reconcilePool(telemetry: MarkerLifecycleTelemetry): void {
     const requestedFamilyTarget = Math.min(
       MAX_PIPELINE_MARKERS,
-      this.queue1DepthTarget +
-        this.queue2DepthTarget +
+      this.readerChannelDepthTarget +
+        this.senderChannelDepthTarget +
         this.desiredThroughputTarget(telemetry),
     )
     const heldByZeroThroughput =
       telemetry.runState === 'running' &&
       this.familySlots().length > 0 &&
-      (!this.queue1DequeueActive || !this.queue2DequeueActive)
+      (!this.readerChannelReceiveActive || !this.senderChannelReceiveActive)
     this.familyTarget = heldByZeroThroughput
       ? this.activeFamilySlots().length
       : requestedFamilyTarget
@@ -513,28 +513,28 @@ export class MarkerLifecycleController {
   private familyHydrationPositions(
     count: number,
     target: number,
-  ): readonly { stage: 'queue1' | 'queue2' | null; phase: number }[] {
+  ): readonly { stage: 'readerChannel' | 'senderChannel' | null; phase: number }[] {
     if (count <= 0) return []
 
-    const selected: { stage: 'queue1' | 'queue2' | null; phase: number }[] = []
-    const queueTargets = [
-      { stage: 'queue1' as const, target: this.queue1DepthTarget },
-      { stage: 'queue2' as const, target: this.queue2DepthTarget },
+    const selected: { stage: 'readerChannel' | 'senderChannel' | null; phase: number }[] = []
+    const channelTargets = [
+      { stage: 'readerChannel' as const, target: this.readerChannelDepthTarget },
+      { stage: 'senderChannel' as const, target: this.senderChannelDepthTarget },
     ]
-    for (const queue of queueTargets) {
+    for (const channel of channelTargets) {
       const resident = this.familySlots().filter(
-        (slot) => slot.stage === queue.stage,
+        (slot) => slot.stage === channel.stage,
       ).length
       const needed = Math.min(
         count - selected.length,
-        Math.max(0, queue.target - resident),
+        Math.max(0, channel.target - resident),
       )
-      for (const phase of this.queueHydrationPhases(
-        queue.stage,
+      for (const phase of this.channelHydrationPhases(
+        channel.stage,
         needed,
-        queue.target,
+        channel.target,
       )) {
-        selected.push({ stage: queue.stage, phase })
+        selected.push({ stage: channel.stage, phase })
       }
     }
 
@@ -596,8 +596,8 @@ export class MarkerLifecycleController {
     return selected
   }
 
-  private queueHydrationPhases(
-    stage: 'queue1' | 'queue2',
+  private channelHydrationPhases(
+    stage: 'readerChannel' | 'senderChannel',
     count: number,
     target: number,
   ): readonly number[] {
@@ -777,7 +777,7 @@ export class MarkerLifecycleController {
   ): boolean {
     if (slot.stage === 'target' && slot.phase >= 1) return false
     if (
-      slot.stage === 'queue1' && !this.queue1DequeueActive
+      slot.stage === 'readerChannel' && !this.readerChannelReceiveActive
     ) {
       return false
     }
@@ -818,7 +818,7 @@ export class MarkerLifecycleController {
       slot.stage = followingStage
       slot.phase = 0
       changed = true
-      if (slot.stage === 'queue1' && !this.queue1DequeueActive) {
+      if (slot.stage === 'readerChannel' && !this.readerChannelReceiveActive) {
         return changed
       }
     }
@@ -843,10 +843,10 @@ export class MarkerLifecycleController {
     stage: MarkerStage,
     followingStage: MarkerStage,
   ): boolean {
-    if (stage === 'reader' && followingStage === 'queue1') {
-      return this.queue1DequeueActive
+    if (stage === 'reader' && followingStage === 'readerChannel') {
+      return this.readerChannelReceiveActive
     }
-    if (stage === 'queue1') return this.queue1DequeueActive
+    if (stage === 'readerChannel') return this.readerChannelReceiveActive
     return true
   }
 
@@ -1003,7 +1003,7 @@ export class MarkerLifecycleController {
 
     const completedHttp = this.activeFamilySlots()
       .filter((slot) =>
-        slot.outcome === null && !this.familyHeldAtStoppedQueue(slot)
+        slot.outcome === null && !this.familyHeldAtStoppedChannel(slot)
       )
       .sort((left, right) => lifecycleRank(right) - lifecycleRank(left))
       .slice(0, missing)
@@ -1014,19 +1014,19 @@ export class MarkerLifecycleController {
     return completedHttp.length > 0
   }
 
-  private familyHeldAtStoppedQueue(slot: MutableMarkerSlot): boolean {
-    return (slot.stage === 'reader' && !this.queue1DequeueActive && slot.phase >= 1) ||
-      (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
+  private familyHeldAtStoppedChannel(slot: MutableMarkerSlot): boolean {
+    return (slot.stage === 'reader' && !this.readerChannelReceiveActive && slot.phase >= 1) ||
+      (slot.stage === 'readerChannel' && !this.readerChannelReceiveActive) ||
       (slot.stage === 'throttler' &&
         this.valveOpeningIndex < VALVE_OPENING_MAX_INDEX &&
         slot.phase <= this.valvePreAdmissionStopPhase)
   }
 
   private captureTotals(telemetry: MarkerLifecycleTelemetry): void {
-    this.previousQueue1EnqueuedTotal = telemetry.queue1.enqueuedBatchesTotal
-    this.previousQueue1DequeuedTotal = telemetry.queue1.dequeuedBatchesTotal
-    this.previousQueue2EnqueuedTotal = telemetry.queue2.enqueuedBatchesTotal
-    this.previousQueue2DequeuedTotal = telemetry.queue2.dequeuedBatchesTotal
+    this.previousReaderChannelSentTotal = telemetry.readerChannel.sentBatchesTotal
+    this.previousReaderChannelReceivedTotal = telemetry.readerChannel.receivedBatchesTotal
+    this.previousSenderChannelSentTotal = telemetry.senderChannel.sentBatchesTotal
+    this.previousSenderChannelReceivedTotal = telemetry.senderChannel.receivedBatchesTotal
     this.previousRequestsStartedTotal = telemetry.http.requestsStartedTotal
     this.previousRequestsCompletedTotal = telemetry.http.requestsCompletedTotal
     this.previousRequestsSucceededTotal = telemetry.http.requestsSucceededTotal
@@ -1046,9 +1046,9 @@ export class MarkerLifecycleController {
     this.initialized = false
   }
 
-  private queued(slot: MutableMarkerSlot): boolean {
-    return (slot.stage === 'reader' && !this.queue1DequeueActive && slot.phase >= 1) ||
-      (slot.stage === 'queue1' && !this.queue1DequeueActive) ||
+  private buffered(slot: MutableMarkerSlot): boolean {
+    return (slot.stage === 'reader' && !this.readerChannelReceiveActive && slot.phase >= 1) ||
+      (slot.stage === 'readerChannel' && !this.readerChannelReceiveActive) ||
       (slot.stage === 'throttler' &&
         this.valveOpeningIndex < VALVE_OPENING_MAX_INDEX &&
         slot.phase <= this.valvePreAdmissionStopPhase)
@@ -1067,7 +1067,7 @@ export class MarkerLifecycleController {
         state: slot.state,
         stage: slot.stage,
         phase: slot.phase,
-        queued: this.queued(slot),
+        buffered: this.buffered(slot),
         outcome: slot.outcome,
         outcomeVisible:
           slot.outcome !== null && slot.stage === 'target' && slot.phase >= 1,

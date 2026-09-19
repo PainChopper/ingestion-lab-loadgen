@@ -8,23 +8,23 @@ import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
   LoadgenSnapshot,
   LoadgenTelemetrySnapshot,
-  QueueTelemetrySnapshot,
+  ChannelTelemetrySnapshot,
 } from '../../model/loadgen'
-import { QueueFlowStateDeriver } from '../../model/queueFlowState'
+import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import {
   createPipelineGeometry,
   PORTRAIT_THROTTLER_LIFT,
-  QUEUE_CABLE_ENDPOINTS,
+  CHANNEL_CABLE_ENDPOINTS,
   type TextPlacement,
 } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
   getFlowMarkerTarget,
-  getQueueDepthFamilyTarget,
+  getChannelDepthFamilyTarget,
   MAX_PIPELINE_MARKERS,
 } from './markerLifecycle'
 import type { MarkerLifecycleSnapshot } from './markerLifecycle'
-import { getQueueMarkerPathGeometry } from './markerPaths'
+import { getChannelMarkerPathGeometry } from './markerPaths'
 import { PipelineMarkers } from './PipelineMarkers'
 import { PipelineSvg } from './PipelineSvg'
 import { VALVE_FLANGES } from './throttlerValve'
@@ -71,12 +71,12 @@ describe('responsive pipeline geometry', () => {
       geometry.actors.target.bounds.x + geometry.actors.target.bounds.width
     )).toBe(50)
     expect(
-      geometry.queues['reader-to-throttler'].end.x -
-      geometry.queues['reader-to-throttler'].start.x,
+      geometry.channels['reader-to-throttler'].end.x -
+      geometry.channels['reader-to-throttler'].start.x,
     ).toBeCloseTo(205 + delta, 10)
     expect(
-      geometry.queues['throttler-to-sender'].end.x -
-      geometry.queues['throttler-to-sender'].start.x,
+      geometry.channels['throttler-to-sender'].end.x -
+      geometry.channels['throttler-to-sender'].start.x,
     ).toBeCloseTo(215 + delta, 10)
     expect(geometry.http.end.x - geometry.http.start.x)
       .toBeCloseTo(90 + delta, 10)
@@ -114,9 +114,9 @@ describe('responsive pipeline geometry', () => {
       expect(geometry.actors.target.ports.input.y).toBe(targetTop)
       expect(geometry.viewBox.height)
         .toBe(1160 + readerHeight + senderHeight)
-      expect(geometry.queues['reader-to-throttler'].metrics.throughputY)
+      expect(geometry.channels['reader-to-throttler'].metrics.throughputY)
         .toBe(readerBottom + 60)
-      expect(geometry.queues['throttler-to-sender'].metrics.throughputY)
+      expect(geometry.channels['throttler-to-sender'].metrics.throughputY)
         .toBe(throttlerSlotOutput + 42)
     },
   )
@@ -182,12 +182,12 @@ describe('responsive pipeline geometry', () => {
         ]
       const cardRight = throttler.bounds.x + throttler.bounds.width
       const cardBottom = throttler.bounds.y + throttler.bounds.height
-      const inputQueueMetricBottom = Math.max(
-        ...Object.values(geometry.queues['reader-to-throttler'].metrics)
+      const inputChannelMetricBottom = Math.max(
+        ...Object.values(geometry.channels['reader-to-throttler'].metrics)
           .filter((value): value is number => value !== 350),
       )
-      const outputQueueMetricTop = Math.min(
-        ...Object.values(geometry.queues['throttler-to-sender'].metrics)
+      const outputChannelMetricTop = Math.min(
+        ...Object.values(geometry.channels['throttler-to-sender'].metrics)
           .filter((value): value is number => value !== 350),
       )
       const pipeRight = Math.max(
@@ -216,8 +216,8 @@ describe('responsive pipeline geometry', () => {
         expect(globalX).toBeGreaterThan(cardRight)
         expect(globalX).toBeGreaterThan(pipeRight)
         expect(globalX).toBeGreaterThan(throttler.ports.output.x)
-        expect(globalY).toBeGreaterThan(inputQueueMetricBottom)
-        expect(globalY).toBeLessThan(outputQueueMetricTop)
+        expect(globalY).toBeGreaterThan(inputChannelMetricBottom)
+        expect(globalY).toBeLessThan(outputChannelMetricTop)
         expect(globalY).toBeLessThan(cardBottom)
         expect(globalY).toBeLessThan(geometry.actors.sender.title.y)
         expect(placement.anchor).toBe('start')
@@ -248,7 +248,7 @@ describe('responsive pipeline geometry', () => {
     },
   )
 
-  it('owns monotonic portrait pipe routes with queue-style rounded bends', () => {
+  it('owns monotonic portrait pipe routes with channel-style rounded bends', () => {
     const geometry = createPipelineGeometry({
       orientation: 'portrait',
       readerWorkers: 7,
@@ -331,13 +331,13 @@ afterAll(() => {
   styleElement.remove()
 })
 
-function activeQueue<TQueue extends QueueTelemetrySnapshot>(
-  queue: TQueue,
+function activeChannel<TChannel extends ChannelTelemetrySnapshot>(
+  channel: TChannel,
   applied: number,
   candidate: number | null,
-): TQueue {
+): TChannel {
   return {
-    ...queue,
+    ...channel,
     depthBatches: Math.min(applied, 4),
     throughputTps: 50_000,
     inputTps: 50_000,
@@ -346,10 +346,10 @@ function activeQueue<TQueue extends QueueTelemetrySnapshot>(
     outputTransactionsPerSecond: 50_000,
     inputBatchesPerSecond: 10,
     outputBatchesPerSecond: 10,
-    enqueuedBatchesTotal: 20,
-    dequeuedBatchesTotal: 18,
+    sentBatchesTotal: 20,
+    receivedBatchesTotal: 18,
     capacity: {
-      ...queue.capacity,
+      ...channel.capacity,
       applied,
       preview: candidate,
       pending: candidate,
@@ -367,10 +367,10 @@ function activeSnapshot(): LoadgenSnapshot {
     reader: { ...base.reader, state: 'running' },
     throttler: { ...base.throttler, state: 'running' },
     sender: { ...base.sender, state: 'running' },
-    queue1: activeQueue(base.queue1, 10, 0),
-    queue2: activeQueue(base.queue2, 160, 50),
+    readerChannel: activeChannel(base.readerChannel, 10, 0),
+    senderChannel: activeChannel(base.senderChannel, 160, 50),
   }
-  return new QueueFlowStateDeriver().derive(telemetry, 0)
+  return new ChannelFlowStateDeriver().derive(telemetry, 0)
 }
 
 function renderPipeline(
@@ -390,7 +390,7 @@ function renderPipeline(
       selectedId={null}
       onSelect={vi.fn()}
       onWorkerCountChange={vi.fn()}
-      onQueueCapacityChange={vi.fn()}
+      onChannelCapacityChange={vi.fn()}
       requestedTpsPreview={null}
       onRequestedTpsPreviewChange={vi.fn()}
       onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
@@ -450,7 +450,7 @@ function pipelineElement(snapshot: LoadgenSnapshot) {
       selectedId={null}
       onSelect={vi.fn()}
       onWorkerCountChange={vi.fn()}
-      onQueueCapacityChange={vi.fn()}
+      onChannelCapacityChange={vi.fn()}
       requestedTpsPreview={null}
       onRequestedTpsPreviewChange={vi.fn()}
       onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
@@ -469,7 +469,7 @@ describe('PipelineSvg marker wiring', () => {
       runState: 'idle' | 'running' | 'paused',
       readTps: number,
     ) =>
-      new QueueFlowStateDeriver().derive({
+      new ChannelFlowStateDeriver().derive({
         ...base,
         adapterKind,
         runState,
@@ -573,24 +573,24 @@ describe('PipelineSvg marker wiring', () => {
         expect(ports).toEqual(actorCase.ports)
       }
 
-      const queuePaths = Object.values(geometry.queues).map((queue) => {
+      const channelPaths = Object.values(geometry.channels).map((channel) => {
         const group = view.container.querySelector(
-          `#queue-${
-            queue === geometry.queues['reader-to-throttler']
+          `#channel-${
+            channel === geometry.channels['reader-to-throttler']
               ? 'reader-to-throttler'
               : 'throttler-to-sender'
           }`,
         )!
         const paths = [...group.querySelectorAll<SVGPathElement>(
-          '.pipeline-queue-cable, .pipeline-queue-requested-cable',
+          '.pipeline-channel-cable, .pipeline-channel-requested-cable',
         )]
 
         expect(paths.length).toBeGreaterThan(0)
         for (const path of paths) {
           expect(path.getAttribute('d'))
-            .toMatch(new RegExp(`^M${queue.start.x} ${queue.start.y}\\b`))
+            .toMatch(new RegExp(`^M${channel.start.x} ${channel.start.y}\\b`))
           expect(path.getAttribute('d'))
-            .toMatch(new RegExp(`H${queue.end.x}$`))
+            .toMatch(new RegExp(`H${channel.end.x}$`))
         }
 
         return paths.map((path) => path.getAttribute('d'))
@@ -605,7 +605,7 @@ describe('PipelineSvg marker wiring', () => {
       const endpointInventory = {
         readerPorts: actorCases[0].ports,
         senderPorts: actorCases[1].ports,
-        queuePaths,
+        channelPaths,
         httpPath: httpPath.getAttribute('d'),
       }
       if (stableEndpointInventory === null) {
@@ -621,7 +621,7 @@ describe('PipelineSvg marker wiring', () => {
         view.container.querySelector('#reader-actor')!,
       ))
       expect(svgChildren.indexOf(
-        view.container.querySelector('#queue-throttler-to-sender')!,
+        view.container.querySelector('#channel-throttler-to-sender')!,
       )).toBeLessThan(svgChildren.indexOf(
         view.container.querySelector('#sender-actor')!,
       ))
@@ -766,9 +766,9 @@ describe('PipelineSvg marker wiring', () => {
           expect(placement.x).toBeGreaterThan(throttler.ports.output.x)
           expect(Math.min(
             ...Object.values(
-              geometry.queues['throttler-to-sender'].metrics,
+              geometry.channels['throttler-to-sender'].metrics,
             ).filter((value): value is number => value !== 350)
-              .map((queueY) => Math.abs(placement.y - queueY)),
+              .map((channelY) => Math.abs(placement.y - channelY)),
           )).toBeGreaterThanOrEqual(24)
           expect(placement.y).toBeLessThan(actorGeometry.sender.title.y)
           expect(placement.y).toBeLessThan(throttlerBottom)
@@ -868,27 +868,27 @@ describe('PipelineSvg marker wiring', () => {
     }
   })
 
-  it('projects the unified marker pool onto applied queue paths', () => {
+  it('projects the unified marker pool onto applied channel paths', () => {
     const snapshot = activeSnapshot()
     const telemetry = markerTelemetryFromSnapshot(snapshot, false)
     const { container } = renderPipeline(snapshot)
     const cases = [
-      { queue: snapshot.queue1, stage: 'queue1' as const },
-      { queue: snapshot.queue2, stage: 'queue2' as const },
+      { channel: snapshot.readerChannel, stage: 'readerChannel' as const },
+      { channel: snapshot.senderChannel, stage: 'senderChannel' as const },
     ] as const
 
     for (const testCase of cases) {
-      const queueGroup = container.querySelector(`#queue-${testCase.queue.id}`)!
-      const cable = queueGroup.querySelector<SVGPathElement>('.pipeline-queue-cable')!
+      const channelGroup = container.querySelector(`#channel-${testCase.channel.id}`)!
+      const cable = channelGroup.querySelector<SVGPathElement>('.pipeline-channel-cable')!
       const markers = [...container.querySelectorAll<SVGCircleElement>(
         `.pipeline-marker[data-marker-stage="${testCase.stage}"]`,
       )]
       const path = cable.getAttribute('d')!
-      const geometry = getQueueMarkerPathGeometry(
-        testCase.queue.id,
-        testCase.queue.capacity,
+      const geometry = getChannelMarkerPathGeometry(
+        testCase.channel.id,
+        testCase.channel.capacity,
       )
-      const endpoints = QUEUE_CABLE_ENDPOINTS[testCase.queue.id]
+      const endpoints = CHANNEL_CABLE_ENDPOINTS[testCase.channel.id]
 
       expect(path).toBe(geometry.cablePath)
       expect(path.startsWith(`M${endpoints.start.x} ${endpoints.start.y}`))
@@ -911,20 +911,20 @@ describe('PipelineSvg marker wiring', () => {
       .toBe(true)
   })
 
-  it('keeps marker ownership outside QueueCable and removes request UI after apply', () => {
+  it('keeps marker ownership outside ChannelCable and removes request UI after apply', () => {
     const pending = activeSnapshot()
     const view = renderPipeline(pending)
 
-    for (const queue of [pending.queue1, pending.queue2]) {
-      const queueGroup = view.container.querySelector(`#queue-${queue.id}`)!
-      const cable = queueGroup.querySelector('.pipeline-queue-cable')!
-      const appliedLabel = queueGroup.querySelector('.pipeline-queue-capacity-applied')!
-      const metrics = [...queueGroup.querySelectorAll('.pipeline-queue-metric')]
-      const slider = queueGroup.querySelector('.pipeline-queue-handle')!
-      const children = [...queueGroup.children]
+    for (const channel of [pending.readerChannel, pending.senderChannel]) {
+      const channelGroup = view.container.querySelector(`#channel-${channel.id}`)!
+      const cable = channelGroup.querySelector('.pipeline-channel-cable')!
+      const appliedLabel = channelGroup.querySelector('.pipeline-channel-capacity-applied')!
+      const metrics = [...channelGroup.querySelectorAll('.pipeline-channel-metric')]
+      const slider = channelGroup.querySelector('.pipeline-channel-handle')!
+      const children = [...channelGroup.children]
 
-      expect(queueGroup.querySelector('.pipeline-queue-requested-cable')).toBeNull()
-      expect(queueGroup.querySelector('.pipeline-marker')).toBeNull()
+      expect(channelGroup.querySelector('.pipeline-channel-requested-cable')).toBeNull()
+      expect(channelGroup.querySelector('.pipeline-marker')).toBeNull()
       expect(children.indexOf(cable)).toBeLessThan(children.indexOf(appliedLabel))
       expect(children.indexOf(appliedLabel)).toBeLessThan(
         children.indexOf(metrics[0]),
@@ -936,8 +936,8 @@ describe('PipelineSvg marker wiring', () => {
 
     const applied = {
       ...pending,
-      queue1: activeQueue(pending.queue1, 0, null),
-      queue2: activeQueue(pending.queue2, 50, null),
+      readerChannel: activeChannel(pending.readerChannel, 0, null),
+      senderChannel: activeChannel(pending.senderChannel, 50, null),
     }
     view.rerender(
       <PipelineSvg
@@ -945,7 +945,7 @@ describe('PipelineSvg marker wiring', () => {
         selectedId={null}
         onSelect={vi.fn()}
         onWorkerCountChange={vi.fn()}
-        onQueueCapacityChange={vi.fn()}
+        onChannelCapacityChange={vi.fn()}
         requestedTpsPreview={null}
         onRequestedTpsPreviewChange={vi.fn()}
         onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
@@ -953,11 +953,11 @@ describe('PipelineSvg marker wiring', () => {
       />,
     )
 
-    for (const queue of [applied.queue1, applied.queue2]) {
-      const queueGroup = view.container.querySelector(`#queue-${queue.id}`)!
-      expect(queueGroup.querySelector('.pipeline-queue-requested-cable')).toBeNull()
-      expect(queueGroup.querySelector('.pipeline-queue-capacity-applied')).toBeNull()
-      expect(queueGroup.querySelector('.pipeline-queue-capacity-status')).toBeNull()
+    for (const channel of [applied.readerChannel, applied.senderChannel]) {
+      const channelGroup = view.container.querySelector(`#channel-${channel.id}`)!
+      expect(channelGroup.querySelector('.pipeline-channel-requested-cable')).toBeNull()
+      expect(channelGroup.querySelector('.pipeline-channel-capacity-applied')).toBeNull()
+      expect(channelGroup.querySelector('.pipeline-channel-capacity-status')).toBeNull()
     }
   })
 
@@ -974,7 +974,7 @@ describe('PipelineSvg marker wiring', () => {
         state: 'retiring',
         stage: 'target',
         phase: 0.008,
-        queued: false,
+        buffered: false,
         outcome: null,
         outcomeVisible: false,
         pulseProgress: 0,
@@ -1036,8 +1036,8 @@ describe('PipelineSvg marker wiring', () => {
     const base = activeSnapshot()
     const moving: LoadgenSnapshot = {
       ...base,
-      queue1: { ...base.queue1, throughputTps: 250_000 },
-      queue2: { ...base.queue2, throughputTps: 250_000 },
+      readerChannel: { ...base.readerChannel, throughputTps: 250_000 },
+      senderChannel: { ...base.senderChannel, throughputTps: 250_000 },
     }
     const view = renderPipeline(moving)
     const beforeZero = readVisibleFamilies(view.container)
@@ -1052,8 +1052,8 @@ describe('PipelineSvg marker wiring', () => {
           pending: null,
         },
       },
-      queue1: { ...moving.queue1, throughputTps: 0 },
-      queue2: { ...moving.queue2, throughputTps: 0 },
+      readerChannel: { ...moving.readerChannel, throughputTps: 0 },
+      senderChannel: { ...moving.senderChannel, throughputTps: 0 },
     }
     view.rerender(
       <PipelineSvg
@@ -1061,7 +1061,7 @@ describe('PipelineSvg marker wiring', () => {
         selectedId={null}
         onSelect={vi.fn()}
         onWorkerCountChange={vi.fn()}
-        onQueueCapacityChange={vi.fn()}
+        onChannelCapacityChange={vi.fn()}
         requestedTpsPreview={null}
         onRequestedTpsPreviewChange={vi.fn()}
         onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
@@ -1071,8 +1071,8 @@ describe('PipelineSvg marker wiring', () => {
     const atZero = readVisibleFamilies(view.container)
 
     expect(acceptedZero.throttler.requestedTps.applied).toBe(0)
-    expect(acceptedZero.queue1.throughputTps).toBe(0)
-    expect(acceptedZero.queue2.throughputTps).toBe(0)
+    expect(acceptedZero.readerChannel.throughputTps).toBe(0)
+    expect(acceptedZero.senderChannel.throughputTps).toBe(0)
     expect(atZero).toEqual(beforeZero)
 
     const currentWorkers = acceptedZero.reader.workers.applied ?? 0
@@ -1097,7 +1097,7 @@ describe('PipelineSvg marker wiring', () => {
         selectedId={null}
         onSelect={vi.fn()}
         onWorkerCountChange={vi.fn()}
-        onQueueCapacityChange={vi.fn()}
+        onChannelCapacityChange={vi.fn()}
         requestedTpsPreview={null}
         onRequestedTpsPreviewChange={vi.fn()}
         onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
@@ -1115,8 +1115,8 @@ describe('PipelineSvg marker wiring', () => {
       throughputTps: number,
     ): LoadgenSnapshot => ({
       ...snapshot,
-      queue1: { ...snapshot.queue1, throughputTps },
-      queue2: { ...snapshot.queue2, throughputTps },
+      readerChannel: { ...snapshot.readerChannel, throughputTps },
+      senderChannel: { ...snapshot.senderChannel, throughputTps },
     })
     const readActiveFlow = (container: HTMLElement) => new Map(
       [...container.querySelectorAll<SVGCircleElement>(
@@ -1141,7 +1141,7 @@ describe('PipelineSvg marker wiring', () => {
           selectedId={null}
           onSelect={vi.fn()}
           onWorkerCountChange={vi.fn()}
-          onQueueCapacityChange={vi.fn()}
+          onChannelCapacityChange={vi.fn()}
           requestedTpsPreview={null}
           onRequestedTpsPreviewChange={vi.fn()}
           onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
@@ -1152,13 +1152,13 @@ describe('PipelineSvg marker wiring', () => {
       const survivors = [...after].filter(([familyId]) => before.has(familyId))
 
       expect(after.size).toBe(
-        getQueueDepthFamilyTarget(
-          snapshot.queue1.depthBatches,
-          snapshot.queue1.capacity.applied ?? 0,
+        getChannelDepthFamilyTarget(
+          snapshot.readerChannel.depthBatches,
+          snapshot.readerChannel.capacity.applied ?? 0,
         ) +
-          getQueueDepthFamilyTarget(
-            snapshot.queue2.depthBatches,
-            snapshot.queue2.capacity.applied ?? 0,
+          getChannelDepthFamilyTarget(
+            snapshot.senderChannel.depthBatches,
+            snapshot.senderChannel.capacity.applied ?? 0,
           ) +
           getFlowMarkerTarget(throughputTps),
       )
@@ -1243,11 +1243,11 @@ describe('PipelineSvg marker wiring', () => {
     const base = activeSnapshot()
     const snapshot: LoadgenSnapshot = {
       ...base,
-      queue1: {
-        ...base.queue1,
+      readerChannel: {
+        ...base.readerChannel,
         depthBatches: 12,
         capacity: {
-          ...base.queue1.capacity,
+          ...base.readerChannel.capacity,
           applied: 12,
           preview: 0,
           pending: 0,
@@ -1269,7 +1269,7 @@ describe('PipelineSvg marker wiring', () => {
       state: 'active' as const,
       stage: 'throttler' as const,
       phase: 0.3 - index * 0.01,
-      queued: true,
+      buffered: true,
       outcome: null,
       outcomeVisible: false,
       pulseProgress: 0,
@@ -1345,7 +1345,7 @@ describe('PipelineSvg marker wiring', () => {
         <PipelineMarkers
           snapshot={{
             ...withoutCandidate,
-            queue1: { ...withoutCandidate.queue1, depthBatches: 3 },
+            readerChannel: { ...withoutCandidate.readerChannel, depthBatches: 3 },
           }}
           markers={{ ...markerSnapshot, revision: 4, motionElapsedMs: 500 }}
         />
@@ -1374,7 +1374,7 @@ describe('PipelineSvg marker wiring', () => {
     )).toBe(true)
   })
 
-  it('keeps one uniform vacuum and an empty green q2 projection at drain end', () => {
+  it('keeps one uniform vacuum and an empty green senderChannel projection at drain end', () => {
     const base = activeSnapshot()
     const drained: LoadgenSnapshot = {
       ...base,
@@ -1387,15 +1387,15 @@ describe('PipelineSvg marker wiring', () => {
           pending: 225_000,
         },
       },
-      queue1: {
-        ...base.queue1,
+      readerChannel: {
+        ...base.readerChannel,
         depthBatches: 0,
         throughputTps: 0,
         flowState: 'normal',
         displayedPressure: 0,
       },
-      queue2: {
-        ...base.queue2,
+      senderChannel: {
+        ...base.senderChannel,
         depthBatches: 0,
         throughputTps: 0,
         flowState: 'normal',
@@ -1409,12 +1409,12 @@ describe('PipelineSvg marker wiring', () => {
     expect(vacuum.dataset.vacuumFill).toBe('uniform')
     expect(vacuum.getAttribute('fill')).toBe('#03111f')
     expect(view.container.querySelectorAll(
-      '.pipeline-marker[data-marker-stage="queue2"][visibility="visible"]',
+      '.pipeline-marker[data-marker-stage="senderChannel"][visibility="visible"]',
     )).toHaveLength(0)
-    const q2 = view.container.querySelector<SVGGElement>(
-      '#queue-throttler-to-sender',
+    const senderChannel = view.container.querySelector<SVGGElement>(
+      '#channel-throttler-to-sender',
     )!
-    expect(q2.style.getPropertyValue('--pipeline-queue-pressure-color'))
+    expect(senderChannel.style.getPropertyValue('--pipeline-channel-pressure-color'))
       .toBe('#79d957')
   })
 
@@ -1422,8 +1422,8 @@ describe('PipelineSvg marker wiring', () => {
     const base = activeSnapshot()
     const rendezvous: LoadgenSnapshot = {
       ...base,
-      queue1: {
-        ...base.queue1,
+      readerChannel: {
+        ...base.readerChannel,
         depthBatches: 0,
         throughputTps: 0,
         blockedSenders: 1,
@@ -1431,14 +1431,14 @@ describe('PipelineSvg marker wiring', () => {
         displayedPressure: 1,
         flowState: 'backpressure',
         capacity: {
-          ...base.queue1.capacity,
+          ...base.readerChannel.capacity,
           applied: 0,
           preview: 12,
           pending: 12,
         },
       },
-      queue2: {
-        ...base.queue2,
+      senderChannel: {
+        ...base.senderChannel,
         depthBatches: 0,
         throughputTps: 0,
         displayedPressure: 0,
@@ -1446,41 +1446,41 @@ describe('PipelineSvg marker wiring', () => {
       },
     }
     const view = renderPipeline(rendezvous)
-    const q1 = view.container.querySelector<SVGGElement>(
-      '#queue-reader-to-throttler',
+    const readerChannel = view.container.querySelector<SVGGElement>(
+      '#channel-reader-to-throttler',
     )!
 
-    expect(q1.style.getPropertyValue('--pipeline-queue-pressure-color'))
+    expect(readerChannel.style.getPropertyValue('--pipeline-channel-pressure-color'))
       .toBe('#ff6748')
     expect(view.container.querySelectorAll(
-      '.pipeline-marker[data-marker-stage="queue1"][visibility="visible"]',
+      '.pipeline-marker[data-marker-stage="readerChannel"][visibility="visible"]',
     )).toHaveLength(0)
   })
 
-  it('keeps valve flow color owned by upstream queue1', () => {
+  it('keeps valve flow color owned by upstream readerChannel', () => {
     const base = activeSnapshot()
     const snapshot: LoadgenSnapshot = {
       ...base,
-      queue1: {
-        ...base.queue1,
+      readerChannel: {
+        ...base.readerChannel,
         displayedPressure: 0,
         flowState: 'normal',
       },
-      queue2: {
-        ...base.queue2,
+      senderChannel: {
+        ...base.senderChannel,
         displayedPressure: 1,
         flowState: 'backpressure',
       },
     }
     const view = renderPipeline(snapshot)
     const valve = view.container.querySelector<SVGGElement>('#throttler-actor')!
-    const q2 = view.container.querySelector<SVGGElement>(
-      '#queue-throttler-to-sender',
+    const senderChannel = view.container.querySelector<SVGGElement>(
+      '#channel-throttler-to-sender',
     )!
 
     expect(valve.style.getPropertyValue('--pipeline-valve-flow-color'))
       .toBe('#79d957')
-    expect(q2.style.getPropertyValue('--pipeline-queue-pressure-color'))
+    expect(senderChannel.style.getPropertyValue('--pipeline-channel-pressure-color'))
       .toBe('#ff6748')
   })
 
@@ -1496,10 +1496,10 @@ describe('PipelineSvg marker wiring', () => {
 
     expect(svg.getAttribute('viewBox')).toBe(geometry.viewBox.value)
     expect(svg.dataset.layout).toBe('portrait')
-    for (const queue of [snapshot.queue1, snapshot.queue2]) {
-      const endpoints = geometry.queues[queue.id]
+    for (const channel of [snapshot.readerChannel, snapshot.senderChannel]) {
+      const endpoints = geometry.channels[channel.id]
       const cable = view.container.querySelector<SVGPathElement>(
-        `#queue-${queue.id} .pipeline-queue-cable`,
+        `#channel-${channel.id} .pipeline-channel-cable`,
       )!
       expect(cable.getAttribute('d')?.startsWith(
         `M${endpoints.start.x} ${endpoints.start.y}`,
@@ -1571,7 +1571,7 @@ describe('PipelineSvg marker wiring', () => {
     )?.getAttribute('data-detached-anchor')).toBe('550 342')
   })
 
-  it('follows the resolved layout class for queue handle cursors', () => {
+  it('follows the resolved layout class for channel handle cursors', () => {
     const snapshot = activeSnapshot()
     const cases = [
       {
@@ -1590,7 +1590,7 @@ describe('PipelineSvg marker wiring', () => {
       const view = renderPipeline(snapshot, testCase.orientation)
       const svg = view.container.querySelector('svg')!
       const slider = view.container.querySelector<SVGGElement>(
-        '.pipeline-queue-handle',
+        '.pipeline-channel-handle',
       )!
 
       expect(svg.classList).toContain(
@@ -1604,21 +1604,21 @@ describe('PipelineSvg marker wiring', () => {
 
     const unavailableSnapshot: LoadgenSnapshot = {
       ...snapshot,
-      queue1: {
-        ...snapshot.queue1,
+      readerChannel: {
+        ...snapshot.readerChannel,
         capacity: {
-          ...snapshot.queue1.capacity,
+          ...snapshot.readerChannel.capacity,
           applyMode: 'unavailable',
         },
       },
     }
     const unavailableView = renderPipeline(unavailableSnapshot, 'portrait')
     const disabledSlider = unavailableView.container.querySelector<SVGGElement>(
-      '#queue-reader-to-throttler .pipeline-queue-handle',
+      '#channel-reader-to-throttler .pipeline-channel-handle',
     )!
 
     expect(disabledSlider.classList)
-      .toContain('pipeline-queue-handle--disabled')
+      .toContain('pipeline-channel-handle--disabled')
     expect(getComputedStyle(disabledSlider).cursor).toBe('default')
   })
 
@@ -1626,8 +1626,8 @@ describe('PipelineSvg marker wiring', () => {
     const base = activeSnapshot()
     const snapshot: LoadgenSnapshot = {
       ...base,
-      queue1: {
-        ...base.queue1,
+      readerChannel: {
+        ...base.readerChannel,
         blockedSenders: 3,
         oldestBlockedSenderMs: 1_250,
       },
@@ -1649,16 +1649,16 @@ describe('PipelineSvg marker wiring', () => {
     assertTypography('#reader-actor .pipeline-worker-secondary', '12px', '600')
     assertTypography('#target-actor .pipeline-target-primary', '15px', '650')
     assertTypography('#target-actor .pipeline-target-secondary', '12px', '600')
-    assertTypography('.pipeline-queue-metric.pipeline-small-strong', '15px', '700')
-    assertTypography('.pipeline-queue-metric.pipeline-small', '13px', '600')
-    assertTypography('.pipeline-queue-wait-status', '12px', '700')
-    assertTypography('.pipeline-queue-capacity-status', '12px', '700')
+    assertTypography('.pipeline-channel-metric.pipeline-small-strong', '15px', '700')
+    assertTypography('.pipeline-channel-metric.pipeline-small', '13px', '600')
+    assertTypography('.pipeline-channel-wait-status', '12px', '700')
+    assertTypography('.pipeline-channel-capacity-status', '12px', '700')
     assertTypography('.pipeline-http-status', '14px', '700')
     assertTypography('.pipeline-http-throughput', '13px', '650')
     assertTypography('.pipeline-http-detail', '12px', '600')
     assertTypography('#requested-display', '14px', '650')
     assertTypography('.pipeline-valve-opening-label', '13px', '800')
-    assertTypography('.pipeline-queue-handle__value', '11px', '750')
+    assertTypography('.pipeline-channel-handle__value', '11px', '750')
   })
 
   it.each(['landscape', 'portrait'] as const)(
@@ -1825,7 +1825,7 @@ describe('PipelineSvg marker wiring', () => {
         state: 'active',
         stage: 'target',
         phase: 1,
-        queued: false,
+        buffered: false,
         outcome: 'error',
         outcomeVisible: true,
         pulseProgress: 0.8,
@@ -1941,8 +1941,8 @@ describe('PipelineSvg marker wiring', () => {
     const landscapeMetrics = [...landscape.container.querySelectorAll(
       '#http-link text',
     )]
-    const queueTopRow = landscape.container.querySelector(
-      '#queue-throttler-to-sender .pipeline-queue-metric',
+    const channelTopRow = landscape.container.querySelector(
+      '#channel-throttler-to-sender .pipeline-channel-metric',
     )!
     const senderTopRow = landscape.container.querySelector(
       '#sender-actor .pipeline-value',
@@ -1951,7 +1951,7 @@ describe('PipelineSvg marker wiring', () => {
     expect(landscapeMetrics.map((metric) => metric.getAttribute('y')))
       .toEqual(['507', '528', '549'])
     expect(landscapeMetrics[0].getAttribute('y'))
-      .toBe(queueTopRow.getAttribute('y'))
+      .toBe(channelTopRow.getAttribute('y'))
     expect(Math.abs(
       Number(landscapeMetrics[0].getAttribute('y')) -
       Number(senderTopRow.getAttribute('y')),

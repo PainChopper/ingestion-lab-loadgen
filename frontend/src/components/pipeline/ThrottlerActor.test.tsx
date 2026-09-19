@@ -5,11 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
   NumericControlSnapshot,
-  QueueSnapshot,
+  ChannelSnapshot,
   SelectableId,
   ThrottlerInstallationMode,
 } from '../../model/loadgen'
-import { QueueFlowStateDeriver } from '../../model/queueFlowState'
+import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import { createPipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { ThrottlerActor } from './ThrottlerActor'
@@ -35,7 +35,7 @@ function Harness({
   accepted = true,
   onCommand = vi.fn(),
   onSelect = vi.fn(),
-  queueOverrides = {},
+  channelOverrides = {},
   installationMode = 'installed',
   pendingInstallationMode = null,
   modeAccepted = true,
@@ -46,7 +46,7 @@ function Harness({
   accepted?: boolean
   onCommand?: (value: number) => void
   onSelect?: (id: SelectableId) => void
-  queueOverrides?: Partial<QueueSnapshot>
+  channelOverrides?: Partial<ChannelSnapshot>
   installationMode?: ThrottlerInstallationMode
   pendingInstallationMode?: ThrottlerInstallationMode | null
   modeAccepted?: boolean
@@ -54,7 +54,7 @@ function Harness({
   orientation?: PipelineOrientation
 }) {
   const adapter = new SimulationAdapter()
-  const snapshot = new QueueFlowStateDeriver().derive(adapter.getSnapshot(), 0)
+  const snapshot = new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0)
   adapter.dispose()
   const [preview, setPreview] = useState<number | null>(null)
   const geometry = createPipelineGeometry({
@@ -75,7 +75,7 @@ function Harness({
             pending: pendingInstallationMode,
           },
         }}
-        upstreamQueue={{ ...snapshot.queue1, ...queueOverrides }}
+        upstreamChannel={{ ...snapshot.readerChannel, ...channelOverrides }}
         previewTps={preview}
         selected={false}
         onSelect={onSelect}
@@ -518,7 +518,7 @@ describe('ThrottlerActor valve control', () => {
     const view = render(
       <Harness
         control={requestedControl({ applied: 0, preview: 250_000, pending: 225_000 })}
-        queueOverrides={{ flowState: 'normal', displayedPressure: 0 }}
+        channelOverrides={{ flowState: 'normal', displayedPressure: 0 }}
       />,
     )
     const connectors = [...view.container.querySelectorAll(
@@ -543,7 +543,7 @@ describe('ThrottlerActor valve control', () => {
     view.rerender(
       <Harness
         control={requestedControl({ applied: 0, preview: 250_000, pending: 225_000 })}
-        queueOverrides={{ flowState: 'backpressure', displayedPressure: 1 }}
+        channelOverrides={{ flowState: 'backpressure', displayedPressure: 1 }}
       />,
     )
     expect(actor.style.getPropertyValue('--pipeline-valve-flow-color'))

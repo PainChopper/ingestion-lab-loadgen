@@ -5,21 +5,21 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
-import type { LoadgenSnapshot, QueueSnapshot } from '../../model/loadgen'
+import type { LoadgenSnapshot, ChannelSnapshot } from '../../model/loadgen'
 import {
   MarkerLifecycleController,
 } from './markerLifecycle'
 import type {
   MarkerLifecycleSnapshot,
   MarkerLifecycleTelemetry,
-  QueueMarkerTelemetry,
+  ChannelMarkerTelemetry,
 } from './markerLifecycle'
 import {
   getMarkerStagePathGeometry,
   getValveMarkerPathGeometry,
 } from './markerPaths'
 import type { MarkerStage } from './markerLifecycle'
-import { getQueueCapacityPresentation } from './queueCableGeometry'
+import { getChannelCapacityPresentation } from './channelCableGeometry'
 import { effectiveValveOpeningIndex } from './throttlerValve'
 import {
   createPipelineGeometry,
@@ -43,7 +43,7 @@ function usePrefersReducedMotion(): boolean {
   return reducedMotion
 }
 
-function queueDequeueActive(snapshot: QueueSnapshot): boolean {
+function channelReceiveActive(snapshot: ChannelSnapshot): boolean {
   if (
     snapshot.flowState === 'stopped' ||
     snapshot.flowState === 'connection-error'
@@ -54,17 +54,17 @@ function queueDequeueActive(snapshot: QueueSnapshot): boolean {
   return snapshot.throughputTps !== null && snapshot.throughputTps > 0
 }
 
-function queueTelemetry(snapshot: QueueSnapshot): QueueMarkerTelemetry {
+function channelTelemetry(snapshot: ChannelSnapshot): ChannelMarkerTelemetry {
   return {
     id: snapshot.id,
     depthBatches: snapshot.depthBatches,
-    appliedCapacity: getQueueCapacityPresentation(snapshot.capacity).applied,
+    appliedCapacity: getChannelCapacityPresentation(snapshot.capacity).applied,
     throughputTps: snapshot.throughputTps,
-    dequeueActive: queueDequeueActive(snapshot),
+    receiveActive: channelReceiveActive(snapshot),
     blocked:
       snapshot.flowState === 'backpressure' || snapshot.blockedSenders > 0,
-    enqueuedBatchesTotal: snapshot.enqueuedBatchesTotal,
-    dequeuedBatchesTotal: snapshot.dequeuedBatchesTotal,
+    sentBatchesTotal: snapshot.sentBatchesTotal,
+    receivedBatchesTotal: snapshot.receivedBatchesTotal,
   }
 }
 
@@ -88,9 +88,9 @@ export function markerTelemetryFromSnapshot(
   )
   const stages: readonly MarkerStage[] = [
     'reader',
-    'queue1',
+    'readerChannel',
     'throttler',
-    'queue2',
+    'senderChannel',
     'sender',
     'http',
     'target',
@@ -99,8 +99,8 @@ export function markerTelemetryFromSnapshot(
     stage,
     getMarkerStagePathGeometry(
       stage,
-      snapshot.queue1.capacity,
-      snapshot.queue2.capacity,
+      snapshot.readerChannel.capacity,
+      snapshot.senderChannel.capacity,
       valveOpeningIndex,
       resolvedGeometry,
     ).length,
@@ -112,8 +112,8 @@ export function markerTelemetryFromSnapshot(
     valveOpeningIndex,
     valvePreAdmissionStopPhase: valveGeometry.preAdmissionStopPhase,
     valveExitPhase: valveGeometry.exitPhase,
-    queue1: queueTelemetry(snapshot.queue1),
-    queue2: queueTelemetry(snapshot.queue2),
+    readerChannel: channelTelemetry(snapshot.readerChannel),
+    senderChannel: channelTelemetry(snapshot.senderChannel),
     http: {
       inFlightRequests: snapshot.http.inFlightRequests ?? 0,
       requestsStartedTotal: snapshot.http.requestsStartedTotal,

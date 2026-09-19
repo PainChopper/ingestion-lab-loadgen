@@ -6,15 +6,15 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
-import type { QueueSnapshot, SelectableId } from '../../model/loadgen'
-import { QueueFlowStateDeriver } from '../../model/queueFlowState'
-import { QUEUE_CABLE_ENDPOINTS } from './geometry'
+import type { ChannelSnapshot, SelectableId } from '../../model/loadgen'
+import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
+import { CHANNEL_CABLE_ENDPOINTS } from './geometry'
 import {
-  buildQueueCablePath,
+  buildChannelCablePath,
   capacityToCableY,
-  QUEUE_CABLE_MAX_LIFT,
-} from './queueCableGeometry'
-import { QueueCable } from './QueueCable'
+  CHANNEL_CABLE_MAX_LIFT,
+} from './channelCableGeometry'
+import { ChannelCable } from './ChannelCable'
 
 const styleElement = document.createElement('style')
 const pipelineStyles = readFileSync(
@@ -32,19 +32,19 @@ afterAll(() => {
 })
 
 function derivedSnapshot(adapter: SimulationAdapter) {
-  return new QueueFlowStateDeriver().derive(adapter.getSnapshot(), 0)
+  return new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0)
 }
 
-function queueSnapshot(
-  queue: QueueSnapshot,
+function channelSnapshot(
+  channel: ChannelSnapshot,
   applied: number,
   candidate: number | null = null,
-): QueueSnapshot {
+): ChannelSnapshot {
   return {
-    ...queue,
+    ...channel,
     depthBatches: applied,
     capacity: {
-      ...queue.capacity,
+      ...channel.capacity,
       applied,
       preview: candidate,
       pending: candidate,
@@ -53,17 +53,17 @@ function queueSnapshot(
 }
 
 function renderCable(
-  snapshot: QueueSnapshot,
+  snapshot: ChannelSnapshot,
   options: {
     onSelect?: (id: SelectableId) => void
-    onCapacityChange?: (id: QueueSnapshot['id'], value: number) => void
+    onCapacityChange?: (id: ChannelSnapshot['id'], value: number) => void
     capacityValues?: readonly number[]
   } = {},
 ) {
-  const endpoints = QUEUE_CABLE_ENDPOINTS[snapshot.id]
+  const endpoints = CHANNEL_CABLE_ENDPOINTS[snapshot.id]
   return render(
     <svg viewBox="0 0 1100 640">
-      <QueueCable
+      <ChannelCable
         snapshot={snapshot}
         start={endpoints.start}
         end={endpoints.end}
@@ -99,7 +99,7 @@ function pathApexY(path: string): number {
     /Q-?\d+(?:\.\d+)? (-?\d+(?:\.\d+)?) -?\d+(?:\.\d+)? (-?\d+(?:\.\d+)?)/g,
   )]
   if (quadraticCommands.length === 0) {
-    throw new Error(`expected a lifted queue cable path, received: ${path}`)
+    throw new Error(`expected a lifted channel cable path, received: ${path}`)
   }
 
   return Math.min(...quadraticCommands.flatMap((command) => [
@@ -120,14 +120,14 @@ function translatedY(element: Element): number {
   return Number(match[1])
 }
 
-describe('QueueCable mounted behavior', () => {
-  it('activates only queue1 cable flow from measured queue rates', () => {
+describe('ChannelCable mounted behavior', () => {
+  it('activates only readerChannel cable flow from measured channel rates', () => {
     const adapter = new SimulationAdapter()
-    const queue = derivedSnapshot(adapter).queue1
+    const channel = derivedSnapshot(adapter).readerChannel
     const active = {
-      ...queue,
+      ...channel,
       flowState: 'stopped' as const,
-      capacity: { ...queue.capacity, applied: 0 },
+      capacity: { ...channel.capacity, applied: 0 },
       depthBatches: 0,
       blockedSenders: 0,
       blockedMs: 900,
@@ -136,10 +136,10 @@ describe('QueueCable mounted behavior', () => {
     }
     const activeView = renderCable(active)
     const activeGroup = activeView.container.querySelector(
-      '#queue-reader-to-throttler',
+      '#channel-reader-to-throttler',
     )!
 
-    expect(activeGroup.classList.contains('pipeline-queue--flow-active')).toBe(true)
+    expect(activeGroup.classList.contains('pipeline-channel--flow-active')).toBe(true)
     expect(activeGroup.getAttribute('data-input-active')).toBe('true')
     expect(activeGroup.getAttribute('data-output-active')).toBe('false')
     expect(activeView.container.textContent).not.toContain('Waiting upstream')
@@ -151,25 +151,25 @@ describe('QueueCable mounted behavior', () => {
       outputTransactionsPerSecond: 0,
     })
     const idleGroup = idleView.container.querySelector(
-      '#queue-reader-to-throttler',
+      '#channel-reader-to-throttler',
     )!
-    expect(idleGroup.classList.contains('pipeline-queue--flow-active')).toBe(false)
+    expect(idleGroup.classList.contains('pipeline-channel--flow-active')).toBe(false)
     idleView.unmount()
     adapter.dispose()
   })
 
-  it('uses keyboard capacity steps and bounds for both queue scales', async () => {
+  it('uses keyboard capacity steps and bounds for both channel scales', async () => {
     const user = userEvent.setup()
     const adapter = new SimulationAdapter()
     const snapshot = derivedSnapshot(adapter)
     const cases = [
-      { queue: snapshot.queue1, expected: [5, 9, 0, 12] },
-      { queue: snapshot.queue2, expected: [110, 150, 0, 160] },
+      { channel: snapshot.readerChannel, expected: [5, 9, 0, 12] },
+      { channel: snapshot.senderChannel, expected: [110, 150, 0, 160] },
     ] as const
 
     for (const testCase of cases) {
       const onCapacityChange = vi.fn()
-      const view = renderCable(testCase.queue, { onCapacityChange })
+      const view = renderCable(testCase.channel, { onCapacityChange })
       const slider = screen.getByRole('slider')
 
       await user.click(slider)
@@ -183,11 +183,11 @@ describe('QueueCable mounted behavior', () => {
     adapter.dispose()
   })
 
-  it('shows and selects queue1 HTTP capacities by discrete scale index', async () => {
+  it('shows and selects readerChannel HTTP capacities by discrete scale index', async () => {
     const user = userEvent.setup()
     const adapter = new SimulationAdapter()
-    const source = derivedSnapshot(adapter).queue1
-    const queue = {
+    const source = derivedSnapshot(adapter).readerChannel
+    const channel = {
       ...source,
       capacity: {
         ...source.capacity,
@@ -199,7 +199,7 @@ describe('QueueCable mounted behavior', () => {
       },
     }
     const onCapacityChange = vi.fn()
-    const view = renderCable(queue, {
+    const view = renderCable(channel, {
       onCapacityChange,
       capacityValues: [0, 1, 2, 8, 64, 512, 8_192],
     })
@@ -207,7 +207,7 @@ describe('QueueCable mounted behavior', () => {
 
     expect(slider.textContent).toBe('2')
     expect([...view.container.querySelectorAll(
-      '.pipeline-queue-scale__label',
+      '.pipeline-channel-scale__label',
     )].map((label) => label.textContent)).toEqual(['0', '8', '8,192'])
 
     await user.click(slider)
@@ -221,13 +221,13 @@ describe('QueueCable mounted behavior', () => {
   it('makes both unavailable capacity handles gray and inert', () => {
     const adapter = new SimulationAdapter()
     const snapshot = derivedSnapshot(adapter)
-    const queues = [snapshot.queue1, snapshot.queue2]
+    const channels = [snapshot.readerChannel, snapshot.senderChannel]
 
-    for (const queue of queues) {
+    for (const channel of channels) {
       const onCapacityChange = vi.fn()
       const view = renderCable({
-        ...queue,
-        capacity: { ...queue.capacity, applyMode: 'unavailable' },
+        ...channel,
+        capacity: { ...channel.capacity, applyMode: 'unavailable' },
       }, { onCapacityChange })
       const slider = screen.getByRole('slider')
 
@@ -235,7 +235,7 @@ describe('QueueCable mounted behavior', () => {
       expect(slider.getAttribute('tabindex')).toBe('-1')
       expect(getComputedStyle(slider).color).toBe('var(--muted)')
       expect(getComputedStyle(slider).getPropertyValue(
-        '--pipeline-queue-handle-state-color',
+        '--pipeline-channel-handle-state-color',
       )).toBe('var(--muted)')
 
       fireEvent.pointerDown(slider, {
@@ -255,24 +255,24 @@ describe('QueueCable mounted behavior', () => {
 
   it('lifts a nonzero unavailable fixed capacity without enabling commands', () => {
     const adapter = new SimulationAdapter()
-    const queue = derivedSnapshot(adapter).queue1
+    const channel = derivedSnapshot(adapter).readerChannel
     const onCapacityChange = vi.fn()
-    const fixedQueue = {
-      ...queue,
+    const fixedChannel = {
+      ...channel,
       capacity: {
-        ...queue.capacity,
+        ...channel.capacity,
         applied: 2,
         min: 0,
         max: 2,
         applyMode: 'unavailable' as const,
       },
     }
-    const { container } = renderCable(fixedQueue, { onCapacityChange })
+    const { container } = renderCable(fixedChannel, { onCapacityChange })
     const slider = screen.getByRole('slider')
-    const cable = container.querySelector('.pipeline-queue-cable')!
+    const cable = container.querySelector('.pipeline-channel-cable')!
 
     expect(pathApexY(cable.getAttribute('d')!)).toBeLessThan(
-      QUEUE_CABLE_ENDPOINTS[fixedQueue.id].start.y,
+      CHANNEL_CABLE_ENDPOINTS[fixedChannel.id].start.y,
     )
     expect(slider.getAttribute('aria-disabled')).toBe('true')
     fireEvent.keyDown(slider, { key: 'ArrowUp' })
@@ -282,12 +282,12 @@ describe('QueueCable mounted behavior', () => {
 
   it('shows a local pointer preview and commits the released capacity', () => {
     const adapter = new SimulationAdapter()
-    const queue = queueSnapshot(derivedSnapshot(adapter).queue1, 4)
+    const channel = channelSnapshot(derivedSnapshot(adapter).readerChannel, 4)
     const onCapacityChange = vi.fn()
-    const { container } = renderCable(queue, { onCapacityChange })
+    const { container } = renderCable(channel, { onCapacityChange })
     installSvgCoordinates(container.querySelector('svg')!)
     const slider = screen.getByRole('slider')
-    const solidPath = container.querySelector('.pipeline-queue-cable')!
+    const solidPath = container.querySelector('.pipeline-channel-cable')!
     const appliedPath = solidPath.getAttribute('d')
 
     fireEvent.pointerDown(slider, {
@@ -297,17 +297,17 @@ describe('QueueCable mounted behavior', () => {
     })
     fireEvent.pointerMove(slider, { pointerId: 7, clientY: 260 })
 
-    const ghost = container.querySelector('.pipeline-queue-requested-cable')!
-    const handleBody = slider.querySelector('.pipeline-queue-handle__body')!
-    const handleValue = slider.querySelector('.pipeline-queue-handle__value')!
+    const ghost = container.querySelector('.pipeline-channel-requested-cable')!
+    const handleBody = slider.querySelector('.pipeline-channel-handle__body')!
+    const handleValue = slider.querySelector('.pipeline-channel-handle__value')!
     const requestRing = slider.querySelector(
-      '.pipeline-queue-handle__request-ring',
+      '.pipeline-channel-handle__request-ring',
     )!
     const appliedStyle = getComputedStyle(solidPath)
     const ghostStyle = getComputedStyle(ghost)
     const handleStyle = getComputedStyle(slider)
     expect(ghost).not.toBeNull()
-    expect(ghost.classList).toContain('pipeline-queue-requested-cable--preview')
+    expect(ghost.classList).toContain('pipeline-channel-requested-cable--preview')
     expect(ghostStyle.stroke).toBe('var(--cyan)')
     expect(ghostStyle.strokeWidth).toBe('2px')
     expect(ghostStyle.strokeDasharray).toBe('none')
@@ -316,13 +316,13 @@ describe('QueueCable mounted behavior', () => {
       Number.parseFloat(appliedStyle.strokeWidth),
     )
     expect(handleStyle.getPropertyValue(
-      '--pipeline-queue-handle-state-color',
+      '--pipeline-channel-handle-state-color',
     )).toBe('var(--cyan)')
     expect(getComputedStyle(handleBody).stroke).toBe(
-      'var(--pipeline-queue-handle-state-color)',
+      'var(--pipeline-channel-handle-state-color)',
     )
     expect(getComputedStyle(handleValue).fill).toBe(
-      'var(--pipeline-queue-handle-state-color)',
+      'var(--pipeline-channel-handle-state-color)',
     )
     expect(getComputedStyle(requestRing).stroke).toBe('var(--cyan)')
     expect(getComputedStyle(requestRing).opacity).toBe('1')
@@ -331,8 +331,8 @@ describe('QueueCable mounted behavior', () => {
     expect(slider.getAttribute('aria-valuenow')).toBe('6')
 
     fireEvent.pointerUp(slider, { pointerId: 7, clientY: 260 })
-    expect(onCapacityChange).toHaveBeenCalledWith(queue.id, 6)
-    expect(container.querySelector('.pipeline-queue-requested-cable')).toBeNull()
+    expect(onCapacityChange).toHaveBeenCalledWith(channel.id, 6)
+    expect(container.querySelector('.pipeline-channel-requested-cable')).toBeNull()
     adapter.dispose()
   })
 
@@ -341,13 +341,13 @@ describe('QueueCable mounted behavior', () => {
     const snapshot = derivedSnapshot(adapter)
     const cases = [
       {
-        queue: queueSnapshot(snapshot.queue1, 5),
+        channel: channelSnapshot(snapshot.readerChannel, 5),
         pointerId: 11,
         releaseY: 240,
         expected: 8,
       },
       {
-        queue: queueSnapshot(snapshot.queue2, 30),
+        channel: channelSnapshot(snapshot.senderChannel, 30),
         pointerId: 12,
         releaseY: 285,
         expected: 40,
@@ -356,7 +356,7 @@ describe('QueueCable mounted behavior', () => {
 
     for (const testCase of cases) {
       const onCapacityChange = vi.fn()
-      const view = renderCable(testCase.queue, { onCapacityChange })
+      const view = renderCable(testCase.channel, { onCapacityChange })
       installSvgCoordinates(view.container.querySelector('svg')!)
       const slider = screen.getByRole('slider')
 
@@ -373,7 +373,7 @@ describe('QueueCable mounted behavior', () => {
       expect(slider.getAttribute('aria-valuenow')).toBe(
         String(testCase.expected),
       )
-      expect(slider.classList).toContain('pipeline-queue-handle--preview')
+      expect(slider.classList).toContain('pipeline-channel-handle--preview')
 
       fireEvent.pointerUp(document.body, {
         pointerId: testCase.pointerId,
@@ -389,10 +389,10 @@ describe('QueueCable mounted behavior', () => {
 
       expect(onCapacityChange).toHaveBeenCalledTimes(1)
       expect(onCapacityChange).toHaveBeenCalledWith(
-        testCase.queue.id,
+        testCase.channel.id,
         testCase.expected,
       )
-      expect(slider.classList).not.toContain('pipeline-queue-handle--preview')
+      expect(slider.classList).not.toContain('pipeline-channel-handle--preview')
       view.unmount()
     }
     adapter.dispose()
@@ -400,9 +400,9 @@ describe('QueueCable mounted behavior', () => {
 
   it('cancels on lost capture, pointercancel, and Escape', () => {
     const adapter = new SimulationAdapter()
-    const queue = queueSnapshot(derivedSnapshot(adapter).queue2, 100, 30)
+    const channel = channelSnapshot(derivedSnapshot(adapter).senderChannel, 100, 30)
     const onCapacityChange = vi.fn()
-    const { container } = renderCable(queue, { onCapacityChange })
+    const { container } = renderCable(channel, { onCapacityChange })
     installSvgCoordinates(container.querySelector('svg')!)
     const slider = screen.getByRole('slider')
 
@@ -416,7 +416,7 @@ describe('QueueCable mounted behavior', () => {
         pointerId: 13,
         clientY: 285,
       })
-      expect(slider.classList).toContain('pipeline-queue-handle--preview')
+      expect(slider.classList).toContain('pipeline-channel-handle--preview')
 
       if (terminalEvent === 'lostcapture') {
         fireEvent.lostPointerCapture(slider, { pointerId: 13 })
@@ -428,7 +428,7 @@ describe('QueueCable mounted behavior', () => {
 
       fireEvent.pointerUp(document.body, { pointerId: 13, clientY: 285 })
       expect(onCapacityChange).not.toHaveBeenCalled()
-      expect(slider.classList).not.toContain('pipeline-queue-handle--preview')
+      expect(slider.classList).not.toContain('pipeline-channel-handle--preview')
       expect(slider.getAttribute('aria-valuenow')).toBe('30')
     }
     adapter.dispose()
@@ -436,9 +436,9 @@ describe('QueueCable mounted behavior', () => {
 
   it('removes active drag listeners on unmount', () => {
     const adapter = new SimulationAdapter()
-    const queue = queueSnapshot(derivedSnapshot(adapter).queue2, 100, 30)
+    const channel = channelSnapshot(derivedSnapshot(adapter).senderChannel, 100, 30)
     const onCapacityChange = vi.fn()
-    const view = renderCable(queue, { onCapacityChange })
+    const view = renderCable(channel, { onCapacityChange })
     installSvgCoordinates(view.container.querySelector('svg')!)
     const slider = screen.getByRole('slider')
 
@@ -460,9 +460,9 @@ describe('QueueCable mounted behavior', () => {
 
   it('cancels a pointer candidate without dispatching it', () => {
     const adapter = new SimulationAdapter()
-    const queue = queueSnapshot(derivedSnapshot(adapter).queue1, 4)
+    const channel = channelSnapshot(derivedSnapshot(adapter).readerChannel, 4)
     const onCapacityChange = vi.fn()
-    const { container } = renderCable(queue, { onCapacityChange })
+    const { container } = renderCable(channel, { onCapacityChange })
     installSvgCoordinates(container.querySelector('svg')!)
     const slider = screen.getByRole('slider')
 
@@ -472,11 +472,11 @@ describe('QueueCable mounted behavior', () => {
       clientY: 300,
     })
     fireEvent.pointerMove(slider, { pointerId: 9, clientY: 260 })
-    expect(container.querySelector('.pipeline-queue-requested-cable')).not.toBeNull()
+    expect(container.querySelector('.pipeline-channel-requested-cable')).not.toBeNull()
 
     fireEvent.pointerCancel(slider, { pointerId: 9 })
     expect(onCapacityChange).not.toHaveBeenCalled()
-    expect(container.querySelector('.pipeline-queue-requested-cable')).toBeNull()
+    expect(container.querySelector('.pipeline-channel-requested-cable')).toBeNull()
     expect(slider.getAttribute('aria-valuenow')).toBe('4')
     adapter.dispose()
   })
@@ -485,61 +485,61 @@ describe('QueueCable mounted behavior', () => {
     const adapter = new SimulationAdapter()
     const snapshot = derivedSnapshot(adapter)
     const cases = [
-      { queue: snapshot.queue1, applied: 12, candidate: 5 },
-      { queue: snapshot.queue2, applied: 100, candidate: 30 },
+      { channel: snapshot.readerChannel, applied: 12, candidate: 5 },
+      { channel: snapshot.senderChannel, applied: 100, candidate: 30 },
     ] as const
 
     for (const testCase of cases) {
-      const snapshot = queueSnapshot(
-        testCase.queue,
+      const snapshot = channelSnapshot(
+        testCase.channel,
         testCase.applied,
         testCase.candidate,
       )
-      const endpoints = QUEUE_CABLE_ENDPOINTS[snapshot.id]
+      const endpoints = CHANNEL_CABLE_ENDPOINTS[snapshot.id]
       const appliedY = capacityToCableY(
         testCase.applied,
         snapshot.capacity,
         endpoints.start.y,
-        QUEUE_CABLE_MAX_LIFT,
+        CHANNEL_CABLE_MAX_LIFT,
       )
       const candidateY = capacityToCableY(
         testCase.candidate,
         snapshot.capacity,
         endpoints.start.y,
-        QUEUE_CABLE_MAX_LIFT,
+        CHANNEL_CABLE_MAX_LIFT,
       )
-      const candidatePath = buildQueueCablePath(
+      const candidatePath = buildChannelCablePath(
         endpoints.start,
         endpoints.end,
         candidateY,
       )
       const view = renderCable(snapshot)
-      const queueGroup = view.container.querySelector(`#queue-${snapshot.id}`)!
-      const cable = queueGroup.querySelector('.pipeline-queue-cable')!
-      const appliedLabel = queueGroup.querySelector('.pipeline-queue-capacity-applied')!
-      const metricLabels = [...queueGroup.querySelectorAll('.pipeline-queue-metric')]
-      const slider = queueGroup.querySelector('.pipeline-queue-handle')!
-      const handleBody = slider.querySelector('.pipeline-queue-handle__body')!
-      const handleValue = slider.querySelector('.pipeline-queue-handle__value')!
-      const children = [...queueGroup.children]
+      const channelGroup = view.container.querySelector(`#channel-${snapshot.id}`)!
+      const cable = channelGroup.querySelector('.pipeline-channel-cable')!
+      const appliedLabel = channelGroup.querySelector('.pipeline-channel-capacity-applied')!
+      const metricLabels = [...channelGroup.querySelectorAll('.pipeline-channel-metric')]
+      const slider = channelGroup.querySelector('.pipeline-channel-handle')!
+      const handleBody = slider.querySelector('.pipeline-channel-handle__body')!
+      const handleValue = slider.querySelector('.pipeline-channel-handle__value')!
+      const children = [...channelGroup.children]
       const cableStyle = getComputedStyle(cable)
       const handleStyle = getComputedStyle(slider)
 
       expect(cable.getAttribute('d')).toBe(candidatePath)
-      expect(queueGroup.querySelector('.pipeline-queue-requested-cable')).toBeNull()
+      expect(channelGroup.querySelector('.pipeline-channel-requested-cable')).toBeNull()
       expect(Number.parseFloat(cableStyle.strokeWidth)).toBeGreaterThan(0)
       expect(handleStyle.getPropertyValue(
-        '--pipeline-queue-handle-state-color',
+        '--pipeline-channel-handle-state-color',
       )).toBe('var(--yellow)')
       expect(getComputedStyle(handleBody).stroke).toBe(
-        'var(--pipeline-queue-handle-state-color)',
+        'var(--pipeline-channel-handle-state-color)',
       )
       expect(getComputedStyle(handleValue).fill).toBe(
-        'var(--pipeline-queue-handle-state-color)',
+        'var(--pipeline-channel-handle-state-color)',
       )
       expect(translatedY(slider)).toBe(candidateY)
-      expect(queueGroup.querySelector('.pipeline-queue-markers')).toBeNull()
-      expect(queueGroup.querySelector('.pipeline-marker')).toBeNull()
+      expect(channelGroup.querySelector('.pipeline-channel-markers')).toBeNull()
+      expect(channelGroup.querySelector('.pipeline-marker')).toBeNull()
       expect(appliedLabel.getAttribute('transform')).toBe(
         `translate(${(endpoints.start.x + endpoints.end.x) / 2 - 50} ${appliedY})`,
       )
@@ -561,19 +561,19 @@ describe('QueueCable mounted behavior', () => {
 
   it('removes pending indicators after apply', () => {
     const adapter = new SimulationAdapter()
-    const base = derivedSnapshot(adapter).queue1
-    const pending = queueSnapshot(base, 10, 4)
-    const applied = queueSnapshot(base, 4)
-    const endpoints = QUEUE_CABLE_ENDPOINTS[base.id]
+    const base = derivedSnapshot(adapter).readerChannel
+    const pending = channelSnapshot(base, 10, 4)
+    const applied = channelSnapshot(base, 4)
+    const endpoints = CHANNEL_CABLE_ENDPOINTS[base.id]
     const view = renderCable(pending)
 
-    expect(view.container.querySelector('.pipeline-queue-requested-cable')).toBeNull()
+    expect(view.container.querySelector('.pipeline-channel-requested-cable')).toBeNull()
     expect(screen.getByText('Applied 10')).not.toBeNull()
     expect(screen.getByText('Pending 4 batches')).not.toBeNull()
 
     view.rerender(
       <svg viewBox="0 0 1100 640">
-        <QueueCable
+        <ChannelCable
           snapshot={applied}
           start={endpoints.start}
           end={endpoints.end}
@@ -584,65 +584,65 @@ describe('QueueCable mounted behavior', () => {
       </svg>,
     )
 
-    expect(view.container.querySelector('.pipeline-queue-requested-cable')).toBeNull()
+    expect(view.container.querySelector('.pipeline-channel-requested-cable')).toBeNull()
     expect(screen.queryByText(/Applied 10/)).toBeNull()
     expect(screen.queryByText(/Pending 4 batches/)).toBeNull()
-    expect(view.container.querySelector('.pipeline-queue-cable')?.getAttribute('d'))
-      .toBe(buildQueueCablePath(endpoints.start, endpoints.end, 335))
+    expect(view.container.querySelector('.pipeline-channel-cable')?.getAttribute('d'))
+      .toBe(buildChannelCablePath(endpoints.start, endpoints.end, 335))
     adapter.dispose()
   })
 
-  it('selects the queue by click and Enter', async () => {
+  it('selects the channel by click and Enter', async () => {
     const user = userEvent.setup()
     const adapter = new SimulationAdapter()
-    const queue = {
-      ...derivedSnapshot(adapter).queue1,
+    const channel = {
+      ...derivedSnapshot(adapter).readerChannel,
       displayedPressure: 0.5,
       flowState: 'near-limit' as const,
     }
     const onSelect = vi.fn()
-    renderCable(queue, { onSelect })
+    renderCable(channel, { onSelect })
     const control = screen.getByRole('button', {
-      name: 'Inspect reader to throttler queue',
+      name: 'Inspect reader to throttler channel',
     })
 
     expect(control.getAttribute('data-pressure')).toBe('0.50')
     expect(control.getAttribute('style')).toContain(
-      '--pipeline-queue-pressure-color: #ffd31f',
+      '--pipeline-channel-pressure-color: #ffd31f',
     )
-    expect(control.querySelector('.pipeline-queue-cable')?.getAttribute('stroke'))
+    expect(control.querySelector('.pipeline-channel-cable')?.getAttribute('stroke'))
       .toBeNull()
     expect(getComputedStyle(screen.getByRole('slider')).getPropertyValue(
-      '--pipeline-queue-handle-state-color',
+      '--pipeline-channel-handle-state-color',
     )).toBe('currentColor')
 
     await user.click(control)
     control.focus()
     await user.keyboard('{Enter}')
 
-    expect(onSelect).toHaveBeenNthCalledWith(1, queue.id)
-    expect(onSelect).toHaveBeenNthCalledWith(2, queue.id)
+    expect(onSelect).toHaveBeenNthCalledWith(1, channel.id)
+    expect(onSelect).toHaveBeenNthCalledWith(2, channel.id)
     adapter.dispose()
   })
 
   it('applies stopped and connection-error cable overrides immediately', () => {
     const adapter = new SimulationAdapter()
-    const base = derivedSnapshot(adapter).queue1
-    const endpoints = QUEUE_CABLE_ENDPOINTS[base.id]
+    const base = derivedSnapshot(adapter).readerChannel
+    const endpoints = CHANNEL_CABLE_ENDPOINTS[base.id]
     const view = renderCable({
       ...base,
       displayedPressure: 1,
       flowState: 'stopped',
     })
-    let queueGroup = view.container.querySelector(`#queue-${base.id}`)!
+    let channelGroup = view.container.querySelector(`#channel-${base.id}`)!
 
-    expect(queueGroup.classList).toContain('pipeline-queue--stopped')
-    expect(getComputedStyle(queueGroup).color).toBe('var(--muted)')
-    expect(getComputedStyle(queueGroup).transition).toBe('none')
+    expect(channelGroup.classList).toContain('pipeline-channel--stopped')
+    expect(getComputedStyle(channelGroup).color).toBe('var(--muted)')
+    expect(getComputedStyle(channelGroup).transition).toBe('none')
 
     view.rerender(
       <svg viewBox="0 0 1100 640">
-        <QueueCable
+        <ChannelCable
           snapshot={{
             ...base,
             displayedPressure: 0,
@@ -656,14 +656,14 @@ describe('QueueCable mounted behavior', () => {
         />
       </svg>,
     )
-    queueGroup = view.container.querySelector(`#queue-${base.id}`)!
-    const slider = queueGroup.querySelector('.pipeline-queue-handle')!
-    const handleBody = slider.querySelector('.pipeline-queue-handle__body')!
-    expect(queueGroup.classList).toContain('pipeline-queue--connection-error')
-    expect(getComputedStyle(queueGroup).color).toBe('var(--red)')
-    expect(getComputedStyle(queueGroup).transition).toBe('none')
+    channelGroup = view.container.querySelector(`#channel-${base.id}`)!
+    const slider = channelGroup.querySelector('.pipeline-channel-handle')!
+    const handleBody = slider.querySelector('.pipeline-channel-handle__body')!
+    expect(channelGroup.classList).toContain('pipeline-channel--connection-error')
+    expect(getComputedStyle(channelGroup).color).toBe('var(--red)')
+    expect(getComputedStyle(channelGroup).transition).toBe('none')
     expect(getComputedStyle(slider).getPropertyValue(
-      '--pipeline-queue-handle-state-color',
+      '--pipeline-channel-handle-state-color',
     )).toBe('currentColor')
     expect(getComputedStyle(handleBody).strokeDasharray).toBe('6 3')
     adapter.dispose()

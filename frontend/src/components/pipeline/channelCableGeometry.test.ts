@@ -1,23 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import type { NumericControlSnapshot } from '../../model/loadgen'
 import {
-  buildQueueCablePath,
-  buildPortraitQueueCablePath,
+  buildChannelCablePath,
+  buildPortraitChannelCablePath,
   cableYToCapacity,
   capacityFromKeyboard,
   capacityFromVerticalDrag,
   capacityToCableY,
   getCapacityTicks,
-  getQueueCapacityPresentation,
-  getQueueCableGeometryPresentation,
-  getQueueCablePathLength,
-  getQueueMarkerCount,
+  getChannelCapacityPresentation,
+  getChannelCableGeometryPresentation,
+  getChannelCablePathLength,
+  getChannelMarkerCount,
   normalizeCapacity,
-} from './queueCableGeometry'
+} from './channelCableGeometry'
 
 const smallRange = { min: 0, max: 12, step: 1 }
 const largeRange = { min: 0, max: 160, step: 10 }
-const queue1Range = { min: 0, max: 8_192, step: 1 }
+const readerChannelRange = { min: 0, max: 8_192, step: 1 }
 const policyAllowed = [0, 1, 2, 8, 64, 512, 8_192] as const
 
 function capacityControl(
@@ -36,7 +36,7 @@ function capacityControl(
   }
 }
 
-describe('queue cable capacity geometry', () => {
+describe('channel cable capacity geometry', () => {
   it('clamps and snaps values on both configured scales', () => {
     expect([
       normalizeCapacity(-4, smallRange),
@@ -97,9 +97,9 @@ describe('queue cable capacity geometry', () => {
     }
   })
 
-  it('uses equal index intervals for the queue1 capacity scale', () => {
+  it('uses equal index intervals for the readerChannel capacity scale', () => {
     const ticks = getCapacityTicks(
-      queue1Range,
+      readerChannelRange,
       415,
       240,
       policyAllowed,
@@ -111,14 +111,14 @@ describe('queue cable capacity geometry', () => {
     })
     expect(capacityToCableY(
       8_192,
-      queue1Range,
+      readerChannelRange,
       415,
       240,
       policyAllowed,
     )).toBe(175)
     expect(cableYToCapacity(
       415 - 3 * 240 / 6,
-      queue1Range,
+      readerChannelRange,
       415,
       240,
       policyAllowed,
@@ -126,7 +126,7 @@ describe('queue cable capacity geometry', () => {
     expect(capacityFromVerticalDrag(
       2,
       -2 * 240 / 6,
-      queue1Range,
+      readerChannelRange,
       240,
       policyAllowed,
     )).toBe(64)
@@ -134,7 +134,7 @@ describe('queue cable capacity geometry', () => {
       capacityFromKeyboard(
         key,
         2,
-        queue1Range,
+        readerChannelRange,
         policyAllowed,
       ),
     )).toEqual([8, 8_192, 0, 0, 8_192])
@@ -165,7 +165,7 @@ describe('queue cable capacity geometry', () => {
     ] as const
 
     for (const testCase of cases) {
-      expect(getQueueCapacityPresentation(
+      expect(getChannelCapacityPresentation(
         testCase.control,
         testCase.localPreview,
       )).toEqual(testCase.expected)
@@ -191,18 +191,18 @@ describe('queue cable capacity geometry', () => {
     ]
 
     for (const testCase of cases) {
-      const pending = getQueueCableGeometryPresentation(
+      const pending = getChannelCableGeometryPresentation(
         testCase.control,
         testCase.start,
         testCase.end,
       )
-      const preview = getQueueCableGeometryPresentation(
+      const preview = getChannelCableGeometryPresentation(
         testCase.control,
         testCase.start,
         testCase.end,
         testCase.control.pending,
       )
-      const canonical = getQueueCableGeometryPresentation(
+      const canonical = getChannelCableGeometryPresentation(
         { ...testCase.control, preview: null, pending: null },
         testCase.start,
         testCase.end,
@@ -215,7 +215,7 @@ describe('queue cable capacity geometry', () => {
       expect(pending.requestedPath).toBeNull()
       expect(preview.sliderY).toBe(testCase.candidateY)
       expect(preview.requestedPath).toBe(
-        buildQueueCablePath(testCase.start, testCase.end, testCase.candidateY),
+        buildChannelCablePath(testCase.start, testCase.end, testCase.candidateY),
       )
     }
   })
@@ -224,30 +224,30 @@ describe('queue cable capacity geometry', () => {
     const start = { x: 150, y: 415 }
     const end = { x: 355, y: 415 }
 
-    expect(buildQueueCablePath(start, end, 415)).toBe('M150 415 H355')
-    expect(buildQueueCablePath(start, end, 295)).toMatch(
+    expect(buildChannelCablePath(start, end, 415)).toBe('M150 415 H355')
+    expect(buildChannelCablePath(start, end, 295)).toMatch(
       /^M150 415 H.+ Q.+ V.+ Q.+ H.+ Q.+ V.+ Q.+ H355$/,
     )
-    expect(getQueueCablePathLength(start, end, 415)).toBe(205)
-    expect(getQueueCablePathLength(start, end, 335)).toBeCloseTo(340.89, 2)
-    expect(getQueueCablePathLength(
+    expect(getChannelCablePathLength(start, end, 415)).toBe(205)
+    expect(getChannelCablePathLength(start, end, 335)).toBeCloseTo(340.89, 2)
+    expect(getChannelCablePathLength(
       { x: 505, y: 415 },
       { x: 720, y: 415 },
       265,
     )).toBeCloseTo(490.89, 2)
   })
 
-  it('builds portrait queues from exact vertical endpoints without overflow', () => {
+  it('builds portrait channels from exact vertical endpoints without overflow', () => {
     const start = { x: 240, y: 268 }
     const end = { x: 240, y: 515 }
-    const zero = getQueueCableGeometryPresentation(
+    const zero = getChannelCableGeometryPresentation(
       capacityControl(0),
       start,
       end,
       null,
       'portrait',
     )
-    const full = getQueueCableGeometryPresentation(
+    const full = getChannelCableGeometryPresentation(
       capacityControl(12),
       start,
       end,
@@ -257,7 +257,7 @@ describe('queue cable capacity geometry', () => {
 
     expect(zero.cablePath).toBe('M240 268 V515')
     expect(full.cablePath).toBe(
-      buildPortraitQueueCablePath(start, end, 100),
+      buildPortraitChannelCablePath(start, end, 100),
     )
     expect(full.sliderX).toBe(100)
     expect(full.sliderY).toBe(391.5)
@@ -281,23 +281,23 @@ describe('queue cable capacity geometry', () => {
       .toEqual([0, 80, 160])
   })
 
-  it('bounds queue family density by depth and the fixed marker pool', () => {
+  it('bounds channel family density by depth and the fixed marker pool', () => {
     expect([
-      getQueueMarkerCount(4, 0),
-      getQueueMarkerCount(4, 4),
-      getQueueMarkerCount(4, 12),
-      getQueueMarkerCount(15, 100),
-      getQueueMarkerCount(50, 100),
-      getQueueMarkerCount(100, 100),
+      getChannelMarkerCount(4, 0),
+      getChannelMarkerCount(4, 4),
+      getChannelMarkerCount(4, 12),
+      getChannelMarkerCount(15, 100),
+      getChannelMarkerCount(50, 100),
+      getChannelMarkerCount(100, 100),
     ]).toEqual([0, 4, 4, 4, 12, 24])
   })
 
-  it('never increases queue family density when capacity grows', () => {
+  it('never increases channel family density when capacity grows', () => {
     const capacities = [1, 2, 3, 4, 5, 8, 12, 16, 24, 50, 100, 250]
 
     for (const depth of [1, 4, 8, 15, 24, 50, 100]) {
       const targets = capacities.map((capacity) =>
-        getQueueMarkerCount(depth, capacity),
+        getChannelMarkerCount(depth, capacity),
       )
       expect(targets.every((target) => target <= depth && target <= 24))
         .toBe(true)

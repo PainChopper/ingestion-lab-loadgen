@@ -1,6 +1,6 @@
 import type {
   HttpLastOutcome,
-  QueueTrend,
+  ChannelTrend,
   SenderWorkerStateCounts,
   ThrottlerInstallationMode,
 } from './loadgen'
@@ -43,14 +43,14 @@ export interface CapacityTelemetry {
   readonly pending: number | null
 }
 
-export interface QueueTelemetry {
+export interface ChannelTelemetry {
   readonly capacity: CapacityTelemetry
-  readonly enqueuedBatchesTotal: number
-  readonly enqueuedTransactionsTotal: number
-  readonly dequeuedBatchesTotal: number
-  readonly dequeuedTransactionsTotal: number
+  readonly sentBatchesTotal: number
+  readonly sentTransactionsTotal: number
+  readonly receivedBatchesTotal: number
+  readonly receivedTransactionsTotal: number
   readonly depthBatches: number
-  readonly queuedTransactions: number
+  readonly bufferedTransactions: number
   readonly handoffBatches: number
   readonly handoffBatchesTotal: number
   readonly blockedSenders: number
@@ -60,7 +60,7 @@ export interface QueueTelemetry {
   readonly outputBatchesPerSecond: number
   readonly inputTransactionsPerSecond: number
   readonly outputTransactionsPerSecond: number
-  readonly trend: QueueTrend
+  readonly trend: ChannelTrend
 }
 
 export interface HttpTelemetry {
@@ -114,8 +114,8 @@ export interface SimulationTelemetry {
   readonly attemptedTransactionsPerSecond: number
   readonly acceptedTransactionsPerSecond: number
   readonly rejectedTransactionsPerSecond: number
-  readonly queue1: QueueTelemetry
-  readonly queue2: QueueTelemetry
+  readonly readerChannel: ChannelTelemetry
+  readonly senderChannel: ChannelTelemetry
   readonly sender: SenderTelemetry
   readonly http: HttpTelemetry
 }
@@ -154,7 +154,7 @@ export type SimulationAttemptOutcomeSource = (
   context: SimulationAttemptContext,
 ) => SimulationAttemptOutcome
 
-interface QueueActivity {
+interface ChannelActivity {
   inputBatches: number
   inputTransactions: number
   outputBatches: number
@@ -163,8 +163,8 @@ interface QueueActivity {
 }
 
 interface StepActivity {
-  queue1: QueueActivity
-  queue2: QueueActivity
+  readerChannel: ChannelActivity
+  senderChannel: ChannelActivity
   httpStartedTransactions: number
   httpRetryStartedTransactions: number
   httpCompletedTransactions: number
@@ -174,12 +174,12 @@ interface StepActivity {
 }
 
 interface AdmissionResult {
-  queue2Blocked: boolean
+  senderChannelBlocked: boolean
   tokenLimited: boolean
 }
 
 interface ReaderProductionResult extends AdmissionResult {
-  queue1Blocked: boolean
+  readerChannelBlocked: boolean
 }
 
 type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
@@ -198,7 +198,7 @@ interface SenderWorker {
   hadAmbiguousOutcome: boolean
 }
 
-function createQueueActivity(): QueueActivity {
+function createChannelActivity(): ChannelActivity {
   return {
     inputBatches: 0,
     inputTransactions: 0,
@@ -210,8 +210,8 @@ function createQueueActivity(): QueueActivity {
 
 function createStepActivity(): StepActivity {
   return {
-    queue1: createQueueActivity(),
-    queue2: createQueueActivity(),
+    readerChannel: createChannelActivity(),
+    senderChannel: createChannelActivity(),
     httpStartedTransactions: 0,
     httpRetryStartedTransactions: 0,
     httpCompletedTransactions: 0,
@@ -254,7 +254,7 @@ export function deterministicRetryDelayMs(
   return roundedStepDuration(nominal * RETRY_JITTER_FACTORS[factorIndex])
 }
 
-class StatefulQueue<TItem> {
+class StatefulChannel<TItem> {
   private readonly items: TItem[] = []
   private readonly transactionsOf: (item: TItem) => number
   private appliedCapacity: number
@@ -262,10 +262,10 @@ class StatefulQueue<TItem> {
   private pendingCapacity: number | null = null
   private blockedForMs = 0
 
-  enqueuedBatchesTotal = 0
-  enqueuedTransactionsTotal = 0
-  dequeuedBatchesTotal = 0
-  dequeuedTransactionsTotal = 0
+  sentBatchesTotal = 0
+  sentTransactionsTotal = 0
+  receivedBatchesTotal = 0
+  receivedTransactionsTotal = 0
   handoffBatchesTotal = 0
   blockedMsTotal = 0
   blockedSenders = 0
@@ -282,7 +282,7 @@ class StatefulQueue<TItem> {
     return this.items.length
   }
 
-  get queuedTransactions(): number {
+  get bufferedTransactions(): number {
     return this.items.reduce(
       (total, item) => total + this.transactionsOf(item),
       0,
@@ -326,7 +326,7 @@ class StatefulQueue<TItem> {
     return this.items[0] ?? null
   }
 
-  enqueue(item: TItem, activity: QueueActivity): boolean {
+  send(item: TItem, activity: ChannelActivity): boolean {
     if (this.appliedCapacity === 0 || this.depthBatches >= this.appliedCapacity) {
       return false
     }
@@ -335,7 +335,7 @@ class StatefulQueue<TItem> {
     return true
   }
 
-  dequeue(activity: QueueActivity): TItem | null {
+  receive(activity: ChannelActivity): TItem | null {
     const item = this.items.shift()
     if (item === undefined) return null
     this.recordOutput(item, activity)
@@ -343,7 +343,7 @@ class StatefulQueue<TItem> {
     return item
   }
 
-  handoff(item: TItem, activity: QueueActivity): void {
+  handoff(item: TItem, activity: ChannelActivity): void {
     this.recordInput(item, activity)
     this.recordOutput(item, activity)
     this.handoffBatchesTotal += 1
@@ -363,10 +363,10 @@ class StatefulQueue<TItem> {
   }
 
   telemetry(
-    activity: QueueActivity,
+    activity: ChannelActivity,
     rateSeconds: number,
     running: boolean,
-  ): QueueTelemetry {
+  ): ChannelTelemetry {
     const inputBatchesPerSecond =
       rateSeconds === 0 ? 0 : activity.inputBatches / rateSeconds
     const outputBatchesPerSecond =
@@ -375,7 +375,7 @@ class StatefulQueue<TItem> {
       rateSeconds === 0 ? 0 : activity.inputTransactions / rateSeconds
     const outputTransactionsPerSecond =
       rateSeconds === 0 ? 0 : activity.outputTransactions / rateSeconds
-    const trend: QueueTrend = !running
+    const trend: ChannelTrend = !running
       ? 'steady'
       : inputTransactionsPerSecond > outputTransactionsPerSecond
         ? 'rising'
@@ -384,12 +384,12 @@ class StatefulQueue<TItem> {
           : 'steady'
     return {
       capacity: this.capacity,
-      enqueuedBatchesTotal: this.enqueuedBatchesTotal,
-      enqueuedTransactionsTotal: this.enqueuedTransactionsTotal,
-      dequeuedBatchesTotal: this.dequeuedBatchesTotal,
-      dequeuedTransactionsTotal: this.dequeuedTransactionsTotal,
+      sentBatchesTotal: this.sentBatchesTotal,
+      sentTransactionsTotal: this.sentTransactionsTotal,
+      receivedBatchesTotal: this.receivedBatchesTotal,
+      receivedTransactionsTotal: this.receivedTransactionsTotal,
       depthBatches: this.depthBatches,
-      queuedTransactions: this.queuedTransactions,
+      bufferedTransactions: this.bufferedTransactions,
       handoffBatches: running ? activity.handoffBatches : 0,
       handoffBatchesTotal: this.handoffBatchesTotal,
       blockedSenders: running ? this.blockedSenders : 0,
@@ -411,27 +411,27 @@ class StatefulQueue<TItem> {
     this.previewCapacity = null
     this.pendingCapacity = null
     this.blockedForMs = 0
-    this.enqueuedBatchesTotal = 0
-    this.enqueuedTransactionsTotal = 0
-    this.dequeuedBatchesTotal = 0
-    this.dequeuedTransactionsTotal = 0
+    this.sentBatchesTotal = 0
+    this.sentTransactionsTotal = 0
+    this.receivedBatchesTotal = 0
+    this.receivedTransactionsTotal = 0
     this.handoffBatchesTotal = 0
     this.blockedMsTotal = 0
     this.blockedSenders = 0
   }
 
-  private recordInput(item: TItem, activity: QueueActivity): void {
+  private recordInput(item: TItem, activity: ChannelActivity): void {
     const transactions = this.transactionsOf(item)
-    this.enqueuedBatchesTotal += 1
-    this.enqueuedTransactionsTotal += transactions
+    this.sentBatchesTotal += 1
+    this.sentTransactionsTotal += transactions
     activity.inputBatches += 1
     activity.inputTransactions += transactions
   }
 
-  private recordOutput(item: TItem, activity: QueueActivity): void {
+  private recordOutput(item: TItem, activity: ChannelActivity): void {
     const transactions = this.transactionsOf(item)
-    this.dequeuedBatchesTotal += 1
-    this.dequeuedTransactionsTotal += transactions
+    this.receivedBatchesTotal += 1
+    this.receivedTransactionsTotal += transactions
     activity.outputBatches += 1
     activity.outputTransactions += transactions
   }
@@ -451,8 +451,8 @@ class StatefulQueue<TItem> {
 export class FixedStepSimulation {
   readonly config: SimulationConfig
 
-  private readonly queue1: StatefulQueue<number>
-  private readonly queue2: StatefulQueue<SimulationBatch>
+  private readonly readerChannel: StatefulChannel<number>
+  private readonly senderChannel: StatefulChannel<SimulationBatch>
   private readonly activities: StepActivity[] = []
   private readonly attemptOutcomeSource:
     | SimulationAttemptOutcomeSource
@@ -490,14 +490,14 @@ export class FixedStepSimulation {
 
   constructor(
     config: SimulationConfig,
-    queue1Capacity: number,
-    queue2Capacity: number,
+    readerChannelCapacity: number,
+    senderChannelCapacity: number,
     attemptOutcomeSource?: SimulationAttemptOutcomeSource,
   ) {
     this.config = { ...config }
-    this.queue1 = new StatefulQueue(queue1Capacity, (transactions) => transactions)
-    this.queue2 = new StatefulQueue(
-      queue2Capacity,
+    this.readerChannel = new StatefulChannel(readerChannelCapacity, (transactions) => transactions)
+    this.senderChannel = new StatefulChannel(
+      senderChannelCapacity,
       (batch) => batch.transactions,
     )
     this.attemptOutcomeSource = attemptOutcomeSource
@@ -516,20 +516,20 @@ export class FixedStepSimulation {
     this.startDueRetries(activity)
     this.finalizeSenderScaleDown()
     this.refillThrottlerTokens()
-    this.drainQueue2(activity)
-    let queue2Blocked = this.flushThrottlerBuffer(activity)
-    const admission = this.receiveQueue1(activity)
-    queue2Blocked ||= admission.queue2Blocked
+    this.drainSenderChannel(activity)
+    let senderChannelBlocked = this.flushThrottlerBuffer(activity)
+    const admission = this.receiveReaderChannel(activity)
+    senderChannelBlocked ||= admission.senderChannelBlocked
     const production = this.produceReaderBatches(activity)
-    queue2Blocked ||= production.queue2Blocked
+    senderChannelBlocked ||= production.senderChannelBlocked
 
-    this.queue1.observeBlocked(
-      production.queue1Blocked,
-      activity.queue1.inputBatches > 0 || activity.queue1.handoffBatches > 0,
+    this.readerChannel.observeBlocked(
+      production.readerChannelBlocked,
+      activity.readerChannel.inputBatches > 0 || activity.readerChannel.handoffBatches > 0,
     )
-    this.queue2.observeBlocked(
-      queue2Blocked,
-      activity.queue2.inputBatches > 0 || activity.queue2.handoffBatches > 0,
+    this.senderChannel.observeBlocked(
+      senderChannelBlocked,
+      activity.senderChannel.inputBatches > 0 || activity.senderChannel.handoffBatches > 0,
     )
     if (admission.tokenLimited || production.tokenLimited) {
       this.limitedMs += FIXED_STEP_MS
@@ -557,8 +557,8 @@ export class FixedStepSimulation {
     )
   }
 
-  requestQueueCapacity(queue: 1 | 2, capacity: number): boolean {
-    return (queue === 1 ? this.queue1 : this.queue2).requestCapacity(capacity)
+  requestChannelCapacity(channel: 1 | 2, capacity: number): boolean {
+    return (channel === 1 ? this.readerChannel : this.senderChannel).requestCapacity(capacity)
   }
 
   clearInstantaneousTelemetry(): void {
@@ -566,8 +566,8 @@ export class FixedStepSimulation {
   }
 
   reset(): void {
-    this.queue1.resetRuntime()
-    this.queue2.resetRuntime()
+    this.readerChannel.resetRuntime()
+    this.senderChannel.resetRuntime()
     this.activities.length = 0
     this.workers = Array.from(
       { length: this.config.senderWorkers },
@@ -607,19 +607,19 @@ export class FixedStepSimulation {
   telemetry(running: boolean): SimulationTelemetry {
     const aggregate = this.aggregateActivity()
     const rateSeconds = RATE_WINDOW_STEPS * FIXED_STEP_MS / 1_000
-    const queue1 = this.queue1.telemetry(aggregate.queue1, rateSeconds, running)
-    const queue2 = this.queue2.telemetry(aggregate.queue2, rateSeconds, running)
+    const readerChannel = this.readerChannel.telemetry(aggregate.readerChannel, rateSeconds, running)
+    const senderChannel = this.senderChannel.telemetry(aggregate.senderChannel, rateSeconds, running)
     const divisor = rateSeconds === 0 ? 1 : rateSeconds
     const workerSlots = this.workerSlots
     const workerStates = this.workerStateCounts(workerSlots)
 
     return {
       elapsedMs: this.elapsedMs,
-      totalTransactions: this.queue1.dequeuedTransactionsTotal,
+      totalTransactions: this.readerChannel.receivedTransactionsTotal,
       limitedMs: this.limitedMs,
       readerCapacityTps: this.readerCapacityTps,
-      readerTransactionsPerSecond: queue1.inputTransactionsPerSecond,
-      admittedTransactionsPerSecond: queue1.outputTransactionsPerSecond,
+      readerTransactionsPerSecond: readerChannel.inputTransactionsPerSecond,
+      admittedTransactionsPerSecond: readerChannel.outputTransactionsPerSecond,
       attemptedTransactionsPerSecond: running
         ? aggregate.httpStartedTransactions / divisor
         : 0,
@@ -629,8 +629,8 @@ export class FixedStepSimulation {
       rejectedTransactionsPerSecond: running
         ? aggregate.httpRejectedTransactions / divisor
         : 0,
-      queue1,
-      queue2,
+      readerChannel,
+      senderChannel,
       sender: {
         workers: {
           applied: this.workers.length,
@@ -851,7 +851,7 @@ export class FixedStepSimulation {
       return
     }
     const refill = this.config.requestedTps * FIXED_STEP_MS / 1_000
-    const headTransactions = this.queue1.peek() ?? this.config.readBatchSize
+    const headTransactions = this.readerChannel.peek() ?? this.config.readBatchSize
     const tokenCapacity = Math.max(headTransactions, this.config.readBatchSize) +
       refill
     this.throttlerTokens = Math.min(
@@ -860,11 +860,11 @@ export class FixedStepSimulation {
     )
   }
 
-  private drainQueue2(activity: StepActivity): void {
-    while (this.queue2.peek() !== null) {
+  private drainSenderChannel(activity: StepActivity): void {
+    while (this.senderChannel.peek() !== null) {
       const worker = this.nextIdleWorker()
       if (worker === null) return
-      const batch = this.queue2.dequeue(activity.queue2)
+      const batch = this.senderChannel.receive(activity.senderChannel)
       if (batch === null) return
       worker.batch = batch
       worker.hadAmbiguousOutcome = false
@@ -880,22 +880,22 @@ export class FixedStepSimulation {
     ) {
       const batch = this.pendingHttpBatch ?? this.createHttpBatch()
       this.pendingHttpBatch = batch
-      if (this.queue2.capacity.applied === 0) {
+      if (this.senderChannel.capacity.applied === 0) {
         const worker = this.nextIdleWorker()
         if (worker === null) {
           blocked = true
           break
         }
-        this.queue2.handoff(batch, activity.queue2)
+        this.senderChannel.handoff(batch, activity.senderChannel)
         worker.batch = batch
         worker.hadAmbiguousOutcome = false
         this.startAttempt(worker, 1, activity)
       } else {
-        if (!this.queue2.enqueue(batch, activity.queue2)) {
+        if (!this.senderChannel.send(batch, activity.senderChannel)) {
           blocked = true
           break
         }
-        this.drainQueue2(activity)
+        this.drainSenderChannel(activity)
       }
       this.throttlerBufferedTransactions -= batch.transactions
       this.pendingHttpBatch = null
@@ -913,33 +913,33 @@ export class FixedStepSimulation {
     }
   }
 
-  private receiveQueue1(activity: StepActivity): AdmissionResult {
-    const availableBatches = this.queue1.depthBatches
+  private receiveReaderChannel(activity: StepActivity): AdmissionResult {
+    const availableBatches = this.readerChannel.depthBatches
     const installed = this.config.throttlerInstallationMode === 'installed'
     for (let batchIndex = 0; batchIndex < availableBatches; batchIndex += 1) {
       if (this.pendingHttpBatch !== null) break
       if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
-        const queue2Blocked = this.flushThrottlerBuffer(activity)
-        if (queue2Blocked) return { queue2Blocked: true, tokenLimited: false }
+        const senderChannelBlocked = this.flushThrottlerBuffer(activity)
+        if (senderChannelBlocked) return { senderChannelBlocked: true, tokenLimited: false }
       }
 
-      const transactions = this.queue1.peek()
+      const transactions = this.readerChannel.peek()
       if (transactions === null) break
       if (installed && this.throttlerTokens < transactions) {
-        return { queue2Blocked: false, tokenLimited: true }
+        return { senderChannelBlocked: false, tokenLimited: true }
       }
 
-      const received = this.queue1.dequeue(activity.queue1)
+      const received = this.readerChannel.receive(activity.readerChannel)
       if (received === null) break
       if (installed) this.throttlerTokens -= received
       this.throttlerBufferedTransactions += received
 
       if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
-        const queue2Blocked = this.flushThrottlerBuffer(activity)
-        if (queue2Blocked) return { queue2Blocked: true, tokenLimited: false }
+        const senderChannelBlocked = this.flushThrottlerBuffer(activity)
+        if (senderChannelBlocked) return { senderChannelBlocked: true, tokenLimited: false }
       }
     }
-    return { queue2Blocked: false, tokenLimited: false }
+    return { senderChannelBlocked: false, tokenLimited: false }
   }
 
   private produceReaderBatches(activity: StepActivity): ReaderProductionResult {
@@ -951,27 +951,27 @@ export class FixedStepSimulation {
     )
     if (this.readerTransactionCredit < transactions) {
       return {
-        queue1Blocked: false,
-        queue2Blocked: false,
+        readerChannelBlocked: false,
+        senderChannelBlocked: false,
         tokenLimited: false,
       }
     }
 
     while (this.readerTransactionCredit >= transactions) {
-      if (this.queue1.capacity.applied === 0) {
+      if (this.readerChannel.capacity.applied === 0) {
         if (this.pendingHttpBatch !== null) {
           return {
-            queue1Blocked: true,
-            queue2Blocked: true,
+            readerChannelBlocked: true,
+            senderChannelBlocked: true,
             tokenLimited: false,
           }
         }
         if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
-          const queue2Blocked = this.flushThrottlerBuffer(activity)
-          if (queue2Blocked) {
+          const senderChannelBlocked = this.flushThrottlerBuffer(activity)
+          if (senderChannelBlocked) {
             return {
-              queue1Blocked: true,
-              queue2Blocked: true,
+              readerChannelBlocked: true,
+              senderChannelBlocked: true,
               tokenLimited: false,
             }
           }
@@ -981,30 +981,30 @@ export class FixedStepSimulation {
           this.throttlerTokens < transactions
         ) {
           return {
-            queue1Blocked: true,
-            queue2Blocked: false,
+            readerChannelBlocked: true,
+            senderChannelBlocked: false,
             tokenLimited: true,
           }
         }
-        this.queue1.handoff(transactions, activity.queue1)
+        this.readerChannel.handoff(transactions, activity.readerChannel)
         if (this.config.throttlerInstallationMode === 'installed') {
           this.throttlerTokens -= transactions
         }
         this.throttlerBufferedTransactions += transactions
         if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
-          const queue2Blocked = this.flushThrottlerBuffer(activity)
-          if (queue2Blocked) {
+          const senderChannelBlocked = this.flushThrottlerBuffer(activity)
+          if (senderChannelBlocked) {
             return {
-              queue1Blocked: true,
-              queue2Blocked: true,
+              readerChannelBlocked: true,
+              senderChannelBlocked: true,
               tokenLimited: false,
             }
           }
         }
-      } else if (!this.queue1.enqueue(transactions, activity.queue1)) {
+      } else if (!this.readerChannel.send(transactions, activity.readerChannel)) {
         return {
-          queue1Blocked: true,
-          queue2Blocked: false,
+          readerChannelBlocked: true,
+          senderChannelBlocked: false,
           tokenLimited: false,
         }
       }
@@ -1013,8 +1013,8 @@ export class FixedStepSimulation {
     }
 
     return {
-      queue1Blocked: false,
-      queue2Blocked: false,
+      readerChannelBlocked: false,
+      senderChannelBlocked: false,
       tokenLimited: false,
     }
   }
@@ -1132,16 +1132,16 @@ export class FixedStepSimulation {
   private aggregateActivity(): StepActivity {
     const aggregate = createStepActivity()
     for (const activity of this.activities) {
-      aggregate.queue1.inputBatches += activity.queue1.inputBatches
-      aggregate.queue1.inputTransactions += activity.queue1.inputTransactions
-      aggregate.queue1.outputBatches += activity.queue1.outputBatches
-      aggregate.queue1.outputTransactions += activity.queue1.outputTransactions
-      aggregate.queue1.handoffBatches += activity.queue1.handoffBatches
-      aggregate.queue2.inputBatches += activity.queue2.inputBatches
-      aggregate.queue2.inputTransactions += activity.queue2.inputTransactions
-      aggregate.queue2.outputBatches += activity.queue2.outputBatches
-      aggregate.queue2.outputTransactions += activity.queue2.outputTransactions
-      aggregate.queue2.handoffBatches += activity.queue2.handoffBatches
+      aggregate.readerChannel.inputBatches += activity.readerChannel.inputBatches
+      aggregate.readerChannel.inputTransactions += activity.readerChannel.inputTransactions
+      aggregate.readerChannel.outputBatches += activity.readerChannel.outputBatches
+      aggregate.readerChannel.outputTransactions += activity.readerChannel.outputTransactions
+      aggregate.readerChannel.handoffBatches += activity.readerChannel.handoffBatches
+      aggregate.senderChannel.inputBatches += activity.senderChannel.inputBatches
+      aggregate.senderChannel.inputTransactions += activity.senderChannel.inputTransactions
+      aggregate.senderChannel.outputBatches += activity.senderChannel.outputBatches
+      aggregate.senderChannel.outputTransactions += activity.senderChannel.outputTransactions
+      aggregate.senderChannel.handoffBatches += activity.senderChannel.handoffBatches
       aggregate.httpStartedTransactions += activity.httpStartedTransactions
       aggregate.httpRetryStartedTransactions +=
         activity.httpRetryStartedTransactions

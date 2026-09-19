@@ -2,15 +2,15 @@ import type {
   ConnectionState,
   LoadgenSnapshot,
   LoadgenTelemetrySnapshot,
-  QueueFlowState,
-  QueueSnapshot,
-  QueueTelemetrySnapshot,
+  ChannelFlowState,
+  ChannelSnapshot,
+  ChannelTelemetrySnapshot,
   RunState,
 } from './loadgen'
 
-export const QUEUE_PRESSURE_GREEN = '#79d957'
-export const QUEUE_PRESSURE_YELLOW = '#ffd31f'
-export const QUEUE_PRESSURE_RED = '#ff6748'
+export const CHANNEL_PRESSURE_GREEN = '#79d957'
+export const CHANNEL_PRESSURE_YELLOW = '#ffd31f'
+export const CHANNEL_PRESSURE_RED = '#ff6748'
 
 const PRESSURE_UNITS_PER_SECOND = 2
 const PRESSURE_MIDPOINT = 0.5
@@ -56,18 +56,18 @@ export function blockingPressure(
   )
 }
 
-function hasRendezvousWaiter(queue: QueueTelemetrySnapshot): boolean {
-  return queue.capacity.applied === 0 && queue.blockedSenders > 0
+function hasRendezvousWaiter(channel: ChannelTelemetrySnapshot): boolean {
+  return channel.capacity.applied === 0 && channel.blockedSenders > 0
 }
 
-export function effectiveQueuePressure(
-  queue: QueueTelemetrySnapshot,
+export function effectiveChannelPressure(
+  channel: ChannelTelemetrySnapshot,
 ): number {
-  if (hasRendezvousWaiter(queue)) return 1
+  if (hasRendezvousWaiter(channel)) return 1
 
   return Math.max(
-    occupancyPressure(queue.depthBatches, queue.capacity.applied),
-    blockingPressure(queue.blockedSenders, queue.oldestBlockedSenderMs),
+    occupancyPressure(channel.depthBatches, channel.capacity.applied),
+    blockingPressure(channel.blockedSenders, channel.oldestBlockedSenderMs),
   )
 }
 
@@ -86,16 +86,16 @@ function moveDisplayedPressure(
   return Math.round(next * 1_000_000) / 1_000_000
 }
 
-function queueMode(
-  queue: QueueTelemetrySnapshot,
+function channelMode(
+  channel: ChannelTelemetrySnapshot,
   runState: RunState,
   connectionState: ConnectionState,
-): Extract<QueueFlowState, 'stopped' | 'connection-error'> | null {
+): Extract<ChannelFlowState, 'stopped' | 'connection-error'> | null {
   const missingTelemetry =
-    queue.depthBatches === null ||
-    queue.capacity.applied === null ||
-    !Number.isFinite(queue.blockedSenders) ||
-    !Number.isFinite(queue.oldestBlockedSenderMs)
+    channel.depthBatches === null ||
+    channel.capacity.applied === null ||
+    !Number.isFinite(channel.blockedSenders) ||
+    !Number.isFinite(channel.oldestBlockedSenderMs)
 
   if (connectionState !== 'connected' || missingTelemetry) {
     return 'connection-error'
@@ -104,7 +104,7 @@ function queueMode(
   return null
 }
 
-function pressureFlowState(displayedPressure: number): QueueFlowState {
+function pressureFlowState(displayedPressure: number): ChannelFlowState {
   if (displayedPressure === 1) return 'backpressure'
   if (displayedPressure >= PRESSURE_MIDPOINT) return 'near-limit'
   return 'normal'
@@ -121,31 +121,31 @@ function mixHexColors(start: string, end: string, amount: number): string {
   return `#${channels.join('')}`
 }
 
-export function queuePressureColor(pressure: number): string {
+export function channelPressureColor(pressure: number): string {
   const bounded = clampPressure(pressure)
   if (bounded <= PRESSURE_MIDPOINT) {
     return mixHexColors(
-      QUEUE_PRESSURE_GREEN,
-      QUEUE_PRESSURE_YELLOW,
+      CHANNEL_PRESSURE_GREEN,
+      CHANNEL_PRESSURE_YELLOW,
       bounded / PRESSURE_MIDPOINT,
     )
   }
 
   return mixHexColors(
-    QUEUE_PRESSURE_YELLOW,
-    QUEUE_PRESSURE_RED,
+    CHANNEL_PRESSURE_YELLOW,
+    CHANNEL_PRESSURE_RED,
     (bounded - PRESSURE_MIDPOINT) / PRESSURE_MIDPOINT,
   )
 }
 
-interface QueueDerivationState {
+interface ChannelDerivationState {
   displayedPressure: number
   observedAtMs: number | null
   pressureActive: boolean
 }
 
-export class QueueFlowStateDeriver {
-  private readonly queueStates = new Map<string, QueueDerivationState>()
+export class ChannelFlowStateDeriver {
+  private readonly channelStates = new Map<string, ChannelDerivationState>()
   private sourceSnapshot: LoadgenTelemetrySnapshot | null = null
   private derivedSnapshot: LoadgenSnapshot | null = null
 
@@ -157,48 +157,48 @@ export class QueueFlowStateDeriver {
       return this.derivedSnapshot
     }
 
-    const queue1 = this.deriveQueue(
-      snapshot.queue1,
+    const readerChannel = this.deriveChannel(
+      snapshot.readerChannel,
       snapshot.runState,
       snapshot.connectionState,
       observedAtMs,
     )
-    const queue2 = this.deriveQueue(
-      snapshot.queue2,
+    const senderChannel = this.deriveChannel(
+      snapshot.senderChannel,
       snapshot.runState,
       snapshot.connectionState,
       observedAtMs,
     )
-    const derived = Object.freeze({ ...snapshot, queue1, queue2 })
+    const derived = Object.freeze({ ...snapshot, readerChannel, senderChannel })
 
     this.sourceSnapshot = snapshot
     this.derivedSnapshot = derived
     return derived
   }
 
-  private deriveQueue(
-    queue: QueueTelemetrySnapshot,
+  private deriveChannel(
+    channel: ChannelTelemetrySnapshot,
     runState: RunState,
     connectionState: ConnectionState,
     observedAtMs: number,
-  ): QueueSnapshot {
-    const state = this.queueStates.get(queue.id) ?? {
+  ): ChannelSnapshot {
+    const state = this.channelStates.get(channel.id) ?? {
       displayedPressure: 0,
       observedAtMs: null,
       pressureActive: false,
     }
-    const mode = queueMode(queue, runState, connectionState)
+    const mode = channelMode(channel, runState, connectionState)
 
     if (mode === null) {
       const elapsedMs =
         state.pressureActive && state.observedAtMs !== null
           ? observedAtMs - state.observedAtMs
           : 0
-      state.displayedPressure = hasRendezvousWaiter(queue)
+      state.displayedPressure = hasRendezvousWaiter(channel)
         ? 1
         : moveDisplayedPressure(
             state.displayedPressure,
-            effectiveQueuePressure(queue),
+            effectiveChannelPressure(channel),
             elapsedMs,
           )
       state.pressureActive = Number.isFinite(observedAtMs) && elapsedMs >= 0
@@ -206,10 +206,10 @@ export class QueueFlowStateDeriver {
       state.pressureActive = false
     }
     state.observedAtMs = Number.isFinite(observedAtMs) ? observedAtMs : null
-    this.queueStates.set(queue.id, state)
+    this.channelStates.set(channel.id, state)
 
     return Object.freeze({
-      ...queue,
+      ...channel,
       displayedPressure: state.displayedPressure,
       flowState: mode ?? pressureFlowState(state.displayedPressure),
     })

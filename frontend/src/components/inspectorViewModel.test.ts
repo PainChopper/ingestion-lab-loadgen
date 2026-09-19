@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import { SimulationAdapter } from '../adapters/SimulationAdapter'
 import type { LoadgenSnapshot, SelectableId } from '../model/loadgen'
-import { QueueFlowStateDeriver } from '../model/queueFlowState'
+import { ChannelFlowStateDeriver } from '../model/channelFlowState'
 import {
   formatStateLabel,
   getInspectorViewModel,
 } from './inspectorViewModel'
 
 function derivedSnapshot(adapter: SimulationAdapter): LoadgenSnapshot {
-  return new QueueFlowStateDeriver().derive(adapter.getSnapshot(), 0)
+  return new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0)
 }
 
-function withQueueCapacity(
+function withChannelCapacity(
   snapshot: LoadgenSnapshot,
   applied: number,
   depthBatches: number,
@@ -19,11 +19,11 @@ function withQueueCapacity(
 ): LoadgenSnapshot {
   return {
     ...snapshot,
-    queue1: {
-      ...snapshot.queue1,
+    readerChannel: {
+      ...snapshot.readerChannel,
       depthBatches,
       capacity: {
-        ...snapshot.queue1.capacity,
+        ...snapshot.readerChannel.capacity,
         applied,
         preview: pending,
         pending,
@@ -32,7 +32,7 @@ function withQueueCapacity(
   }
 }
 
-function withQueueBlocking(
+function withChannelBlocking(
   snapshot: LoadgenSnapshot,
   blockedSenders: number,
   oldestBlockedSenderMs: number,
@@ -40,8 +40,8 @@ function withQueueBlocking(
 ): LoadgenSnapshot {
   return {
     ...snapshot,
-    queue1: {
-      ...snapshot.queue1,
+    readerChannel: {
+      ...snapshot.readerChannel,
       blockedSenders,
       oldestBlockedSenderMs,
       blockedMs,
@@ -188,7 +188,7 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
-  it('formats queue depth, capacity, state, and rates from the snapshot', () => {
+  it('formats channel depth, capacity, state, and rates from the snapshot', () => {
     const adapter = new SimulationAdapter()
     const model = getInspectorViewModel(
       derivedSnapshot(adapter),
@@ -223,7 +223,7 @@ describe('inspector view model', () => {
     ] as const
 
     for (const testCase of cases) {
-      const snapshot = withQueueBlocking(
+      const snapshot = withChannelBlocking(
         derivedSnapshot(adapter),
         testCase.blockedSenders,
         testCase.oldestMs,
@@ -244,19 +244,19 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
-  it('projects immediate rendezvous pressure without inventing queue depth', () => {
+  it('projects immediate rendezvous pressure without inventing channel depth', () => {
     const adapter = new SimulationAdapter()
     const base = adapter.getSnapshot()
-    const snapshot = new QueueFlowStateDeriver().derive({
+    const snapshot = new ChannelFlowStateDeriver().derive({
       ...base,
       runState: 'running',
-      queue1: {
-        ...base.queue1,
+      readerChannel: {
+        ...base.readerChannel,
         depthBatches: 0,
         blockedSenders: 1,
         oldestBlockedSenderMs: 10,
         capacity: {
-          ...base.queue1.capacity,
+          ...base.readerChannel.capacity,
           applied: 0,
           preview: 12,
           pending: 12,
@@ -275,7 +275,7 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
-  it('keeps queue depth and capacity truthful across apply states', () => {
+  it('keeps channel depth and capacity truthful across apply states', () => {
     const cases = [
     {
       name: 'applied 4, depth 4, pending 0',
@@ -313,7 +313,7 @@ describe('inspector view model', () => {
     const adapter = new SimulationAdapter()
 
     for (const testCase of cases) {
-      const snapshot = withQueueCapacity(
+      const snapshot = withChannelCapacity(
         derivedSnapshot(adapter),
         testCase.applied,
         testCase.depth,

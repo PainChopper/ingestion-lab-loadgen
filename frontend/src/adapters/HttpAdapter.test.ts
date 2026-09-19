@@ -5,7 +5,7 @@ import type {
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
   LoadgenPolicySnapshot,
-  QueueTelemetrySnapshot,
+  ChannelTelemetrySnapshot,
   RunState,
 } from '../model/loadgen'
 import { HttpAdapter } from './HttpAdapter'
@@ -22,20 +22,20 @@ interface TestWireSnapshot {
   readonly readerReadBatchSize: number
   readonly readerRowsRead: number
   readonly readerSource: string | null
-  readonly queue1Capacity: number
-  readonly queue1EnqueuedBatchesTotal: number
-  readonly queue1EnqueuedTransactionsTotal: number
-  readonly queue1DequeuedBatchesTotal: number
-  readonly queue1DequeuedTransactionsTotal: number
-  readonly queue1DepthBatches: number
-  readonly queue1QueuedTransactions: number
-  readonly queue1BlockedSenders: number
-  readonly queue1OldestBlockedSenderMs: number
-  readonly queue1BlockedMs: number
-  readonly queue1InputBatchesPerSecond: number
-  readonly queue1InputTransactionsPerSecond: number
-  readonly queue1OutputBatchesPerSecond: number
-  readonly queue1OutputTransactionsPerSecond: number
+  readonly readerChannelCapacity: number
+  readonly readerChannelSentBatchesTotal: number
+  readonly readerChannelSentTransactionsTotal: number
+  readonly readerChannelReceivedBatchesTotal: number
+  readonly readerChannelReceivedTransactionsTotal: number
+  readonly readerChannelDepthBatches: number
+  readonly readerChannelBufferedTransactions: number
+  readonly readerChannelBlockedSenders: number
+  readonly readerChannelOldestBlockedSenderMs: number
+  readonly readerChannelBlockedMs: number
+  readonly readerChannelInputBatchesPerSecond: number
+  readonly readerChannelInputTransactionsPerSecond: number
+  readonly readerChannelOutputBatchesPerSecond: number
+  readonly readerChannelOutputTransactionsPerSecond: number
 }
 
 interface MockResponseOptions {
@@ -58,7 +58,7 @@ const VALID_WIRE: TestWireSnapshot = {
       unit: 'transactions',
       mutability: 'idle-only',
     },
-    queue1Capacity: {
+    readerChannelCapacity: {
       default: 2,
       allowed: [0, 1, 2, 8, 16, 64, 8_192],
       unit: 'batches',
@@ -71,20 +71,20 @@ const VALID_WIRE: TestWireSnapshot = {
   readerReadBatchSize: 50_000,
   readerRowsRead: 14_000,
   readerSource: 'MBD-mini/trx/part/input.parquet',
-  queue1Capacity: 8,
-  queue1EnqueuedBatchesTotal: 11,
-  queue1EnqueuedTransactionsTotal: 550_000,
-  queue1DequeuedBatchesTotal: 5,
-  queue1DequeuedTransactionsTotal: 250_000,
-  queue1DepthBatches: 6,
-  queue1QueuedTransactions: 300_000,
-  queue1BlockedSenders: 1,
-  queue1OldestBlockedSenderMs: 450,
-  queue1BlockedMs: 1_600,
-  queue1InputBatchesPerSecond: 2.5,
-  queue1InputTransactionsPerSecond: 125_000.5,
-  queue1OutputBatchesPerSecond: 1.25,
-  queue1OutputTransactionsPerSecond: 62_500.25,
+  readerChannelCapacity: 8,
+  readerChannelSentBatchesTotal: 11,
+  readerChannelSentTransactionsTotal: 550_000,
+  readerChannelReceivedBatchesTotal: 5,
+  readerChannelReceivedTransactionsTotal: 250_000,
+  readerChannelDepthBatches: 6,
+  readerChannelBufferedTransactions: 300_000,
+  readerChannelBlockedSenders: 1,
+  readerChannelOldestBlockedSenderMs: 450,
+  readerChannelBlockedMs: 1_600,
+  readerChannelInputBatchesPerSecond: 2.5,
+  readerChannelInputTransactionsPerSecond: 125_000.5,
+  readerChannelOutputBatchesPerSecond: 1.25,
+  readerChannelOutputTransactionsPerSecond: 62_500.25,
 }
 
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
@@ -204,22 +204,22 @@ function readBatchSizeControl(
   }
 }
 
-function neutralQueue(
-  id: QueueTelemetrySnapshot['id'],
-  from: QueueTelemetrySnapshot['from'],
-  to: QueueTelemetrySnapshot['to'],
-): QueueTelemetrySnapshot {
+function neutralChannel(
+  id: ChannelTelemetrySnapshot['id'],
+  from: ChannelTelemetrySnapshot['from'],
+  to: ChannelTelemetrySnapshot['to'],
+): ChannelTelemetrySnapshot {
   return {
     id,
     from,
     to,
     capacity: control('batches'),
-    enqueuedBatchesTotal: 0,
-    enqueuedTransactionsTotal: 0,
-    dequeuedBatchesTotal: 0,
-    dequeuedTransactionsTotal: 0,
+    sentBatchesTotal: 0,
+    sentTransactionsTotal: 0,
+    receivedBatchesTotal: 0,
+    receivedTransactionsTotal: 0,
     depthBatches: null,
-    queuedTransactions: null,
+    bufferedTransactions: null,
     handoffBatches: 0,
     handoffBatchesTotal: 0,
     blockedSenders: 0,
@@ -236,43 +236,43 @@ function neutralQueue(
   }
 }
 
-function queue1(
+function readerChannel(
   wire: TestWireSnapshot | null,
   connectionState: ConnectionState,
-): QueueTelemetrySnapshot {
-  const queue = neutralQueue(
+): ChannelTelemetrySnapshot {
+  const channel = neutralChannel(
     'reader-to-throttler',
     'reader',
     'throttler',
   )
-  if (wire === null) return queue
+  if (wire === null) return channel
 
   return {
-    ...queue,
+    ...channel,
     capacity: {
-      ...control('batches', wire.queue1Capacity),
-      min: wire.policy.queue1Capacity.allowed[0]!,
-      max: wire.policy.queue1Capacity.allowed.at(-1)!,
+      ...control('batches', wire.readerChannelCapacity),
+      min: wire.policy.readerChannelCapacity.allowed[0]!,
+      max: wire.policy.readerChannelCapacity.allowed.at(-1)!,
       applyMode: connectionState === 'connected' && wire.runState === 'idle'
         ? 'immediate'
         : 'unavailable',
     },
-    depthBatches: wire.queue1DepthBatches,
-    queuedTransactions: wire.queue1QueuedTransactions,
-    enqueuedBatchesTotal: wire.queue1EnqueuedBatchesTotal,
-    enqueuedTransactionsTotal: wire.queue1EnqueuedTransactionsTotal,
-    dequeuedBatchesTotal: wire.queue1DequeuedBatchesTotal,
-    dequeuedTransactionsTotal: wire.queue1DequeuedTransactionsTotal,
-    inputBatchesPerSecond: wire.queue1InputBatchesPerSecond,
-    inputTransactionsPerSecond: wire.queue1InputTransactionsPerSecond,
-    outputBatchesPerSecond: wire.queue1OutputBatchesPerSecond,
-    outputTransactionsPerSecond: wire.queue1OutputTransactionsPerSecond,
-    inputTps: wire.queue1InputTransactionsPerSecond,
-    outputTps: wire.queue1OutputTransactionsPerSecond,
-    throughputTps: wire.queue1OutputTransactionsPerSecond,
-    blockedSenders: wire.queue1BlockedSenders,
-    oldestBlockedSenderMs: wire.queue1OldestBlockedSenderMs,
-    blockedMs: wire.queue1BlockedMs,
+    depthBatches: wire.readerChannelDepthBatches,
+    bufferedTransactions: wire.readerChannelBufferedTransactions,
+    sentBatchesTotal: wire.readerChannelSentBatchesTotal,
+    sentTransactionsTotal: wire.readerChannelSentTransactionsTotal,
+    receivedBatchesTotal: wire.readerChannelReceivedBatchesTotal,
+    receivedTransactionsTotal: wire.readerChannelReceivedTransactionsTotal,
+    inputBatchesPerSecond: wire.readerChannelInputBatchesPerSecond,
+    inputTransactionsPerSecond: wire.readerChannelInputTransactionsPerSecond,
+    outputBatchesPerSecond: wire.readerChannelOutputBatchesPerSecond,
+    outputTransactionsPerSecond: wire.readerChannelOutputTransactionsPerSecond,
+    inputTps: wire.readerChannelInputTransactionsPerSecond,
+    outputTps: wire.readerChannelOutputTransactionsPerSecond,
+    throughputTps: wire.readerChannelOutputTransactionsPerSecond,
+    blockedSenders: wire.readerChannelBlockedSenders,
+    oldestBlockedSenderMs: wire.readerChannelOldestBlockedSenderMs,
+    blockedMs: wire.readerChannelBlockedMs,
   }
 }
 
@@ -322,8 +322,8 @@ function expectedSnapshot(
       limitedMs: null,
       state: runState,
     },
-    queue1: queue1(wire, connectionState),
-    queue2: neutralQueue(
+    readerChannel: readerChannel(wire, connectionState),
+    senderChannel: neutralChannel(
       'throttler-to-sender',
       'throttler',
       'sender',
@@ -414,13 +414,13 @@ const malformedCases: ReadonlyArray<{
     },
   },
   {
-    name: 'malformed queue1 policy',
+    name: 'malformed readerChannel policy',
     result: async () => mockResponse({
       ...VALID_WIRE,
       policy: {
         ...VALID_WIRE.policy,
-        queue1Capacity: {
-          ...VALID_WIRE.policy.queue1Capacity,
+        readerChannelCapacity: {
+          ...VALID_WIRE.policy.readerChannelCapacity,
           allowed: [0, 2, 2],
         },
       },
@@ -489,18 +489,18 @@ const malformedCases: ReadonlyArray<{
     }),
   },
   {
-    name: 'negative queue capacity',
-    result: async () => mockResponse({ ...VALID_WIRE, queue1Capacity: -1 }),
+    name: 'negative channel capacity',
+    result: async () => mockResponse({ ...VALID_WIRE, readerChannelCapacity: -1 }),
   },
   {
-    name: 'fractional queue depth',
-    result: async () => mockResponse({ ...VALID_WIRE, queue1DepthBatches: 0.5 }),
+    name: 'fractional channel depth',
+    result: async () => mockResponse({ ...VALID_WIRE, readerChannelDepthBatches: 0.5 }),
   },
   {
-    name: 'unsafe queued transactions',
+    name: 'unsafe buffered transactions',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      queue1QueuedTransactions: Number.MAX_SAFE_INTEGER + 1,
+      readerChannelBufferedTransactions: Number.MAX_SAFE_INTEGER + 1,
     }),
   },
   {
@@ -601,15 +601,15 @@ describe('HttpAdapter', () => {
       max: 0,
       applyMode: 'unavailable',
     })
-    expect(snapshot.queue1).toEqual({
-      ...neutralQueue('reader-to-throttler', 'reader', 'throttler'),
+    expect(snapshot.readerChannel).toEqual({
+      ...neutralChannel('reader-to-throttler', 'reader', 'throttler'),
       capacity: { ...control('batches', 8), min: 0, max: 8_192 },
       depthBatches: 6,
-      queuedTransactions: 300_000,
-      enqueuedBatchesTotal: 11,
-      enqueuedTransactionsTotal: 550_000,
-      dequeuedBatchesTotal: 5,
-      dequeuedTransactionsTotal: 250_000,
+      bufferedTransactions: 300_000,
+      sentBatchesTotal: 11,
+      sentTransactionsTotal: 550_000,
+      receivedBatchesTotal: 5,
+      receivedTransactionsTotal: 250_000,
       inputBatchesPerSecond: 2.5,
       inputTransactionsPerSecond: 125_000.5,
       outputBatchesPerSecond: 1.25,
@@ -626,16 +626,16 @@ describe('HttpAdapter', () => {
   })
 
   it.each([0, 1, 2, 8_192])(
-    'maps queue1 capacity %i to the discrete HTTP control range',
-    async (queue1Capacity) => {
-      const wire = { ...VALID_WIRE, queue1Capacity }
+    'maps readerChannel capacity %i to the discrete HTTP control range',
+    async (readerChannelCapacity) => {
+      const wire = { ...VALID_WIRE, readerChannelCapacity }
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
       const adapter = new HttpAdapter()
 
       await flushPoll()
 
-      expect(adapter.getSnapshot().queue1.capacity).toEqual({
-        applied: queue1Capacity,
+      expect(adapter.getSnapshot().readerChannel.capacity).toEqual({
+        applied: readerChannelCapacity,
         preview: null,
         pending: null,
         min: 0,
@@ -701,12 +701,12 @@ describe('HttpAdapter', () => {
       readerReadBatchSize: 25_000,
       readerRowsRead: 28_000,
       readerSource: 'MBD-mini/trx/part/recovered.parquet',
-      queue1Capacity: 16,
-      queue1DepthBatches: 4,
-      queue1QueuedTransactions: 100_000,
-      queue1BlockedSenders: 0,
-      queue1OldestBlockedSenderMs: 0,
-      queue1BlockedMs: 2_000,
+      readerChannelCapacity: 16,
+      readerChannelDepthBatches: 4,
+      readerChannelBufferedTransactions: 100_000,
+      readerChannelBlockedSenders: 0,
+      readerChannelOldestBlockedSenderMs: 0,
+      readerChannelBlockedMs: 2_000,
     }
     fetchMock
       .mockResolvedValueOnce(mockResponse(VALID_WIRE))
@@ -845,7 +845,7 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it('sends an idle read batch size through the command queue without updating the snapshot', async () => {
+  it('sends an idle read batch size through the command channel without updating the snapshot', async () => {
     const idleWire: TestWireSnapshot = { ...VALID_WIRE, runState: 'idle' }
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? Promise.resolve(mockCommandResponse())
@@ -955,11 +955,11 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it('sends an idle queue1 capacity through the existing command queue', async () => {
+  it('sends an idle readerChannel capacity through the existing command channel', async () => {
     const idleWire: TestWireSnapshot = {
       ...VALID_WIRE,
       runState: 'idle',
-      queue1Capacity: 2,
+      readerChannelCapacity: 2,
     }
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? Promise.resolve(mockCommandResponse())
@@ -967,7 +967,7 @@ describe('HttpAdapter', () => {
     const adapter = new HttpAdapter()
 
     await flushPoll()
-    expect(adapter.getSnapshot().queue1.capacity).toEqual({
+    expect(adapter.getSnapshot().readerChannel.capacity).toEqual({
       applied: 2,
       preview: null,
       pending: null,
@@ -979,21 +979,20 @@ describe('HttpAdapter', () => {
     })
 
     const receipt = await adapter.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
+      type: 'set-reader-channel-capacity',
       value: 8_192,
     })
 
     expect(receipt).toMatchObject({
       accepted: true,
-      commandType: 'set-queue-capacity',
+      commandType: 'set-reader-channel-capacity',
       applyMode: 'immediate',
       snapshotRevision: 1,
       error: null,
     })
     expect(commandFetchCalls()).toHaveLength(1)
     expect(commandFetchCalls()[0]?.[1]).toMatchObject({
-      body: '{"action":"set-queue-capacity","value":8192}',
+      body: '{"action":"set-reader-channel-capacity","value":8192}',
     })
     adapter.dispose()
   })
@@ -1003,7 +1002,7 @@ describe('HttpAdapter', () => {
     { state: 'paused' as const, value: 2 },
     { state: 'idle' as const, value: 3 },
   ])(
-    'rejects queue1 capacity $value locally in $state',
+    'rejects readerChannel capacity $value locally in $state',
     async ({ state, value }) => {
       const wire: TestWireSnapshot = { ...VALID_WIRE, runState: state }
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
@@ -1011,8 +1010,7 @@ describe('HttpAdapter', () => {
 
       await flushPoll()
       const receipt = await adapter.dispatch({
-        type: 'set-queue-capacity',
-        queue: 'reader-to-throttler',
+        type: 'set-reader-channel-capacity',
         value,
       })
 
@@ -1022,7 +1020,7 @@ describe('HttpAdapter', () => {
         error: { code: 'unavailable', retryable: false },
       })
       expect(commandFetchCalls()).toHaveLength(0)
-      expect(adapter.getSnapshot().queue1.capacity).toMatchObject({
+      expect(adapter.getSnapshot().readerChannel.capacity).toMatchObject({
         applied: 8,
         applyMode: state === 'idle' ? 'immediate' : 'unavailable',
       })
@@ -1030,7 +1028,7 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it('does not send a queued queue1 capacity after the snapshot enters Run', async () => {
+  it('does not send a buffered readerChannel capacity after the snapshot enters Run', async () => {
     const idleWire: TestWireSnapshot = { ...VALID_WIRE, runState: 'idle' }
     const runningWire: TestWireSnapshot = {
       ...VALID_WIRE,
@@ -1052,8 +1050,7 @@ describe('HttpAdapter', () => {
     const runReceipt = adapter.dispatch({ type: 'run' })
     await Promise.resolve()
     const capacityReceipt = adapter.dispatch({
-      type: 'set-queue-capacity',
-      queue: 'reader-to-throttler',
+      type: 'set-reader-channel-capacity',
       value: 4,
     })
 
@@ -1298,7 +1295,7 @@ describe('HttpAdapter', () => {
     expect(commandFetchCalls()).toHaveLength(0)
   })
 
-  it('lets an in-flight POST settle but disposes queued commands without POST', async () => {
+  it('lets an in-flight POST settle but disposes buffered commands without POST', async () => {
     const inFlight = deferred<Response>()
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? inFlight.promise

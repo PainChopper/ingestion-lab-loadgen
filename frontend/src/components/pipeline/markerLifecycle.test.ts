@@ -3,13 +3,13 @@ import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
   LoadgenSnapshot,
   NumericControlSnapshot,
-  QueueId,
+  ChannelId,
   RunState,
 } from '../../model/loadgen'
-import { QueueFlowStateDeriver } from '../../model/queueFlowState'
+import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import {
   getFlowMarkerTarget,
-  getQueueDepthFamilyTarget,
+  getChannelDepthFamilyTarget,
   MARKER_STAGE_ORDER,
   markerMicroJitter,
   markerWaitingOffset,
@@ -17,7 +17,7 @@ import {
   MAX_FLOW_MARKERS,
   MAX_PENDING_OUTCOMES,
   MAX_PIPELINE_MARKERS,
-  MAX_QUEUE_DEPTH_FAMILIES,
+  MAX_CHANNEL_DEPTH_FAMILIES,
   MIN_FLOW_MARKERS,
   valveAdmissionIntervalMs,
 } from './markerLifecycle'
@@ -25,7 +25,7 @@ import type {
   MarkerLifecycleTelemetry,
   MarkerStage,
   PipelineMarkerSlotSnapshot,
-  QueueMarkerTelemetry,
+  ChannelMarkerTelemetry,
 } from './markerLifecycle'
 import {
   getMarkerStagePathGeometry,
@@ -50,29 +50,29 @@ function capacityControl(
   }
 }
 
-const Q1_CONTROL = capacityControl(4, 12, 1)
-const Q2_CONTROL = capacityControl(100, 160, 10)
+const READER_CHANNEL_CONTROL = capacityControl(4, 12, 1)
+const SENDER_CHANNEL_CONTROL = capacityControl(100, 160, 10)
 const PRODUCTION_STAGE_LENGTHS = Object.fromEntries(
   MARKER_STAGE_ORDER.map((stage) => [
     stage,
-    getMarkerStagePathGeometry(stage, Q1_CONTROL, Q2_CONTROL).length,
+    getMarkerStagePathGeometry(stage, READER_CHANNEL_CONTROL, SENDER_CHANNEL_CONTROL).length,
   ]),
 ) as Record<MarkerStage, number>
 
-function queueTelemetry(
-  id: QueueId,
-  overrides: Partial<QueueMarkerTelemetry> = {},
-): QueueMarkerTelemetry {
-  const queue1 = id === 'reader-to-throttler'
+function channelTelemetry(
+  id: ChannelId,
+  overrides: Partial<ChannelMarkerTelemetry> = {},
+): ChannelMarkerTelemetry {
+  const readerChannel = id === 'reader-to-throttler'
   return {
     id,
-    depthBatches: queue1 ? 4 : 100,
-    appliedCapacity: queue1 ? 4 : 100,
+    depthBatches: readerChannel ? 4 : 100,
+    appliedCapacity: readerChannel ? 4 : 100,
     throughputTps: 50_000,
-    dequeueActive: true,
+    receiveActive: true,
     blocked: false,
-    enqueuedBatchesTotal: 100,
-    dequeuedBatchesTotal: 90,
+    sentBatchesTotal: 100,
+    receivedBatchesTotal: 90,
     ...overrides,
   }
 }
@@ -82,8 +82,8 @@ function telemetry(
     runState?: RunState
     reducedMotion?: boolean
     valveOpeningIndex?: number
-    queue1?: Partial<QueueMarkerTelemetry>
-    queue2?: Partial<QueueMarkerTelemetry>
+    readerChannel?: Partial<ChannelMarkerTelemetry>
+    senderChannel?: Partial<ChannelMarkerTelemetry>
     http?: Partial<MarkerLifecycleTelemetry['http']>
   } = {},
 ): MarkerLifecycleTelemetry {
@@ -95,8 +95,8 @@ function telemetry(
     valveOpeningIndex,
     valvePreAdmissionStopPhase: valveGeometry.preAdmissionStopPhase,
     valveExitPhase: valveGeometry.exitPhase,
-    queue1: queueTelemetry('reader-to-throttler', options.queue1),
-    queue2: queueTelemetry('throttler-to-sender', options.queue2),
+    readerChannel: channelTelemetry('reader-to-throttler', options.readerChannel),
+    senderChannel: channelTelemetry('throttler-to-sender', options.senderChannel),
     http: {
       inFlightRequests: 0,
       requestsStartedTotal: 0,
@@ -122,7 +122,7 @@ function visible(controller: MarkerLifecycleController) {
 
 function familiesAtStage(
   controller: MarkerLifecycleController,
-  stage: 'queue1' | 'queue2',
+  stage: 'readerChannel' | 'senderChannel',
 ) {
   return flow(controller).filter((marker) => marker.stage === stage)
 }
@@ -134,7 +134,7 @@ function flow(controller: MarkerLifecycleController) {
 function waitingAtValve(controller: MarkerLifecycleController) {
   return flow(controller).filter((marker) =>
     marker.stage === 'throttler' &&
-    marker.queued
+    marker.buffered
   )
 }
 
@@ -200,13 +200,13 @@ function advanceUntil(
 describe('MarkerLifecycleController', () => {
   it('does not create cold-start flow families from stale activity', () => {
     const adapter = new SimulationAdapter()
-    const base = new QueueFlowStateDeriver().derive(adapter.getSnapshot(), 0)
+    const base = new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0)
     adapter.dispose()
     const snapshot: LoadgenSnapshot = {
       ...base,
       runState: 'running',
-      queue1: {
-        ...base.queue1,
+      readerChannel: {
+        ...base.readerChannel,
         depthBatches: 0,
         flowState: 'normal',
         inputBatchesPerSecond: 10,
@@ -214,8 +214,8 @@ describe('MarkerLifecycleController', () => {
         throughputTps: 0,
         handoffBatches: 7,
       },
-      queue2: {
-        ...base.queue2,
+      senderChannel: {
+        ...base.senderChannel,
         depthBatches: 0,
         flowState: 'normal',
         inputBatchesPerSecond: 8,
@@ -227,48 +227,48 @@ describe('MarkerLifecycleController', () => {
     }
 
     const staleTelemetry = markerTelemetryFromSnapshot(snapshot, false)
-    expect(staleTelemetry.queue1.dequeueActive).toBe(false)
-    expect(staleTelemetry.queue2.dequeueActive).toBe(false)
+    expect(staleTelemetry.readerChannel.receiveActive).toBe(false)
+    expect(staleTelemetry.senderChannel.receiveActive).toBe(false)
     expect(flow(new MarkerLifecycleController(staleTelemetry))).toHaveLength(0)
 
     const beforeRestart = telemetry({
-      queue1: { depthBatches: 0 },
-      queue2: { depthBatches: 0 },
+      readerChannel: { depthBatches: 0 },
+      senderChannel: { depthBatches: 0 },
       http: { inFlightRequests: 3, requestsStartedTotal: 20 },
     })
     const restarted = new MarkerLifecycleController(beforeRestart)
     expect(flow(restarted)).toHaveLength(MIN_FLOW_MARKERS)
     restarted.reconcile(telemetry({
-      queue1: {
+      readerChannel: {
         depthBatches: 0,
         throughputTps: 0,
-        dequeueActive: false,
-        enqueuedBatchesTotal: 0,
-        dequeuedBatchesTotal: 0,
+        receiveActive: false,
+        sentBatchesTotal: 0,
+        receivedBatchesTotal: 0,
       },
-      queue2: {
+      senderChannel: {
         depthBatches: 0,
         throughputTps: 0,
-        dequeueActive: false,
-        enqueuedBatchesTotal: 0,
-        dequeuedBatchesTotal: 0,
+        receiveActive: false,
+        sentBatchesTotal: 0,
+        receivedBatchesTotal: 0,
       },
       http: { inFlightRequests: 99 },
     }))
     expect(flow(restarted)).toHaveLength(0)
   })
 
-  it('hydrates queue depth as families and adds cadence families on start', () => {
+  it('hydrates channel depth as families and adds cadence families on start', () => {
     const idle = telemetry({
       runState: 'idle',
-      queue1: { throughputTps: 0, dequeueActive: false },
-      queue2: { throughputTps: 0, dequeueActive: false },
+      readerChannel: { throughputTps: 0, receiveActive: false },
+      senderChannel: { throughputTps: 0, receiveActive: false },
     })
     const controller = new MarkerLifecycleController(idle)
     const idleFamilies = flow(controller).map(markerPosition)
 
-    expect(familiesAtStage(controller, 'queue1')).toHaveLength(4)
-    expect(familiesAtStage(controller, 'queue2')).toHaveLength(24)
+    expect(familiesAtStage(controller, 'readerChannel')).toHaveLength(4)
+    expect(familiesAtStage(controller, 'senderChannel')).toHaveLength(24)
     expect(flow(controller)).toHaveLength(28)
     expect(flow(controller).every((marker) => marker.familyId !== null)).toBe(true)
 
@@ -281,9 +281,9 @@ describe('MarkerLifecycleController', () => {
     expect(flow(controller).every((marker) => marker.familyId !== null)).toBe(true)
   })
 
-  it('moves a q2 flow family every frame for three seconds at 70 px/s', () => {
+  it('moves a senderChannel flow family every frame for three seconds at 70 px/s', () => {
     const controller = new MarkerLifecycleController(telemetry())
-    const tracked = flow(controller).find((marker) => marker.stage === 'queue2')!
+    const tracked = flow(controller).find((marker) => marker.stage === 'senderChannel')!
     const familyId = tracked.familyId!
     let previousDistance = routeDistance(tracked)
     let traveled = 0
@@ -295,7 +295,7 @@ describe('MarkerLifecycleController', () => {
       const currentDistance = routeDistance(current)
       const frameDistance = currentDistance - previousDistance
 
-      expect(current.stage).toBe('queue2')
+      expect(current.stage).toBe('senderChannel')
       expect(frameDistance).toBeGreaterThan(0)
       expect(frameDistance).toBeCloseTo(70 * frameMs / 1_000, 8)
       previousDistance = currentDistance
@@ -305,16 +305,16 @@ describe('MarkerLifecycleController', () => {
     expect(traveled).toBeCloseTo(210, 8)
   })
 
-  it('freezes queue families in FIFO order when dequeue stops', () => {
+  it('freezes channel families in FIFO order when receive stops', () => {
     const stopped = telemetry({
-      queue1: {
+      readerChannel: {
         throughputTps: 0,
-        dequeueActive: false,
+        receiveActive: false,
         blocked: true,
       },
     })
     const controller = new MarkerLifecycleController(stopped)
-    const before = familiesAtStage(controller, 'queue1')
+    const before = familiesAtStage(controller, 'readerChannel')
       .map(({ slotId, phase }) => ({ slotId, phase }))
       .sort((left, right) => right.phase - left.phase)
 
@@ -322,39 +322,39 @@ describe('MarkerLifecycleController', () => {
       controller.advance(16)
     }
 
-    const after = familiesAtStage(controller, 'queue1')
+    const after = familiesAtStage(controller, 'readerChannel')
       .map(({ slotId, phase }) => ({ slotId, phase }))
       .sort((left, right) => right.phase - left.phase)
     expect(after).toEqual(before)
     expect(after.map(({ phase }) => phase)).toEqual([0.875, 0.625, 0.375, 0.125])
   })
 
-  it('keeps an admitted family moving when q2 throughput reaches zero', () => {
+  it('keeps an admitted family moving when senderChannel throughput reaches zero', () => {
     const controller = new MarkerLifecycleController(telemetry())
-    const tracked = flow(controller).find((marker) => marker.stage === 'queue2')!
+    const tracked = flow(controller).find((marker) => marker.stage === 'senderChannel')!
     const familyId = tracked.familyId!
     const beforeDistance = routeDistance(tracked)
     controller.reconcile(telemetry({
-      queue2: { throughputTps: 0, dequeueActive: false, blocked: true },
+      senderChannel: { throughputTps: 0, receiveActive: false, blocked: true },
     }))
 
     controller.advance(16)
     const advanced = markerByFamily(controller, familyId)
     expect(advanced.familyId).toBe(familyId)
     expect(routeDistance(advanced) - beforeDistance).toBeCloseTo(1.12, 8)
-    expect(advanced.queued).toBe(false)
+    expect(advanced.buffered).toBe(false)
   })
 
-  it('drains an in-queue family at zero throughput while run remains active', () => {
+  it('drains an in-channel family at zero throughput while run remains active', () => {
     const controller = new MarkerLifecycleController(telemetry())
-    const tracked = flow(controller).find((marker) => marker.stage === 'queue2')!
+    const tracked = flow(controller).find((marker) => marker.stage === 'senderChannel')!
     const familyId = tracked.familyId!
     controller.advance(160)
     const moving = markerByFamily(controller, familyId)
-    expect(moving.stage).toBe('queue2')
+    expect(moving.stage).toBe('senderChannel')
 
     controller.reconcile(telemetry({
-      queue2: { throughputTps: 0, dequeueActive: true, blocked: false },
+      senderChannel: { throughputTps: 0, receiveActive: true, blocked: false },
       http: { inFlightRequests: 3 },
     }))
     const beforeDrain = routeDistance(markerByFamily(controller, familyId))
@@ -362,13 +362,13 @@ describe('MarkerLifecycleController', () => {
     const drained = markerByFamily(controller, familyId)
     expect(drained.familyId).toBe(familyId)
     expect(routeDistance(drained)).toBeGreaterThan(beforeDrain)
-    expect(drained.queued).toBe(false)
+    expect(drained.buffered).toBe(false)
   })
 
   it('holds pre-valve FIFO while finite downstream families drain at zero', () => {
     const closed = telemetry({
       valveOpeningIndex: 0,
-      queue2: { depthBatches: 4, appliedCapacity: 4 },
+      senderChannel: { depthBatches: 4, appliedCapacity: 4 },
     })
     const controller = new MarkerLifecycleController(closed)
     advanceUntil(controller, () => waitingAtValve(controller).length >= 2)
@@ -384,12 +384,12 @@ describe('MarkerLifecycleController', () => {
 
     const stopped = (succeededTotal = 0) => telemetry({
       valveOpeningIndex: 0,
-      queue1: { throughputTps: 0, dequeueActive: false },
-      queue2: {
+      readerChannel: { throughputTps: 0, receiveActive: false },
+      senderChannel: {
         depthBatches: 0,
         appliedCapacity: 4,
         throughputTps: 0,
-        dequeueActive: false,
+        receiveActive: false,
       },
       http: {
         requestsCompletedTotal: succeededTotal,
@@ -398,16 +398,16 @@ describe('MarkerLifecycleController', () => {
     })
     controller.reconcile(stopped())
     advanceUntil(controller, () => flow(controller).every(
-      (marker) => marker.stage !== 'queue2',
+      (marker) => marker.stage !== 'senderChannel',
     ), 20_000)
-    expect(flow(controller).filter((marker) => marker.stage === 'queue2'))
+    expect(flow(controller).filter((marker) => marker.stage === 'senderChannel'))
       .toHaveLength(0)
     const waitingAfterDrain = waitingBefore.map(({ familyId }) =>
       markerByFamily(controller, familyId)
     )
     expect(waitingAfterDrain.map((marker) => marker.familyId))
       .toEqual(waitingBefore.map(({ familyId }) => familyId))
-    expect(waitingAfterDrain.every((marker) => marker.queued)).toBe(true)
+    expect(waitingAfterDrain.every((marker) => marker.buffered)).toBe(true)
     expect(waitingAfterDrain[0].phase).toBe(waitingBefore[0].phase)
     expect(waitingAfterDrain[1].phase).toBeLessThan(waitingAfterDrain[0].phase)
 
@@ -431,14 +431,14 @@ describe('MarkerLifecycleController', () => {
     expect([...downstreamIds].some((familyId) =>
       flow(controller).some((marker) => marker.familyId === familyId)
     )).toBe(false)
-    expect(flow(controller).filter((marker) => marker.stage === 'queue2'))
+    expect(flow(controller).filter((marker) => marker.stage === 'senderChannel'))
       .toHaveLength(0)
   })
 
   it('freezes retiring families only for explicit pause', () => {
     const controller = new MarkerLifecycleController(telemetry())
     controller.advance(160)
-    controller.reconcile(telemetry({ queue1: { depthBatches: 2 } }))
+    controller.reconcile(telemetry({ readerChannel: { depthBatches: 2 } }))
     const retiringBeforeZero = visible(controller)
       .filter((marker) => marker.state === 'retiring')
       .map((marker) => ({
@@ -451,8 +451,8 @@ describe('MarkerLifecycleController', () => {
 
     controller.reconcile(telemetry({
       runState: 'paused',
-      queue1: { depthBatches: 2, throughputTps: 0, dequeueActive: false },
-      queue2: { throughputTps: 0, dequeueActive: false },
+      readerChannel: { depthBatches: 2, throughputTps: 0, receiveActive: false },
+      senderChannel: { throughputTps: 0, receiveActive: false },
     }))
     controller.advance(4_000)
     const paused = visible(controller)
@@ -466,8 +466,8 @@ describe('MarkerLifecycleController', () => {
     expect(paused).toEqual(retiringBeforeZero)
 
     controller.reconcile(telemetry({
-      queue1: { depthBatches: 2, throughputTps: 0, dequeueActive: false },
-      queue2: { throughputTps: 0, dequeueActive: false },
+      readerChannel: { depthBatches: 2, throughputTps: 0, receiveActive: false },
+      senderChannel: { throughputTps: 0, receiveActive: false },
     }))
     controller.advance(1_000)
     expect(visible(controller).some((marker) =>
@@ -489,8 +489,8 @@ describe('MarkerLifecycleController', () => {
     controller.advance(3_000)
     controller.reconcile(telemetry({
       runState: 'paused',
-      queue1: { throughputTps: 125_000 },
-      queue2: { throughputTps: 125_000 },
+      readerChannel: { throughputTps: 125_000 },
+      senderChannel: { throughputTps: 125_000 },
     }))
     expect(flow(controller).map(({ slotId, familyId, stage, phase }) => ({
       slotId,
@@ -500,7 +500,7 @@ describe('MarkerLifecycleController', () => {
     }))).toEqual(paused)
 
     controller.reconcile(telemetry())
-    const tracked = paused.find((marker) => marker.stage === 'queue2')!
+    const tracked = paused.find((marker) => marker.stage === 'senderChannel')!
     const beforeDistance = routeDistance(markerByFamily(controller, tracked.familyId!))
     controller.advance(16)
     const resumed = markerByFamily(controller, tracked.familyId!)
@@ -509,11 +509,11 @@ describe('MarkerLifecycleController', () => {
 
   it('crosses the valve endpoint without coordinate or speed discontinuity', () => {
     const controller = new MarkerLifecycleController(telemetry())
-    const tracked = flow(controller).find((marker) => marker.stage === 'queue1')!
+    const tracked = flow(controller).find((marker) => marker.stage === 'readerChannel')!
     const familyId = tracked.familyId!
     let previous = markerByFamily(controller, familyId)
 
-    while (previous.stage === 'queue1') {
+    while (previous.stage === 'readerChannel') {
       const previousDistance = routeDistance(previous)
       controller.advance(16)
       const current = markerByFamily(controller, familyId)
@@ -522,17 +522,17 @@ describe('MarkerLifecycleController', () => {
     }
 
     expect(previous.stage).toBe('throttler')
-    const queueEnd = getMarkerStagePathGeometry(
-      'queue1',
-      Q1_CONTROL,
-      Q2_CONTROL,
+    const channelEnd = getMarkerStagePathGeometry(
+      'readerChannel',
+      READER_CHANNEL_CONTROL,
+      SENDER_CHANNEL_CONTROL,
     ).end
     const valveStart = getMarkerStagePathGeometry(
       'throttler',
-      Q1_CONTROL,
-      Q2_CONTROL,
+      READER_CHANNEL_CONTROL,
+      SENDER_CHANNEL_CONTROL,
     ).start
-    expect(queueEnd).toEqual(valveStart)
+    expect(channelEnd).toEqual(valveStart)
   })
 
   it('holds pre-valve families in FIFO and releases them without changing identity', () => {
@@ -550,12 +550,12 @@ describe('MarkerLifecycleController', () => {
     const held = waiting.map(({ familyId }) => markerByFamily(controller, familyId))
     expect(held.map((marker) => marker.familyId))
       .toEqual(waiting.map(({ familyId }) => familyId))
-    expect(held.every((marker) => marker.queued)).toBe(true)
+    expect(held.every((marker) => marker.buffered)).toBe(true)
     expect(held[0].phase).toBe(waiting[0].phase)
     expect(held[1].phase).toBeGreaterThanOrEqual(waiting[1].phase)
     expect(held[1].phase).toBeLessThan(held[0].phase)
 
-    const downstream = flow(controller).find((marker) => marker.stage === 'queue2')!
+    const downstream = flow(controller).find((marker) => marker.stage === 'senderChannel')!
     const downstreamBefore = routeDistance(downstream)
     controller.advance(16)
     expect(routeDistance(markerByFamily(controller, downstream.familyId!)))
@@ -577,16 +577,16 @@ describe('MarkerLifecycleController', () => {
     const prepare = () => {
       const controller = new MarkerLifecycleController(telemetry({
         valveOpeningIndex: 0,
-        queue2: { depthBatches: 0 },
+        senderChannel: { depthBatches: 0 },
       }))
       const backlogFamilies = new Set(
-        familiesAtStage(controller, 'queue1')
-          .slice(0, getQueueDepthFamilyTarget(4, 4))
+        familiesAtStage(controller, 'readerChannel')
+          .slice(0, getChannelDepthFamilyTarget(4, 4))
           .map((marker) => marker.familyId),
       )
       advanceUntil(controller, () => [...backlogFamilies].every((familyId) => {
         const marker = markerByFamily(controller, familyId!)
-        return marker.stage === 'throttler' && marker.queued
+        return marker.stage === 'throttler' && marker.buffered
       }), 60_000)
       return { controller, backlogFamilies }
     }
@@ -595,13 +595,13 @@ describe('MarkerLifecycleController', () => {
       backlogFamilies: ReadonlySet<string | null>,
     ) => [...backlogFamilies].filter((familyId) => {
       const marker = markerByFamily(controller, familyId!)
-      return marker.stage !== 'throttler' || !marker.queued
+      return marker.stage !== 'throttler' || !marker.buffered
     }).length
 
     const closed = prepare()
     expect(waitingAtValve(closed.controller).filter((marker) =>
       closed.backlogFamilies.has(marker.familyId)
-    )).toHaveLength(getQueueDepthFamilyTarget(4, 4))
+    )).toHaveLength(getChannelDepthFamilyTarget(4, 4))
     const waitingFamily = waitingAtValve(closed.controller)[0]
     const jitterBefore = markerMicroJitter(
       waitingFamily.familyId!,
@@ -642,7 +642,7 @@ describe('MarkerLifecycleController', () => {
       const partial = prepare()
       partial.controller.reconcile(telemetry({
         valveOpeningIndex,
-        queue2: { depthBatches: 0 },
+        senderChannel: { depthBatches: 0 },
       }))
       for (let elapsed = 0; elapsed < 600; elapsed += 16) {
         partial.controller.advance(Math.min(16, 600 - elapsed))
@@ -662,7 +662,7 @@ describe('MarkerLifecycleController', () => {
     const oneAtATime = prepare()
     oneAtATime.controller.reconcile(telemetry({
       valveOpeningIndex: 10,
-      queue2: { depthBatches: 0 },
+      senderChannel: { depthBatches: 0 },
     }))
     oneAtATime.controller.advance(600)
     expect(releasedCount(oneAtATime.controller, oneAtATime.backlogFamilies))
@@ -674,7 +674,7 @@ describe('MarkerLifecycleController', () => {
     const fullyOpen = prepare()
     fullyOpen.controller.reconcile(telemetry({
       valveOpeningIndex: 11,
-      queue2: { depthBatches: 0 },
+      senderChannel: { depthBatches: 0 },
     }))
     const openBefore = new Map([...fullyOpen.backlogFamilies].map((familyId) => [
       familyId,
@@ -689,7 +689,7 @@ describe('MarkerLifecycleController', () => {
     const released = releases[1]
     const tracked = [...released.backlogFamilies]
       .map((familyId) => markerByFamily(released.controller, familyId!))
-      .find((marker) => marker.stage !== 'throttler' || !marker.queued)!
+      .find((marker) => marker.stage !== 'throttler' || !marker.buffered)!
     const before = markerPosition(tracked)
     released.controller.advance(16)
     const after = markerByFamily(released.controller, tracked.familyId!)
@@ -700,7 +700,7 @@ describe('MarkerLifecycleController', () => {
 
   it('ignores preview and pending when projecting applied valve admission', () => {
     const adapter = new SimulationAdapter()
-    const base = new QueueFlowStateDeriver().derive(adapter.getSnapshot(), 0)
+    const base = new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0)
     adapter.dispose()
     const withCandidate: LoadgenSnapshot = {
       ...base,
@@ -791,8 +791,8 @@ describe('MarkerLifecycleController', () => {
 
   it('keeps exactly 60 fixed slots with unique active family IDs', () => {
     const controller = new MarkerLifecycleController(telemetry({
-      queue1: { throughputTps: 500_000 },
-      queue2: { throughputTps: 500_000 },
+      readerChannel: { throughputTps: 500_000 },
+      senderChannel: { throughputTps: 500_000 },
     }))
     const slots = controller.getSnapshot().markers
     const families = flow(controller).map((marker) => marker.familyId!)
@@ -806,8 +806,8 @@ describe('MarkerLifecycleController', () => {
       (marker) => marker.familyId !== null,
     )).toBe(true)
     expect(flow(controller)).toHaveLength(4 + 24 + MAX_FLOW_MARKERS)
-    expect(getQueueDepthFamilyTarget(100, 100))
-      .toBe(MAX_QUEUE_DEPTH_FAMILIES)
+    expect(getChannelDepthFamilyTarget(100, 100))
+      .toBe(MAX_CHANNEL_DEPTH_FAMILIES)
     expect(getFlowMarkerTarget(1)).toBe(MIN_FLOW_MARKERS)
     expect(getFlowMarkerTarget(500_000)).toBe(MAX_FLOW_MARKERS)
   })
@@ -851,15 +851,15 @@ describe('MarkerLifecycleController', () => {
   it('services only the bounded FIFO after overflow outcomes arrive', () => {
     const controller = new MarkerLifecycleController(telemetry({
       runState: 'idle',
-      queue1: { throughputTps: 0, dequeueActive: false },
-      queue2: { throughputTps: 0, dequeueActive: false },
+      readerChannel: { throughputTps: 0, receiveActive: false },
+      senderChannel: { throughputTps: 0, receiveActive: false },
     }))
     const familiesBefore = flow(controller).map(markerPosition)
 
     controller.reconcile(telemetry({
       runState: 'idle',
-      queue1: { throughputTps: 0, dequeueActive: false },
-      queue2: { throughputTps: 0, dequeueActive: false },
+      readerChannel: { throughputTps: 0, receiveActive: false },
+      senderChannel: { throughputTps: 0, receiveActive: false },
       http: {
         requestsCompletedTotal: 30,
         requestsFailedTotal: 30,
@@ -867,8 +867,8 @@ describe('MarkerLifecycleController', () => {
     }))
     controller.reconcile(telemetry({
       runState: 'idle',
-      queue1: { throughputTps: 0, dequeueActive: false },
-      queue2: { throughputTps: 0, dequeueActive: false },
+      readerChannel: { throughputTps: 0, receiveActive: false },
+      senderChannel: { throughputTps: 0, receiveActive: false },
       http: {
         requestsCompletedTotal: MAX_PENDING_OUTCOMES + 10,
         requestsSucceededTotal: MAX_PENDING_OUTCOMES - 20,
@@ -930,14 +930,14 @@ describe('MarkerLifecycleController', () => {
       .toHaveLength(0)
   })
 
-  it('carries one family through production geometry, q1 wait, outcome, and recycle', () => {
+  it('carries one family through production geometry, readerChannel wait, outcome, and recycle', () => {
     let succeededTotal = 0
     const withTotals = (
-      queue1: Partial<QueueMarkerTelemetry> = {},
-      queue2: Partial<QueueMarkerTelemetry> = {},
+      readerChannel: Partial<ChannelMarkerTelemetry> = {},
+      senderChannel: Partial<ChannelMarkerTelemetry> = {},
     ) => telemetry({
-      queue1,
-      queue2,
+      readerChannel,
+      senderChannel,
       http: {
         requestsCompletedTotal: succeededTotal,
         requestsSucceededTotal: succeededTotal,
@@ -992,26 +992,26 @@ describe('MarkerLifecycleController', () => {
       advanceContinuously()
     }
     while (
-      markerByFamily(controller, familyId).stage === 'queue1' &&
+      markerByFamily(controller, familyId).stage === 'readerChannel' &&
       markerByFamily(controller, familyId).phase < 0.25
     ) {
       advanceContinuously()
     }
 
     controller.reconcile(withTotals(
-      { throughputTps: 0, dequeueActive: false, blocked: true },
+      { throughputTps: 0, receiveActive: false, blocked: true },
     ))
-    const q1Frozen = markerByFamily(controller, familyId)
+    const readerChannelFrozen = markerByFamily(controller, familyId)
     controller.advance(2_000)
     expect(markerByFamily(controller, familyId)).toMatchObject({
-      stage: 'queue1',
-      phase: q1Frozen.phase,
+      stage: 'readerChannel',
+      phase: readerChannelFrozen.phase,
       familyId,
     })
     controller.reconcile(withTotals())
     advanceContinuously()
 
-    while (markerByFamily(controller, familyId).stage === 'queue1') {
+    while (markerByFamily(controller, familyId).stage === 'readerChannel') {
       advanceContinuously()
     }
 
@@ -1063,7 +1063,7 @@ describe('MarkerLifecycleController', () => {
     const controller = new MarkerLifecycleController(telemetry())
     const initial = flow(controller)
 
-    controller.reconcile(telemetry({ queue1: { depthBatches: 2 } }))
+    controller.reconcile(telemetry({ readerChannel: { depthBatches: 2 } }))
     const reduced = flow(controller)
     const retiring = visible(controller).filter((marker) =>
       marker.state === 'retiring'
@@ -1076,12 +1076,12 @@ describe('MarkerLifecycleController', () => {
 
   it('preserves family identity and phase when capacity changes depth density', () => {
     const controller = new MarkerLifecycleController(telemetry({
-      queue2: { depthBatches: 50, appliedCapacity: 50 },
+      senderChannel: { depthBatches: 50, appliedCapacity: 50 },
     }))
     const before = flow(controller)
 
     controller.reconcile(telemetry({
-      queue2: { depthBatches: 50, appliedCapacity: 100 },
+      senderChannel: { depthBatches: 50, appliedCapacity: 100 },
     }))
     const after = flow(controller)
 
@@ -1101,7 +1101,7 @@ describe('MarkerLifecycleController', () => {
       phase,
     }))
     const upstreamBefore = before.filter((marker) =>
-      marker.stage === 'reader' || marker.stage === 'queue1'
+      marker.stage === 'reader' || marker.stage === 'readerChannel'
     )
     controller.advance(10_000)
     const after = flow(controller).map(({ slotId, familyId, stage, phase }) => ({
@@ -1117,7 +1117,7 @@ describe('MarkerLifecycleController', () => {
       const previous = before.find((item) => item.familyId === marker.familyId)
       return previous !== undefined &&
         previous.stage !== 'reader' &&
-        previous.stage !== 'queue1' &&
+        previous.stage !== 'readerChannel' &&
         (previous.stage !== marker.stage || previous.phase !== marker.phase)
     })).toBe(true)
     expect(controller.getSnapshot().motionElapsedMs).toBe(0)
@@ -1156,15 +1156,15 @@ describe('MarkerLifecycleController', () => {
 
   it('preserves exact flow family positions across repeated cardinality revisions', () => {
     const controller = new MarkerLifecycleController(telemetry({
-      queue1: { throughputTps: 250_000 },
-      queue2: { throughputTps: 250_000 },
+      readerChannel: { throughputTps: 250_000 },
+      senderChannel: { throughputTps: 250_000 },
     }))
     const revisions = [125_000, 50_000, 250_000, 250_000, 1, 125_000, 250_000]
     for (const throughputTps of revisions) {
       const before = flow(controller)
       controller.reconcile(telemetry({
-        queue1: { throughputTps },
-        queue2: { throughputTps },
+        readerChannel: { throughputTps },
+        senderChannel: { throughputTps },
       }))
       const after = flow(controller)
       expect(after).toHaveLength(28 + getFlowMarkerTarget(throughputTps))
@@ -1172,13 +1172,13 @@ describe('MarkerLifecycleController', () => {
     }
   })
 
-  it('hydrates only missing transaction families when queue depth grows', () => {
+  it('hydrates only missing transaction families when channel depth grows', () => {
     const controller = new MarkerLifecycleController(telemetry({
-      queue2: { depthBatches: 15, appliedCapacity: 100 },
+      senderChannel: { depthBatches: 15, appliedCapacity: 100 },
     }))
     const initial = flow(controller)
     controller.reconcile(telemetry({
-      queue2: { depthBatches: 50, appliedCapacity: 100 },
+      senderChannel: { depthBatches: 50, appliedCapacity: 100 },
     }))
     const grown = flow(controller)
 
@@ -1192,33 +1192,33 @@ describe('MarkerLifecycleController', () => {
     const capacity = 24
     const depths = [6, 18, 3, 24, 12, 21, 9, 24]
     const controller = new MarkerLifecycleController(telemetry({
-      queue1: { depthBatches: 12, appliedCapacity: capacity },
-      queue2: { depthBatches: 18, appliedCapacity: capacity },
+      readerChannel: { depthBatches: 12, appliedCapacity: capacity },
+      senderChannel: { depthBatches: 18, appliedCapacity: capacity },
     }))
 
     for (let revision = 1; revision <= 24; revision += 1) {
       const before = flow(controller)
-      const queue1Depth = depths[revision % depths.length]
-      const queue2Depth = depths[(revision + 3) % depths.length]
+      const readerChannelDepth = depths[revision % depths.length]
+      const senderChannelDepth = depths[(revision + 3) % depths.length]
       controller.reconcile(telemetry({
-        queue1: {
-          depthBatches: queue1Depth,
+        readerChannel: {
+          depthBatches: readerChannelDepth,
           appliedCapacity: capacity,
-          enqueuedBatchesTotal: 100 + revision,
-          dequeuedBatchesTotal: 90 + revision,
+          sentBatchesTotal: 100 + revision,
+          receivedBatchesTotal: 90 + revision,
         },
-        queue2: {
-          depthBatches: queue2Depth,
+        senderChannel: {
+          depthBatches: senderChannelDepth,
           appliedCapacity: capacity,
-          enqueuedBatchesTotal: 100 + revision,
-          dequeuedBatchesTotal: 90 + revision,
+          sentBatchesTotal: 100 + revision,
+          receivedBatchesTotal: 90 + revision,
         },
       }))
 
       const after = flow(controller)
       expect(after).toHaveLength(
-        getQueueDepthFamilyTarget(queue1Depth, capacity) +
-          getQueueDepthFamilyTarget(queue2Depth, capacity) +
+        getChannelDepthFamilyTarget(readerChannelDepth, capacity) +
+          getChannelDepthFamilyTarget(senderChannelDepth, capacity) +
           MIN_FLOW_MARKERS,
       )
       expectFlowSurvivors(before, after)
@@ -1271,8 +1271,8 @@ describe('MarkerLifecycleController', () => {
 
   it('maps HTTP attempts, failures, and connection errors onto real flow families', () => {
     const attempts = new MarkerLifecycleController(telemetry({
-      queue1: { depthBatches: 0, throughputTps: 0, dequeueActive: false },
-      queue2: { depthBatches: 0, throughputTps: 0, dequeueActive: false },
+      readerChannel: { depthBatches: 0, throughputTps: 0, receiveActive: false },
+      senderChannel: { depthBatches: 0, throughputTps: 0, receiveActive: false },
       http: { inFlightRequests: 99, requestsStartedTotal: 99 },
     }))
     expect(flow(attempts)).toHaveLength(0)
@@ -1315,29 +1315,29 @@ describe('MarkerLifecycleController', () => {
     })
   })
 
-  it('projects retry attempts from Sender without reverse q2 movement', () => {
+  it('projects retry attempts from Sender without reverse senderChannel movement', () => {
     const empty = telemetry({
-      queue1: {
+      readerChannel: {
         depthBatches: 0,
         throughputTps: 0,
-        dequeueActive: false,
-        enqueuedBatchesTotal: 0,
-        dequeuedBatchesTotal: 0,
+        receiveActive: false,
+        sentBatchesTotal: 0,
+        receivedBatchesTotal: 0,
       },
-      queue2: {
+      senderChannel: {
         depthBatches: 0,
         throughputTps: 0,
-        dequeueActive: false,
-        enqueuedBatchesTotal: 12,
-        dequeuedBatchesTotal: 12,
+        receiveActive: false,
+        sentBatchesTotal: 12,
+        receivedBatchesTotal: 12,
       },
     })
     const controller = new MarkerLifecycleController(empty)
     expect(flow(controller)).toHaveLength(0)
 
     controller.reconcile(telemetry({
-      queue1: empty.queue1,
-      queue2: empty.queue2,
+      readerChannel: empty.readerChannel,
+      senderChannel: empty.senderChannel,
       http: {
         inFlightRequests: 1,
         requestsStartedTotal: 1,
@@ -1351,7 +1351,7 @@ describe('MarkerLifecycleController', () => {
       retryAttempt: true,
     })
     expect(flow(controller).some((marker) =>
-      marker.retryAttempt === true && marker.stage === 'queue2'
+      marker.retryAttempt === true && marker.stage === 'senderChannel'
     )).toBe(false)
 
     advanceUntil(controller, () => {
@@ -1361,8 +1361,8 @@ describe('MarkerLifecycleController', () => {
       return current.stage === 'target' && current.phase === 1
     })
     controller.reconcile(telemetry({
-      queue1: empty.queue1,
-      queue2: empty.queue2,
+      readerChannel: empty.readerChannel,
+      senderChannel: empty.senderChannel,
       http: {
         requestsStartedTotal: 1,
         requestsCompletedTotal: 1,
@@ -1382,25 +1382,25 @@ describe('MarkerLifecycleController', () => {
 
   it('drops excess retry projection when the shared marker pool is full', () => {
     const empty = telemetry({
-      queue1: {
+      readerChannel: {
         depthBatches: 0,
         throughputTps: 0,
-        dequeueActive: false,
-        enqueuedBatchesTotal: 0,
-        dequeuedBatchesTotal: 0,
+        receiveActive: false,
+        sentBatchesTotal: 0,
+        receivedBatchesTotal: 0,
       },
-      queue2: {
+      senderChannel: {
         depthBatches: 0,
         throughputTps: 0,
-        dequeueActive: false,
-        enqueuedBatchesTotal: 0,
-        dequeuedBatchesTotal: 0,
+        receiveActive: false,
+        sentBatchesTotal: 0,
+        receivedBatchesTotal: 0,
       },
     })
     const controller = new MarkerLifecycleController(empty)
     controller.reconcile(telemetry({
-      queue1: empty.queue1,
-      queue2: empty.queue2,
+      readerChannel: empty.readerChannel,
+      senderChannel: empty.senderChannel,
       http: {
         inFlightRequests: 99,
         requestsStartedTotal: 99,
