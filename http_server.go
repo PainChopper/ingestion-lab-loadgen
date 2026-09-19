@@ -31,6 +31,7 @@ const (
 
 type commandResult struct {
 	status commandStatus
+	err    error
 }
 
 const snapshotPath = "/api/loadgen/snapshot"

@@ -1,7 +1,9 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import { SimulationAdapter } from '../adapters/SimulationAdapter'
+import type { LoadgenTelemetrySnapshot } from '../model/loadgen'
 import { LabShell } from './LabShell'
 
 let adapter: SimulationAdapter | null = null
@@ -14,6 +16,37 @@ afterEach(() => {
 })
 
 describe('LabShell', () => {
+  it('renders a snapshot start error and clears its alert on the next snapshot', () => {
+    const simulation = new SimulationAdapter()
+    let snapshot: LoadgenTelemetrySnapshot = {
+      ...simulation.getSnapshot(),
+      startError: 'producer is unavailable',
+    }
+    const listeners = new Set<(next: LoadgenTelemetrySnapshot) => void>()
+    const errorAdapter: LoadgenAdapter = {
+      kind: 'simulation',
+      getSnapshot: () => snapshot,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        listener(snapshot)
+        return () => listeners.delete(listener)
+      },
+      dispatch: simulation.dispatch,
+      dispose: simulation.dispose,
+    }
+    render(<LabShell adapter={errorAdapter} />)
+
+    expect(screen.getByRole('alert').textContent)
+      .toBe('Не удалось запустить: producer is unavailable')
+
+    act(() => {
+      snapshot = { ...snapshot, startError: null }
+      listeners.forEach((listener) => listener(snapshot))
+    })
+    expect(screen.queryByRole('alert')).toBeNull()
+    errorAdapter.dispose()
+  })
+
   it('runs, pauses, and resets through the mounted toolbar', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()

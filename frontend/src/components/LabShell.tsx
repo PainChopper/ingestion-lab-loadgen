@@ -116,6 +116,12 @@ function TopBar({
         </button>
       </div>
 
+      {snapshot.startError !== null && (
+        <p className="run-start-error" role="alert">
+          Не удалось запустить: {snapshot.startError}
+        </p>
+      )}
+
       <dl className="run-counters">
         <div>
           <dt>Elapsed</dt>

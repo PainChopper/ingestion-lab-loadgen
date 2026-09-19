@@ -17,6 +17,9 @@ var blackHole uint64
 type controlState struct {
 	actualTPS         int64
 	totalTransactions int64
+	elapsedBeforeRun  time.Duration
+	runStartedAt      time.Time
+	startError        *string
 
 	lifecycle *lifecycle
 }

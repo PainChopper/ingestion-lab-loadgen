@@ -11,6 +11,8 @@ type statusSnapshot struct {
 	TotalTransactions int64    `json:"totalTransactions"`
 	ReaderWorkers     int      `json:"readerWorkers"`
 	SenderWorkers     int      `json:"senderWorkers"`
+	ElapsedMs         int64    `json:"elapsedMs"`
+	StartError        *string  `json:"startError"`
 }
 
 func snapshotHandler(requests chan<- request) http.Handler {

@@ -45,6 +45,8 @@ func (state *controlState) eventLoop(
 					TotalTransactions: state.totalTransactions,
 					ReaderWorkers:     1,
 					SenderWorkers:     0,
+					ElapsedMs:         state.elapsedMs(time.Now()),
+					StartError:        state.startError,
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
@@ -55,12 +57,22 @@ func (state *controlState) eventLoop(
 					if err != nil {
 						cancel()
 						log.Printf("cannot start load generator: %v", err)
+						message := err.Error()
+						state.startError = &message
+						if cmd.commandReply != nil {
+							cmd.commandReply <- commandResult{err: err}
+						}
 						continue
 					}
 					cancelProducer = cancel
 				}
 				if state.lifecycle.run() {
+					state.runStartedAt = time.Now()
+					state.startError = nil
 					cancelConsumer, consumerDone = startConsumer(batches, &consumedSinceTick)
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- commandResult{}
 				}
 			case cmdPause:
 				if state.lifecycle.currentState() != runStateRunning {
@@ -68,6 +80,7 @@ func (state *controlState) eventLoop(
 				}
 				cancelConsumer()
 				<-consumerDone
+				state.pauseElapsed(time.Now())
 				cancelConsumer = nil
 				consumerDone = nil
 				delta := consumedSinceTick.Swap(0)
@@ -112,7 +125,26 @@ func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMe
 	consumedSinceTick.Store(0)
 	state.totalTransactions = 0
 	state.actualTPS = 0
+	state.elapsedBeforeRun = 0
+	state.runStartedAt = time.Time{}
+	state.startError = nil
 	promMetrics.actualTPS.Set(0)
+}
+
+func (state *controlState) elapsedMs(now time.Time) int64 {
+	elapsed := state.elapsedBeforeRun
+	if state.lifecycle.currentState() == runStateRunning {
+		elapsed += now.Sub(state.runStartedAt)
+	}
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed.Milliseconds()
+}
+
+func (state *controlState) pauseElapsed(now time.Time) {
+	state.elapsedBeforeRun += now.Sub(state.runStartedAt)
+	state.runStartedAt = time.Time{}
 }
 
 func startConsumer(
