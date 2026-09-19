@@ -7,7 +7,12 @@ import (
 
 const progressEvery int64 = 500
 
-func consumeBatches(ctx context.Context, batches <-chan []Transaction, consumedSinceTick *atomic.Int64) {
+func consumeBatches(
+	ctx context.Context,
+	batches <-chan []Transaction,
+	consumedSinceTick *atomic.Int64,
+	queueTelemetry *queue1Telemetry,
+) {
 	var pending int64
 	for {
 		if ctx.Err() != nil {
@@ -22,6 +27,7 @@ func consumeBatches(ctx context.Context, batches <-chan []Transaction, consumedS
 				return
 			}
 			batch = next
+			queueTelemetry.recordDequeue(len(batch))
 		}
 		for i := range batch {
 			consumeTransaction(&batch[i])

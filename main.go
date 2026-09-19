@@ -9,7 +9,7 @@ import (
 const (
 	windowLength = time.Second / 1
 	startTPS     = 100_000
-	dataPath     = "./data/MBD-mini/trx/**/*.parquet"
+	dataPath     = "./data/MBD-mini/trx/fold=*/*.parquet"
 )
 
 var blackHole uint64

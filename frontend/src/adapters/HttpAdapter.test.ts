@@ -21,11 +21,19 @@ interface TestWireSnapshot {
   readonly readerRowsRead: number
   readonly readerSource: string | null
   readonly queue1Capacity: number
+  readonly queue1EnqueuedBatchesTotal: number
+  readonly queue1EnqueuedTransactionsTotal: number
+  readonly queue1DequeuedBatchesTotal: number
+  readonly queue1DequeuedTransactionsTotal: number
   readonly queue1DepthBatches: number
   readonly queue1QueuedTransactions: number
   readonly queue1BlockedSenders: number
   readonly queue1OldestBlockedSenderMs: number
   readonly queue1BlockedMs: number
+  readonly queue1InputBatchesPerSecond: number
+  readonly queue1InputTransactionsPerSecond: number
+  readonly queue1OutputBatchesPerSecond: number
+  readonly queue1OutputTransactionsPerSecond: number
 }
 
 interface MockResponseOptions {
@@ -46,11 +54,19 @@ const VALID_WIRE: TestWireSnapshot = {
   readerRowsRead: 14_000,
   readerSource: 'MBD-mini/trx/part/input.parquet',
   queue1Capacity: 8,
+  queue1EnqueuedBatchesTotal: 11,
+  queue1EnqueuedTransactionsTotal: 550_000,
+  queue1DequeuedBatchesTotal: 5,
+  queue1DequeuedTransactionsTotal: 250_000,
   queue1DepthBatches: 6,
   queue1QueuedTransactions: 300_000,
   queue1BlockedSenders: 1,
   queue1OldestBlockedSenderMs: 450,
   queue1BlockedMs: 1_600,
+  queue1InputBatchesPerSecond: 2.5,
+  queue1InputTransactionsPerSecond: 125_000.5,
+  queue1OutputBatchesPerSecond: 1.25,
+  queue1OutputTransactionsPerSecond: 62_500.25,
 }
 
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
@@ -222,6 +238,17 @@ function queue1(
     },
     depthBatches: wire.queue1DepthBatches,
     queuedTransactions: wire.queue1QueuedTransactions,
+    enqueuedBatchesTotal: wire.queue1EnqueuedBatchesTotal,
+    enqueuedTransactionsTotal: wire.queue1EnqueuedTransactionsTotal,
+    dequeuedBatchesTotal: wire.queue1DequeuedBatchesTotal,
+    dequeuedTransactionsTotal: wire.queue1DequeuedTransactionsTotal,
+    inputBatchesPerSecond: wire.queue1InputBatchesPerSecond,
+    inputTransactionsPerSecond: wire.queue1InputTransactionsPerSecond,
+    outputBatchesPerSecond: wire.queue1OutputBatchesPerSecond,
+    outputTransactionsPerSecond: wire.queue1OutputTransactionsPerSecond,
+    inputTps: wire.queue1InputTransactionsPerSecond,
+    outputTps: wire.queue1OutputTransactionsPerSecond,
+    throughputTps: wire.queue1OutputTransactionsPerSecond,
     blockedSenders: wire.queue1BlockedSenders,
     oldestBlockedSenderMs: wire.queue1OldestBlockedSenderMs,
     blockedMs: wire.queue1BlockedMs,
@@ -493,7 +520,7 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('maps only the sixteen valid wire fields into a fresh frozen snapshot', async () => {
+  it('maps only the twenty-four valid wire fields into a fresh frozen snapshot', async () => {
     fetchMock.mockResolvedValueOnce(mockResponse(
       VALID_WIRE,
       { contentType: 'application/json; charset=utf-8' },
@@ -536,6 +563,17 @@ describe('HttpAdapter', () => {
       capacity: { ...control('batches', 8), min: 0, max: 8_192 },
       depthBatches: 6,
       queuedTransactions: 300_000,
+      enqueuedBatchesTotal: 11,
+      enqueuedTransactionsTotal: 550_000,
+      dequeuedBatchesTotal: 5,
+      dequeuedTransactionsTotal: 250_000,
+      inputBatchesPerSecond: 2.5,
+      inputTransactionsPerSecond: 125_000.5,
+      outputBatchesPerSecond: 1.25,
+      outputTransactionsPerSecond: 62_500.25,
+      inputTps: 125_000.5,
+      outputTps: 62_500.25,
+      throughputTps: 62_500.25,
       blockedSenders: 1,
       oldestBlockedSenderMs: 450,
       blockedMs: 1_600,

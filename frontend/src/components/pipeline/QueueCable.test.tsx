@@ -122,6 +122,43 @@ function translatedY(element: Element): number {
 }
 
 describe('QueueCable mounted behavior', () => {
+  it('activates only queue1 cable flow from measured queue rates', () => {
+    const adapter = new SimulationAdapter()
+    const queue = derivedSnapshot(adapter).queue1
+    const active = {
+      ...queue,
+      flowState: 'stopped' as const,
+      capacity: { ...queue.capacity, applied: 0 },
+      depthBatches: 0,
+      blockedSenders: 0,
+      blockedMs: 900,
+      inputTransactionsPerSecond: 500,
+      outputTransactionsPerSecond: 0,
+    }
+    const activeView = renderCable(active)
+    const activeGroup = activeView.container.querySelector(
+      '#queue-reader-to-throttler',
+    )!
+
+    expect(activeGroup.classList.contains('pipeline-queue--flow-active')).toBe(true)
+    expect(activeGroup.getAttribute('data-input-active')).toBe('true')
+    expect(activeGroup.getAttribute('data-output-active')).toBe('false')
+    expect(activeView.container.textContent).not.toContain('Waiting upstream')
+    activeView.unmount()
+
+    const idleView = renderCable({
+      ...active,
+      inputTransactionsPerSecond: 0,
+      outputTransactionsPerSecond: 0,
+    })
+    const idleGroup = idleView.container.querySelector(
+      '#queue-reader-to-throttler',
+    )!
+    expect(idleGroup.classList.contains('pipeline-queue--flow-active')).toBe(false)
+    idleView.unmount()
+    adapter.dispose()
+  })
+
   it('uses keyboard capacity steps and bounds for both queue scales', async () => {
     const user = userEvent.setup()
     const adapter = new SimulationAdapter()

@@ -4,13 +4,71 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
 )
+
+func TestProduceBatchesReadsNestedDefaultParquet(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data", "MBD-mini", "trx", "fold=0", "input.parquet")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create nested fixture directory: %v", err)
+	}
+	if err := parquet.WriteFile(path, []Transaction{{ClientID: "nested fixture"}}); err != nil {
+		t.Fatalf("write nested parquet fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var telemetry readerTelemetry
+	var queueTelemetry queue1Telemetry
+	pattern := filepath.Join(dir, filepath.FromSlash(dataPath))
+	batches, err := produceBatches(ctx, pattern, 1, defaultQueue1Capacity, &telemetry, &queueTelemetry)
+	if err != nil {
+		t.Fatalf("start producer with default pattern: %v", err)
+	}
+
+	select {
+	case batch := <-batches:
+		if len(batch) != 1 || batch[0].ClientID != "nested fixture" {
+			t.Fatalf("batch = %v, want nested fixture row", batch)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nested parquet row was not produced")
+	}
+	cancel()
+	for range batches {
+	}
+}
+
+func TestProduceBatchesRejectsEmptyAndInvalidPatterns(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		pattern string
+		badGlob bool
+	}{
+		{name: "empty pattern", pattern: ""},
+		{name: "invalid pattern", pattern: "[", badGlob: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var telemetry readerTelemetry
+			var queueTelemetry queue1Telemetry
+			batches, err := produceBatches(context.Background(), test.pattern, 1, 1, &telemetry, &queueTelemetry)
+			if err == nil || batches != nil {
+				t.Fatalf("produceBatches(%q) = (%v, %v), want nil channel and error", test.pattern, batches, err)
+			}
+			if test.badGlob && !errors.Is(err, filepath.ErrBadPattern) {
+				t.Fatalf("error = %v, want bad glob pattern", err)
+			}
+		})
+	}
+}
 
 func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 	dir := t.TempDir()

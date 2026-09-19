@@ -33,6 +33,7 @@ interface WorkerActorProps {
   workerStates?: SenderWorkerStateCounts
   workerSlots?: readonly SenderWorkerSlotSnapshot[] | null
   runState: RunState
+  active?: boolean
   inputPort?: Point
   outputPort: Point
   primaryMetric: string
@@ -132,6 +133,7 @@ export function WorkerActor({
   workerStates,
   workerSlots,
   runState,
+  active,
   inputPort,
   outputPort,
   primaryMetric,
@@ -149,7 +151,7 @@ export function WorkerActor({
   const workerStep = Math.max(1, Math.round(workers.step))
   const chipState = (index: number): SenderWorkerState | 'active' | 'inactive' => {
     if (workerSlots === undefined || workerSlots === null) {
-      return runState === 'running' ? 'active' : 'inactive'
+      return (active ?? (runState === 'running')) ? 'active' : 'inactive'
     }
     return workerSlots[index]?.state ?? 'inactive'
   }

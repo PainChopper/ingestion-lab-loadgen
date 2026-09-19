@@ -773,6 +773,19 @@
   opacity: 1;
 }
 
+@media (prefers-reduced-motion: no-preference) {
+  .pipeline-queue--flow-active .pipeline-queue-cable {
+    stroke-dasharray: 8 6;
+    animation: pipeline-queue-flow 700ms linear infinite;
+  }
+}
+
+@keyframes pipeline-queue-flow {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+
 .pipeline-queue-handle--preview .pipeline-queue-handle__request-ring {
   stroke: var(--cyan);
   stroke-dasharray: 2 2;

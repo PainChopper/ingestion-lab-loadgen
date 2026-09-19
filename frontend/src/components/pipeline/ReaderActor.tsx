@@ -6,6 +6,7 @@ import { WorkerActor, type WorkerActorId } from './WorkerActor'
 
 interface ReaderActorProps {
   snapshot: ReaderSnapshot
+  rateDriven: boolean
   selected: boolean
   onSelect: (id: SelectableId) => void
   onWorkerCountChange: (actor: WorkerActorId, value: number) => void
@@ -15,6 +16,7 @@ interface ReaderActorProps {
 
 export function ReaderActor({
   snapshot,
+  rateDriven,
   selected,
   onSelect,
   onWorkerCountChange,
@@ -31,6 +33,9 @@ export function ReaderActor({
       controls={geometry.controls}
       workers={snapshot.workers}
       runState={snapshot.state}
+      active={rateDriven
+        ? snapshot.readTps !== null && snapshot.readTps > 0
+        : undefined}
       outputPort={geometry.ports.output}
       primaryMetric={`Read ${formatRate(snapshot.readTps)}`}
       secondaryMetric={`Capacity ${formatRate(snapshot.configuredCapacityTps)}`}

@@ -460,6 +460,45 @@ function pipelineElement(snapshot: LoadgenSnapshot) {
 }
 
 describe('PipelineSvg marker wiring', () => {
+  it('keeps Simulation Reader activity lifecycle-driven while HTTP uses read rate', () => {
+    const adapter = new SimulationAdapter()
+    const base = adapter.getSnapshot()
+    adapter.dispose()
+    const withReadRate = (
+      adapterKind: 'simulation' | 'http',
+      runState: 'idle' | 'running' | 'paused',
+      readTps: number,
+    ) =>
+      new QueueFlowStateDeriver().derive({
+        ...base,
+        adapterKind,
+        runState,
+        reader: { ...base.reader, state: runState, readTps },
+        throttler: { ...base.throttler, state: runState },
+        sender: { ...base.sender, state: runState },
+      }, 0)
+
+    const simulation = renderPipeline(withReadRate('simulation', 'running', 0))
+    expect(simulation.container.querySelectorAll('#reader-actor .pipeline-worker--active'))
+      .toHaveLength(base.reader.workers.applied ?? 0)
+    simulation.unmount()
+
+    const idle = renderPipeline(withReadRate('http', 'idle', 0))
+    expect(idle.container.querySelectorAll('#reader-actor .pipeline-worker--active'))
+      .toHaveLength(0)
+    idle.unmount()
+
+    const running = renderPipeline(withReadRate('http', 'running', 1))
+    expect(running.container.querySelectorAll('#reader-actor .pipeline-worker--active'))
+      .toHaveLength(base.reader.workers.applied ?? 0)
+    running.unmount()
+
+    const paused = renderPipeline(withReadRate('http', 'paused', 1))
+    expect(paused.container.querySelectorAll('#reader-actor .pipeline-worker--active'))
+      .toHaveLength(base.reader.workers.applied ?? 0)
+    paused.unmount()
+  })
+
   it('keeps landscape actor bottoms, ports, and link endpoints stable across worker boundaries', () => {
     const cases = [
       { count: 0, reader: { top: 355, height: 120 }, sender: { top: 355, height: 120 } },

@@ -36,7 +36,8 @@ func TestQueue1TelemetryMeasuresBlockedSendUntilConsumerReceives(t *testing.T) {
 
 	waitForBlockedSender(t, &telemetry)
 	blocked := telemetry.snapshot(time.Now())
-	if blocked.blockedSenders != 1 || blocked.depthBatches != 1 || blocked.queuedTransactions != 1 {
+	if blocked.blockedSenders != 1 || blocked.depthBatches != 1 || blocked.queuedTransactions != 1 ||
+		blocked.enqueuedBatchesTotal != 0 {
 		t.Fatalf("blocked queue measurements = %+v", blocked)
 	}
 	time.Sleep(10 * time.Millisecond)
@@ -52,7 +53,8 @@ func TestQueue1TelemetryMeasuresBlockedSendUntilConsumerReceives(t *testing.T) {
 	}
 
 	completed := telemetry.snapshot(time.Now())
-	if completed.blockedSenders != 0 || completed.blockedMs <= 0 || completed.depthBatches != 1 {
+	if completed.blockedSenders != 0 || completed.blockedMs <= 0 || completed.depthBatches != 1 ||
+		completed.enqueuedBatchesTotal != 1 || completed.enqueuedTransactionsTotal != 1 {
 		t.Fatalf("completed queue measurements = %+v", completed)
 	}
 }
@@ -101,7 +103,8 @@ func TestQueue1TelemetryRecordsCancelledBlockedSendAndReset(t *testing.T) {
 	}
 
 	completed := telemetry.snapshot(time.Now())
-	if completed.blockedSenders != 0 || completed.blockedMs <= 0 {
+	if completed.blockedSenders != 0 || completed.blockedMs <= 0 ||
+		completed.enqueuedBatchesTotal != 0 || completed.enqueuedTransactionsTotal != 0 {
 		t.Fatalf("cancelled queue measurements = %+v", completed)
 	}
 
@@ -109,8 +112,88 @@ func TestQueue1TelemetryRecordsCancelledBlockedSendAndReset(t *testing.T) {
 	reset := telemetry.snapshot(time.Now())
 	if reset.capacity != 0 || reset.depthBatches != 0 ||
 		reset.queuedTransactions != 0 || reset.blockedSenders != 0 ||
-		reset.oldestBlockedSenderMs != 0 || reset.blockedMs != 0 {
+		reset.oldestBlockedSenderMs != 0 || reset.blockedMs != 0 ||
+		reset.enqueuedBatchesTotal != 0 || reset.enqueuedTransactionsTotal != 0 ||
+		reset.dequeuedBatchesTotal != 0 || reset.dequeuedTransactionsTotal != 0 ||
+		reset.inputBatchesPerSecond != 0 || reset.inputTransactionsPerSecond != 0 ||
+		reset.outputBatchesPerSecond != 0 || reset.outputTransactionsPerSecond != 0 {
 		t.Fatalf("reset queue measurements = %+v", reset)
+	}
+}
+
+func TestQueue1TelemetryCountsSuccessfulSendAndSamplesWindow(t *testing.T) {
+	batches := make(chan []Transaction, 2)
+	var telemetry queue1Telemetry
+	telemetry.start(batches, 2)
+	if !telemetry.send(context.Background(), batches, make([]Transaction, 2)) {
+		t.Fatal("first send failed")
+	}
+	if !telemetry.send(context.Background(), batches, make([]Transaction, 3)) {
+		t.Fatal("second send failed")
+	}
+	telemetry.recordDequeue(len(<-batches))
+
+	beforeSample := telemetry.snapshot(time.Now())
+	if beforeSample.enqueuedBatchesTotal != 2 || beforeSample.enqueuedTransactionsTotal != 5 ||
+		beforeSample.dequeuedBatchesTotal != 1 || beforeSample.dequeuedTransactionsTotal != 2 ||
+		beforeSample.inputBatchesPerSecond != 0 || beforeSample.outputBatchesPerSecond != 0 {
+		t.Fatalf("before sample = %+v", beforeSample)
+	}
+
+	telemetry.sample(500 * time.Millisecond)
+	first := telemetry.snapshot(time.Now())
+	if first.inputBatchesPerSecond != 4 || first.inputTransactionsPerSecond != 10 ||
+		first.outputBatchesPerSecond != 2 || first.outputTransactionsPerSecond != 4 {
+		t.Fatalf("first window = %+v", first)
+	}
+	telemetry.sample(500 * time.Millisecond)
+	second := telemetry.snapshot(time.Now())
+	if second.enqueuedBatchesTotal != 2 || second.dequeuedBatchesTotal != 1 ||
+		second.inputBatchesPerSecond != 0 || second.inputTransactionsPerSecond != 0 ||
+		second.outputBatchesPerSecond != 0 || second.outputTransactionsPerSecond != 0 {
+		t.Fatalf("empty window = %+v", second)
+	}
+
+	telemetry.recordDequeue(len(<-batches))
+	telemetry.reset()
+	telemetry.sample(time.Second)
+	reset := telemetry.snapshot(time.Now())
+	if reset.enqueuedBatchesTotal != 0 || reset.enqueuedTransactionsTotal != 0 ||
+		reset.dequeuedBatchesTotal != 0 || reset.dequeuedTransactionsTotal != 0 ||
+		reset.inputBatchesPerSecond != 0 || reset.inputTransactionsPerSecond != 0 ||
+		reset.outputBatchesPerSecond != 0 || reset.outputTransactionsPerSecond != 0 {
+		t.Fatalf("reset window = %+v", reset)
+	}
+}
+
+func TestQueue1TelemetryUnbufferedHandoffCountsOnlyAfterSend(t *testing.T) {
+	batches := make(chan []Transaction)
+	var telemetry queue1Telemetry
+	telemetry.start(batches, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sent := make(chan bool, 1)
+	go func() {
+		sent <- telemetry.send(ctx, batches, make([]Transaction, 2))
+	}()
+
+	waitForBlockedSender(t, &telemetry)
+	blocked := telemetry.snapshot(time.Now())
+	if blocked.capacity != 0 || blocked.depthBatches != 0 || blocked.enqueuedBatchesTotal != 0 {
+		t.Fatalf("blocked unbuffered queue = %+v", blocked)
+	}
+	batch := <-batches
+	telemetry.recordDequeue(len(batch))
+	if ok := <-sent; !ok {
+		t.Fatal("unbuffered send failed after receive")
+	}
+	telemetry.sample(time.Second)
+	handoff := telemetry.snapshot(time.Now())
+	if handoff.depthBatches != 0 || handoff.enqueuedBatchesTotal != 1 ||
+		handoff.enqueuedTransactionsTotal != 2 || handoff.dequeuedBatchesTotal != 1 ||
+		handoff.dequeuedTransactionsTotal != 2 || handoff.inputBatchesPerSecond != 1 ||
+		handoff.outputBatchesPerSecond != 1 {
+		t.Fatalf("unbuffered handoff = %+v", handoff)
 	}
 }
 

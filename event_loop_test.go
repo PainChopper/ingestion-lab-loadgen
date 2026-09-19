@@ -341,20 +341,34 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- request{kind: cmdRun}
 	waitForState(t, requests, runStateRunning)
 	queue := make(chan []Transaction, defaultQueue1Capacity)
-	queue <- make([]Transaction, 2)
 	state.queue1.start(queue, 2)
+	if !state.queue1.send(context.Background(), queue, make([]Transaction, 2)) {
+		t.Fatal("queue send failed")
+	}
 	state.reader.recordRead(2, filepath.Join("data", "first.parquet"))
 	requests <- request{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
 	state.reader.recordRead(3, filepath.Join("data", "second.parquet"))
+	metrics <- time.Now()
 
 	snapshotReply := make(chan statusSnapshot, 1)
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot := <-snapshotReply
 	if snapshot.ReaderRowsRead != 5 || snapshot.ReaderSource == nil ||
 		*snapshot.ReaderSource != "data/second.parquet" || snapshot.Queue1Capacity != 2 ||
-		snapshot.Queue1DepthBatches != 1 || snapshot.Queue1QueuedTransactions != 2 {
+		snapshot.Queue1DepthBatches != 1 || snapshot.Queue1QueuedTransactions != 2 ||
+		snapshot.Queue1EnqueuedBatchesTotal != 1 || snapshot.Queue1EnqueuedTransactionsTotal != 2 ||
+		snapshot.Queue1InputBatchesPerSecond != 1 || snapshot.Queue1InputTransactionsPerSecond != 2 {
 		t.Fatalf("paused snapshot = %+v, want reader and queue measurements", snapshot)
+	}
+	state.queue1.recordDequeue(len(<-queue))
+	metrics <- time.Now()
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	snapshot = <-snapshotReply
+	if snapshot.Queue1DequeuedBatchesTotal != 1 || snapshot.Queue1DequeuedTransactionsTotal != 2 ||
+		snapshot.Queue1InputBatchesPerSecond != 0 || snapshot.Queue1InputTransactionsPerSecond != 0 ||
+		snapshot.Queue1OutputBatchesPerSecond != 1 || snapshot.Queue1OutputTransactionsPerSecond != 2 {
+		t.Fatalf("drained queue snapshot = %+v", snapshot)
 	}
 
 	requests <- request{kind: cmdRun}
@@ -371,7 +385,11 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	if snapshot.ReaderReadTPS != 0 || snapshot.ReaderRowsRead != 0 || snapshot.ReaderSource != nil ||
 		snapshot.Queue1Capacity != defaultQueue1Capacity || snapshot.Queue1DepthBatches != 0 ||
 		snapshot.Queue1QueuedTransactions != 0 || snapshot.Queue1BlockedSenders != 0 ||
-		snapshot.Queue1OldestBlockedSenderMs != 0 || snapshot.Queue1BlockedMs != 0 {
+		snapshot.Queue1OldestBlockedSenderMs != 0 || snapshot.Queue1BlockedMs != 0 ||
+		snapshot.Queue1EnqueuedBatchesTotal != 0 || snapshot.Queue1EnqueuedTransactionsTotal != 0 ||
+		snapshot.Queue1DequeuedBatchesTotal != 0 || snapshot.Queue1DequeuedTransactionsTotal != 0 ||
+		snapshot.Queue1InputBatchesPerSecond != 0 || snapshot.Queue1InputTransactionsPerSecond != 0 ||
+		snapshot.Queue1OutputBatchesPerSecond != 0 || snapshot.Queue1OutputTransactionsPerSecond != 0 {
 		t.Fatalf("snapshot after Reset = %+v, want zero measurements", snapshot)
 	}
 }
