@@ -154,6 +154,7 @@ function freezeSnapshot(
     connectionState: 'connected',
     runState: state.runState,
     elapsedMs: telemetry.elapsedMs,
+    startError: null,
     totalTransactions: telemetry.totalTransactions,
     reader: Object.freeze({
       id: 'reader',

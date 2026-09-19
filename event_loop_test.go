@@ -2,12 +2,111 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestElapsedMsUsesRunStartAndAccumulatedTime(t *testing.T) {
+	start := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+	state := controlState{lifecycle: newLifecycle()}
+	if got := state.elapsedMs(start); got != 0 {
+		t.Fatalf("idle elapsed = %d, want 0", got)
+	}
+
+	state.lifecycle.run()
+	state.runStartedAt = start
+	if got := state.elapsedMs(start.Add(1250 * time.Millisecond)); got != 1250 {
+		t.Fatalf("running elapsed = %d, want 1250", got)
+	}
+
+	state.lifecycle.pause()
+	state.pauseElapsed(start.Add(1250 * time.Millisecond))
+	if got := state.elapsedMs(start.Add(10 * time.Second)); got != 1250 {
+		t.Fatalf("paused elapsed = %d, want 1250", got)
+	}
+
+	state.lifecycle.run()
+	state.runStartedAt = start.Add(10 * time.Second)
+	if got := state.elapsedMs(start.Add(10*time.Second + 750*time.Millisecond)); got != 2000 {
+		t.Fatalf("resumed elapsed = %d, want 2000", got)
+	}
+}
+
+func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
+	requests := make(chan request, 3)
+	metrics := make(chan time.Time)
+	batches := make(chan []Transaction)
+	var starts int
+	produce := func(ctx context.Context) (<-chan []Transaction, error) {
+		starts++
+		switch starts {
+		case 1:
+			return nil, errors.New("first failure")
+		case 2:
+			return nil, errors.New("second failure")
+		}
+		go func() {
+			defer close(batches)
+			<-ctx.Done()
+		}()
+		return batches, nil
+	}
+	startCustomEventLoopForTest(t, requests, metrics, produce)
+	reply := make(chan commandResult, 1)
+	snapshotReply := make(chan statusSnapshot, 1)
+
+	for index, want := range []string{"first failure", "second failure"} {
+		requests <- request{kind: cmdRun, commandReply: reply}
+		if result := <-reply; result.err == nil || result.err.Error() != want {
+			t.Fatalf("Run error = %v, want %q", result.err, want)
+		}
+		requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+		snapshot := <-snapshotReply
+		if snapshot.RunState != runStateIdle || snapshot.ElapsedMs != 0 || snapshot.StartError == nil || *snapshot.StartError != want {
+			t.Fatalf("failed Run snapshot = %+v, want idle, zero elapsed, %q", snapshot, want)
+		}
+		if index == 0 {
+			requests <- request{kind: cmdReset, commandReply: reply}
+			if result := <-reply; result.status != commandAccepted {
+				t.Fatalf("Reset status = %v, want accepted", result.status)
+			}
+			requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+			if snapshot := <-snapshotReply; snapshot.StartError != nil || snapshot.ElapsedMs != 0 {
+				t.Fatalf("Reset snapshot = %+v, want cleared error and elapsed", snapshot)
+			}
+		}
+	}
+
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.err != nil {
+		t.Fatalf("retry Run error = %v, want nil", result.err)
+	}
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	if snapshot := <-snapshotReply; snapshot.RunState != runStateRunning || snapshot.StartError != nil {
+		t.Fatalf("successful Run snapshot = %+v", snapshot)
+	}
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.err != nil || starts != 3 {
+		t.Fatalf("repeated Run = %+v, producer starts = %d, want nil error and 3 starts", result, starts)
+	}
+	requests <- request{kind: cmdPause}
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	if snapshot := <-snapshotReply; snapshot.RunState != runStatePaused || snapshot.ElapsedMs < 0 {
+		t.Fatalf("Pause snapshot = %+v", snapshot)
+	}
+	requests <- request{kind: cmdReset, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("paused Reset status = %v, want accepted", result.status)
+	}
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	if snapshot := <-snapshotReply; snapshot.RunState != runStateIdle || snapshot.ElapsedMs != 0 {
+		t.Fatalf("paused Reset snapshot = %+v", snapshot)
+	}
+}
 
 func TestRunCommandStartsPipelineOnce(t *testing.T) {
 	var starts int

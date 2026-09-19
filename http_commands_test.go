@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,7 +38,7 @@ func TestCommandsHandlerDispatches(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("command was not dispatched")
 			}
-			if test.expectedKind == cmdReset {
+			if test.expectedKind == cmdRun || test.expectedKind == cmdReset {
 				cmd.commandReply <- commandResult{status: commandAccepted}
 			}
 			select {
@@ -54,6 +55,31 @@ func TestCommandsHandlerDispatches(t *testing.T) {
 				t.Errorf("command kind = %v, want %v", cmd.kind, test.expectedKind)
 			}
 		})
+	}
+}
+
+func TestCommandsHandlerReportsRunStartError(t *testing.T) {
+	commands := make(chan request, 1)
+	request := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"run"}`))
+	recorder := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		commandsHandler(commands).ServeHTTP(recorder, request)
+	}()
+
+	command := <-commands
+	command.commandReply <- commandResult{err: errors.New("missing parquet")}
+	<-done
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("reply code = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
+		t.Errorf("content type = %q, want application/json", contentType)
+	}
+	if body := recorder.Body.String(); body != "{\"error\":\"missing parquet\"}\n" {
+		t.Errorf("reply body = %q", body)
 	}
 }
 

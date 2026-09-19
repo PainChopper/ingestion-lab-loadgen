@@ -11,6 +11,8 @@ import { HttpAdapter } from './HttpAdapter'
 
 interface TestWireSnapshot {
   readonly runState: RunState
+  readonly elapsedMs: number
+  readonly startError: string | null
   readonly totalTransactions: number
   readonly readerWorkers: number
   readonly senderWorkers: number
@@ -24,6 +26,8 @@ interface MockResponseOptions {
 
 const VALID_WIRE: TestWireSnapshot = {
   runState: 'running',
+  elapsedMs: 12_345,
+  startError: null,
   totalTransactions: 42_000,
   readerWorkers: 1,
   senderWorkers: 0,
@@ -168,7 +172,8 @@ function expectedSnapshot(
     adapterKind: 'http',
     connectionState,
     runState,
-    elapsedMs: 0,
+    elapsedMs: wire?.elapsedMs ?? 0,
+    startError: wire?.startError ?? null,
     totalTransactions: wire?.totalTransactions ?? 0,
     reader: {
       id: 'reader',
@@ -297,6 +302,29 @@ const malformedCases: ReadonlyArray<{
     }),
   },
   {
+    name: 'negative elapsed time',
+    result: async () => mockResponse({ ...VALID_WIRE, elapsedMs: -1 }),
+  },
+  {
+    name: 'fractional elapsed time',
+    result: async () => mockResponse({ ...VALID_WIRE, elapsedMs: 0.5 }),
+  },
+  {
+    name: 'unsafe elapsed time',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      elapsedMs: Number.MAX_SAFE_INTEGER + 1,
+    }),
+  },
+  {
+    name: 'empty start error',
+    result: async () => mockResponse({ ...VALID_WIRE, startError: '' }),
+  },
+  {
+    name: 'invalid start error',
+    result: async () => mockResponse({ ...VALID_WIRE, startError: 42 }),
+  },
+  {
     name: 'negative integer',
     result: async () => mockResponse({ ...VALID_WIRE, readerWorkers: -1 }),
   },
@@ -367,7 +395,7 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('maps only the four valid wire fields into a fresh frozen snapshot', async () => {
+  it('maps only the six valid wire fields into a fresh frozen snapshot', async () => {
     fetchMock.mockResolvedValueOnce(mockResponse(
       VALID_WIRE,
       { contentType: 'application/json; charset=utf-8' },
@@ -417,6 +445,8 @@ describe('HttpAdapter', () => {
   it('preserves last-known wire fields on failure and recovers on success', async () => {
     const recoveredWire: TestWireSnapshot = {
       runState: 'paused',
+      elapsedMs: 67_890,
+      startError: 'previous start failed',
       totalTransactions: 84_000,
       readerWorkers: 2,
       senderWorkers: 3,
@@ -637,6 +667,58 @@ describe('HttpAdapter', () => {
     expect(snapshotFetchCalls()).toHaveLength(1)
     expect(commandFetchCalls()).toHaveLength(0)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    adapter.dispose()
+  })
+
+  it('maps an HTTP 422 start error into a nonretryable unavailable receipt', async () => {
+    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+      ? Promise.resolve(mockResponse(
+        { error: 'producer is unavailable' },
+        { status: 422 },
+      ))
+      : pendingResponse())
+    const adapter = new HttpAdapter()
+
+    const receipt = await adapter.dispatch({ type: 'run' })
+
+    expect(receipt).toEqual({
+      commandId: 'http-local-1',
+      commandType: 'run',
+      accepted: false,
+      applyMode: 'unavailable',
+      appliedAtMs: null,
+      snapshotRevision: 0,
+      error: {
+        code: 'unavailable',
+        message: 'producer is unavailable',
+        retryable: false,
+        details: null,
+      },
+    })
+    expectDeepFrozen(receipt)
+    adapter.dispose()
+  })
+
+  it.each([
+    mockResponse({}, { status: 422 }),
+    mockResponse({ error: '' }, { status: 422 }),
+    mockResponse(null, { status: 422, jsonError: new SyntaxError() }),
+  ])('keeps the HTTP status message for a malformed 422 error body', async (response) => {
+    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+      ? Promise.resolve(response)
+      : pendingResponse())
+    const adapter = new HttpAdapter()
+
+    const receipt = await adapter.dispatch({ type: 'run' })
+
+    expect(receipt).toMatchObject({
+      accepted: false,
+      error: {
+        code: 'unavailable',
+        message: 'command request failed with HTTP status 422',
+        retryable: false,
+      },
+    })
     adapter.dispose()
   })
 

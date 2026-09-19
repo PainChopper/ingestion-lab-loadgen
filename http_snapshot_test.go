@@ -4,12 +4,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	requests := make(chan request, 1)
-	expected := statusSnapshot{RunState: runStateRunning, TotalTransactions: 46, ReaderWorkers: 1, SenderWorkers: 0}
+	startError := "failed to start"
+	expected := statusSnapshot{
+		RunState:          runStateRunning,
+		TotalTransactions: 46,
+		ReaderWorkers:     1,
+		SenderWorkers:     0,
+		ElapsedMs:         1234,
+		StartError:        &startError,
+	}
 
 	req := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
 	rec := httptest.NewRecorder()
@@ -40,8 +49,27 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		t.Fatalf("decode response body: %v", err)
 	}
 
-	if actual != expected {
+	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("actual = %v, want %v", actual, expected)
+	}
+}
+
+func TestSnapshotHandlerIncludesZeroElapsedAndNullStartError(t *testing.T) {
+	requests := make(chan request, 1)
+	request := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
+	recorder := httptest.NewRecorder()
+	go func() {
+		command := <-requests
+		command.snapshotReply <- statusSnapshot{RunState: runStateIdle}
+	}()
+
+	snapshotHandler(requests).ServeHTTP(recorder, request)
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if string(body["elapsedMs"]) != "0" || string(body["startError"]) != "null" {
+		t.Errorf("elapsedMs = %s, startError = %s", body["elapsedMs"], body["startError"])
 	}
 }
 

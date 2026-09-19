@@ -85,6 +85,7 @@ describe('SimulationAdapter', () => {
     expect(Object.isFrozen(initial.target.errorRatePercent)).toBe(true)
     expect(Object.isFrozen(initial.sender.workerSlots)).toBe(true)
     expect(Object.isFrozen(initial.sender.workerSlots?.[0])).toBe(true)
+    expect(initial.startError).toBeNull()
     expectSenderSlotConservation(initial.sender)
 
     unsubscribe()

@@ -190,6 +190,7 @@ export interface LoadgenTelemetrySnapshot {
   readonly connectionState: ConnectionState
   readonly runState: RunState
   readonly elapsedMs: number
+  readonly startError: string | null
   readonly totalTransactions: number
   readonly reader: ReaderSnapshot
   readonly throttler: ThrottlerSnapshot

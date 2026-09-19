@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 )
 
@@ -25,7 +26,18 @@ func commandsHandler(commands chan<- request) http.Handler {
 
 		switch cr.Action {
 		case "run":
-			commands <- request{kind: cmdRun}
+			reply := make(chan commandResult, 1)
+			commands <- request{kind: cmdRun, commandReply: reply}
+			if result := <-reply; result.err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				if err := json.NewEncoder(w).Encode(struct {
+					Error string `json:"error"`
+				}{Error: result.err.Error()}); err != nil {
+					log.Printf("encode command error: %v", err)
+					return
+				}
+			}
 		case "pause":
 			commands <- request{kind: cmdPause}
 		case "reset":

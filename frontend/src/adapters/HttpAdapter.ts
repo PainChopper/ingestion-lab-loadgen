@@ -17,14 +17,18 @@ const UNAVAILABLE_COMMAND_MESSAGE = 'command is not available in the HTTP adapte
 const DISPOSED_COMMAND_MESSAGE = 'http adapter is disposed'
 const NETWORK_COMMAND_MESSAGE = 'command request failed due to a network error'
 const WIRE_KEYS = Object.freeze([
+  'elapsedMs',
   'readerWorkers',
   'runState',
   'senderWorkers',
+  'startError',
   'totalTransactions',
 ])
 
 interface WireSnapshot {
   readonly runState: RunState
+  readonly elapsedMs: number
+  readonly startError: string | null
   readonly totalTransactions: number
   readonly readerWorkers: number
   readonly senderWorkers: number
@@ -126,7 +130,8 @@ function createSnapshot(
     adapterKind: 'http',
     connectionState,
     runState,
-    elapsedMs: 0,
+    elapsedMs: wire?.elapsedMs ?? 0,
+    startError: wire?.startError ?? null,
     totalTransactions: wire?.totalTransactions ?? 0,
     reader: {
       id: 'reader',
@@ -236,7 +241,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     keys.length !== WIRE_KEYS.length ||
     keys.some((key, index) => key !== WIRE_KEYS[index])
   ) {
-    throw new Error('snapshot body must contain exactly four wire keys')
+    throw new Error('snapshot body must contain exactly six wire keys')
   }
 
   if (
@@ -247,15 +252,24 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     throw new Error('snapshot runState is invalid')
   }
   if (
+    !isWireInteger(record.elapsedMs) ||
     !isWireInteger(record.totalTransactions) ||
     !isWireInteger(record.readerWorkers) ||
     !isWireInteger(record.senderWorkers)
   ) {
     throw new Error('snapshot counters must be nonnegative safe integers')
   }
+  if (
+    record.startError !== null &&
+    (typeof record.startError !== 'string' || record.startError.length === 0)
+  ) {
+    throw new Error('snapshot startError must be null or a nonempty string')
+  }
 
   return {
     runState: record.runState,
+    elapsedMs: record.elapsedMs,
+    startError: record.startError,
     totalTransactions: record.totalTransactions,
     readerWorkers: record.readerWorkers,
     senderWorkers: record.senderWorkers,
@@ -277,6 +291,19 @@ async function decodeResponse(response: Response): Promise<WireSnapshot> {
   }
 
   return decodeWireSnapshot(await response.json())
+}
+
+async function decodeCommandError(response: Response): Promise<string | null> {
+  try {
+    const body: unknown = await response.json()
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      return null
+    }
+    const error = (body as Record<string, unknown>).error
+    return typeof error === 'string' && error.length > 0 ? error : null
+  } catch {
+    return null
+  }
 }
 
 export class HttpAdapter implements LoadgenAdapter {
@@ -434,6 +461,19 @@ export class HttpAdapter implements LoadgenAdapter {
           snapshotRevision: this.snapshot.revision,
           error: null,
         })
+      }
+
+      if (response.status === 422) {
+        const message = await decodeCommandError(response)
+        if (message !== null) {
+          return this.rejectCommand(
+            commandId,
+            command,
+            'unavailable',
+            message,
+            false,
+          )
+        }
       }
 
       return this.rejectCommand(
