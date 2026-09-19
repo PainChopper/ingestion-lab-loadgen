@@ -11,7 +11,7 @@ func (state *controlState) eventLoop(
 	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
-	produce func(context.Context) (<-chan []Transaction, error),
+	produce func(context.Context, int) (<-chan []Transaction, error),
 ) {
 	var consumedSinceTick atomic.Int64
 	var batches <-chan []Transaction
@@ -42,15 +42,16 @@ func (state *controlState) eventLoop(
 			case getSnapshot:
 				reader := state.reader.snapshot()
 				snapshot := statusSnapshot{
-					RunState:          state.lifecycle.currentState(),
-					TotalTransactions: state.totalTransactions,
-					ReaderWorkers:     1,
-					SenderWorkers:     0,
-					ElapsedMs:         state.elapsedMs(time.Now()),
-					StartError:        state.startError,
-					ReaderReadTPS:     reader.readTPS,
-					ReaderRowsRead:    reader.rowsRead,
-					ReaderSource:      reader.source,
+					RunState:            state.lifecycle.currentState(),
+					TotalTransactions:   state.totalTransactions,
+					ReaderWorkers:       1,
+					ReaderReadBatchSize: state.readBatchSize(),
+					SenderWorkers:       0,
+					ElapsedMs:           state.elapsedMs(time.Now()),
+					StartError:          state.startError,
+					ReaderReadTPS:       reader.readTPS,
+					ReaderRowsRead:      reader.rowsRead,
+					ReaderSource:        reader.source,
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
@@ -58,7 +59,7 @@ func (state *controlState) eventLoop(
 					state.reader.startInterval(time.Now())
 					producerContext, cancel := context.WithCancel(context.Background())
 					var err error
-					batches, err = produce(producerContext)
+					batches, err = produce(producerContext, state.readBatchSize())
 					if err != nil {
 						cancel()
 						state.reader.reset()
@@ -111,6 +112,18 @@ func (state *controlState) eventLoop(
 					state.resetProgress(&consumedSinceTick, promMetrics)
 				default:
 					result.status = commandConflict
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- result
+				}
+			case cmdSetReadBatchSize:
+				result := commandResult{status: commandAccepted}
+				if state.lifecycle.currentState() != runStateIdle {
+					result.status = commandConflict
+				} else if !validReadBatchSize(cmd.value) {
+					result.status = commandConflict
+				} else {
+					state.configuredReadBatchSize = cmd.value
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result

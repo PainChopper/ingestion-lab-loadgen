@@ -26,7 +26,7 @@ func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 	defer cancel()
 	var telemetry readerTelemetry
 	telemetry.startInterval(time.Now())
-	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), &telemetry)
+	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), defaultReadBatchSize, &telemetry)
 	if err != nil {
 		t.Fatalf("start producer: %v", err)
 	}
@@ -47,6 +47,39 @@ func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 		}
 	}
 
+	cancel()
+	for range batches {
+	}
+}
+
+func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "input.parquet")
+	rows := make([]Transaction, 1500)
+	for i := range rows {
+		rows[i].ClientID = "synthetic"
+	}
+	if err := parquet.WriteFile(path, rows); err != nil {
+		t.Fatalf("write parquet fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var telemetry readerTelemetry
+	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), 1000, &telemetry)
+	if err != nil {
+		t.Fatalf("start producer: %v", err)
+	}
+	for range 3 {
+		select {
+		case batch := <-batches:
+			if len(batch) != 1000 {
+				t.Fatalf("batch length = %d, want 1000", len(batch))
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("configured batch was not produced")
+		}
+	}
 	cancel()
 	for range batches {
 	}

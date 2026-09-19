@@ -18,6 +18,7 @@ const DISPOSED_COMMAND_MESSAGE = 'http adapter is disposed'
 const NETWORK_COMMAND_MESSAGE = 'command request failed due to a network error'
 const WIRE_KEYS = Object.freeze([
   'elapsedMs',
+  'readerReadBatchSize',
   'readerReadTps',
   'readerRowsRead',
   'readerSource',
@@ -36,13 +37,14 @@ interface WireSnapshot {
   readonly readerWorkers: number
   readonly senderWorkers: number
   readonly readerReadTps: number
+  readonly readerReadBatchSize: number
   readonly readerRowsRead: number
   readonly readerSource: string | null
 }
 
-type LifecycleCommand = Extract<
+type SupportedCommand = Extract<
   LoadgenCommand,
-  { type: 'run' | 'pause' | 'reset' }
+  { type: 'run' | 'pause' | 'reset' | 'set-read-batch-size' }
 >
 
 function deepFreeze<T>(value: T): T {
@@ -56,12 +58,13 @@ function deepFreeze<T>(value: T): T {
   return Object.freeze(value)
 }
 
-function isLifecycleCommand(
+function isSupportedCommand(
   command: LoadgenCommand,
-): command is LifecycleCommand {
+): command is SupportedCommand {
   return command.type === 'run' ||
     command.type === 'pause' ||
-    command.type === 'reset'
+    command.type === 'reset' ||
+    command.type === 'set-read-batch-size'
 }
 
 function unavailableControl(unit: string): NumericControlSnapshot {
@@ -142,7 +145,11 @@ function createSnapshot(
     reader: {
       id: 'reader',
       workers: workerControl(wire?.readerWorkers ?? null),
-      readBatchSize: unavailableControl('tx'),
+      readBatchSize: readBatchSizeControl(
+        wire?.readerReadBatchSize ?? null,
+        connectionState,
+        runState,
+      ),
       readTps: wire?.readerReadTps ?? null,
       configuredCapacityTps: null,
       limitationReason: null,
@@ -240,6 +247,13 @@ function isWireNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
+function isReadBatchSize(value: unknown): value is number {
+  return isWireInteger(value) &&
+    value >= 1_000 &&
+    value <= 100_000 &&
+    value % 1_000 === 0
+}
+
 function decodeWireSnapshot(value: unknown): WireSnapshot {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('snapshot body must be an object')
@@ -251,7 +265,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     keys.length !== WIRE_KEYS.length ||
     keys.some((key, index) => key !== WIRE_KEYS[index])
   ) {
-    throw new Error('snapshot body must contain exactly nine wire keys')
+    throw new Error('snapshot body must contain exactly ten wire keys')
   }
 
   if (
@@ -272,6 +286,9 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   }
   if (!isWireNumber(record.readerReadTps)) {
     throw new Error('snapshot readerReadTps must be a nonnegative finite number')
+  }
+  if (!isReadBatchSize(record.readerReadBatchSize)) {
+    throw new Error('snapshot readerReadBatchSize is invalid')
   }
   if (
     record.startError !== null &&
@@ -294,8 +311,28 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     readerWorkers: record.readerWorkers,
     senderWorkers: record.senderWorkers,
     readerReadTps: record.readerReadTps,
+    readerReadBatchSize: record.readerReadBatchSize,
     readerRowsRead: record.readerRowsRead,
     readerSource: record.readerSource,
+  }
+}
+
+function readBatchSizeControl(
+  value: number | null,
+  connectionState: ConnectionState,
+  runState: RunState,
+): NumericControlSnapshot {
+  return {
+    applied: value,
+    preview: null,
+    pending: null,
+    min: 1_000,
+    max: 100_000,
+    step: 1_000,
+    unit: 'tx',
+    applyMode: connectionState === 'connected' && runState === 'idle'
+      ? 'immediate'
+      : 'unavailable',
   }
 }
 
@@ -370,7 +407,7 @@ export class HttpAdapter implements LoadgenAdapter {
   dispatch = (command: LoadgenCommand): Promise<CommandReceipt> => {
     const commandId = `http-local-${++this.commandSequence}`
 
-    if (!isLifecycleCommand(command)) {
+    if (!isSupportedCommand(command)) {
       return Promise.resolve(this.rejectCommand(
         commandId,
         command,
@@ -390,8 +427,23 @@ export class HttpAdapter implements LoadgenAdapter {
       ))
     }
 
+    if (
+      command.type === 'set-read-batch-size' &&
+      (!isReadBatchSize(command.value) ||
+        this.snapshot.connectionState !== 'connected' ||
+        this.snapshot.runState !== 'idle')
+    ) {
+      return Promise.resolve(this.rejectCommand(
+        commandId,
+        command,
+        'unavailable',
+        UNAVAILABLE_COMMAND_MESSAGE,
+        false,
+      ))
+    }
+
     const receipt = this.commandQueue.then(
-      () => this.sendLifecycleCommand(commandId, command),
+      () => this.sendCommand(commandId, command),
     )
     this.commandQueue = receipt.then(
       () => undefined,
@@ -453,9 +505,9 @@ export class HttpAdapter implements LoadgenAdapter {
     this.publish(createSnapshot(revision, 'connected', wire))
   }
 
-  private sendLifecycleCommand = async (
+  private sendCommand = async (
     commandId: string,
-    command: LifecycleCommand,
+    command: SupportedCommand,
   ): Promise<CommandReceipt> => {
     if (this.disposed) {
       return this.rejectCommand(
@@ -471,7 +523,11 @@ export class HttpAdapter implements LoadgenAdapter {
       const response = await fetch(COMMAND_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: command.type }),
+        body: JSON.stringify(
+          command.type === 'set-read-batch-size'
+            ? { action: command.type, value: command.value }
+            : { action: command.type },
+        ),
       })
 
       if (response.status >= 200 && response.status <= 299) {

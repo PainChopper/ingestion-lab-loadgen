@@ -42,7 +42,7 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 	metrics := make(chan time.Time)
 	batches := make(chan []Transaction)
 	var starts int
-	produce := func(ctx context.Context) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, _ int) (<-chan []Transaction, error) {
 		starts++
 		switch starts {
 		case 1:
@@ -188,7 +188,7 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 	freshBatches := make(chan []Transaction)
 	var starts int
 
-	produce := func(ctx context.Context) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, _ int) (<-chan []Transaction, error) {
 		starts++
 		if starts == 1 {
 			go func() {
@@ -317,7 +317,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	metrics := make(chan time.Time)
 	batches := make(chan []Transaction)
 	state := controlState{lifecycle: newLifecycle()}
-	produce := func(ctx context.Context) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, _ int) (<-chan []Transaction, error) {
 		go func() {
 			defer close(batches)
 			<-ctx.Done()
@@ -375,7 +375,7 @@ func startEventLoopForTest(t *testing.T, onProduce func()) (chan<- request, chan
 	requests := make(chan request, 3)
 	batches := make(chan []Transaction)
 	metrics := make(chan time.Time)
-	produce := func(ctx context.Context) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, _ int) (<-chan []Transaction, error) {
 		onProduce()
 		go func() {
 			defer close(batches)
@@ -392,7 +392,7 @@ func startCustomEventLoopForTest(
 	t *testing.T,
 	requests chan request,
 	metrics <-chan time.Time,
-	produce func(context.Context) (<-chan []Transaction, error),
+	produce func(context.Context, int) (<-chan []Transaction, error),
 ) {
 	t.Helper()
 

@@ -25,12 +25,24 @@ export function NumericControl({
     control.applied === null ? '' : String(control.applied),
   )
   const appliedDraft = control.applied === null ? '' : String(control.applied)
+  const unavailable = control.applyMode === 'unavailable'
+  const wasUnavailable = useRef(unavailable)
 
   useEffect(() => {
+    if (unavailable) {
+      const becameUnavailable = !wasUnavailable.current
+      wasUnavailable.current = true
+      setEditing(false)
+      setDraft(appliedDraft)
+      if (becameUnavailable) onPreviewChange?.(null)
+      return
+    }
+
+    wasUnavailable.current = false
     if (!editing) {
       setDraft(appliedDraft)
     }
-  }, [appliedDraft, editing])
+  }, [appliedDraft, editing, onPreviewChange, unavailable])
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     setDraft(event.currentTarget.value)
@@ -43,6 +55,11 @@ export function NumericControl({
   }
 
   const commitDraft = (input: HTMLInputElement) => {
+    if (unavailable) {
+      setDraft(appliedDraft)
+      return
+    }
+
     const value = input.valueAsNumber
     if (input.checkValidity() && Number.isFinite(value)) {
       onValueChange(value)
@@ -90,7 +107,7 @@ export function NumericControl({
         max={control.max}
         step={control.step}
         value={draft}
-        disabled={control.applyMode === 'unavailable'}
+        disabled={unavailable}
         inputMode="numeric"
         aria-describedby={unitId}
         onFocus={() => setEditing(true)}

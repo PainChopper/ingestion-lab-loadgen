@@ -767,8 +767,10 @@
 }
 
 .pipeline-queue-handle--disabled {
+  --pipeline-queue-handle-state-color: var(--muted);
+  color: var(--muted);
   cursor: default;
-  opacity: 0.58;
+  opacity: 1;
 }
 
 .pipeline-queue-handle--preview .pipeline-queue-handle__request-ring {

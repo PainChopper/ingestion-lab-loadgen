@@ -17,6 +17,7 @@ interface TestWireSnapshot {
   readonly readerWorkers: number
   readonly senderWorkers: number
   readonly readerReadTps: number
+  readonly readerReadBatchSize: number
   readonly readerRowsRead: number
   readonly readerSource: string | null
 }
@@ -35,6 +36,7 @@ const VALID_WIRE: TestWireSnapshot = {
   readerWorkers: 1,
   senderWorkers: 0,
   readerReadTps: 3_500.5,
+  readerReadBatchSize: 50_000,
   readerRowsRead: 14_000,
   readerSource: 'MBD-mini/trx/part/input.parquet',
 }
@@ -134,6 +136,25 @@ function control(
   }
 }
 
+function readBatchSizeControl(
+  value: number | null,
+  connectionState: ConnectionState,
+  runState: RunState,
+): NumericControlSnapshot {
+  return {
+    applied: value,
+    preview: null,
+    pending: null,
+    min: 1_000,
+    max: 100_000,
+    step: 1_000,
+    unit: 'tx',
+    applyMode: connectionState === 'connected' && runState === 'idle'
+      ? 'immediate'
+      : 'unavailable',
+  }
+}
+
 function neutralQueue(
   id: QueueTelemetrySnapshot['id'],
   from: QueueTelemetrySnapshot['from'],
@@ -184,7 +205,11 @@ function expectedSnapshot(
     reader: {
       id: 'reader',
       workers: control('workers', wire?.readerWorkers ?? null),
-      readBatchSize: control('tx'),
+      readBatchSize: readBatchSizeControl(
+        wire?.readerReadBatchSize ?? null,
+        connectionState,
+        runState,
+      ),
       readTps: wire?.readerReadTps ?? null,
       configuredCapacityTps: null,
       limitationReason: null,
@@ -416,7 +441,7 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('maps only the nine valid wire fields into a fresh frozen snapshot', async () => {
+  it('maps only the ten valid wire fields into a fresh frozen snapshot', async () => {
     fetchMock.mockResolvedValueOnce(mockResponse(
       VALID_WIRE,
       { contentType: 'application/json; charset=utf-8' },
@@ -436,6 +461,14 @@ describe('HttpAdapter', () => {
       applyMode: 'unavailable',
     })
     expect(snapshot.reader).toMatchObject({
+      readBatchSize: {
+        applied: 50_000,
+        min: 1_000,
+        max: 100_000,
+        step: 1_000,
+        unit: 'tx',
+        applyMode: 'unavailable',
+      },
       readTps: 3_500.5,
       rowsRead: 14_000,
       source: 'MBD-mini/trx/part/input.parquet',
@@ -499,6 +532,7 @@ describe('HttpAdapter', () => {
       readerWorkers: 2,
       senderWorkers: 3,
       readerReadTps: 2_000,
+      readerReadBatchSize: 25_000,
       readerRowsRead: 28_000,
       readerSource: 'MBD-mini/trx/part/recovered.parquet',
     }
@@ -637,6 +671,80 @@ describe('HttpAdapter', () => {
     },
   )
 
+  it('sends an idle read batch size through the command queue without updating the snapshot', async () => {
+    const idleWire: TestWireSnapshot = { ...VALID_WIRE, runState: 'idle' }
+    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+      ? Promise.resolve(mockCommandResponse())
+      : Promise.resolve(mockResponse(idleWire)))
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    const snapshot = adapter.getSnapshot()
+    expect(snapshot.reader.readBatchSize).toEqual({
+      applied: 50_000,
+      preview: null,
+      pending: null,
+      min: 1_000,
+      max: 100_000,
+      step: 1_000,
+      unit: 'tx',
+      applyMode: 'immediate',
+    })
+
+    const receipt = await adapter.dispatch({
+      type: 'set-read-batch-size',
+      value: 25_000,
+    })
+
+    expect(receipt).toMatchObject({
+      accepted: true,
+      commandType: 'set-read-batch-size',
+      applyMode: 'immediate',
+      snapshotRevision: 1,
+      error: null,
+    })
+    expect(commandFetchCalls()).toHaveLength(1)
+    expect(commandFetchCalls()[0]?.[1]).toMatchObject({
+      body: '{"action":"set-read-batch-size","value":25000}',
+    })
+    expect(adapter.getSnapshot()).toBe(snapshot)
+    expect(adapter.getSnapshot().reader.readBatchSize.applied).toBe(50_000)
+    adapter.dispose()
+  })
+
+  it.each([
+    { state: 'running' as const, value: 25_000 },
+    { state: 'paused' as const, value: 25_000 },
+    { state: 'idle' as const, value: 999 },
+    { state: 'idle' as const, value: 1_001 },
+    { state: 'idle' as const, value: 100_001 },
+  ])(
+    'rejects read batch size $value locally in $state',
+    async ({ state, value }) => {
+      const wire: TestWireSnapshot = { ...VALID_WIRE, runState: state }
+      fetchMock.mockResolvedValueOnce(mockResponse(wire))
+      const adapter = new HttpAdapter()
+
+      await flushPoll()
+      const receipt = await adapter.dispatch({
+        type: 'set-read-batch-size',
+        value,
+      })
+
+      expect(receipt).toMatchObject({
+        accepted: false,
+        applyMode: 'unavailable',
+        error: { code: 'unavailable', retryable: false },
+      })
+      expect(commandFetchCalls()).toHaveLength(0)
+      expect(adapter.getSnapshot().reader.readBatchSize).toMatchObject({
+        applied: 50_000,
+        applyMode: state === 'idle' ? 'immediate' : 'unavailable',
+      })
+      adapter.dispose()
+    },
+  )
+
   it('accepts 204 without a response body and leaves snapshot authority intact', async () => {
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? Promise.resolve(mockCommandResponse(204))
@@ -685,7 +793,6 @@ describe('HttpAdapter', () => {
       { type: 'set-worker-count', actor: 'reader', value: 2 },
       { type: 'set-worker-count', actor: 'sender', value: 3 },
       { type: 'set-queue-capacity', queue: 'reader-to-throttler', value: 4 },
-      { type: 'set-read-batch-size', value: 5_000 },
       { type: 'set-http-batch-size', value: 1_000 },
       { type: 'set-http-timeout', valueMs: 500 },
       { type: 'set-target-delay', valueMs: 40 },

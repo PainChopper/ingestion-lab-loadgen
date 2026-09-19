@@ -144,6 +144,41 @@ describe('QueueCable mounted behavior', () => {
     adapter.dispose()
   })
 
+  it('makes both unavailable capacity handles gray and inert', () => {
+    const adapter = new SimulationAdapter()
+    const snapshot = derivedSnapshot(adapter)
+    const queues = [snapshot.queue1, snapshot.queue2]
+
+    for (const queue of queues) {
+      const onCapacityChange = vi.fn()
+      const view = renderCable({
+        ...queue,
+        capacity: { ...queue.capacity, applyMode: 'unavailable' },
+      }, { onCapacityChange })
+      const slider = screen.getByRole('slider')
+
+      expect(slider.getAttribute('aria-disabled')).toBe('true')
+      expect(slider.getAttribute('tabindex')).toBe('-1')
+      expect(getComputedStyle(slider).color).toBe('var(--muted)')
+      expect(getComputedStyle(slider).getPropertyValue(
+        '--pipeline-queue-handle-state-color',
+      )).toBe('var(--muted)')
+
+      fireEvent.pointerDown(slider, {
+        pointerId: 3,
+        button: 0,
+        clientY: 300,
+      })
+      fireEvent.pointerMove(slider, { pointerId: 3, clientY: 260 })
+      fireEvent.pointerUp(slider, { pointerId: 3, clientY: 260 })
+      fireEvent.keyDown(slider, { key: 'ArrowUp' })
+
+      expect(onCapacityChange).not.toHaveBeenCalled()
+      view.unmount()
+    }
+    adapter.dispose()
+  })
+
   it('shows a local pointer preview and commits the released capacity', () => {
     const adapter = new SimulationAdapter()
     const queue = queueSnapshot(derivedSnapshot(adapter).queue1, 4)

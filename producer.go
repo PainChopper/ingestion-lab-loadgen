@@ -10,9 +10,8 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-func produceBatches(ctx context.Context, dataPath string, telemetry *readerTelemetry) (<-chan []Transaction, error) {
+func produceBatches(ctx context.Context, dataPath string, batchSize int, telemetry *readerTelemetry) (<-chan []Transaction, error) {
 	const batchReadAheadCapacity = 2
-	const batchSize = 50_000
 
 	files, err := filepath.Glob(dataPath)
 	if err != nil {

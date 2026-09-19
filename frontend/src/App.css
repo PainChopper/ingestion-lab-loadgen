@@ -176,8 +176,11 @@
 }
 
 .numeric-control input:disabled {
+  color: var(--muted);
+  background: var(--navy-900);
+  border-color: var(--line);
   cursor: not-allowed;
-  opacity: 0.58;
+  opacity: 1;
 }
 
 .numeric-control__unit {
