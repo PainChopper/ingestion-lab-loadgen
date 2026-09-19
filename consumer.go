@@ -10,6 +10,7 @@ const progressEvery int64 = 500
 func consumeBatches(
 	ctx context.Context,
 	batches <-chan []Transaction,
+	senderChannel *readerChannelTelemetry,
 	consumedSinceTick *atomic.Int64,
 ) {
 	var pending int64
@@ -26,6 +27,7 @@ func consumeBatches(
 				return
 			}
 			batch = next
+			senderChannel.recordReceive(len(batch))
 		}
 		for i := range batch {
 			consumeTransaction(&batch[i])

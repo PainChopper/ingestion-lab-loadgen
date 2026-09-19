@@ -20,9 +20,11 @@ func startThrottler(
 	ctx context.Context,
 	readerBatches <-chan []Transaction,
 	readerChannel *readerChannelTelemetry,
+	senderChannel *readerChannelTelemetry,
 	initial throttlerSettings,
 ) (<-chan []Transaction, <-chan struct{}, chan<- throttlerUpdate) {
 	senderBatches := make(chan []Transaction)
+	senderChannel.start(senderBatches, 0)
 	done := make(chan struct{})
 	updates := make(chan throttlerUpdate)
 	go func() {
@@ -41,7 +43,7 @@ func startThrottler(
 					return
 				}
 				readerChannel.recordReceive(len(batch))
-				if !forwardThrottledBatch(ctx, senderBatches, batch, updates, &settings) {
+				if !forwardThrottledBatch(ctx, senderBatches, senderChannel, batch, updates, &settings) {
 					return
 				}
 			}
@@ -53,6 +55,7 @@ func startThrottler(
 func forwardThrottledBatch(
 	ctx context.Context,
 	senderBatches chan<- []Transaction,
+	senderChannel *readerChannelTelemetry,
 	batch []Transaction,
 	updates <-chan throttlerUpdate,
 	settings *throttlerSettings,
@@ -97,7 +100,26 @@ func forwardThrottledBatch(
 			*settings = update.settings
 			waitStarted = time.Now()
 			close(update.applied)
+			continue
 		case senderBatches <- batch:
+			senderChannel.recordSend(len(batch))
+			return true
+		default:
+		}
+
+		senderChannel.startBlocked(time.Now())
+		select {
+		case <-ctx.Done():
+			senderChannel.finishBlocked(time.Now())
+			return false
+		case update := <-updates:
+			senderChannel.finishBlocked(time.Now())
+			*settings = update.settings
+			waitStarted = time.Now()
+			close(update.applied)
+		case senderBatches <- batch:
+			senderChannel.finishBlocked(time.Now())
+			senderChannel.recordSend(len(batch))
 			return true
 		}
 	}

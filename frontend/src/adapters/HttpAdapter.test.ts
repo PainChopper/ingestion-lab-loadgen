@@ -21,6 +21,7 @@ interface TestWireSnapshot {
   readonly readerReadTps: number
   readonly readerReadBatchSize: number
   readonly throttlerRequestedTps: number
+  readonly throttlerAdmittedTps: number
   readonly throttlerInstallationMode: 'installed' | 'bypass'
   readonly readerRowsRead: number
   readonly readerSource: string | null
@@ -38,6 +39,20 @@ interface TestWireSnapshot {
   readonly readerChannelInputTransactionsPerSecond: number
   readonly readerChannelOutputBatchesPerSecond: number
   readonly readerChannelOutputTransactionsPerSecond: number
+  readonly senderChannelCapacity: number
+  readonly senderChannelSentBatchesTotal: number
+  readonly senderChannelSentTransactionsTotal: number
+  readonly senderChannelReceivedBatchesTotal: number
+  readonly senderChannelReceivedTransactionsTotal: number
+  readonly senderChannelDepthBatches: number
+  readonly senderChannelBufferedTransactions: number
+  readonly senderChannelBlockedSenders: number
+  readonly senderChannelOldestBlockedSenderMs: number
+  readonly senderChannelBlockedMs: number
+  readonly senderChannelInputBatchesPerSecond: number
+  readonly senderChannelInputTransactionsPerSecond: number
+  readonly senderChannelOutputBatchesPerSecond: number
+  readonly senderChannelOutputTransactionsPerSecond: number
 }
 
 interface MockResponseOptions {
@@ -85,6 +100,7 @@ const VALID_WIRE: TestWireSnapshot = {
   readerReadTps: 3_500.5,
   readerReadBatchSize: 50_000,
   throttlerRequestedTps: 200,
+  throttlerAdmittedTps: 125_000.5,
   throttlerInstallationMode: 'installed',
   readerRowsRead: 14_000,
   readerSource: 'MBD-mini/trx/part/input.parquet',
@@ -102,6 +118,20 @@ const VALID_WIRE: TestWireSnapshot = {
   readerChannelInputTransactionsPerSecond: 125_000.5,
   readerChannelOutputBatchesPerSecond: 1.25,
   readerChannelOutputTransactionsPerSecond: 62_500.25,
+  senderChannelCapacity: 0,
+  senderChannelSentBatchesTotal: 7,
+  senderChannelSentTransactionsTotal: 350_000,
+  senderChannelReceivedBatchesTotal: 7,
+  senderChannelReceivedTransactionsTotal: 350_000,
+  senderChannelDepthBatches: 0,
+  senderChannelBufferedTransactions: 0,
+  senderChannelBlockedSenders: 1,
+  senderChannelOldestBlockedSenderMs: 450,
+  senderChannelBlockedMs: 1_600,
+  senderChannelInputBatchesPerSecond: 1.5,
+  senderChannelInputTransactionsPerSecond: 75_000.5,
+  senderChannelOutputBatchesPerSecond: 1.25,
+  senderChannelOutputTransactionsPerSecond: 62_500.25,
 }
 
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
@@ -312,6 +342,36 @@ function readerChannel(
   }
 }
 
+function senderChannel(wire: TestWireSnapshot | null): ChannelTelemetrySnapshot {
+  const channel = neutralChannel(
+    'throttler-to-sender',
+    'throttler',
+    'sender',
+  )
+  if (wire === null) return channel
+
+  return {
+    ...channel,
+    capacity: control('batches', wire.senderChannelCapacity),
+    depthBatches: wire.senderChannelDepthBatches,
+    bufferedTransactions: wire.senderChannelBufferedTransactions,
+    sentBatchesTotal: wire.senderChannelSentBatchesTotal,
+    sentTransactionsTotal: wire.senderChannelSentTransactionsTotal,
+    receivedBatchesTotal: wire.senderChannelReceivedBatchesTotal,
+    receivedTransactionsTotal: wire.senderChannelReceivedTransactionsTotal,
+    inputBatchesPerSecond: wire.senderChannelInputBatchesPerSecond,
+    inputTransactionsPerSecond: wire.senderChannelInputTransactionsPerSecond,
+    outputBatchesPerSecond: wire.senderChannelOutputBatchesPerSecond,
+    outputTransactionsPerSecond: wire.senderChannelOutputTransactionsPerSecond,
+    inputTps: wire.senderChannelInputTransactionsPerSecond,
+    outputTps: wire.senderChannelOutputTransactionsPerSecond,
+    throughputTps: wire.senderChannelOutputTransactionsPerSecond,
+    blockedSenders: wire.senderChannelBlockedSenders,
+    oldestBlockedSenderMs: wire.senderChannelOldestBlockedSenderMs,
+    blockedMs: wire.senderChannelBlockedMs,
+  }
+}
+
 function expectedSnapshot(
   revision: number,
   connectionState: ConnectionState,
@@ -362,16 +422,12 @@ function expectedSnapshot(
           ? null
           : 'Недоступно в HTTP snapshot mode',
       },
-      admittedTps: null,
+      admittedTps: wire?.throttlerAdmittedTps ?? null,
       limitedMs: null,
       state: runState,
     },
     readerChannel: readerChannel(wire, connectionState),
-    senderChannel: neutralChannel(
-      'throttler-to-sender',
-      'throttler',
-      'sender',
-    ),
+    senderChannel: senderChannel(wire),
     sender: {
       id: 'sender',
       workers: control('workers', wire?.senderWorkers ?? null),
@@ -496,6 +552,24 @@ const malformedCases: ReadonlyArray<{
   {
     name: 'wrong-type requested TPS value',
     result: async () => mockResponse({ ...VALID_WIRE, throttlerRequestedTps: '200' }),
+  },
+  {
+    name: 'missing throttler admitted TPS',
+    result: async () => {
+      const { throttlerAdmittedTps: _admittedTps, ...withoutAdmittedTps } = VALID_WIRE
+      return mockResponse(withoutAdmittedTps)
+    },
+  },
+  {
+    name: 'wrong-type sender channel rate',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      senderChannelInputTransactionsPerSecond: '75000.5',
+    }),
+  },
+  {
+    name: 'nonzero fixed sender channel capacity',
+    result: async () => mockResponse({ ...VALID_WIRE, senderChannelCapacity: 1 }),
   },
   {
     name: 'unknown applied installation mode',
@@ -688,6 +762,7 @@ describe('HttpAdapter', () => {
         unit: 'transactions/s',
         applyMode: 'immediate',
       },
+      admittedTps: 125_000.5,
       installationMode: {
         applied: 'installed',
         applyMode: 'immediate',
@@ -709,6 +784,26 @@ describe('HttpAdapter', () => {
       outputBatchesPerSecond: 1.25,
       outputTransactionsPerSecond: 62_500.25,
       inputTps: 125_000.5,
+      outputTps: 62_500.25,
+      throughputTps: 62_500.25,
+      blockedSenders: 1,
+      oldestBlockedSenderMs: 450,
+      blockedMs: 1_600,
+    })
+    expect(snapshot.senderChannel).toEqual({
+      ...neutralChannel('throttler-to-sender', 'throttler', 'sender'),
+      capacity: control('batches', 0),
+      depthBatches: 0,
+      bufferedTransactions: 0,
+      sentBatchesTotal: 7,
+      sentTransactionsTotal: 350_000,
+      receivedBatchesTotal: 7,
+      receivedTransactionsTotal: 350_000,
+      inputBatchesPerSecond: 1.5,
+      inputTransactionsPerSecond: 75_000.5,
+      outputBatchesPerSecond: 1.25,
+      outputTransactionsPerSecond: 62_500.25,
+      inputTps: 75_000.5,
       outputTps: 62_500.25,
       throughputTps: 62_500.25,
       blockedSenders: 1,
@@ -749,6 +844,18 @@ describe('HttpAdapter', () => {
       readerReadTps: 0,
       readerRowsRead: 0,
       readerSource: null,
+      throttlerAdmittedTps: 0,
+      senderChannelSentBatchesTotal: 0,
+      senderChannelSentTransactionsTotal: 0,
+      senderChannelReceivedBatchesTotal: 0,
+      senderChannelReceivedTransactionsTotal: 0,
+      senderChannelBlockedSenders: 0,
+      senderChannelOldestBlockedSenderMs: 0,
+      senderChannelBlockedMs: 0,
+      senderChannelInputBatchesPerSecond: 0,
+      senderChannelInputTransactionsPerSecond: 0,
+      senderChannelOutputBatchesPerSecond: 0,
+      senderChannelOutputTransactionsPerSecond: 0,
     }
     fetchMock.mockResolvedValueOnce(mockResponse(resetWire))
     const adapter = new HttpAdapter()
@@ -760,6 +867,21 @@ describe('HttpAdapter', () => {
       rowsRead: 0,
       source: null,
       state: 'idle',
+    })
+    expect(adapter.getSnapshot().throttler.admittedTps).toBe(0)
+    expect(adapter.getSnapshot().senderChannel).toMatchObject({
+      capacity: control('batches', 0),
+      depthBatches: 0,
+      bufferedTransactions: 0,
+      sentBatchesTotal: 0,
+      sentTransactionsTotal: 0,
+      receivedBatchesTotal: 0,
+      receivedTransactionsTotal: 0,
+      blockedSenders: 0,
+      oldestBlockedSenderMs: 0,
+      blockedMs: 0,
+      inputTransactionsPerSecond: 0,
+      outputTransactionsPerSecond: 0,
     })
     adapter.dispose()
   })
@@ -782,7 +904,7 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it('preserves last-known wire fields on failure and recovers on success', async () => {
+  it('clears telemetry on failure and recovers on success', async () => {
     const recoveredWire: TestWireSnapshot = {
       ...VALID_WIRE,
       runState: 'paused',
@@ -814,7 +936,7 @@ describe('HttpAdapter', () => {
 
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPoll()
-    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(2, 'error', VALID_WIRE))
+    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(2, 'error'))
 
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPoll()
@@ -1004,7 +1126,7 @@ describe('HttpAdapter', () => {
 
       expect(adapter.getSnapshot()).toMatchObject({
         connectionState: 'error',
-        policy: VALID_WIRE.policy,
+        policy: null,
       })
       const receipt = await adapter.dispatch(command)
       expect(receipt).toMatchObject({

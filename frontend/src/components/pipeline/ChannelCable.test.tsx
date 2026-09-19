@@ -121,7 +121,7 @@ function translatedY(element: Element): number {
 }
 
 describe('ChannelCable mounted behavior', () => {
-  it('activates only readerChannel cable flow from measured channel rates', () => {
+  it('activates both channel cables only from their measured rates', () => {
     const adapter = new SimulationAdapter()
     const channel = derivedSnapshot(adapter).readerChannel
     const active = {
@@ -155,6 +155,20 @@ describe('ChannelCable mounted behavior', () => {
     )!
     expect(idleGroup.classList.contains('pipeline-channel--flow-active')).toBe(false)
     idleView.unmount()
+
+    const senderActiveView = renderCable({
+      ...active,
+      id: 'throttler-to-sender',
+      from: 'throttler',
+      to: 'sender',
+      inputTransactionsPerSecond: 0,
+      outputTransactionsPerSecond: 500,
+    })
+    const senderActiveGroup = senderActiveView.container.querySelector(
+      '#channel-throttler-to-sender',
+    )!
+    expect(senderActiveGroup.classList.contains('pipeline-channel--flow-active')).toBe(true)
+    senderActiveView.unmount()
     adapter.dispose()
   })
 

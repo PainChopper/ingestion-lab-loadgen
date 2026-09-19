@@ -17,6 +17,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		TotalTransactions:                        46,
 		ReaderWorkers:                            1,
 		ThrottlerRequestedTPS:                    200,
+		ThrottlerAdmittedTPS:                     3,
 		ThrottlerInstallationMode:                throttlerInstalled,
 		SenderWorkers:                            0,
 		ElapsedMs:                                1234,
@@ -32,6 +33,20 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		ReaderChannelInputTransactionsPerSecond:  3,
 		ReaderChannelOutputBatchesPerSecond:      0.5,
 		ReaderChannelOutputTransactionsPerSecond: 1,
+		SenderChannelCapacity:                    0,
+		SenderChannelDepthBatches:                0,
+		SenderChannelBufferedTransactions:        0,
+		SenderChannelBlockedSenders:              1,
+		SenderChannelOldestBlockedSenderMs:       12,
+		SenderChannelBlockedMs:                   34,
+		SenderChannelSentBatchesTotal:            2,
+		SenderChannelSentTransactionsTotal:       6,
+		SenderChannelReceivedBatchesTotal:        1,
+		SenderChannelReceivedTransactionsTotal:   3,
+		SenderChannelInputBatchesPerSecond:       1,
+		SenderChannelInputTransactionsPerSecond:  3,
+		SenderChannelOutputBatchesPerSecond:      0.5,
+		SenderChannelOutputTransactionsPerSecond: 1.5,
 		Policy:                                   testPolicy(t).snapshot(),
 	}
 
@@ -81,8 +96,8 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		"readerChannelOutputBatchesPerSecond":      "0.5",
 		"readerChannelOutputTransactionsPerSecond": "1",
 	}
-	if len(fields) != 27 {
-		t.Errorf("snapshot field count = %d, want 27", len(fields))
+	if len(fields) != 42 {
+		t.Errorf("snapshot field count = %d, want 42", len(fields))
 	}
 	if string(fields["throttlerRequestedTps"]) != "200" || string(fields["throttlerInstallationMode"]) != `"installed"` {
 		t.Errorf("throttler applied fields = %s, %s", fields["throttlerRequestedTps"], fields["throttlerInstallationMode"])
@@ -91,6 +106,28 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		t.Error("policy must be a JSON object")
 	}
 	for name, want := range wantReaderChannelFields {
+		if got := string(fields[name]); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	wantSenderFields := map[string]string{
+		"throttlerAdmittedTps":                     "3",
+		"senderChannelCapacity":                    "0",
+		"senderChannelDepthBatches":                "0",
+		"senderChannelBufferedTransactions":        "0",
+		"senderChannelBlockedSenders":              "1",
+		"senderChannelOldestBlockedSenderMs":       "12",
+		"senderChannelBlockedMs":                   "34",
+		"senderChannelSentBatchesTotal":            "2",
+		"senderChannelSentTransactionsTotal":       "6",
+		"senderChannelReceivedBatchesTotal":        "1",
+		"senderChannelReceivedTransactionsTotal":   "3",
+		"senderChannelInputBatchesPerSecond":       "1",
+		"senderChannelInputTransactionsPerSecond":  "3",
+		"senderChannelOutputBatchesPerSecond":      "0.5",
+		"senderChannelOutputTransactionsPerSecond": "1.5",
+	}
+	for name, want := range wantSenderFields {
 		if got := string(fields[name]); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
@@ -124,7 +161,22 @@ func TestSnapshotHandlerIncludesZeroElapsedAndNullStartError(t *testing.T) {
 		string(body["readerChannelInputBatchesPerSecond"]) != "0" ||
 		string(body["readerChannelInputTransactionsPerSecond"]) != "0" ||
 		string(body["readerChannelOutputBatchesPerSecond"]) != "0" ||
-		string(body["readerChannelOutputTransactionsPerSecond"]) != "0" {
+		string(body["readerChannelOutputTransactionsPerSecond"]) != "0" ||
+		string(body["throttlerAdmittedTps"]) != "0" ||
+		string(body["senderChannelCapacity"]) != "0" ||
+		string(body["senderChannelDepthBatches"]) != "0" ||
+		string(body["senderChannelBufferedTransactions"]) != "0" ||
+		string(body["senderChannelBlockedSenders"]) != "0" ||
+		string(body["senderChannelOldestBlockedSenderMs"]) != "0" ||
+		string(body["senderChannelBlockedMs"]) != "0" ||
+		string(body["senderChannelSentBatchesTotal"]) != "0" ||
+		string(body["senderChannelSentTransactionsTotal"]) != "0" ||
+		string(body["senderChannelReceivedBatchesTotal"]) != "0" ||
+		string(body["senderChannelReceivedTransactionsTotal"]) != "0" ||
+		string(body["senderChannelInputBatchesPerSecond"]) != "0" ||
+		string(body["senderChannelInputTransactionsPerSecond"]) != "0" ||
+		string(body["senderChannelOutputBatchesPerSecond"]) != "0" ||
+		string(body["senderChannelOutputTransactionsPerSecond"]) != "0" {
 		t.Errorf("idle snapshot body = %v", body)
 	}
 }

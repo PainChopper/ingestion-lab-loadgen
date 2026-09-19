@@ -56,6 +56,7 @@ func (state *controlState) eventLoop(
 			case getSnapshot:
 				reader := state.reader.snapshot()
 				readerChannel := state.readerChannel.snapshot(time.Now())
+				senderChannel := state.senderChannel.snapshot(time.Now())
 				if state.lifecycle.currentState() == runStateIdle {
 					readerChannel.capacity = state.readerChannelCapacity()
 				}
@@ -65,6 +66,7 @@ func (state *controlState) eventLoop(
 					ReaderWorkers:                            1,
 					ReaderReadBatchSize:                      state.readBatchSize(),
 					ThrottlerRequestedTPS:                    state.requestedTPS(),
+					ThrottlerAdmittedTPS:                     senderChannel.inputTransactionsPerSecond,
 					ThrottlerInstallationMode:                state.installationMode(),
 					SenderWorkers:                            0,
 					ElapsedMs:                                state.elapsedMs(time.Now()),
@@ -86,6 +88,20 @@ func (state *controlState) eventLoop(
 					ReaderChannelInputTransactionsPerSecond:  readerChannel.inputTransactionsPerSecond,
 					ReaderChannelOutputBatchesPerSecond:      readerChannel.outputBatchesPerSecond,
 					ReaderChannelOutputTransactionsPerSecond: readerChannel.outputTransactionsPerSecond,
+					SenderChannelCapacity:                    senderChannel.capacity,
+					SenderChannelDepthBatches:                senderChannel.depthBatches,
+					SenderChannelBufferedTransactions:        senderChannel.bufferedTransactions,
+					SenderChannelBlockedSenders:              senderChannel.blockedSenders,
+					SenderChannelOldestBlockedSenderMs:       senderChannel.oldestBlockedSenderMs,
+					SenderChannelBlockedMs:                   senderChannel.blockedMs,
+					SenderChannelSentBatchesTotal:            senderChannel.sentBatchesTotal,
+					SenderChannelSentTransactionsTotal:       senderChannel.sentTransactionsTotal,
+					SenderChannelReceivedBatchesTotal:        senderChannel.receivedBatchesTotal,
+					SenderChannelReceivedTransactionsTotal:   senderChannel.receivedTransactionsTotal,
+					SenderChannelInputBatchesPerSecond:       senderChannel.inputBatchesPerSecond,
+					SenderChannelInputTransactionsPerSecond:  senderChannel.inputTransactionsPerSecond,
+					SenderChannelOutputBatchesPerSecond:      senderChannel.outputBatchesPerSecond,
+					SenderChannelOutputTransactionsPerSecond: senderChannel.outputTransactionsPerSecond,
 					Policy:                                   state.policy.snapshot(),
 				}
 				cmd.snapshotReply <- snapshot
@@ -111,7 +127,7 @@ func (state *controlState) eventLoop(
 					throttlerContext, cancel := context.WithCancel(context.Background())
 					cancelThrottler = cancel
 					senderBatches, throttlerDone, throttlerUpdates = startThrottler(
-						throttlerContext, batches, &state.readerChannel, state.throttlerSettings(false),
+						throttlerContext, batches, &state.readerChannel, &state.senderChannel, state.throttlerSettings(false),
 					)
 				}
 				if state.lifecycle.run() {
@@ -120,7 +136,7 @@ func (state *controlState) eventLoop(
 					if resuming {
 						state.notifyThrottler(throttlerUpdates, throttlerDone, false)
 					}
-					cancelConsumer, consumerDone = startConsumer(senderBatches, &consumedSinceTick)
+					cancelConsumer, consumerDone = startConsumer(senderBatches, &state.senderChannel, &consumedSinceTick)
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- commandResult{}
@@ -220,6 +236,7 @@ func (state *controlState) eventLoop(
 		case <-metrics:
 			state.reader.sample(time.Now())
 			state.readerChannel.sample(windowLength)
+			state.senderChannel.sample(windowLength)
 			delta := consumedSinceTick.Swap(0)
 			state.actualTPS = delta * int64(time.Second/windowLength)
 			state.totalTransactions += delta
@@ -273,6 +290,7 @@ func (state *controlState) notifyThrottler(
 func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMetrics *Metrics) {
 	state.reader.reset()
 	state.readerChannel.reset()
+	state.senderChannel.reset()
 	consumedSinceTick.Store(0)
 	state.totalTransactions = 0
 	state.actualTPS = 0
@@ -300,13 +318,14 @@ func (state *controlState) pauseElapsed(now time.Time) {
 
 func startConsumer(
 	batches <-chan []Transaction,
+	senderChannel *readerChannelTelemetry,
 	consumedSinceTick *atomic.Int64,
 ) (context.CancelFunc, <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		consumeBatches(ctx, batches, consumedSinceTick)
+		consumeBatches(ctx, batches, senderChannel, consumedSinceTick)
 	}()
 	return cancel, done
 }
