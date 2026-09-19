@@ -11,7 +11,7 @@ func consumeBatches(
 	ctx context.Context,
 	batches <-chan []Transaction,
 	consumedSinceTick *atomic.Int64,
-	queueTelemetry *queue1Telemetry,
+	readerChannelTelemetry *readerChannelTelemetry,
 ) {
 	var pending int64
 	for {
@@ -27,7 +27,7 @@ func consumeBatches(
 				return
 			}
 			batch = next
-			queueTelemetry.recordDequeue(len(batch))
+			readerChannelTelemetry.recordReceive(len(batch))
 		}
 		for i := range batch {
 			consumeTransaction(&batch[i])

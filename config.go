@@ -8,13 +8,13 @@ import (
 )
 
 const (
-	defaultConfigPath   = "config.toml"
-	policySchemaVersion = 1
-	sourceUnit          = "glob-pattern"
-	batchSizeUnit       = "transactions"
-	queueCapacityUnit   = "batches"
-	startupOnly         = "startup-only"
-	idleOnly            = "idle-only"
+	defaultConfigPath         = "config.toml"
+	policySchemaVersion       = 1
+	sourceUnit                = "glob-pattern"
+	batchSizeUnit             = "transactions"
+	readerChannelCapacityUnit = "batches"
+	startupOnly               = "startup-only"
+	idleOnly                  = "idle-only"
 )
 
 var requiredPolicyKeys = []string{
@@ -28,17 +28,17 @@ var requiredPolicyKeys = []string{
 	"reader.read_batch_size.step",
 	"reader.read_batch_size.unit",
 	"reader.read_batch_size.mutability",
-	"queue1.capacity.default",
-	"queue1.capacity.allowed",
-	"queue1.capacity.unit",
-	"queue1.capacity.mutability",
+	"readerChannel.capacity.default",
+	"readerChannel.capacity.allowed",
+	"readerChannel.capacity.unit",
+	"readerChannel.capacity.mutability",
 }
 
 type policy struct {
-	SchemaVersion int          `mapstructure:"schema_version"`
-	Source        sourcePolicy `mapstructure:"source"`
-	Reader        readerPolicy `mapstructure:"reader"`
-	Queue1        queue1Policy `mapstructure:"queue1"`
+	SchemaVersion int                 `mapstructure:"schema_version"`
+	Source        sourcePolicy        `mapstructure:"source"`
+	Reader        readerPolicy        `mapstructure:"reader"`
+	ReaderChannel readerChannelPolicy `mapstructure:"readerChannel"`
 }
 
 type sourcePolicy struct {
@@ -51,7 +51,7 @@ type readerPolicy struct {
 	ReadBatchSize rangePolicy `mapstructure:"read_batch_size"`
 }
 
-type queue1Policy struct {
+type readerChannelPolicy struct {
 	Capacity allowedPolicy `mapstructure:"capacity"`
 }
 
@@ -117,8 +117,8 @@ func (p policy) validate() error {
 	if err := p.Reader.ReadBatchSize.validate(); err != nil {
 		return fmt.Errorf("reader.read_batch_size: %w", err)
 	}
-	if err := p.Queue1.Capacity.validate(); err != nil {
-		return fmt.Errorf("queue1.capacity: %w", err)
+	if err := p.ReaderChannel.Capacity.validate(); err != nil {
+		return fmt.Errorf("readerChannel.capacity: %w", err)
 	}
 	return nil
 }
@@ -141,8 +141,8 @@ func (p rangePolicy) contains(value int) bool {
 }
 
 func (p allowedPolicy) validate() error {
-	if p.Unit != queueCapacityUnit || p.Mutability != idleOnly {
-		return fmt.Errorf("must use unit %q and mutability %q", queueCapacityUnit, idleOnly)
+	if p.Unit != readerChannelCapacityUnit || p.Mutability != idleOnly {
+		return fmt.Errorf("must use unit %q and mutability %q", readerChannelCapacityUnit, idleOnly)
 	}
 	if len(p.Allowed) == 0 {
 		return fmt.Errorf("allowed must not be empty")
@@ -171,13 +171,13 @@ func (p allowedPolicy) contains(value int) bool {
 }
 
 type policySnapshot struct {
-	ReaderReadBatchSize rangePolicy   `json:"readerReadBatchSize"`
-	Queue1Capacity      allowedPolicy `json:"queue1Capacity"`
+	ReaderReadBatchSize   rangePolicy   `json:"readerReadBatchSize"`
+	ReaderChannelCapacity allowedPolicy `json:"readerChannelCapacity"`
 }
 
 func (p policy) snapshot() policySnapshot {
 	return policySnapshot{
-		ReaderReadBatchSize: p.Reader.ReadBatchSize,
-		Queue1Capacity:      p.Queue1.Capacity,
+		ReaderReadBatchSize:   p.Reader.ReadBatchSize,
+		ReaderChannelCapacity: p.ReaderChannel.Capacity,
 	}
 }

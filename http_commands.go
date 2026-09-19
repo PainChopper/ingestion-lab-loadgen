@@ -58,18 +58,18 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			if result := <-reply; result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
-		case "set-queue-capacity":
+		case "set-reader-channel-capacity":
 			var value int
 			if string(cr.Value) == "null" {
-				http.Error(w, "Invalid queue capacity", http.StatusBadRequest)
+				http.Error(w, "Invalid reader channel capacity", http.StatusBadRequest)
 				return
 			}
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !validQueue1Capacity(policy, value) {
-				http.Error(w, "Invalid queue capacity", http.StatusBadRequest)
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReaderChannelCapacity(policy, value) {
+				http.Error(w, "Invalid reader channel capacity", http.StatusBadRequest)
 				return
 			}
 			reply := make(chan commandResult, 1)
-			commands <- request{kind: cmdSetQueueCapacity, value: value, commandReply: reply}
+			commands <- request{kind: cmdSetReaderChannelCapacity, value: value, commandReply: reply}
 			if result := <-reply; result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}

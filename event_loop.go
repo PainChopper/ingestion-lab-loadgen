@@ -41,36 +41,36 @@ func (state *controlState) eventLoop(
 			switch cmd.kind {
 			case getSnapshot:
 				reader := state.reader.snapshot()
-				queue1 := state.queue1.snapshot(time.Now())
+				readerChannel := state.readerChannel.snapshot(time.Now())
 				if state.lifecycle.currentState() == runStateIdle {
-					queue1.capacity = state.queue1Capacity()
+					readerChannel.capacity = state.readerChannelCapacity()
 				}
 				snapshot := statusSnapshot{
-					RunState:                          state.lifecycle.currentState(),
-					TotalTransactions:                 state.totalTransactions,
-					ReaderWorkers:                     1,
-					ReaderReadBatchSize:               state.readBatchSize(),
-					SenderWorkers:                     0,
-					ElapsedMs:                         state.elapsedMs(time.Now()),
-					StartError:                        state.startError,
-					ReaderReadTPS:                     reader.readTPS,
-					ReaderRowsRead:                    reader.rowsRead,
-					ReaderSource:                      reader.source,
-					Queue1Capacity:                    queue1.capacity,
-					Queue1DepthBatches:                queue1.depthBatches,
-					Queue1QueuedTransactions:          queue1.queuedTransactions,
-					Queue1BlockedSenders:              queue1.blockedSenders,
-					Queue1OldestBlockedSenderMs:       queue1.oldestBlockedSenderMs,
-					Queue1BlockedMs:                   queue1.blockedMs,
-					Queue1EnqueuedBatchesTotal:        queue1.enqueuedBatchesTotal,
-					Queue1EnqueuedTransactionsTotal:   queue1.enqueuedTransactionsTotal,
-					Queue1DequeuedBatchesTotal:        queue1.dequeuedBatchesTotal,
-					Queue1DequeuedTransactionsTotal:   queue1.dequeuedTransactionsTotal,
-					Queue1InputBatchesPerSecond:       queue1.inputBatchesPerSecond,
-					Queue1InputTransactionsPerSecond:  queue1.inputTransactionsPerSecond,
-					Queue1OutputBatchesPerSecond:      queue1.outputBatchesPerSecond,
-					Queue1OutputTransactionsPerSecond: queue1.outputTransactionsPerSecond,
-					Policy:                            state.policy.snapshot(),
+					RunState:                                 state.lifecycle.currentState(),
+					TotalTransactions:                        state.totalTransactions,
+					ReaderWorkers:                            1,
+					ReaderReadBatchSize:                      state.readBatchSize(),
+					SenderWorkers:                            0,
+					ElapsedMs:                                state.elapsedMs(time.Now()),
+					StartError:                               state.startError,
+					ReaderReadTPS:                            reader.readTPS,
+					ReaderRowsRead:                           reader.rowsRead,
+					ReaderSource:                             reader.source,
+					ReaderChannelCapacity:                    readerChannel.capacity,
+					ReaderChannelDepthBatches:                readerChannel.depthBatches,
+					ReaderChannelBufferedTransactions:        readerChannel.bufferedTransactions,
+					ReaderChannelBlockedSenders:              readerChannel.blockedSenders,
+					ReaderChannelOldestBlockedSenderMs:       readerChannel.oldestBlockedSenderMs,
+					ReaderChannelBlockedMs:                   readerChannel.blockedMs,
+					ReaderChannelSentBatchesTotal:            readerChannel.sentBatchesTotal,
+					ReaderChannelSentTransactionsTotal:       readerChannel.sentTransactionsTotal,
+					ReaderChannelReceivedBatchesTotal:        readerChannel.receivedBatchesTotal,
+					ReaderChannelReceivedTransactionsTotal:   readerChannel.receivedTransactionsTotal,
+					ReaderChannelInputBatchesPerSecond:       readerChannel.inputBatchesPerSecond,
+					ReaderChannelInputTransactionsPerSecond:  readerChannel.inputTransactionsPerSecond,
+					ReaderChannelOutputBatchesPerSecond:      readerChannel.outputBatchesPerSecond,
+					ReaderChannelOutputTransactionsPerSecond: readerChannel.outputTransactionsPerSecond,
+					Policy:                                   state.policy.snapshot(),
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
@@ -78,7 +78,7 @@ func (state *controlState) eventLoop(
 					state.reader.startInterval(time.Now())
 					producerContext, cancel := context.WithCancel(context.Background())
 					var err error
-					batches, err = produce(producerContext, state.readBatchSize(), state.queue1Capacity())
+					batches, err = produce(producerContext, state.readBatchSize(), state.readerChannelCapacity())
 					if err != nil {
 						cancel()
 						state.reader.reset()
@@ -95,7 +95,7 @@ func (state *controlState) eventLoop(
 				if state.lifecycle.run() {
 					state.runStartedAt = time.Now()
 					state.startError = nil
-					cancelConsumer, consumerDone = startConsumer(batches, &consumedSinceTick, &state.queue1)
+					cancelConsumer, consumerDone = startConsumer(batches, &consumedSinceTick, &state.readerChannel)
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- commandResult{}
@@ -147,13 +147,13 @@ func (state *controlState) eventLoop(
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
 				}
-			case cmdSetQueueCapacity:
+			case cmdSetReaderChannelCapacity:
 				result := commandResult{status: commandAccepted}
-				if state.lifecycle.currentState() != runStateIdle || !validQueue1Capacity(state.policy, cmd.value) {
+				if state.lifecycle.currentState() != runStateIdle || !validReaderChannelCapacity(state.policy, cmd.value) {
 					result.status = commandConflict
 				} else {
-					state.configuredQueue1Capacity = cmd.value
-					state.queue1CapacityConfigured = true
+					state.configuredReaderChannelCapacity = cmd.value
+					state.readerChannelCapacityConfigured = true
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
@@ -162,7 +162,7 @@ func (state *controlState) eventLoop(
 
 		case <-metrics:
 			state.reader.sample(time.Now())
-			state.queue1.sample(windowLength)
+			state.readerChannel.sample(windowLength)
 			delta := consumedSinceTick.Swap(0)
 			state.actualTPS = delta * int64(time.Second/windowLength)
 			state.totalTransactions += delta
@@ -174,7 +174,7 @@ func (state *controlState) eventLoop(
 
 func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMetrics *Metrics) {
 	state.reader.reset()
-	state.queue1.reset()
+	state.readerChannel.reset()
 	consumedSinceTick.Store(0)
 	state.totalTransactions = 0
 	state.actualTPS = 0
@@ -203,13 +203,13 @@ func (state *controlState) pauseElapsed(now time.Time) {
 func startConsumer(
 	batches <-chan []Transaction,
 	consumedSinceTick *atomic.Int64,
-	queueTelemetry *queue1Telemetry,
+	readerChannelTelemetry *readerChannelTelemetry,
 ) (context.CancelFunc, <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		consumeBatches(ctx, batches, consumedSinceTick, queueTelemetry)
+		consumeBatches(ctx, batches, consumedSinceTick, readerChannelTelemetry)
 	}()
 	return cancel, done
 }

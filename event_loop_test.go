@@ -184,7 +184,7 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 	metrics := make(chan time.Time)
 	firstBatches := make(chan []Transaction, 1)
 	firstProducerReady := make(chan struct{})
-	firstBatchQueued := make(chan struct{})
+	firstBatchBuffered := make(chan struct{})
 	freshBatches := make(chan []Transaction)
 	var starts int
 
@@ -203,7 +203,7 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 				case <-ctx.Done():
 					return
 				}
-				close(firstBatchQueued)
+				close(firstBatchBuffered)
 				select {
 				case firstBatches <- []Transaction{{}}:
 				case <-ctx.Done():
@@ -228,9 +228,9 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 	waitForState(t, requests, runStatePaused)
 	close(firstProducerReady)
 	select {
-	case <-firstBatchQueued:
+	case <-firstBatchBuffered:
 	case <-time.After(time.Second):
-		t.Fatal("producer did not fill its queue after Pause")
+		t.Fatal("producer did not fill its readerChannel after Pause")
 	}
 
 	resetReply := make(chan commandResult, 1)
@@ -246,7 +246,7 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 	select {
 	case _, ok := <-firstBatches:
 		if ok {
-			t.Fatal("old producer queue retained a batch after Reset")
+			t.Fatal("old producer readerChannel retained a batch after Reset")
 		}
 	case <-time.After(time.Second):
 		t.Fatal("old producer channel was not closed after Reset")
@@ -340,10 +340,10 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 	requests <- request{kind: cmdRun}
 	waitForState(t, requests, runStateRunning)
-	queue := make(chan []Transaction, state.policy.Queue1.Capacity.Default)
-	state.queue1.start(queue, 2)
-	if !state.queue1.send(context.Background(), queue, make([]Transaction, 2)) {
-		t.Fatal("queue send failed")
+	readerChannel := make(chan []Transaction, state.policy.ReaderChannel.Capacity.Default)
+	state.readerChannel.start(readerChannel, 2)
+	if !state.readerChannel.send(context.Background(), readerChannel, make([]Transaction, 2)) {
+		t.Fatal("readerChannel send failed")
 	}
 	state.reader.recordRead(2, filepath.Join("data", "first.parquet"))
 	requests <- request{kind: cmdPause}
@@ -355,20 +355,20 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot := <-snapshotReply
 	if snapshot.ReaderRowsRead != 5 || snapshot.ReaderSource == nil ||
-		*snapshot.ReaderSource != "data/second.parquet" || snapshot.Queue1Capacity != 2 ||
-		snapshot.Queue1DepthBatches != 1 || snapshot.Queue1QueuedTransactions != 2 ||
-		snapshot.Queue1EnqueuedBatchesTotal != 1 || snapshot.Queue1EnqueuedTransactionsTotal != 2 ||
-		snapshot.Queue1InputBatchesPerSecond != 1 || snapshot.Queue1InputTransactionsPerSecond != 2 {
-		t.Fatalf("paused snapshot = %+v, want reader and queue measurements", snapshot)
+		*snapshot.ReaderSource != "data/second.parquet" || snapshot.ReaderChannelCapacity != 2 ||
+		snapshot.ReaderChannelDepthBatches != 1 || snapshot.ReaderChannelBufferedTransactions != 2 ||
+		snapshot.ReaderChannelSentBatchesTotal != 1 || snapshot.ReaderChannelSentTransactionsTotal != 2 ||
+		snapshot.ReaderChannelInputBatchesPerSecond != 1 || snapshot.ReaderChannelInputTransactionsPerSecond != 2 {
+		t.Fatalf("paused snapshot = %+v, want reader and readerChannel measurements", snapshot)
 	}
-	state.queue1.recordDequeue(len(<-queue))
+	state.readerChannel.recordReceive(len(<-readerChannel))
 	metrics <- time.Now()
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
-	if snapshot.Queue1DequeuedBatchesTotal != 1 || snapshot.Queue1DequeuedTransactionsTotal != 2 ||
-		snapshot.Queue1InputBatchesPerSecond != 0 || snapshot.Queue1InputTransactionsPerSecond != 0 ||
-		snapshot.Queue1OutputBatchesPerSecond != 1 || snapshot.Queue1OutputTransactionsPerSecond != 2 {
-		t.Fatalf("drained queue snapshot = %+v", snapshot)
+	if snapshot.ReaderChannelReceivedBatchesTotal != 1 || snapshot.ReaderChannelReceivedTransactionsTotal != 2 ||
+		snapshot.ReaderChannelInputBatchesPerSecond != 0 || snapshot.ReaderChannelInputTransactionsPerSecond != 0 ||
+		snapshot.ReaderChannelOutputBatchesPerSecond != 1 || snapshot.ReaderChannelOutputTransactionsPerSecond != 2 {
+		t.Fatalf("drained readerChannel snapshot = %+v", snapshot)
 	}
 
 	requests <- request{kind: cmdRun}
@@ -383,13 +383,13 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
 	if snapshot.ReaderReadTPS != 0 || snapshot.ReaderRowsRead != 0 || snapshot.ReaderSource != nil ||
-		snapshot.Queue1Capacity != state.policy.Queue1.Capacity.Default || snapshot.Queue1DepthBatches != 0 ||
-		snapshot.Queue1QueuedTransactions != 0 || snapshot.Queue1BlockedSenders != 0 ||
-		snapshot.Queue1OldestBlockedSenderMs != 0 || snapshot.Queue1BlockedMs != 0 ||
-		snapshot.Queue1EnqueuedBatchesTotal != 0 || snapshot.Queue1EnqueuedTransactionsTotal != 0 ||
-		snapshot.Queue1DequeuedBatchesTotal != 0 || snapshot.Queue1DequeuedTransactionsTotal != 0 ||
-		snapshot.Queue1InputBatchesPerSecond != 0 || snapshot.Queue1InputTransactionsPerSecond != 0 ||
-		snapshot.Queue1OutputBatchesPerSecond != 0 || snapshot.Queue1OutputTransactionsPerSecond != 0 {
+		snapshot.ReaderChannelCapacity != state.policy.ReaderChannel.Capacity.Default || snapshot.ReaderChannelDepthBatches != 0 ||
+		snapshot.ReaderChannelBufferedTransactions != 0 || snapshot.ReaderChannelBlockedSenders != 0 ||
+		snapshot.ReaderChannelOldestBlockedSenderMs != 0 || snapshot.ReaderChannelBlockedMs != 0 ||
+		snapshot.ReaderChannelSentBatchesTotal != 0 || snapshot.ReaderChannelSentTransactionsTotal != 0 ||
+		snapshot.ReaderChannelReceivedBatchesTotal != 0 || snapshot.ReaderChannelReceivedTransactionsTotal != 0 ||
+		snapshot.ReaderChannelInputBatchesPerSecond != 0 || snapshot.ReaderChannelInputTransactionsPerSecond != 0 ||
+		snapshot.ReaderChannelOutputBatchesPerSecond != 0 || snapshot.ReaderChannelOutputTransactionsPerSecond != 0 {
 		t.Fatalf("snapshot after Reset = %+v, want zero measurements", snapshot)
 	}
 }

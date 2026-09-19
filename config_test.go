@@ -29,7 +29,7 @@ func testConfigContents() string {
 	return strings.Join([]string{
 		"schema_version = 1", "", "[source]", "path = 'C:\\dataset\\*.parquet'", "unit = \"glob-pattern\"", "mutability = \"startup-only\"", "",
 		"[reader.read_batch_size]", "default = 50000", "min = 1000", "max = 100000", "step = 1000", "unit = \"transactions\"", "mutability = \"idle-only\"", "",
-		"[queue1.capacity]", "default = 2", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
+		"[readerChannel.capacity]", "default = 2", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
 	}, "\n")
 }
 
@@ -61,12 +61,12 @@ func TestLoadPolicyRequiresExplicitPolicyFields(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name:     "missing queue capacity default",
+			name:     "missing reader channel capacity default",
 			contents: strings.Replace(testConfigContents(), "default = 2\nallowed", "allowed", 1),
 			wantErr:  true,
 		},
 		{
-			name:     "explicit zero queue capacity default",
+			name:     "explicit zero reader channel capacity default",
 			contents: strings.Replace(testConfigContents(), "default = 2", "default = 0", 1),
 		},
 	}

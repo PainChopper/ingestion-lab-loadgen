@@ -27,10 +27,10 @@ func TestProduceBatchesReadsNestedDefaultParquet(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var telemetry readerTelemetry
-	var queueTelemetry queue1Telemetry
+	var readerChannelTelemetry readerChannelTelemetry
 	policy := testPolicy(t)
 	pattern := filepath.Join(dir, "data", "MBD-mini", "trx", "fold=*", "*.parquet")
-	batches, err := produceBatches(ctx, pattern, 1, policy.Queue1.Capacity.Default, &telemetry, &queueTelemetry)
+	batches, err := produceBatches(ctx, pattern, 1, policy.ReaderChannel.Capacity.Default, &telemetry, &readerChannelTelemetry)
 	if err != nil {
 		t.Fatalf("start producer with default pattern: %v", err)
 	}
@@ -59,8 +59,8 @@ func TestProduceBatchesRejectsEmptyAndInvalidPatterns(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var telemetry readerTelemetry
-			var queueTelemetry queue1Telemetry
-			batches, err := produceBatches(context.Background(), test.pattern, 1, 1, &telemetry, &queueTelemetry)
+			var readerChannelTelemetry readerChannelTelemetry
+			batches, err := produceBatches(context.Background(), test.pattern, 1, 1, &telemetry, &readerChannelTelemetry)
 			if err == nil || batches != nil {
 				t.Fatalf("produceBatches(%q) = (%v, %v), want nil channel and error", test.pattern, batches, err)
 			}
@@ -85,10 +85,10 @@ func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var telemetry readerTelemetry
-	var queueTelemetry queue1Telemetry
+	var readerChannelTelemetry readerChannelTelemetry
 	telemetry.startInterval(time.Now())
 	policy := testPolicy(t)
-	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Default, policy.Queue1.Capacity.Default, &telemetry, &queueTelemetry)
+	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Default, policy.ReaderChannel.Capacity.Default, &telemetry, &readerChannelTelemetry)
 	if err != nil {
 		t.Fatalf("start producer: %v", err)
 	}
@@ -128,9 +128,9 @@ func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var telemetry readerTelemetry
-	var queueTelemetry queue1Telemetry
+	var readerChannelTelemetry readerChannelTelemetry
 	policy := testPolicy(t)
-	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Min, policy.Queue1.Capacity.Default, &telemetry, &queueTelemetry)
+	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Min, policy.ReaderChannel.Capacity.Default, &telemetry, &readerChannelTelemetry)
 	if err != nil {
 		t.Fatalf("start producer: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
 	}
 }
 
-func TestProduceBatchesUsesConfiguredQueueCapacity(t *testing.T) {
+func TestProduceBatchesUsesConfiguredReaderChannelCapacity(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input.parquet")
 	rows := []Transaction{{ClientID: "synthetic"}}
@@ -161,8 +161,8 @@ func TestProduceBatchesUsesConfiguredQueueCapacity(t *testing.T) {
 		t.Run(fmt.Sprintf("capacity-%d", capacity), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			var telemetry readerTelemetry
-			var queueTelemetry queue1Telemetry
-			batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), 1, capacity, &telemetry, &queueTelemetry)
+			var readerChannelTelemetry readerChannelTelemetry
+			batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), 1, capacity, &telemetry, &readerChannelTelemetry)
 			if err != nil {
 				cancel()
 				t.Fatalf("start producer: %v", err)
@@ -171,7 +171,7 @@ func TestProduceBatchesUsesConfiguredQueueCapacity(t *testing.T) {
 				cancel()
 				t.Fatalf("producer channel capacity = %d, want %d", got, capacity)
 			}
-			if got := queueTelemetry.snapshot(time.Now()).capacity; got != capacity {
+			if got := readerChannelTelemetry.snapshot(time.Now()).capacity; got != capacity {
 				cancel()
 				t.Fatalf("telemetry capacity = %d, want %d", got, capacity)
 			}

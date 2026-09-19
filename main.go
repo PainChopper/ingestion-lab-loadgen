@@ -16,17 +16,17 @@ const (
 var blackHole uint64
 
 type controlState struct {
-	actualTPS                int64
-	totalTransactions        int64
-	elapsedBeforeRun         time.Duration
-	runStartedAt             time.Time
-	startError               *string
-	reader                   readerTelemetry
-	queue1                   queue1Telemetry
-	configuredReadBatchSize  int
-	configuredQueue1Capacity int
-	queue1CapacityConfigured bool
-	policy                   policy
+	actualTPS                       int64
+	totalTransactions               int64
+	elapsedBeforeRun                time.Duration
+	runStartedAt                    time.Time
+	startError                      *string
+	reader                          readerTelemetry
+	readerChannel                   readerChannelTelemetry
+	configuredReadBatchSize         int
+	configuredReaderChannelCapacity int
+	readerChannelCapacityConfigured bool
+	policy                          policy
 
 	lifecycle *lifecycle
 }
@@ -59,8 +59,8 @@ func main() {
 		requests,
 		metrics,
 		promMetrics,
-		func(ctx context.Context, batchSize, queue1Capacity int) (<-chan []Transaction, error) {
-			return produceBatches(ctx, loadedPolicy.Source.Path, batchSize, queue1Capacity, &state.reader, &state.queue1)
+		func(ctx context.Context, batchSize, readerChannelCapacity int) (<-chan []Transaction, error) {
+			return produceBatches(ctx, loadedPolicy.Source.Path, batchSize, readerChannelCapacity, &state.reader, &state.readerChannel)
 		},
 	)
 }

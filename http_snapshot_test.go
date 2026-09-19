@@ -13,24 +13,24 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	startError := "failed to start"
 	source := "data/part/input.parquet"
 	expected := statusSnapshot{
-		RunState:                          runStateRunning,
-		TotalTransactions:                 46,
-		ReaderWorkers:                     1,
-		SenderWorkers:                     0,
-		ElapsedMs:                         1234,
-		StartError:                        &startError,
-		ReaderReadTPS:                     123.5,
-		ReaderRowsRead:                    47,
-		ReaderSource:                      &source,
-		Queue1EnqueuedBatchesTotal:        2,
-		Queue1EnqueuedTransactionsTotal:   4,
-		Queue1DequeuedBatchesTotal:        1,
-		Queue1DequeuedTransactionsTotal:   2,
-		Queue1InputBatchesPerSecond:       1.5,
-		Queue1InputTransactionsPerSecond:  3,
-		Queue1OutputBatchesPerSecond:      0.5,
-		Queue1OutputTransactionsPerSecond: 1,
-		Policy:                            testPolicy(t).snapshot(),
+		RunState:                                 runStateRunning,
+		TotalTransactions:                        46,
+		ReaderWorkers:                            1,
+		SenderWorkers:                            0,
+		ElapsedMs:                                1234,
+		StartError:                               &startError,
+		ReaderReadTPS:                            123.5,
+		ReaderRowsRead:                           47,
+		ReaderSource:                             &source,
+		ReaderChannelSentBatchesTotal:            2,
+		ReaderChannelSentTransactionsTotal:       4,
+		ReaderChannelReceivedBatchesTotal:        1,
+		ReaderChannelReceivedTransactionsTotal:   2,
+		ReaderChannelInputBatchesPerSecond:       1.5,
+		ReaderChannelInputTransactionsPerSecond:  3,
+		ReaderChannelOutputBatchesPerSecond:      0.5,
+		ReaderChannelOutputTransactionsPerSecond: 1,
+		Policy:                                   testPolicy(t).snapshot(),
 	}
 
 	req := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
@@ -69,15 +69,15 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &fields); err != nil {
 		t.Fatal(err)
 	}
-	wantQueueFields := map[string]string{
-		"queue1EnqueuedBatchesTotal":        "2",
-		"queue1EnqueuedTransactionsTotal":   "4",
-		"queue1DequeuedBatchesTotal":        "1",
-		"queue1DequeuedTransactionsTotal":   "2",
-		"queue1InputBatchesPerSecond":       "1.5",
-		"queue1InputTransactionsPerSecond":  "3",
-		"queue1OutputBatchesPerSecond":      "0.5",
-		"queue1OutputTransactionsPerSecond": "1",
+	wantReaderChannelFields := map[string]string{
+		"readerChannelSentBatchesTotal":            "2",
+		"readerChannelSentTransactionsTotal":       "4",
+		"readerChannelReceivedBatchesTotal":        "1",
+		"readerChannelReceivedTransactionsTotal":   "2",
+		"readerChannelInputBatchesPerSecond":       "1.5",
+		"readerChannelInputTransactionsPerSecond":  "3",
+		"readerChannelOutputBatchesPerSecond":      "0.5",
+		"readerChannelOutputTransactionsPerSecond": "1",
 	}
 	if len(fields) != 25 {
 		t.Errorf("snapshot field count = %d, want 25", len(fields))
@@ -85,7 +85,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if string(fields["policy"]) == "null" {
 		t.Error("policy must be a JSON object")
 	}
-	for name, want := range wantQueueFields {
+	for name, want := range wantReaderChannelFields {
 		if got := string(fields[name]); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
@@ -108,18 +108,18 @@ func TestSnapshotHandlerIncludesZeroElapsedAndNullStartError(t *testing.T) {
 	}
 	if string(body["elapsedMs"]) != "0" || string(body["startError"]) != "null" ||
 		string(body["readerReadTps"]) != "0" || string(body["readerRowsRead"]) != "0" ||
-		string(body["readerSource"]) != "null" || string(body["queue1Capacity"]) != "0" ||
-		string(body["queue1DepthBatches"]) != "0" || string(body["queue1QueuedTransactions"]) != "0" ||
-		string(body["queue1BlockedSenders"]) != "0" || string(body["queue1OldestBlockedSenderMs"]) != "0" ||
-		string(body["queue1BlockedMs"]) != "0" ||
-		string(body["queue1EnqueuedBatchesTotal"]) != "0" ||
-		string(body["queue1EnqueuedTransactionsTotal"]) != "0" ||
-		string(body["queue1DequeuedBatchesTotal"]) != "0" ||
-		string(body["queue1DequeuedTransactionsTotal"]) != "0" ||
-		string(body["queue1InputBatchesPerSecond"]) != "0" ||
-		string(body["queue1InputTransactionsPerSecond"]) != "0" ||
-		string(body["queue1OutputBatchesPerSecond"]) != "0" ||
-		string(body["queue1OutputTransactionsPerSecond"]) != "0" {
+		string(body["readerSource"]) != "null" || string(body["readerChannelCapacity"]) != "0" ||
+		string(body["readerChannelDepthBatches"]) != "0" || string(body["readerChannelBufferedTransactions"]) != "0" ||
+		string(body["readerChannelBlockedSenders"]) != "0" || string(body["readerChannelOldestBlockedSenderMs"]) != "0" ||
+		string(body["readerChannelBlockedMs"]) != "0" ||
+		string(body["readerChannelSentBatchesTotal"]) != "0" ||
+		string(body["readerChannelSentTransactionsTotal"]) != "0" ||
+		string(body["readerChannelReceivedBatchesTotal"]) != "0" ||
+		string(body["readerChannelReceivedTransactionsTotal"]) != "0" ||
+		string(body["readerChannelInputBatchesPerSecond"]) != "0" ||
+		string(body["readerChannelInputTransactionsPerSecond"]) != "0" ||
+		string(body["readerChannelOutputBatchesPerSecond"]) != "0" ||
+		string(body["readerChannelOutputTransactionsPerSecond"]) != "0" {
 		t.Errorf("idle snapshot body = %v", body)
 	}
 }

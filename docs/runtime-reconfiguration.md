@@ -9,7 +9,7 @@
 Этот документ фиксирует внутреннюю backend-механику изменения работающего pipeline:
 
 - динамическое увеличение и уменьшение worker pools;
-- будущее изменение capacity bounded queues без reset процесса;
+- будущее изменение capacity bounded channels без reset процесса;
 - границу между внутренним переходом и тем, что видит frontend.
 
 Публичные команды, snapshot и telemetry остаются частью [frontend-backend-contract.md](frontend-backend-contract.md). Здесь описывается не второй контракт, а способ реализации его runtime-поведения.
@@ -69,9 +69,9 @@ Polling `len(A)` для этого не используется: мгновен
 
 ## Наблюдаемое поведение
 
-Frontend продолжает показывать одну логическую queue. Внутренние active/retiring channels, acknowledgements и процесс дренирования в UI не выводятся.
+Frontend продолжает показывать один логический readerChannel. Внутренние active/retiring channels, acknowledgements и процесс дренирования в UI не выводятся.
 
-После переключения producer-ов новое значение становится applied capacity. Queue depth во время короткого перехода может включать остаток retiring channel и active channel и временно превышать applied capacity. Визуальное отношение `depth / capacity` остаётся ограниченным диапазоном `0..1`.
+После переключения producer-ов новое значение становится applied capacity. Reader channel depth во время короткого перехода может включать остаток retiring channel и active channel и временно превышать applied capacity. Визуальное отношение `depth / capacity` остаётся ограниченным диапазоном `0..1`.
 
 Точные названия API rotator-а (`Current`, `Switch` и acknowledgements) пока не фиксируются. Они выбираются при реализации вместе с моделью владения goroutine.
 
@@ -102,10 +102,10 @@ Frontend продолжает показывать одну логическую
 
 На текущем этапе используется вариант `next-run`. После реализации `ChannelRotator` backend сможет применять capacity во время run, не показывая внутренние два channels в UI.
 
-### queue-flow-state-spec-v0.1.md
+### channel-flow-state-spec-v0.1.md
 
 Спецификация рассчитывает occupancy по одной applied capacity. При ротации логическая depth временно является суммой остатков retiring channel и active channel и может быть больше applied capacity. Существующее ограничение визуального pressure диапазоном `0..1` сохраняется; источник агрегированной depth потребуется уточнить при реализации telemetry.
 
 ### [Backend MVP plan](plans/current/backend-mvp-plan.md)
 
-Противоречия нет. Текущий вертикальный срез намеренно не включает динамические workers и live queue resize. Настоящий документ подключён только как будущее направление после готового pipeline.
+Противоречия нет. Текущий вертикальный срез намеренно не включает динамические workers и live readerChannel resize. Настоящий документ подключён только как будущее направление после готового pipeline.
