@@ -69,6 +69,27 @@ export interface NumericControlSnapshot {
   readonly applyMode: ApplyMode
 }
 
+export interface RangeControlPolicySnapshot {
+  readonly default: number
+  readonly min: number
+  readonly max: number
+  readonly step: number
+  readonly unit: string
+  readonly mutability: string
+}
+
+export interface AllowedControlPolicySnapshot {
+  readonly default: number
+  readonly allowed: readonly number[]
+  readonly unit: string
+  readonly mutability: string
+}
+
+export interface LoadgenPolicySnapshot {
+  readonly readerReadBatchSize: RangeControlPolicySnapshot
+  readonly queue1Capacity: AllowedControlPolicySnapshot
+}
+
 export interface InstallationModeControlSnapshot {
   readonly applied: ThrottlerInstallationMode | null
   readonly pending: ThrottlerInstallationMode | null
@@ -192,6 +213,7 @@ export interface LoadgenTelemetrySnapshot {
   readonly elapsedMs: number
   readonly startError: string | null
   readonly totalTransactions: number
+  readonly policy: LoadgenPolicySnapshot | null
   readonly reader: ReaderSnapshot
   readonly throttler: ThrottlerSnapshot
   readonly queue1: QueueTelemetrySnapshot

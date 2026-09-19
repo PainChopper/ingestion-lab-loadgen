@@ -73,6 +73,8 @@ function TopBar({
   onRequestedTpsChange,
 }: SnapshotProps & RequestedTpsControlProps) {
   const running = snapshot.runState === 'running'
+  const runUnavailable = snapshot.adapterKind === 'http' &&
+    (snapshot.connectionState !== 'connected' || snapshot.policy === null)
 
   return (
     <header className="topbar">
@@ -98,6 +100,7 @@ function TopBar({
           onClick={() =>
             void adapter.dispatch({ type: running ? 'pause' : 'run' })
           }
+          disabled={runUnavailable}
           title={running ? 'Pause run' : 'Start run'}
           aria-label={running ? 'Pause run' : 'Start run'}
         >
@@ -275,6 +278,8 @@ function InspectorControls({
       )
     case 'throttler': {
       const running = snapshot.throttler.state === 'running'
+      const runUnavailable = snapshot.adapterKind === 'http' &&
+        (snapshot.connectionState !== 'connected' || snapshot.policy === null)
       return (
         <div className="inspector-controls" aria-label="Throttler configuration">
           <NumericControl
@@ -289,6 +294,7 @@ function InspectorControls({
             onClick={() =>
               void adapter.dispatch({ type: running ? 'pause' : 'run' })
             }
+            disabled={runUnavailable}
           >
             {running ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
             <span>{running ? 'Pause' : 'Resume'}</span>

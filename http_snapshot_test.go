@@ -30,6 +30,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		Queue1InputTransactionsPerSecond:  3,
 		Queue1OutputBatchesPerSecond:      0.5,
 		Queue1OutputTransactionsPerSecond: 1,
+		Policy:                            testPolicy(t).snapshot(),
 	}
 
 	req := httptest.NewRequest(http.MethodGet, snapshotPath, nil)
@@ -78,8 +79,11 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		"queue1OutputBatchesPerSecond":      "0.5",
 		"queue1OutputTransactionsPerSecond": "1",
 	}
-	if len(fields) != 24 {
-		t.Errorf("snapshot field count = %d, want 24", len(fields))
+	if len(fields) != 25 {
+		t.Errorf("snapshot field count = %d, want 25", len(fields))
+	}
+	if string(fields["policy"]) == "null" {
+		t.Error("policy must be a JSON object")
 	}
 	for name, want := range wantQueueFields {
 		if got := string(fields[name]); got != want {

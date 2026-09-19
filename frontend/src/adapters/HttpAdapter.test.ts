@@ -4,6 +4,7 @@ import type {
   LoadgenCommand,
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
+  LoadgenPolicySnapshot,
   QueueTelemetrySnapshot,
   RunState,
 } from '../model/loadgen'
@@ -14,6 +15,7 @@ interface TestWireSnapshot {
   readonly elapsedMs: number
   readonly startError: string | null
   readonly totalTransactions: number
+  readonly policy: LoadgenPolicySnapshot
   readonly readerWorkers: number
   readonly senderWorkers: number
   readonly readerReadTps: number
@@ -47,6 +49,22 @@ const VALID_WIRE: TestWireSnapshot = {
   elapsedMs: 12_345,
   startError: null,
   totalTransactions: 42_000,
+  policy: {
+    readerReadBatchSize: {
+      default: 50_000,
+      min: 1_000,
+      max: 100_000,
+      step: 1_000,
+      unit: 'transactions',
+      mutability: 'idle-only',
+    },
+    queue1Capacity: {
+      default: 2,
+      allowed: [0, 1, 2, 8, 16, 64, 8_192],
+      unit: 'batches',
+      mutability: 'idle-only',
+    },
+  },
   readerWorkers: 1,
   senderWorkers: 0,
   readerReadTps: 3_500.5,
@@ -166,17 +184,20 @@ function control(
 
 function readBatchSizeControl(
   value: number | null,
+  policy: LoadgenPolicySnapshot['readerReadBatchSize'] | null,
   connectionState: ConnectionState,
   runState: RunState,
 ): NumericControlSnapshot {
+  if (policy === null) return control('transactions')
+
   return {
     applied: value,
     preview: null,
     pending: null,
-    min: 1_000,
-    max: 100_000,
-    step: 1_000,
-    unit: 'tx',
+    min: policy.min,
+    max: policy.max,
+    step: policy.step,
+    unit: policy.unit,
     applyMode: connectionState === 'connected' && runState === 'idle'
       ? 'immediate'
       : 'unavailable',
@@ -230,8 +251,8 @@ function queue1(
     ...queue,
     capacity: {
       ...control('batches', wire.queue1Capacity),
-      min: 0,
-      max: 8_192,
+      min: wire.policy.queue1Capacity.allowed[0]!,
+      max: wire.policy.queue1Capacity.allowed.at(-1)!,
       applyMode: connectionState === 'connected' && wire.runState === 'idle'
         ? 'immediate'
         : 'unavailable',
@@ -270,11 +291,13 @@ function expectedSnapshot(
     elapsedMs: wire?.elapsedMs ?? 0,
     startError: wire?.startError ?? null,
     totalTransactions: wire?.totalTransactions ?? 0,
+    policy: wire?.policy ?? null,
     reader: {
       id: 'reader',
       workers: control('workers', wire?.readerWorkers ?? null),
       readBatchSize: readBatchSizeControl(
         wire?.readerReadBatchSize ?? null,
+        wire?.policy.readerReadBatchSize ?? null,
         connectionState,
         runState,
       ),
@@ -382,6 +405,26 @@ const malformedCases: ReadonlyArray<{
   {
     name: 'extra key',
     result: async () => mockResponse({ ...VALID_WIRE, extra: true }),
+  },
+  {
+    name: 'missing policy',
+    result: async () => {
+      const { policy: _policy, ...withoutPolicy } = VALID_WIRE
+      return mockResponse(withoutPolicy)
+    },
+  },
+  {
+    name: 'malformed queue1 policy',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      policy: {
+        ...VALID_WIRE.policy,
+        queue1Capacity: {
+          ...VALID_WIRE.policy.queue1Capacity,
+          allowed: [0, 2, 2],
+        },
+      },
+    }),
   },
   { name: 'null body', result: async () => mockResponse(null) },
   { name: 'array body', result: async () => mockResponse([VALID_WIRE]) },
@@ -545,7 +588,7 @@ describe('HttpAdapter', () => {
         min: 1_000,
         max: 100_000,
         step: 1_000,
-        unit: 'tx',
+        unit: 'transactions',
         applyMode: 'unavailable',
       },
       readTps: 3_500.5,
@@ -778,8 +821,10 @@ describe('HttpAdapter', () => {
     async (command) => {
       fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
         ? Promise.resolve(mockCommandResponse())
-        : pendingResponse())
+        : Promise.resolve(mockResponse(VALID_WIRE)))
       const adapter = new HttpAdapter()
+
+      await flushPoll()
 
       await adapter.dispatch(command)
 
@@ -816,7 +861,7 @@ describe('HttpAdapter', () => {
       min: 1_000,
       max: 100_000,
       step: 1_000,
-      unit: 'tx',
+      unit: 'transactions',
       applyMode: 'immediate',
     })
 
@@ -840,6 +885,42 @@ describe('HttpAdapter', () => {
     expect(adapter.getSnapshot().reader.readBatchSize.applied).toBe(50_000)
     adapter.dispose()
   })
+
+  it.each([{ type: 'run' }, { type: 'pause' }] as const)(
+    'does not dispatch $type from a stale snapshot after policy decoding fails',
+    async (command) => {
+      const invalidPolicyWire = {
+        ...VALID_WIRE,
+        policy: {
+          ...VALID_WIRE.policy,
+          readerReadBatchSize: {
+            ...VALID_WIRE.policy.readerReadBatchSize,
+            step: 0,
+          },
+        },
+      }
+      fetchMock
+        .mockResolvedValueOnce(mockResponse(VALID_WIRE))
+        .mockResolvedValueOnce(mockResponse(invalidPolicyWire))
+      const adapter = new HttpAdapter()
+
+      await flushPoll()
+      await vi.advanceTimersByTimeAsync(1_000)
+      await flushPoll()
+
+      expect(adapter.getSnapshot()).toMatchObject({
+        connectionState: 'error',
+        policy: VALID_WIRE.policy,
+      })
+      const receipt = await adapter.dispatch(command)
+      expect(receipt).toMatchObject({
+        accepted: false,
+        error: { code: 'unavailable', retryable: false },
+      })
+      expect(commandFetchCalls()).toHaveLength(0)
+      adapter.dispose()
+    },
+  )
 
   it.each([
     { state: 'running' as const, value: 25_000 },

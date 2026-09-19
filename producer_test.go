@@ -28,8 +28,9 @@ func TestProduceBatchesReadsNestedDefaultParquet(t *testing.T) {
 	defer cancel()
 	var telemetry readerTelemetry
 	var queueTelemetry queue1Telemetry
-	pattern := filepath.Join(dir, filepath.FromSlash(dataPath))
-	batches, err := produceBatches(ctx, pattern, 1, defaultQueue1Capacity, &telemetry, &queueTelemetry)
+	policy := testPolicy(t)
+	pattern := filepath.Join(dir, "data", "MBD-mini", "trx", "fold=*", "*.parquet")
+	batches, err := produceBatches(ctx, pattern, 1, policy.Queue1.Capacity.Default, &telemetry, &queueTelemetry)
 	if err != nil {
 		t.Fatalf("start producer with default pattern: %v", err)
 	}
@@ -86,7 +87,8 @@ func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 	var telemetry readerTelemetry
 	var queueTelemetry queue1Telemetry
 	telemetry.startInterval(time.Now())
-	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), defaultReadBatchSize, defaultQueue1Capacity, &telemetry, &queueTelemetry)
+	policy := testPolicy(t)
+	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Default, policy.Queue1.Capacity.Default, &telemetry, &queueTelemetry)
 	if err != nil {
 		t.Fatalf("start producer: %v", err)
 	}
@@ -127,7 +129,8 @@ func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
 	defer cancel()
 	var telemetry readerTelemetry
 	var queueTelemetry queue1Telemetry
-	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), 1000, defaultQueue1Capacity, &telemetry, &queueTelemetry)
+	policy := testPolicy(t)
+	batches, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Min, policy.Queue1.Capacity.Default, &telemetry, &queueTelemetry)
 	if err != nil {
 		t.Fatalf("start producer: %v", err)
 	}

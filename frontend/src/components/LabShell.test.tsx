@@ -69,6 +69,35 @@ describe('LabShell', () => {
     })
   })
 
+  it('disables Run when the HTTP policy is unavailable and does not dispatch it', async () => {
+    const simulation = new SimulationAdapter()
+    const snapshot: LoadgenTelemetrySnapshot = {
+      ...simulation.getSnapshot(),
+      adapterKind: 'http',
+      connectionState: 'error',
+      policy: null,
+    }
+    const dispatch = vi.fn()
+    const unavailableAdapter: LoadgenAdapter = {
+      kind: 'http',
+      getSnapshot: () => snapshot,
+      subscribe: (listener) => {
+        listener(snapshot)
+        return () => undefined
+      },
+      dispatch,
+      dispose: simulation.dispose,
+    }
+    const user = userEvent.setup()
+    render(<LabShell adapter={unavailableAdapter} />)
+
+    const run = screen.getByRole('button', { name: 'Start run' })
+    expect((run as HTMLButtonElement).disabled).toBe(true)
+    await user.click(run)
+    expect(dispatch).not.toHaveBeenCalled()
+    unavailableAdapter.dispose()
+  })
+
   it('opens a real actor inspector and clears the selection', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()

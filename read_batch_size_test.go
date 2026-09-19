@@ -35,7 +35,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(commands).ServeHTTP(recorder, request)
+				commandsHandler(commands, testPolicy(t)).ServeHTTP(recorder, request)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -83,7 +83,7 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 		return batches, nil
 	}
 	startCustomEventLoopForTest(t, requests, metrics, produce)
-	commands := commandsHandler(requests)
+	commands := commandsHandler(requests, testPolicy(t))
 	snapshot := func() statusSnapshot {
 		t.Helper()
 		recorder := httptest.NewRecorder()
@@ -103,8 +103,8 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 		}
 	}
 	setSize := `{"action":"set-read-batch-size","value":25000}`
-	if got := snapshot().ReaderReadBatchSize; got != defaultReadBatchSize {
-		t.Fatalf("default size = %d, want %d", got, defaultReadBatchSize)
+	if got := snapshot().ReaderReadBatchSize; got != testPolicy(t).Reader.ReadBatchSize.Default {
+		t.Fatalf("default size = %d, want %d", got, testPolicy(t).Reader.ReadBatchSize.Default)
 	}
 	post(setSize, http.StatusOK)
 	if got := snapshot().ReaderReadBatchSize; got != 25_000 {

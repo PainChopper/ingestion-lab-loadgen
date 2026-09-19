@@ -70,6 +70,7 @@ func (state *controlState) eventLoop(
 					Queue1InputTransactionsPerSecond:  queue1.inputTransactionsPerSecond,
 					Queue1OutputBatchesPerSecond:      queue1.outputBatchesPerSecond,
 					Queue1OutputTransactionsPerSecond: queue1.outputTransactionsPerSecond,
+					Policy:                            state.policy.snapshot(),
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
@@ -138,7 +139,7 @@ func (state *controlState) eventLoop(
 				result := commandResult{status: commandAccepted}
 				if state.lifecycle.currentState() != runStateIdle {
 					result.status = commandConflict
-				} else if !validReadBatchSize(cmd.value) {
+				} else if !validReadBatchSize(state.policy, cmd.value) {
 					result.status = commandConflict
 				} else {
 					state.configuredReadBatchSize = cmd.value
@@ -148,7 +149,7 @@ func (state *controlState) eventLoop(
 				}
 			case cmdSetQueueCapacity:
 				result := commandResult{status: commandAccepted}
-				if state.lifecycle.currentState() != runStateIdle || !validQueue1Capacity(cmd.value) {
+				if state.lifecycle.currentState() != runStateIdle || !validQueue1Capacity(state.policy, cmd.value) {
 					result.status = commandConflict
 				} else {
 					state.configuredQueue1Capacity = cmd.value

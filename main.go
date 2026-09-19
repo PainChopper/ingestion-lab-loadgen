@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"log"
+	"os"
 	"runtime"
 	"time"
 )
@@ -9,7 +11,6 @@ import (
 const (
 	windowLength = time.Second / 1
 	startTPS     = 100_000
-	dataPath     = "./data/MBD-mini/trx/fold=*/*.parquet"
 )
 
 var blackHole uint64
@@ -25,12 +26,24 @@ type controlState struct {
 	configuredReadBatchSize  int
 	configuredQueue1Capacity int
 	queue1CapacityConfigured bool
+	policy                   policy
 
 	lifecycle *lifecycle
 }
 
 func main() {
-	state := controlState{lifecycle: newLifecycle()}
+	configArgument := ""
+	if len(os.Args) > 2 {
+		log.Fatal("usage: loadgen [config-path]")
+	}
+	if len(os.Args) == 2 {
+		configArgument = os.Args[1]
+	}
+	loadedPolicy, _, err := loadPolicy(configArgument)
+	if err != nil {
+		log.Fatal(err)
+	}
+	state := controlState{lifecycle: newLifecycle(), policy: loadedPolicy}
 
 	requests := make(chan request, 10)
 
@@ -40,14 +53,14 @@ func main() {
 	promMetrics := NewMetrics()
 	promMetrics.targetTPS.Set(float64(startTPS))
 
-	startHttpServer(requests, promMetrics)
+	startHttpServer(requests, promMetrics, loadedPolicy)
 
 	state.eventLoop(
 		requests,
 		metrics,
 		promMetrics,
 		func(ctx context.Context, batchSize, queue1Capacity int) (<-chan []Transaction, error) {
-			return produceBatches(ctx, dataPath, batchSize, queue1Capacity, &state.reader, &state.queue1)
+			return produceBatches(ctx, loadedPolicy.Source.Path, batchSize, queue1Capacity, &state.reader, &state.queue1)
 		},
 	)
 }

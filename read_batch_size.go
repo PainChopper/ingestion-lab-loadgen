@@ -1,14 +1,12 @@
 package main
 
-const defaultReadBatchSize = 50_000
-
-func validReadBatchSize(value int) bool {
-	return value >= 1_000 && value <= 100_000 && value%1_000 == 0
+func validReadBatchSize(policy policy, value int) bool {
+	return policy.Reader.ReadBatchSize.contains(value)
 }
 
 func (state *controlState) readBatchSize() int {
-	if state.configuredReadBatchSize == 0 {
-		return defaultReadBatchSize
+	if state.configuredReadBatchSize != 0 {
+		return state.configuredReadBatchSize
 	}
-	return state.configuredReadBatchSize
+	return state.policy.Reader.ReadBatchSize.Default
 }
