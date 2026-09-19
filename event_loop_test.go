@@ -404,6 +404,108 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	}
 }
 
+func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
+	requests, batches, metrics := startEventLoopForTest(t, func() {})
+	commands := commandsHandler(requests, testPolicy(t))
+	post := func(body string, want int) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		commands.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(body)))
+		if recorder.Code != want {
+			t.Fatalf("POST %s = %d, want %d", body, recorder.Code, want)
+		}
+	}
+	snapshot := func() statusSnapshot {
+		t.Helper()
+		reply := make(chan statusSnapshot, 1)
+		requests <- request{kind: getSnapshot, snapshotReply: reply}
+		return <-reply
+	}
+	if got := snapshot(); got.ThrottlerRequestedTPS != 200 || got.ThrottlerInstallationMode != throttlerInstalled {
+		t.Fatalf("initial throttler snapshot = %+v", got)
+	}
+	post(`{"action":"set-requested-tps","value":0}`, http.StatusOK)
+	post(`{"action":"run"}`, http.StatusOK)
+	select {
+	case batches <- []Transaction{{ClientID: "held"}}:
+	case <-time.After(time.Second):
+		t.Fatal("zero-TPS stage did not receive batch")
+	}
+	waitForReaderReceives(t, requests, 1)
+	metrics <- time.Now()
+	if got := snapshot(); got.TotalTransactions != 0 || got.ThrottlerRequestedTPS != 0 {
+		t.Fatalf("zero-TPS running snapshot = %+v", got)
+	}
+	post(`{"action":"set-throttler-installation-mode","value":"bypass"}`, http.StatusOK)
+	waitForTransactions(t, requests, metrics, 1)
+	if got := snapshot(); got.ThrottlerRequestedTPS != 0 || got.ThrottlerInstallationMode != throttlerBypass {
+		t.Fatalf("bypass snapshot = %+v", got)
+	}
+	post(`{"action":"pause"}`, http.StatusOK)
+	waitForState(t, requests, runStatePaused)
+	post(`{"action":"set-requested-tps","value":400}`, http.StatusOK)
+	post(`{"action":"set-throttler-installation-mode","value":"installed"}`, http.StatusOK)
+	select {
+	case batches <- []Transaction{{ClientID: "paused"}}:
+	case <-time.After(time.Second):
+		t.Fatal("paused stage did not receive batch")
+	}
+	waitForReaderReceives(t, requests, 2)
+	metrics <- time.Now()
+	if got := snapshot(); got.TotalTransactions != 1 || got.ThrottlerRequestedTPS != 400 ||
+		got.ThrottlerInstallationMode != throttlerInstalled {
+		t.Fatalf("paused throttler snapshot = %+v", got)
+	}
+	post(`{"action":"run"}`, http.StatusOK)
+	waitForTransactions(t, requests, metrics, 2)
+	post(`{"action":"set-requested-tps","value":25}`, http.StatusOK)
+	if got := snapshot().ThrottlerRequestedTPS; got != 25 {
+		t.Fatalf("running TPS = %d, want 25", got)
+	}
+	post(`{"action":"pause"}`, http.StatusOK)
+	waitForState(t, requests, runStatePaused)
+	post(`{"action":"reset"}`, http.StatusOK)
+	if got := snapshot(); got.RunState != runStateIdle || got.TotalTransactions != 0 ||
+		got.ThrottlerRequestedTPS != 25 || got.ThrottlerInstallationMode != throttlerInstalled {
+		t.Fatalf("reset throttler snapshot = %+v", got)
+	}
+}
+
+func TestResetWhileZeroTPSHoldsBatchCompletes(t *testing.T) {
+	requests, batches, _ := startEventLoopForTest(t, func() {})
+	reply := make(chan commandResult, 1)
+	requests <- request{kind: cmdSetRequestedTPS, value: 0, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("set zero TPS status = %v", result.status)
+	}
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("Run status = %v", result.status)
+	}
+	select {
+	case batches <- []Transaction{{ClientID: "held"}}:
+	case <-time.After(time.Second):
+		t.Fatal("zero-TPS stage did not receive batch")
+	}
+	waitForReaderReceives(t, requests, 1)
+	requests <- request{kind: cmdPause}
+	waitForState(t, requests, runStatePaused)
+	requests <- request{kind: cmdReset, commandReply: reply}
+	select {
+	case result := <-reply:
+		if result.status != commandAccepted {
+			t.Fatalf("Reset status = %v", result.status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Reset blocked while zero TPS held a batch")
+	}
+	snapshotReply := make(chan statusSnapshot, 1)
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	if got := <-snapshotReply; got.RunState != runStateIdle || got.TotalTransactions != 0 || got.ThrottlerRequestedTPS != 0 {
+		t.Fatalf("snapshot after zero-TPS Reset = %+v", got)
+	}
+}
+
 func startEventLoopForTest(t *testing.T, onProduce func()) (chan<- request, chan<- []Transaction, chan<- time.Time) {
 	t.Helper()
 

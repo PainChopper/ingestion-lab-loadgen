@@ -16,6 +16,8 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		RunState:                                 runStateRunning,
 		TotalTransactions:                        46,
 		ReaderWorkers:                            1,
+		ThrottlerRequestedTPS:                    200,
+		ThrottlerInstallationMode:                throttlerInstalled,
 		SenderWorkers:                            0,
 		ElapsedMs:                                1234,
 		StartError:                               &startError,
@@ -79,8 +81,11 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		"readerChannelOutputBatchesPerSecond":      "0.5",
 		"readerChannelOutputTransactionsPerSecond": "1",
 	}
-	if len(fields) != 25 {
-		t.Errorf("snapshot field count = %d, want 25", len(fields))
+	if len(fields) != 27 {
+		t.Errorf("snapshot field count = %d, want 27", len(fields))
+	}
+	if string(fields["throttlerRequestedTps"]) != "200" || string(fields["throttlerInstallationMode"]) != `"installed"` {
+		t.Errorf("throttler applied fields = %s, %s", fields["throttlerRequestedTps"], fields["throttlerInstallationMode"])
 	}
 	if string(fields["policy"]) == "null" {
 		t.Error("policy must be a JSON object")

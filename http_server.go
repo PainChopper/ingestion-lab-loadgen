@@ -16,6 +16,8 @@ const (
 	cmdReset
 	cmdSetReadBatchSize
 	cmdSetReaderChannelCapacity
+	cmdSetRequestedTPS
+	cmdSetThrottlerInstallationMode
 )
 
 type request struct {
@@ -23,6 +25,7 @@ type request struct {
 	snapshotReply chan statusSnapshot
 	commandReply  chan commandResult
 	value         int
+	textValue     string
 }
 
 type commandStatus int

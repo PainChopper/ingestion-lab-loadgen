@@ -20,6 +20,7 @@ func (state *controlState) eventLoop(
 	var consumerDone <-chan struct{}
 	var cancelThrottler context.CancelFunc
 	var throttlerDone <-chan struct{}
+	var throttlerUpdates chan<- throttlerUpdate
 	var cancelProducer context.CancelFunc
 	defer func() {
 		if cancelConsumer != nil {
@@ -63,6 +64,8 @@ func (state *controlState) eventLoop(
 					TotalTransactions:                        state.totalTransactions,
 					ReaderWorkers:                            1,
 					ReaderReadBatchSize:                      state.readBatchSize(),
+					ThrottlerRequestedTPS:                    state.requestedTPS(),
+					ThrottlerInstallationMode:                state.installationMode(),
 					SenderWorkers:                            0,
 					ElapsedMs:                                state.elapsedMs(time.Now()),
 					StartError:                               state.startError,
@@ -87,6 +90,7 @@ func (state *controlState) eventLoop(
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
+				resuming := state.lifecycle.currentState() == runStatePaused
 				if state.lifecycle.currentState() == runStateIdle {
 					state.reader.startInterval(time.Now())
 					producerContext, cancel := context.WithCancel(context.Background())
@@ -106,11 +110,16 @@ func (state *controlState) eventLoop(
 					cancelProducer = cancel
 					throttlerContext, cancel := context.WithCancel(context.Background())
 					cancelThrottler = cancel
-					senderBatches, throttlerDone = startThrottler(throttlerContext, batches, &state.readerChannel)
+					senderBatches, throttlerDone, throttlerUpdates = startThrottler(
+						throttlerContext, batches, &state.readerChannel, state.throttlerSettings(false),
+					)
 				}
 				if state.lifecycle.run() {
 					state.runStartedAt = time.Now()
 					state.startError = nil
+					if resuming {
+						state.notifyThrottler(throttlerUpdates, throttlerDone, false)
+					}
 					cancelConsumer, consumerDone = startConsumer(senderBatches, &consumedSinceTick)
 				}
 				if cmd.commandReply != nil {
@@ -131,6 +140,7 @@ func (state *controlState) eventLoop(
 				state.actualTPS = 0
 				promMetrics.actualTPS.Set(0)
 				state.lifecycle.pause()
+				state.notifyThrottler(throttlerUpdates, throttlerDone, true)
 			case cmdReset:
 				result := commandResult{status: commandAccepted}
 				switch state.lifecycle.currentState() {
@@ -148,6 +158,7 @@ func (state *controlState) eventLoop(
 					cancelProducer = nil
 					cancelThrottler = nil
 					throttlerDone = nil
+					throttlerUpdates = nil
 					state.resetProgress(&consumedSinceTick, promMetrics)
 					state.lifecycle.completeReset()
 				case runStateIdle:
@@ -181,6 +192,29 @@ func (state *controlState) eventLoop(
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
 				}
+			case cmdSetRequestedTPS:
+				result := commandResult{status: commandAccepted}
+				if !state.policy.Throttler.RequestedTPS.contains(cmd.value) {
+					result.status = commandConflict
+				} else if state.requestedTPS() != cmd.value {
+					state.configuredRequestedTPS = cmd.value
+					state.requestedTPSConfigured = true
+					state.notifyThrottler(throttlerUpdates, throttlerDone, state.lifecycle.currentState() == runStatePaused)
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- result
+				}
+			case cmdSetThrottlerInstallationMode:
+				result := commandResult{status: commandAccepted}
+				if !state.policy.Throttler.InstallationMode.contains(cmd.textValue) {
+					result.status = commandConflict
+				} else if state.installationMode() != cmd.textValue {
+					state.configuredInstallationMode = cmd.textValue
+					state.notifyThrottler(throttlerUpdates, throttlerDone, state.lifecycle.currentState() == runStatePaused)
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- result
+				}
 			}
 
 		case <-metrics:
@@ -192,6 +226,47 @@ func (state *controlState) eventLoop(
 			promMetrics.actualTPS.Set(float64(state.actualTPS))
 			promMetrics.transactionsTotal.Add(float64(delta))
 		}
+	}
+}
+
+func (state *controlState) requestedTPS() int {
+	if state.requestedTPSConfigured {
+		return state.configuredRequestedTPS
+	}
+	return state.policy.Throttler.RequestedTPS.Default
+}
+
+func (state *controlState) installationMode() string {
+	if state.configuredInstallationMode != "" {
+		return state.configuredInstallationMode
+	}
+	return state.policy.Throttler.InstallationMode.Default
+}
+
+func (state *controlState) throttlerSettings(paused bool) throttlerSettings {
+	return throttlerSettings{
+		requestedTPS: state.requestedTPS(),
+		mode:         state.installationMode(),
+		paused:       paused,
+	}
+}
+
+func (state *controlState) notifyThrottler(
+	updates chan<- throttlerUpdate,
+	done <-chan struct{},
+	paused bool,
+) {
+	if updates == nil {
+		return
+	}
+	update := throttlerUpdate{
+		settings: state.throttlerSettings(paused),
+		applied:  make(chan struct{}),
+	}
+	select {
+	case updates <- update:
+		<-update.applied
+	case <-done:
 	}
 }
 

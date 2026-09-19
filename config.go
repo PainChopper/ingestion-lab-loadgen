@@ -2,19 +2,25 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/viper"
 )
 
 const (
 	defaultConfigPath         = "config.toml"
-	policySchemaVersion       = 1
+	policySchemaVersion       = 2
 	sourceUnit                = "glob-pattern"
 	batchSizeUnit             = "transactions"
 	readerChannelCapacityUnit = "batches"
 	startupOnly               = "startup-only"
 	idleOnly                  = "idle-only"
+	requestedTPSUnit          = "transactions/s"
+	immediate                 = "immediate"
+	throttlerInstalled        = "installed"
+	throttlerBypass           = "bypass"
 )
 
 var requiredPolicyKeys = []string{
@@ -32,6 +38,15 @@ var requiredPolicyKeys = []string{
 	"readerChannel.capacity.allowed",
 	"readerChannel.capacity.unit",
 	"readerChannel.capacity.mutability",
+	"throttler.requested_tps.default",
+	"throttler.requested_tps.min",
+	"throttler.requested_tps.max",
+	"throttler.requested_tps.step",
+	"throttler.requested_tps.unit",
+	"throttler.requested_tps.mutability",
+	"throttler.installation_mode.default",
+	"throttler.installation_mode.allowed",
+	"throttler.installation_mode.mutability",
 }
 
 type policy struct {
@@ -39,6 +54,7 @@ type policy struct {
 	Source        sourcePolicy        `mapstructure:"source"`
 	Reader        readerPolicy        `mapstructure:"reader"`
 	ReaderChannel readerChannelPolicy `mapstructure:"readerChannel"`
+	Throttler     throttlerPolicy     `mapstructure:"throttler"`
 }
 
 type sourcePolicy struct {
@@ -53,6 +69,17 @@ type readerPolicy struct {
 
 type readerChannelPolicy struct {
 	Capacity allowedPolicy `mapstructure:"capacity"`
+}
+
+type throttlerPolicy struct {
+	RequestedTPS     rangePolicy            `mapstructure:"requested_tps"`
+	InstallationMode installationModePolicy `mapstructure:"installation_mode"`
+}
+
+type installationModePolicy struct {
+	Default    string   `mapstructure:"default" json:"default"`
+	Allowed    []string `mapstructure:"allowed" json:"allowed"`
+	Mutability string   `mapstructure:"mutability" json:"mutability"`
 }
 
 type rangePolicy struct {
@@ -120,7 +147,47 @@ func (p policy) validate() error {
 	if err := p.ReaderChannel.Capacity.validate(); err != nil {
 		return fmt.Errorf("readerChannel.capacity: %w", err)
 	}
+	if int64(p.Reader.ReadBatchSize.Max) > math.MaxInt64/int64(time.Second) {
+		return fmt.Errorf("reader.read_batch_size.max exceeds pacing duration limit")
+	}
+	if err := p.Throttler.RequestedTPS.validateRequestedTPS(); err != nil {
+		return fmt.Errorf("throttler.requested_tps: %w", err)
+	}
+	if err := p.Throttler.InstallationMode.validate(); err != nil {
+		return fmt.Errorf("throttler.installation_mode: %w", err)
+	}
 	return nil
+}
+
+func (p rangePolicy) validateRequestedTPS() error {
+	if p.Unit != requestedTPSUnit || p.Mutability != immediate {
+		return fmt.Errorf("must use unit %q and mutability %q", requestedTPSUnit, immediate)
+	}
+	if p.Min < 0 || p.Max <= p.Min || p.Step <= 0 {
+		return fmt.Errorf("min, max, and step must form a non-negative range")
+	}
+	if !p.contains(p.Default) {
+		return fmt.Errorf("default must be within the range and aligned to step")
+	}
+	return nil
+}
+
+func (p installationModePolicy) validate() error {
+	if p.Mutability != immediate || len(p.Allowed) != 2 ||
+		!p.contains(throttlerInstalled) || !p.contains(throttlerBypass) ||
+		!p.contains(p.Default) {
+		return fmt.Errorf("allowed must be [%q, %q], default must be allowed, and mutability must be %q", throttlerInstalled, throttlerBypass, immediate)
+	}
+	return nil
+}
+
+func (p installationModePolicy) contains(value string) bool {
+	for _, allowed := range p.Allowed {
+		if value == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func (p rangePolicy) validate() error {
@@ -171,13 +238,17 @@ func (p allowedPolicy) contains(value int) bool {
 }
 
 type policySnapshot struct {
-	ReaderReadBatchSize   rangePolicy   `json:"readerReadBatchSize"`
-	ReaderChannelCapacity allowedPolicy `json:"readerChannelCapacity"`
+	ReaderReadBatchSize       rangePolicy            `json:"readerReadBatchSize"`
+	ReaderChannelCapacity     allowedPolicy          `json:"readerChannelCapacity"`
+	ThrottlerRequestedTPS     rangePolicy            `json:"throttlerRequestedTps"`
+	ThrottlerInstallationMode installationModePolicy `json:"throttlerInstallationMode"`
 }
 
 func (p policy) snapshot() policySnapshot {
 	return policySnapshot{
-		ReaderReadBatchSize:   p.Reader.ReadBatchSize,
-		ReaderChannelCapacity: p.ReaderChannel.Capacity,
+		ReaderReadBatchSize:       p.Reader.ReadBatchSize,
+		ReaderChannelCapacity:     p.ReaderChannel.Capacity,
+		ThrottlerRequestedTPS:     p.Throttler.RequestedTPS,
+		ThrottlerInstallationMode: p.Throttler.InstallationMode,
 	}
 }

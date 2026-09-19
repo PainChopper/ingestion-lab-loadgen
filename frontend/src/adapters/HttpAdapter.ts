@@ -8,6 +8,7 @@ import type {
   NumericControlSnapshot,
   ChannelTelemetrySnapshot,
   RunState,
+  ThrottlerInstallationMode,
 } from '../model/loadgen'
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
 const COMMAND_ENDPOINT = '/api/loadgen/commands'
@@ -42,6 +43,8 @@ const WIRE_KEYS = Object.freeze([
   'senderWorkers',
   'startError',
   'totalTransactions',
+  'throttlerInstallationMode',
+  'throttlerRequestedTps',
 ].sort())
 
 interface WireSnapshot {
@@ -54,6 +57,8 @@ interface WireSnapshot {
   readonly senderWorkers: number
   readonly readerReadTps: number
   readonly readerReadBatchSize: number
+  readonly throttlerRequestedTps: number
+  readonly throttlerInstallationMode: ThrottlerInstallationMode
   readonly readerRowsRead: number
   readonly readerSource: string | null
   readonly readerChannelCapacity: number
@@ -81,6 +86,8 @@ type SupportedCommand = Extract<
       | 'reset'
       | 'set-reader-channel-capacity'
       | 'set-read-batch-size'
+      | 'set-requested-tps'
+      | 'set-throttler-installation-mode'
   }
 >
 
@@ -102,7 +109,9 @@ function isSupportedCommand(
     command.type === 'pause' ||
     command.type === 'reset' ||
     command.type === 'set-reader-channel-capacity' ||
-    command.type === 'set-read-batch-size'
+    command.type === 'set-read-batch-size' ||
+    command.type === 'set-requested-tps' ||
+    command.type === 'set-throttler-installation-mode'
 }
 
 function unavailableControl(unit: string): NumericControlSnapshot {
@@ -265,13 +274,21 @@ function createSnapshot(
     },
     throttler: {
       id: 'throttler',
-      requestedTps: unavailableControl('tx/s'),
+      requestedTps: throttlerRequestedTpsControl(
+        wire?.throttlerRequestedTps ?? null,
+        wire?.policy.throttlerRequestedTps ?? null,
+        connectionState,
+      ),
       installationMode: {
-        applied: null,
+        applied: wire?.throttlerInstallationMode ?? null,
         pending: null,
-        applyMode: 'unavailable',
-        writable: false,
-        unavailableReason: UNAVAILABLE_REASON,
+        applyMode: connectionState === 'connected' && wire !== null
+          ? 'immediate'
+          : 'unavailable',
+        writable: connectionState === 'connected' && wire !== null,
+        unavailableReason: connectionState === 'connected' && wire !== null
+          ? null
+          : UNAVAILABLE_REASON,
       },
       admittedTps: null,
       limitedMs: null,
@@ -359,6 +376,25 @@ function isRangeValue(
     (value - policy.min) % policy.step === 0
 }
 
+function throttlerRequestedTpsControl(
+  value: number | null,
+  policy: LoadgenPolicySnapshot['throttlerRequestedTps'] | null,
+  connectionState: ConnectionState,
+): NumericControlSnapshot {
+  if (policy === null) return unavailableControl('transactions/s')
+
+  return {
+    applied: value,
+    preview: null,
+    pending: null,
+    min: policy.min,
+    max: policy.max,
+    step: policy.step,
+    unit: policy.unit,
+    applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
+  }
+}
+
 function isExactObject(
   value: unknown,
   keys: readonly string[],
@@ -371,8 +407,13 @@ function isExactObject(
 }
 
 function decodePolicy(value: unknown): LoadgenPolicySnapshot {
-  if (!isExactObject(value, ['readerChannelCapacity', 'readerReadBatchSize'])) {
-    throw new Error('snapshot policy must contain exactly reader and readerChannel controls')
+  if (!isExactObject(value, [
+    'readerChannelCapacity',
+    'readerReadBatchSize',
+    'throttlerInstallationMode',
+    'throttlerRequestedTps',
+  ])) {
+    throw new Error('snapshot policy must contain exactly reader, readerChannel, and throttler controls')
   }
   const reader = value.readerReadBatchSize
   if (!isExactObject(reader, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
@@ -416,6 +457,45 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   ) {
     throw new Error('snapshot readerChannel policy values are invalid')
   }
+  const requestedTps = value.throttlerRequestedTps
+  if (!isExactObject(requestedTps, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
+    throw new Error('snapshot throttler requested TPS policy is invalid')
+  }
+  if (
+    !isWireInteger(requestedTps.default) || !isWireInteger(requestedTps.min) ||
+    !isWireInteger(requestedTps.max) || !isWireInteger(requestedTps.step) ||
+    requestedTps.max <= requestedTps.min || requestedTps.step <= 0 ||
+    requestedTps.unit !== 'transactions/s' || requestedTps.mutability !== 'immediate'
+  ) {
+    throw new Error('snapshot throttler requested TPS policy is invalid')
+  }
+  const requestedTpsPolicy = {
+    default: requestedTps.default,
+    min: requestedTps.min,
+    max: requestedTps.max,
+    step: requestedTps.step,
+    unit: requestedTps.unit,
+    mutability: requestedTps.mutability,
+  }
+  if (!isRangeValue(requestedTpsPolicy.default, requestedTpsPolicy)) {
+    throw new Error('snapshot throttler requested TPS policy default is invalid')
+  }
+
+  const installationMode = value.throttlerInstallationMode
+  if (!isExactObject(installationMode, ['allowed', 'default', 'mutability'])) {
+    throw new Error('snapshot throttler installation mode policy is invalid')
+  }
+  if (
+    !Array.isArray(installationMode.allowed) ||
+    installationMode.allowed.length !== 2 ||
+    installationMode.allowed[0] !== 'installed' ||
+    installationMode.allowed[1] !== 'bypass' ||
+    installationMode.default !== 'installed' && installationMode.default !== 'bypass' ||
+    !installationMode.allowed.includes(installationMode.default) ||
+    installationMode.mutability !== 'immediate'
+  ) {
+    throw new Error('snapshot throttler installation mode policy is invalid')
+  }
   return Object.freeze({
     readerReadBatchSize: Object.freeze(readerPolicy),
     readerChannelCapacity: Object.freeze({
@@ -423,6 +503,12 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
       allowed,
       unit: readerChannel.unit,
       mutability: readerChannel.mutability,
+    }),
+    throttlerRequestedTps: Object.freeze(requestedTpsPolicy),
+    throttlerInstallationMode: Object.freeze({
+      default: installationMode.default,
+      allowed: Object.freeze([...installationMode.allowed]),
+      mutability: installationMode.mutability,
     }),
   })
 }
@@ -453,6 +539,10 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     !isWireInteger(record.elapsedMs) ||
     !isWireInteger(record.totalTransactions) ||
     !isWireInteger(record.readerWorkers) ||
+    !isRangeValue(record.throttlerRequestedTps, policy.throttlerRequestedTps) ||
+    (record.throttlerInstallationMode !== 'installed' &&
+      record.throttlerInstallationMode !== 'bypass') ||
+    !policy.throttlerInstallationMode.allowed.includes(record.throttlerInstallationMode) ||
     !isWireInteger(record.senderWorkers) ||
     !isWireInteger(record.readerRowsRead) ||
     !isWireInteger(record.readerChannelCapacity) ||
@@ -506,6 +596,8 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     senderWorkers: record.senderWorkers,
     readerReadTps: record.readerReadTps,
     readerReadBatchSize: record.readerReadBatchSize,
+    throttlerRequestedTps: record.throttlerRequestedTps,
+    throttlerInstallationMode: record.throttlerInstallationMode,
     readerRowsRead: record.readerRowsRead,
     readerSource: record.readerSource,
     readerChannelCapacity: record.readerChannelCapacity,
@@ -556,6 +648,14 @@ function canDispatchPolicyCommand(
   if (snapshot.connectionState === 'error') return false
   if (command.type === 'run' || command.type === 'pause') {
     return snapshot.connectionState === 'connecting' || policy !== null
+  }
+  if (command.type === 'set-requested-tps') {
+    return snapshot.connectionState === 'connected' && policy !== null &&
+      isRangeValue(command.value, policy.throttlerRequestedTps)
+  }
+  if (command.type === 'set-throttler-installation-mode') {
+    return snapshot.connectionState === 'connected' && policy !== null &&
+      policy.throttlerInstallationMode.allowed.includes(command.value)
   }
   if (
     snapshot.connectionState !== 'connected' ||
@@ -762,7 +862,9 @@ export class HttpAdapter implements LoadgenAdapter {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           command.type === 'set-read-batch-size' ||
-          command.type === 'set-reader-channel-capacity'
+          command.type === 'set-reader-channel-capacity' ||
+          command.type === 'set-requested-tps' ||
+          command.type === 'set-throttler-installation-mode'
             ? { action: command.type, value: command.value }
             : { action: command.type },
         ),

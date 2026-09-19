@@ -26,6 +26,9 @@ type controlState struct {
 	configuredReadBatchSize         int
 	configuredReaderChannelCapacity int
 	readerChannelCapacityConfigured bool
+	configuredRequestedTPS          int
+	requestedTPSConfigured          bool
+	configuredInstallationMode      string
 	policy                          policy
 
 	lifecycle *lifecycle

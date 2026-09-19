@@ -122,3 +122,66 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestThrottlerCommandValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want int
+		kind requestKind
+	}{
+		{name: "TPS missing", body: `{"action":"set-requested-tps"}`, want: http.StatusBadRequest},
+		{name: "TPS null", body: `{"action":"set-requested-tps","value":null}`, want: http.StatusBadRequest},
+		{name: "TPS fractional", body: `{"action":"set-requested-tps","value":25.5}`, want: http.StatusBadRequest},
+		{name: "TPS string", body: `{"action":"set-requested-tps","value":"25"}`, want: http.StatusBadRequest},
+		{name: "TPS negative", body: `{"action":"set-requested-tps","value":-25}`, want: http.StatusBadRequest},
+		{name: "TPS off step", body: `{"action":"set-requested-tps","value":26}`, want: http.StatusBadRequest},
+		{name: "TPS over max", body: `{"action":"set-requested-tps","value":425}`, want: http.StatusBadRequest},
+		{name: "TPS extra field", body: `{"action":"set-requested-tps","value":25,"other":1}`, want: http.StatusBadRequest},
+		{name: "TPS trailing JSON", body: `{"action":"set-requested-tps","value":25}{}`, want: http.StatusBadRequest},
+		{name: "mode missing", body: `{"action":"set-throttler-installation-mode"}`, want: http.StatusBadRequest},
+		{name: "mode null", body: `{"action":"set-throttler-installation-mode","value":null}`, want: http.StatusBadRequest},
+		{name: "mode number", body: `{"action":"set-throttler-installation-mode","value":1}`, want: http.StatusBadRequest},
+		{name: "mode unknown", body: `{"action":"set-throttler-installation-mode","value":"other"}`, want: http.StatusBadRequest},
+		{name: "mode extra field", body: `{"action":"set-throttler-installation-mode","value":"bypass","other":1}`, want: http.StatusBadRequest},
+		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
+		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":400}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
+		{name: "mode installed", body: `{"action":"set-throttler-installation-mode","value":"installed"}`, want: http.StatusOK, kind: cmdSetThrottlerInstallationMode},
+		{name: "mode bypass", body: `{"action":"set-throttler-installation-mode","value":"bypass"}`, want: http.StatusOK, kind: cmdSetThrottlerInstallationMode},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			commands := make(chan request, 1)
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
+			done := make(chan struct{})
+			policy := testPolicy(t)
+			go func() {
+				defer close(done)
+				commandsHandler(commands, policy).ServeHTTP(recorder, req)
+			}()
+			if test.want == http.StatusOK {
+				select {
+				case command := <-commands:
+					if command.kind != test.kind {
+						t.Errorf("command kind = %v, want %v", command.kind, test.kind)
+					}
+					command.commandReply <- commandResult{status: commandAccepted}
+				case <-time.After(time.Second):
+					t.Fatal("valid command was not dispatched")
+				}
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("command handler did not return")
+			}
+			if recorder.Code != test.want {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
+			}
+			if test.want == http.StatusBadRequest && len(commands) != 0 {
+				t.Fatal("invalid command was dispatched")
+			}
+		})
+	}
+}
