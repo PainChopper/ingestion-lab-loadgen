@@ -74,7 +74,10 @@ func TestSnapshotHandlerIncludesZeroElapsedAndNullStartError(t *testing.T) {
 	}
 	if string(body["elapsedMs"]) != "0" || string(body["startError"]) != "null" ||
 		string(body["readerReadTps"]) != "0" || string(body["readerRowsRead"]) != "0" ||
-		string(body["readerSource"]) != "null" {
+		string(body["readerSource"]) != "null" || string(body["queue1Capacity"]) != "0" ||
+		string(body["queue1DepthBatches"]) != "0" || string(body["queue1QueuedTransactions"]) != "0" ||
+		string(body["queue1BlockedSenders"]) != "0" || string(body["queue1OldestBlockedSenderMs"]) != "0" ||
+		string(body["queue1BlockedMs"]) != "0" {
 		t.Errorf("idle snapshot body = %v", body)
 	}
 }

@@ -7,16 +7,22 @@ import (
 )
 
 type statusSnapshot struct {
-	RunState            runState `json:"runState"`
-	TotalTransactions   int64    `json:"totalTransactions"`
-	ReaderWorkers       int      `json:"readerWorkers"`
-	ReaderReadBatchSize int      `json:"readerReadBatchSize"`
-	SenderWorkers       int      `json:"senderWorkers"`
-	ElapsedMs           int64    `json:"elapsedMs"`
-	StartError          *string  `json:"startError"`
-	ReaderReadTPS       float64  `json:"readerReadTps"`
-	ReaderRowsRead      int64    `json:"readerRowsRead"`
-	ReaderSource        *string  `json:"readerSource"`
+	RunState                    runState `json:"runState"`
+	TotalTransactions           int64    `json:"totalTransactions"`
+	ReaderWorkers               int      `json:"readerWorkers"`
+	ReaderReadBatchSize         int      `json:"readerReadBatchSize"`
+	SenderWorkers               int      `json:"senderWorkers"`
+	ElapsedMs                   int64    `json:"elapsedMs"`
+	StartError                  *string  `json:"startError"`
+	ReaderReadTPS               float64  `json:"readerReadTps"`
+	ReaderRowsRead              int64    `json:"readerRowsRead"`
+	ReaderSource                *string  `json:"readerSource"`
+	Queue1Capacity              int      `json:"queue1Capacity"`
+	Queue1DepthBatches          int      `json:"queue1DepthBatches"`
+	Queue1QueuedTransactions    int      `json:"queue1QueuedTransactions"`
+	Queue1BlockedSenders        int      `json:"queue1BlockedSenders"`
+	Queue1OldestBlockedSenderMs int64    `json:"queue1OldestBlockedSenderMs"`
+	Queue1BlockedMs             int64    `json:"queue1BlockedMs"`
 }
 
 func snapshotHandler(requests chan<- request) http.Handler {

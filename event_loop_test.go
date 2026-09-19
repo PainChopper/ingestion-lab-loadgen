@@ -340,6 +340,9 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 	requests <- request{kind: cmdRun}
 	waitForState(t, requests, runStateRunning)
+	queue := make(chan []Transaction, batchReadAheadCapacity)
+	queue <- make([]Transaction, 2)
+	state.queue1.start(queue, 2)
 	state.reader.recordRead(2, filepath.Join("data", "first.parquet"))
 	requests <- request{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
@@ -349,8 +352,9 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot := <-snapshotReply
 	if snapshot.ReaderRowsRead != 5 || snapshot.ReaderSource == nil ||
-		*snapshot.ReaderSource != "data/second.parquet" {
-		t.Fatalf("paused reader snapshot = %+v, want 5 rows and second source", snapshot)
+		*snapshot.ReaderSource != "data/second.parquet" || snapshot.Queue1Capacity != 2 ||
+		snapshot.Queue1DepthBatches != 1 || snapshot.Queue1QueuedTransactions != 2 {
+		t.Fatalf("paused snapshot = %+v, want reader and queue measurements", snapshot)
 	}
 
 	requests <- request{kind: cmdRun}
@@ -364,8 +368,11 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	}
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
-	if snapshot.ReaderReadTPS != 0 || snapshot.ReaderRowsRead != 0 || snapshot.ReaderSource != nil {
-		t.Fatalf("reader snapshot after Reset = %+v, want zero and null source", snapshot)
+	if snapshot.ReaderReadTPS != 0 || snapshot.ReaderRowsRead != 0 || snapshot.ReaderSource != nil ||
+		snapshot.Queue1Capacity != batchReadAheadCapacity || snapshot.Queue1DepthBatches != 0 ||
+		snapshot.Queue1QueuedTransactions != 0 || snapshot.Queue1BlockedSenders != 0 ||
+		snapshot.Queue1OldestBlockedSenderMs != 0 || snapshot.Queue1BlockedMs != 0 {
+		t.Fatalf("snapshot after Reset = %+v, want zero measurements", snapshot)
 	}
 }
 

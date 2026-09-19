@@ -179,6 +179,33 @@ describe('QueueCable mounted behavior', () => {
     adapter.dispose()
   })
 
+  it('lifts a nonzero unavailable fixed capacity without enabling commands', () => {
+    const adapter = new SimulationAdapter()
+    const queue = derivedSnapshot(adapter).queue1
+    const onCapacityChange = vi.fn()
+    const fixedQueue = {
+      ...queue,
+      capacity: {
+        ...queue.capacity,
+        applied: 2,
+        min: 0,
+        max: 2,
+        applyMode: 'unavailable' as const,
+      },
+    }
+    const { container } = renderCable(fixedQueue, { onCapacityChange })
+    const slider = screen.getByRole('slider')
+    const cable = container.querySelector('.pipeline-queue-cable')!
+
+    expect(pathApexY(cable.getAttribute('d')!)).toBeLessThan(
+      QUEUE_CABLE_ENDPOINTS[fixedQueue.id].start.y,
+    )
+    expect(slider.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.keyDown(slider, { key: 'ArrowUp' })
+    expect(onCapacityChange).not.toHaveBeenCalled()
+    adapter.dispose()
+  })
+
   it('shows a local pointer preview and commits the released capacity', () => {
     const adapter = new SimulationAdapter()
     const queue = queueSnapshot(derivedSnapshot(adapter).queue1, 4)

@@ -20,6 +20,12 @@ interface TestWireSnapshot {
   readonly readerReadBatchSize: number
   readonly readerRowsRead: number
   readonly readerSource: string | null
+  readonly queue1Capacity: number
+  readonly queue1DepthBatches: number
+  readonly queue1QueuedTransactions: number
+  readonly queue1BlockedSenders: number
+  readonly queue1OldestBlockedSenderMs: number
+  readonly queue1BlockedMs: number
 }
 
 interface MockResponseOptions {
@@ -39,6 +45,12 @@ const VALID_WIRE: TestWireSnapshot = {
   readerReadBatchSize: 50_000,
   readerRowsRead: 14_000,
   readerSource: 'MBD-mini/trx/part/input.parquet',
+  queue1Capacity: 8,
+  queue1DepthBatches: 6,
+  queue1QueuedTransactions: 300_000,
+  queue1BlockedSenders: 1,
+  queue1OldestBlockedSenderMs: 450,
+  queue1BlockedMs: 1_600,
 }
 
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
@@ -187,6 +199,28 @@ function neutralQueue(
   }
 }
 
+function queue1(wire: TestWireSnapshot | null): QueueTelemetrySnapshot {
+  const queue = neutralQueue(
+    'reader-to-throttler',
+    'reader',
+    'throttler',
+  )
+  if (wire === null) return queue
+
+  return {
+    ...queue,
+    capacity: {
+      ...control('batches', wire.queue1Capacity),
+      min: 0,
+    },
+    depthBatches: wire.queue1DepthBatches,
+    queuedTransactions: wire.queue1QueuedTransactions,
+    blockedSenders: wire.queue1BlockedSenders,
+    oldestBlockedSenderMs: wire.queue1OldestBlockedSenderMs,
+    blockedMs: wire.queue1BlockedMs,
+  }
+}
+
 function expectedSnapshot(
   revision: number,
   connectionState: ConnectionState,
@@ -231,11 +265,7 @@ function expectedSnapshot(
       limitedMs: null,
       state: runState,
     },
-    queue1: neutralQueue(
-      'reader-to-throttler',
-      'reader',
-      'throttler',
-    ),
+    queue1: queue1(wire),
     queue2: neutralQueue(
       'throttler-to-sender',
       'throttler',
@@ -382,6 +412,21 @@ const malformedCases: ReadonlyArray<{
     }),
   },
   {
+    name: 'negative queue capacity',
+    result: async () => mockResponse({ ...VALID_WIRE, queue1Capacity: -1 }),
+  },
+  {
+    name: 'fractional queue depth',
+    result: async () => mockResponse({ ...VALID_WIRE, queue1DepthBatches: 0.5 }),
+  },
+  {
+    name: 'unsafe queued transactions',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      queue1QueuedTransactions: Number.MAX_SAFE_INTEGER + 1,
+    }),
+  },
+  {
     name: 'empty reader source',
     result: async () => mockResponse({ ...VALID_WIRE, readerSource: '' }),
   },
@@ -441,7 +486,7 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('maps only the ten valid wire fields into a fresh frozen snapshot', async () => {
+  it('maps only the sixteen valid wire fields into a fresh frozen snapshot', async () => {
     fetchMock.mockResolvedValueOnce(mockResponse(
       VALID_WIRE,
       { contentType: 'application/json; charset=utf-8' },
@@ -479,9 +524,41 @@ describe('HttpAdapter', () => {
       max: 0,
       applyMode: 'unavailable',
     })
+    expect(snapshot.queue1).toEqual({
+      ...neutralQueue('reader-to-throttler', 'reader', 'throttler'),
+      capacity: { ...control('batches', 8), min: 0 },
+      depthBatches: 6,
+      queuedTransactions: 300_000,
+      blockedSenders: 1,
+      oldestBlockedSenderMs: 450,
+      blockedMs: 1_600,
+    })
     expectDeepFrozen(snapshot)
     adapter.dispose()
   })
+
+  it.each([0, 2])(
+    'maps fixed queue1 capacity %i to the zero-based geometry range',
+    async (queue1Capacity) => {
+      const wire = { ...VALID_WIRE, queue1Capacity }
+      fetchMock.mockResolvedValueOnce(mockResponse(wire))
+      const adapter = new HttpAdapter()
+
+      await flushPoll()
+
+      expect(adapter.getSnapshot().queue1.capacity).toEqual({
+        applied: queue1Capacity,
+        preview: null,
+        pending: null,
+        min: 0,
+        max: queue1Capacity,
+        step: 1,
+        unit: 'batches',
+        applyMode: 'unavailable',
+      })
+      adapter.dispose()
+    },
+  )
 
   it('maps reset reader metrics as zero values and no source', async () => {
     const resetWire: TestWireSnapshot = {
@@ -525,6 +602,7 @@ describe('HttpAdapter', () => {
 
   it('preserves last-known wire fields on failure and recovers on success', async () => {
     const recoveredWire: TestWireSnapshot = {
+      ...VALID_WIRE,
       runState: 'paused',
       elapsedMs: 67_890,
       startError: 'previous start failed',
@@ -535,6 +613,12 @@ describe('HttpAdapter', () => {
       readerReadBatchSize: 25_000,
       readerRowsRead: 28_000,
       readerSource: 'MBD-mini/trx/part/recovered.parquet',
+      queue1Capacity: 12,
+      queue1DepthBatches: 4,
+      queue1QueuedTransactions: 100_000,
+      queue1BlockedSenders: 0,
+      queue1OldestBlockedSenderMs: 0,
+      queue1BlockedMs: 2_000,
     }
     fetchMock
       .mockResolvedValueOnce(mockResponse(VALID_WIRE))
