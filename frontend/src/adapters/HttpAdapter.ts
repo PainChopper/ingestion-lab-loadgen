@@ -26,7 +26,15 @@ const WIRE_KEYS = Object.freeze([
   'queue1BlockedSenders',
   'queue1Capacity',
   'queue1DepthBatches',
+  'queue1DequeuedBatchesTotal',
+  'queue1DequeuedTransactionsTotal',
+  'queue1EnqueuedBatchesTotal',
+  'queue1EnqueuedTransactionsTotal',
+  'queue1InputBatchesPerSecond',
+  'queue1InputTransactionsPerSecond',
   'queue1OldestBlockedSenderMs',
+  'queue1OutputBatchesPerSecond',
+  'queue1OutputTransactionsPerSecond',
   'queue1QueuedTransactions',
   'readerReadBatchSize',
   'readerReadTps',
@@ -51,11 +59,19 @@ interface WireSnapshot {
   readonly readerRowsRead: number
   readonly readerSource: string | null
   readonly queue1Capacity: number
+  readonly queue1EnqueuedBatchesTotal: number
+  readonly queue1EnqueuedTransactionsTotal: number
+  readonly queue1DequeuedBatchesTotal: number
+  readonly queue1DequeuedTransactionsTotal: number
   readonly queue1DepthBatches: number
   readonly queue1QueuedTransactions: number
   readonly queue1BlockedSenders: number
   readonly queue1OldestBlockedSenderMs: number
   readonly queue1BlockedMs: number
+  readonly queue1InputBatchesPerSecond: number
+  readonly queue1InputTransactionsPerSecond: number
+  readonly queue1OutputBatchesPerSecond: number
+  readonly queue1OutputTransactionsPerSecond: number
 }
 
 type SupportedCommand = Extract<
@@ -198,6 +214,17 @@ function queue1(
     ),
     depthBatches: wire.queue1DepthBatches,
     queuedTransactions: wire.queue1QueuedTransactions,
+    enqueuedBatchesTotal: wire.queue1EnqueuedBatchesTotal,
+    enqueuedTransactionsTotal: wire.queue1EnqueuedTransactionsTotal,
+    dequeuedBatchesTotal: wire.queue1DequeuedBatchesTotal,
+    dequeuedTransactionsTotal: wire.queue1DequeuedTransactionsTotal,
+    inputBatchesPerSecond: wire.queue1InputBatchesPerSecond,
+    inputTransactionsPerSecond: wire.queue1InputTransactionsPerSecond,
+    outputBatchesPerSecond: wire.queue1OutputBatchesPerSecond,
+    outputTransactionsPerSecond: wire.queue1OutputTransactionsPerSecond,
+    inputTps: wire.queue1InputTransactionsPerSecond,
+    outputTps: wire.queue1OutputTransactionsPerSecond,
+    throughputTps: wire.queue1OutputTransactionsPerSecond,
     blockedSenders: wire.queue1BlockedSenders,
     oldestBlockedSenderMs: wire.queue1OldestBlockedSenderMs,
     blockedMs: wire.queue1BlockedMs,
@@ -338,7 +365,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     keys.length !== WIRE_KEYS.length ||
     keys.some((key, index) => key !== WIRE_KEYS[index])
   ) {
-    throw new Error('snapshot body must contain exactly sixteen wire keys')
+    throw new Error('snapshot body must contain exactly twenty-four wire keys')
   }
 
   if (
@@ -355,6 +382,10 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     !isWireInteger(record.senderWorkers) ||
     !isWireInteger(record.readerRowsRead) ||
     !isQueue1Capacity(record.queue1Capacity) ||
+    !isWireInteger(record.queue1EnqueuedBatchesTotal) ||
+    !isWireInteger(record.queue1EnqueuedTransactionsTotal) ||
+    !isWireInteger(record.queue1DequeuedBatchesTotal) ||
+    !isWireInteger(record.queue1DequeuedTransactionsTotal) ||
     !isWireInteger(record.queue1DepthBatches) ||
     !isWireInteger(record.queue1QueuedTransactions) ||
     !isWireInteger(record.queue1BlockedSenders) ||
@@ -365,6 +396,14 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   }
   if (!isWireNumber(record.readerReadTps)) {
     throw new Error('snapshot readerReadTps must be a nonnegative finite number')
+  }
+  if (
+    !isWireNumber(record.queue1InputBatchesPerSecond) ||
+    !isWireNumber(record.queue1InputTransactionsPerSecond) ||
+    !isWireNumber(record.queue1OutputBatchesPerSecond) ||
+    !isWireNumber(record.queue1OutputTransactionsPerSecond)
+  ) {
+    throw new Error('snapshot queue1 rates must be nonnegative finite numbers')
   }
   if (!isReadBatchSize(record.readerReadBatchSize)) {
     throw new Error('snapshot readerReadBatchSize is invalid')
@@ -394,11 +433,19 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     readerRowsRead: record.readerRowsRead,
     readerSource: record.readerSource,
     queue1Capacity: record.queue1Capacity,
+    queue1EnqueuedBatchesTotal: record.queue1EnqueuedBatchesTotal,
+    queue1EnqueuedTransactionsTotal: record.queue1EnqueuedTransactionsTotal,
+    queue1DequeuedBatchesTotal: record.queue1DequeuedBatchesTotal,
+    queue1DequeuedTransactionsTotal: record.queue1DequeuedTransactionsTotal,
     queue1DepthBatches: record.queue1DepthBatches,
     queue1QueuedTransactions: record.queue1QueuedTransactions,
     queue1BlockedSenders: record.queue1BlockedSenders,
     queue1OldestBlockedSenderMs: record.queue1OldestBlockedSenderMs,
     queue1BlockedMs: record.queue1BlockedMs,
+    queue1InputBatchesPerSecond: record.queue1InputBatchesPerSecond,
+    queue1InputTransactionsPerSecond: record.queue1InputTransactionsPerSecond,
+    queue1OutputBatchesPerSecond: record.queue1OutputBatchesPerSecond,
+    queue1OutputTransactionsPerSecond: record.queue1OutputTransactionsPerSecond,
   }
 }
 

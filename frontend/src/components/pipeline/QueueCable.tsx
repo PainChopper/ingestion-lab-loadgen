@@ -201,6 +201,10 @@ export function QueueCable({
   )
   const centerY = (start.y + end.y) / 2
   const disabled = control.applyMode === 'unavailable'
+  const flowActive = snapshot.id === 'reader-to-throttler' && (
+    snapshot.inputTransactionsPerSecond > 0 ||
+    snapshot.outputTransactionsPerSecond > 0
+  )
   const queueStyle = {
     '--pipeline-queue-pressure-color': queuePressureColor(
       snapshot.displayedPressure,
@@ -347,12 +351,14 @@ export function QueueCable({
   return (
     <g
       id={`queue-${snapshot.id}`}
-      className={`pipeline-queue pipeline-selectable pipeline-queue--${snapshot.flowState}${selected ? ' pipeline-selectable--selected' : ''}`}
+      className={`pipeline-queue pipeline-selectable pipeline-queue--${snapshot.flowState}${flowActive ? ' pipeline-queue--flow-active' : ''}${selected ? ' pipeline-selectable--selected' : ''}`}
       role="button"
       tabIndex={0}
       aria-label={`Inspect ${snapshot.from} to ${snapshot.to} queue`}
       aria-pressed={selected}
       data-pressure={snapshot.displayedPressure.toFixed(2)}
+      data-input-active={snapshot.inputTransactionsPerSecond > 0}
+      data-output-active={snapshot.outputTransactionsPerSecond > 0}
       style={queueStyle}
       onClick={() => onSelect(snapshot.id)}
       onKeyDown={handleSelectionKeyDown}

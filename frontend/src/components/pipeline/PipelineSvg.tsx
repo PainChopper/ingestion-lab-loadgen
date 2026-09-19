@@ -119,6 +119,7 @@ export function PipelineSvg({
       />
       <ReaderActor
         snapshot={snapshot.reader}
+        rateDriven={snapshot.adapterKind === 'http'}
         selected={selectedId === snapshot.reader.id}
         onSelect={onSelect}
         onWorkerCountChange={onWorkerCountChange}

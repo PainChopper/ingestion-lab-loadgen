@@ -46,22 +46,30 @@ func (state *controlState) eventLoop(
 					queue1.capacity = state.queue1Capacity()
 				}
 				snapshot := statusSnapshot{
-					RunState:                    state.lifecycle.currentState(),
-					TotalTransactions:           state.totalTransactions,
-					ReaderWorkers:               1,
-					ReaderReadBatchSize:         state.readBatchSize(),
-					SenderWorkers:               0,
-					ElapsedMs:                   state.elapsedMs(time.Now()),
-					StartError:                  state.startError,
-					ReaderReadTPS:               reader.readTPS,
-					ReaderRowsRead:              reader.rowsRead,
-					ReaderSource:                reader.source,
-					Queue1Capacity:              queue1.capacity,
-					Queue1DepthBatches:          queue1.depthBatches,
-					Queue1QueuedTransactions:    queue1.queuedTransactions,
-					Queue1BlockedSenders:        queue1.blockedSenders,
-					Queue1OldestBlockedSenderMs: queue1.oldestBlockedSenderMs,
-					Queue1BlockedMs:             queue1.blockedMs,
+					RunState:                          state.lifecycle.currentState(),
+					TotalTransactions:                 state.totalTransactions,
+					ReaderWorkers:                     1,
+					ReaderReadBatchSize:               state.readBatchSize(),
+					SenderWorkers:                     0,
+					ElapsedMs:                         state.elapsedMs(time.Now()),
+					StartError:                        state.startError,
+					ReaderReadTPS:                     reader.readTPS,
+					ReaderRowsRead:                    reader.rowsRead,
+					ReaderSource:                      reader.source,
+					Queue1Capacity:                    queue1.capacity,
+					Queue1DepthBatches:                queue1.depthBatches,
+					Queue1QueuedTransactions:          queue1.queuedTransactions,
+					Queue1BlockedSenders:              queue1.blockedSenders,
+					Queue1OldestBlockedSenderMs:       queue1.oldestBlockedSenderMs,
+					Queue1BlockedMs:                   queue1.blockedMs,
+					Queue1EnqueuedBatchesTotal:        queue1.enqueuedBatchesTotal,
+					Queue1EnqueuedTransactionsTotal:   queue1.enqueuedTransactionsTotal,
+					Queue1DequeuedBatchesTotal:        queue1.dequeuedBatchesTotal,
+					Queue1DequeuedTransactionsTotal:   queue1.dequeuedTransactionsTotal,
+					Queue1InputBatchesPerSecond:       queue1.inputBatchesPerSecond,
+					Queue1InputTransactionsPerSecond:  queue1.inputTransactionsPerSecond,
+					Queue1OutputBatchesPerSecond:      queue1.outputBatchesPerSecond,
+					Queue1OutputTransactionsPerSecond: queue1.outputTransactionsPerSecond,
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
@@ -86,7 +94,7 @@ func (state *controlState) eventLoop(
 				if state.lifecycle.run() {
 					state.runStartedAt = time.Now()
 					state.startError = nil
-					cancelConsumer, consumerDone = startConsumer(batches, &consumedSinceTick)
+					cancelConsumer, consumerDone = startConsumer(batches, &consumedSinceTick, &state.queue1)
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- commandResult{}
@@ -153,6 +161,7 @@ func (state *controlState) eventLoop(
 
 		case <-metrics:
 			state.reader.sample(time.Now())
+			state.queue1.sample(windowLength)
 			delta := consumedSinceTick.Swap(0)
 			state.actualTPS = delta * int64(time.Second/windowLength)
 			state.totalTransactions += delta
@@ -193,12 +202,13 @@ func (state *controlState) pauseElapsed(now time.Time) {
 func startConsumer(
 	batches <-chan []Transaction,
 	consumedSinceTick *atomic.Int64,
+	queueTelemetry *queue1Telemetry,
 ) (context.CancelFunc, <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		consumeBatches(ctx, batches, consumedSinceTick)
+		consumeBatches(ctx, batches, consumedSinceTick, queueTelemetry)
 	}()
 	return cancel, done
 }
