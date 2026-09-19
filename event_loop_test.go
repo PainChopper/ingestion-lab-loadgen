@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -309,6 +310,63 @@ func TestResetDuringRunReturnsConflictAndPreservesPipeline(t *testing.T) {
 		t.Fatal("consumer stopped after rejected Reset")
 	}
 	waitForTransactions(t, requests, metrics, 2)
+}
+
+func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
+	requests := make(chan request, 3)
+	metrics := make(chan time.Time)
+	batches := make(chan []Transaction)
+	state := controlState{lifecycle: newLifecycle()}
+	produce := func(ctx context.Context) (<-chan []Transaction, error) {
+		go func() {
+			defer close(batches)
+			<-ctx.Done()
+		}()
+		return batches, nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		state.eventLoop(requests, metrics, NewMetrics(), produce)
+	}()
+	t.Cleanup(func() {
+		close(requests)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("event loop did not stop")
+		}
+	})
+
+	requests <- request{kind: cmdRun}
+	waitForState(t, requests, runStateRunning)
+	state.reader.recordRead(2, filepath.Join("data", "first.parquet"))
+	requests <- request{kind: cmdPause}
+	waitForState(t, requests, runStatePaused)
+	state.reader.recordRead(3, filepath.Join("data", "second.parquet"))
+
+	snapshotReply := make(chan statusSnapshot, 1)
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	snapshot := <-snapshotReply
+	if snapshot.ReaderRowsRead != 5 || snapshot.ReaderSource == nil ||
+		*snapshot.ReaderSource != "data/second.parquet" {
+		t.Fatalf("paused reader snapshot = %+v, want 5 rows and second source", snapshot)
+	}
+
+	requests <- request{kind: cmdRun}
+	waitForState(t, requests, runStateRunning)
+	requests <- request{kind: cmdPause}
+	waitForState(t, requests, runStatePaused)
+	resetReply := make(chan commandResult, 1)
+	requests <- request{kind: cmdReset, commandReply: resetReply}
+	if result := <-resetReply; result.status != commandAccepted {
+		t.Fatalf("Reset status = %v, want accepted", result.status)
+	}
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	snapshot = <-snapshotReply
+	if snapshot.ReaderReadTPS != 0 || snapshot.ReaderRowsRead != 0 || snapshot.ReaderSource != nil {
+		t.Fatalf("reader snapshot after Reset = %+v, want zero and null source", snapshot)
+	}
 }
 
 func startEventLoopForTest(t *testing.T, onProduce func()) (chan<- request, chan<- []Transaction, chan<- time.Time) {

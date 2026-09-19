@@ -40,6 +40,7 @@ func (state *controlState) eventLoop(
 			}
 			switch cmd.kind {
 			case getSnapshot:
+				reader := state.reader.snapshot()
 				snapshot := statusSnapshot{
 					RunState:          state.lifecycle.currentState(),
 					TotalTransactions: state.totalTransactions,
@@ -47,15 +48,20 @@ func (state *controlState) eventLoop(
 					SenderWorkers:     0,
 					ElapsedMs:         state.elapsedMs(time.Now()),
 					StartError:        state.startError,
+					ReaderReadTPS:     reader.readTPS,
+					ReaderRowsRead:    reader.rowsRead,
+					ReaderSource:      reader.source,
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
 				if state.lifecycle.currentState() == runStateIdle {
+					state.reader.startInterval(time.Now())
 					producerContext, cancel := context.WithCancel(context.Background())
 					var err error
 					batches, err = produce(producerContext)
 					if err != nil {
 						cancel()
+						state.reader.reset()
 						log.Printf("cannot start load generator: %v", err)
 						message := err.Error()
 						state.startError = &message
@@ -112,6 +118,7 @@ func (state *controlState) eventLoop(
 			}
 
 		case <-metrics:
+			state.reader.sample(time.Now())
 			delta := consumedSinceTick.Swap(0)
 			state.actualTPS = delta * int64(time.Second/windowLength)
 			state.totalTransactions += delta
@@ -122,6 +129,7 @@ func (state *controlState) eventLoop(
 }
 
 func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMetrics *Metrics) {
+	state.reader.reset()
 	consumedSinceTick.Store(0)
 	state.totalTransactions = 0
 	state.actualTPS = 0

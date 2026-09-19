@@ -16,6 +16,9 @@ interface TestWireSnapshot {
   readonly totalTransactions: number
   readonly readerWorkers: number
   readonly senderWorkers: number
+  readonly readerReadTps: number
+  readonly readerRowsRead: number
+  readonly readerSource: string | null
 }
 
 interface MockResponseOptions {
@@ -31,6 +34,9 @@ const VALID_WIRE: TestWireSnapshot = {
   totalTransactions: 42_000,
   readerWorkers: 1,
   senderWorkers: 0,
+  readerReadTps: 3_500.5,
+  readerRowsRead: 14_000,
+  readerSource: 'MBD-mini/trx/part/input.parquet',
 }
 
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
@@ -179,11 +185,11 @@ function expectedSnapshot(
       id: 'reader',
       workers: control('workers', wire?.readerWorkers ?? null),
       readBatchSize: control('tx'),
-      readTps: null,
+      readTps: wire?.readerReadTps ?? null,
       configuredCapacityTps: null,
       limitationReason: null,
-      rowsRead: null,
-      source: null,
+      rowsRead: wire?.readerRowsRead ?? null,
+      source: wire?.readerSource ?? null,
       state: runState,
     },
     throttler: {
@@ -340,6 +346,21 @@ const malformedCases: ReadonlyArray<{
     }),
   },
   {
+    name: 'negative reader rate',
+    result: async () => mockResponse({ ...VALID_WIRE, readerReadTps: -0.5 }),
+  },
+  {
+    name: 'unsafe reader rows',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      readerRowsRead: Number.MAX_SAFE_INTEGER + 1,
+    }),
+  },
+  {
+    name: 'empty reader source',
+    result: async () => mockResponse({ ...VALID_WIRE, readerSource: '' }),
+  },
+  {
     name: 'wrong content type',
     result: async () => mockResponse(VALID_WIRE, { contentType: 'text/plain' }),
   },
@@ -395,7 +416,7 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('maps only the six valid wire fields into a fresh frozen snapshot', async () => {
+  it('maps only the nine valid wire fields into a fresh frozen snapshot', async () => {
     fetchMock.mockResolvedValueOnce(mockResponse(
       VALID_WIRE,
       { contentType: 'application/json; charset=utf-8' },
@@ -414,6 +435,11 @@ describe('HttpAdapter', () => {
       max: 1,
       applyMode: 'unavailable',
     })
+    expect(snapshot.reader).toMatchObject({
+      readTps: 3_500.5,
+      rowsRead: 14_000,
+      source: 'MBD-mini/trx/part/input.parquet',
+    })
     expect(snapshot.sender.workers).toMatchObject({
       applied: 0,
       min: 0,
@@ -421,6 +447,28 @@ describe('HttpAdapter', () => {
       applyMode: 'unavailable',
     })
     expectDeepFrozen(snapshot)
+    adapter.dispose()
+  })
+
+  it('maps reset reader metrics as zero values and no source', async () => {
+    const resetWire: TestWireSnapshot = {
+      ...VALID_WIRE,
+      runState: 'idle',
+      readerReadTps: 0,
+      readerRowsRead: 0,
+      readerSource: null,
+    }
+    fetchMock.mockResolvedValueOnce(mockResponse(resetWire))
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+
+    expect(adapter.getSnapshot().reader).toMatchObject({
+      readTps: 0,
+      rowsRead: 0,
+      source: null,
+      state: 'idle',
+    })
     adapter.dispose()
   })
 
@@ -450,6 +498,9 @@ describe('HttpAdapter', () => {
       totalTransactions: 84_000,
       readerWorkers: 2,
       senderWorkers: 3,
+      readerReadTps: 2_000,
+      readerRowsRead: 28_000,
+      readerSource: 'MBD-mini/trx/part/recovered.parquet',
     }
     fetchMock
       .mockResolvedValueOnce(mockResponse(VALID_WIRE))
