@@ -15,12 +15,13 @@ const (
 var blackHole uint64
 
 type controlState struct {
-	actualTPS         int64
-	totalTransactions int64
-	elapsedBeforeRun  time.Duration
-	runStartedAt      time.Time
-	startError        *string
-	reader            readerTelemetry
+	actualTPS               int64
+	totalTransactions       int64
+	elapsedBeforeRun        time.Duration
+	runStartedAt            time.Time
+	startError              *string
+	reader                  readerTelemetry
+	configuredReadBatchSize int
 
 	lifecycle *lifecycle
 }
@@ -42,8 +43,8 @@ func main() {
 		requests,
 		metrics,
 		promMetrics,
-		func(ctx context.Context) (<-chan []Transaction, error) {
-			return produceBatches(ctx, dataPath, &state.reader)
+		func(ctx context.Context, batchSize int) (<-chan []Transaction, error) {
+			return produceBatches(ctx, dataPath, batchSize, &state.reader)
 		},
 	)
 }

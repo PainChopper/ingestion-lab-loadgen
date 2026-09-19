@@ -14,12 +14,14 @@ const (
 	cmdRun
 	cmdPause
 	cmdReset
+	cmdSetReadBatchSize
 )
 
 type request struct {
 	kind          requestKind
 	snapshotReply chan statusSnapshot
 	commandReply  chan commandResult
+	value         int
 }
 
 type commandStatus int

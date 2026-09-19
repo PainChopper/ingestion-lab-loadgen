@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
@@ -111,6 +111,91 @@ describe('NumericControl', () => {
 
     expect((input as HTMLInputElement).disabled).toBe(true)
     expect((input as HTMLInputElement).value).toBe('4')
+    expect(onValueChange).not.toHaveBeenCalled()
+  })
+
+  it('does not commit a draft after the control becomes unavailable', async () => {
+    const user = userEvent.setup()
+    const onValueChange = vi.fn()
+    const onPreviewChange = vi.fn()
+    const { rerender } = render(
+      <NumericControl
+        label="Capacity"
+        control={control(4)}
+        onValueChange={onValueChange}
+        onPreviewChange={onPreviewChange}
+      />,
+    )
+    const input = screen.getByRole('spinbutton', { name: /^Capacity/ })
+
+    await user.click(input)
+    await user.clear(input)
+    await user.type(input, '7')
+    onPreviewChange.mockClear()
+    rerender(
+      <NumericControl
+        label="Capacity"
+        control={control(4, 'unavailable')}
+        onValueChange={onValueChange}
+        onPreviewChange={onPreviewChange}
+      />,
+    )
+
+    expect((input as HTMLInputElement).disabled).toBe(true)
+    expect((input as HTMLInputElement).value).toBe('4')
+    expect(onValueChange).not.toHaveBeenCalled()
+    expect(onPreviewChange).toHaveBeenCalledWith(null)
+
+    fireEvent.blur(input)
+    expect(onValueChange).not.toHaveBeenCalled()
+  })
+
+  it('clears preview once with a stateful parent when availability changes', async () => {
+    const user = userEvent.setup()
+    const onValueChange = vi.fn()
+    const onPreviewChange = vi.fn()
+    let renderCount = 0
+
+    function Parent({ applyMode }: { applyMode: NumericControlSnapshot['applyMode'] }) {
+      const [, setPreview] = useState<{ value: number | null }>({ value: null })
+      renderCount += 1
+      if (renderCount > 20) throw new Error('NumericControl render loop')
+
+      return (
+        <NumericControl
+          label="Capacity"
+          control={control(4, applyMode)}
+          onValueChange={onValueChange}
+          onPreviewChange={(value) => {
+            onPreviewChange(value)
+            setPreview({ value })
+          }}
+        />
+      )
+    }
+
+    const { rerender } = render(<Parent applyMode="unavailable" />)
+    const input = screen.getByRole('spinbutton', { name: /^Capacity/ })
+    expect((input as HTMLInputElement).disabled).toBe(true)
+    expect(onPreviewChange).not.toHaveBeenCalled()
+
+    rerender(<Parent applyMode="immediate" />)
+    await user.click(input)
+    await user.clear(input)
+    await user.type(input, '7')
+    expect((input as HTMLInputElement).value).toBe('7')
+    onPreviewChange.mockClear()
+
+    rerender(<Parent applyMode="unavailable" />)
+    expect((input as HTMLInputElement).disabled).toBe(true)
+    expect((input as HTMLInputElement).value).toBe('4')
+    expect(onPreviewChange).toHaveBeenCalledTimes(1)
+    expect(onPreviewChange).toHaveBeenCalledWith(null)
+    expect(onValueChange).not.toHaveBeenCalled()
+
+    fireEvent.blur(input)
+    rerender(<Parent applyMode="unavailable" />)
+    expect(onPreviewChange).toHaveBeenCalledTimes(1)
     expect(onValueChange).not.toHaveBeenCalled()
   })
 })

@@ -7,7 +7,8 @@ import (
 )
 
 type commandRequest struct {
-	Action string `json:"action"`
+	Action string          `json:"action"`
+	Value  json.RawMessage `json:"value"`
 }
 
 func commandsHandler(commands chan<- request) http.Handler {
@@ -43,6 +44,17 @@ func commandsHandler(commands chan<- request) http.Handler {
 		case "reset":
 			reply := make(chan commandResult, 1)
 			commands <- request{kind: cmdReset, commandReply: reply}
+			if result := <-reply; result.status == commandConflict {
+				w.WriteHeader(http.StatusConflict)
+			}
+		case "set-read-batch-size":
+			var value int
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReadBatchSize(value) {
+				http.Error(w, "Invalid read batch size", http.StatusBadRequest)
+				return
+			}
+			reply := make(chan commandResult, 1)
+			commands <- request{kind: cmdSetReadBatchSize, value: value, commandReply: reply}
 			if result := <-reply; result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
