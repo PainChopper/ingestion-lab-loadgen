@@ -98,6 +98,9 @@ export function PipelineSvg({
         onSelect={onSelect}
         onCapacityChange={onChannelCapacityChange}
         orientation={orientation}
+        capacityValues={snapshot.adapterKind === 'http'
+          ? snapshot.policy?.senderChannelCapacity.allowed
+          : undefined}
       />
       <ellipse
         cx={VALVE_APERTURE.centerX}

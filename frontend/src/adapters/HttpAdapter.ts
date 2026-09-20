@@ -115,6 +115,7 @@ type SupportedCommand = Extract<
       | 'pause'
       | 'reset'
       | 'set-reader-channel-capacity'
+      | 'set-sender-channel-capacity'
       | 'set-read-batch-size'
       | 'set-requested-tps'
       | 'set-throttler-installation-mode'
@@ -139,6 +140,7 @@ function isSupportedCommand(
     command.type === 'pause' ||
     command.type === 'reset' ||
     command.type === 'set-reader-channel-capacity' ||
+    command.type === 'set-sender-channel-capacity' ||
     command.type === 'set-read-batch-size' ||
     command.type === 'set-requested-tps' ||
     command.type === 'set-throttler-installation-mode'
@@ -270,7 +272,11 @@ function readerChannel(
   }
 }
 
-function senderChannel(wire: WireSnapshot | null): ChannelTelemetrySnapshot {
+function senderChannel(
+  wire: WireSnapshot | null,
+  connectionState: ConnectionState,
+  runState: RunState,
+): ChannelTelemetrySnapshot {
   const channel = neutralChannel(
     'throttler-to-sender',
     'throttler',
@@ -280,7 +286,12 @@ function senderChannel(wire: WireSnapshot | null): ChannelTelemetrySnapshot {
 
   return {
     ...channel,
-    capacity: fixedControl(wire.senderChannelCapacity, 'batches'),
+    capacity: readerChannelCapacityControl(
+      wire.senderChannelCapacity,
+      wire.policy.senderChannelCapacity,
+      connectionState,
+      runState,
+    ),
     depthBatches: wire.senderChannelDepthBatches,
     bufferedTransactions: wire.senderChannelBufferedTransactions,
     sentBatchesTotal: wire.senderChannelSentBatchesTotal,
@@ -355,7 +366,7 @@ function createSnapshot(
       state: runState,
     },
     readerChannel: readerChannel(wire, connectionState, runState),
-    senderChannel: senderChannel(wire),
+    senderChannel: senderChannel(wire, connectionState, runState),
     sender: {
       id: 'sender',
       workers: workerControl(wire?.senderWorkers ?? null),
@@ -466,10 +477,11 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   if (!isExactObject(value, [
     'readerChannelCapacity',
     'readerReadBatchSize',
+    'senderChannelCapacity',
     'throttlerInstallationMode',
     'throttlerRequestedTps',
   ])) {
-    throw new Error('snapshot policy must contain exactly reader, readerChannel, and throttler controls')
+    throw new Error('snapshot policy must contain exactly reader, readerChannel, senderChannel, and throttler controls')
   }
   const reader = value.readerReadBatchSize
   if (!isExactObject(reader, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
@@ -513,6 +525,26 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   ) {
     throw new Error('snapshot readerChannel policy values are invalid')
   }
+  const senderChannel = value.senderChannelCapacity
+  if (!isExactObject(senderChannel, ['allowed', 'default', 'mutability', 'unit'])) {
+    throw new Error('snapshot senderChannel policy is invalid')
+  }
+  if (
+    !Array.isArray(senderChannel.allowed) || senderChannel.allowed.length === 0 ||
+    !senderChannel.allowed.every(isWireInteger) || senderChannel.unit !== 'batches' ||
+    senderChannel.mutability !== 'idle-only'
+  ) {
+    throw new Error('snapshot senderChannel policy is invalid')
+  }
+  const senderAllowed = Object.freeze([...senderChannel.allowed])
+  if (
+    senderAllowed.some((entry, index) => index > 0 && entry <= senderAllowed[index - 1]!) ||
+    !isWireInteger(senderChannel.default) ||
+    !senderAllowed.includes(senderChannel.default)
+  ) {
+    throw new Error('snapshot senderChannel policy values are invalid')
+  }
+
   const requestedTps = value.throttlerRequestedTps
   if (!isExactObject(requestedTps, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
     throw new Error('snapshot throttler requested TPS policy is invalid')
@@ -559,6 +591,12 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
       allowed,
       unit: readerChannel.unit,
       mutability: readerChannel.mutability,
+    }),
+    senderChannelCapacity: Object.freeze({
+      default: senderChannel.default,
+      allowed: senderAllowed,
+      unit: senderChannel.unit,
+      mutability: senderChannel.mutability,
     }),
     throttlerRequestedTps: Object.freeze(requestedTpsPolicy),
     throttlerInstallationMode: Object.freeze({
@@ -613,7 +651,8 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     !isWireInteger(record.readerChannelBlockedSenders) ||
     !isWireInteger(record.readerChannelOldestBlockedSenderMs) ||
     !isWireInteger(record.readerChannelBlockedMs) ||
-    record.senderChannelCapacity !== 0 ||
+    !isWireInteger(record.senderChannelCapacity) ||
+    !policy.senderChannelCapacity.allowed.includes(record.senderChannelCapacity) ||
     !isWireInteger(record.senderChannelSentBatchesTotal) ||
     !isWireInteger(record.senderChannelSentTransactionsTotal) ||
     !isWireInteger(record.senderChannelReceivedBatchesTotal) ||
@@ -755,7 +794,9 @@ function canDispatchPolicyCommand(
   if (command.type === 'set-read-batch-size') {
     return isRangeValue(command.value, policy.readerReadBatchSize)
   }
-  return policy.readerChannelCapacity.allowed.includes(command.value)
+  return command.type === 'set-reader-channel-capacity'
+    ? policy.readerChannelCapacity.allowed.includes(command.value)
+    : policy.senderChannelCapacity.allowed.includes(command.value)
 }
 
 async function decodeResponse(response: Response): Promise<WireSnapshot> {
@@ -951,6 +992,7 @@ export class HttpAdapter implements LoadgenAdapter {
         body: JSON.stringify(
           command.type === 'set-read-batch-size' ||
           command.type === 'set-reader-channel-capacity' ||
+          command.type === 'set-sender-channel-capacity' ||
           command.type === 'set-requested-tps' ||
           command.type === 'set-throttler-installation-mode'
             ? { action: command.type, value: command.value }

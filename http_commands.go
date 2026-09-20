@@ -31,7 +31,10 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
-		if cr.Action == "set-requested-tps" || cr.Action == "set-throttler-installation-mode" {
+		strictAction := cr.Action == "set-requested-tps" ||
+			cr.Action == "set-throttler-installation-mode" ||
+			cr.Action == "set-sender-channel-capacity"
+		if strictAction {
 			decoder := json.NewDecoder(bytes.NewReader(body))
 			decoder.DisallowUnknownFields()
 			if err := decoder.Decode(&cr); err != nil {
@@ -89,6 +92,21 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			}
 			reply := make(chan commandResult, 1)
 			commands <- request{kind: cmdSetReaderChannelCapacity, value: value, commandReply: reply}
+			if result := <-reply; result.status == commandConflict {
+				w.WriteHeader(http.StatusConflict)
+			}
+		case "set-sender-channel-capacity":
+			var value int
+			if string(cr.Value) == "null" {
+				http.Error(w, "Invalid sender channel capacity", http.StatusBadRequest)
+				return
+			}
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !validSenderChannelCapacity(policy, value) {
+				http.Error(w, "Invalid sender channel capacity", http.StatusBadRequest)
+				return
+			}
+			reply := make(chan commandResult, 1)
+			commands <- request{kind: cmdSetSenderChannelCapacity, value: value, commandReply: reply}
 			if result := <-reply; result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}

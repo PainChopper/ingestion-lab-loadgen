@@ -38,6 +38,10 @@ var requiredPolicyKeys = []string{
 	"readerChannel.capacity.allowed",
 	"readerChannel.capacity.unit",
 	"readerChannel.capacity.mutability",
+	"senderChannel.capacity.default",
+	"senderChannel.capacity.allowed",
+	"senderChannel.capacity.unit",
+	"senderChannel.capacity.mutability",
 	"throttler.requested_tps.default",
 	"throttler.requested_tps.min",
 	"throttler.requested_tps.max",
@@ -49,11 +53,14 @@ var requiredPolicyKeys = []string{
 	"throttler.installation_mode.mutability",
 }
 
+var senderChannelCapacityAllowed = []int{0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}
+
 type policy struct {
 	SchemaVersion int                 `mapstructure:"schema_version"`
 	Source        sourcePolicy        `mapstructure:"source"`
 	Reader        readerPolicy        `mapstructure:"reader"`
 	ReaderChannel readerChannelPolicy `mapstructure:"readerChannel"`
+	SenderChannel readerChannelPolicy `mapstructure:"senderChannel"`
 	Throttler     throttlerPolicy     `mapstructure:"throttler"`
 }
 
@@ -147,6 +154,9 @@ func (p policy) validate() error {
 	if err := p.ReaderChannel.Capacity.validate(); err != nil {
 		return fmt.Errorf("readerChannel.capacity: %w", err)
 	}
+	if err := p.SenderChannel.Capacity.validateSenderChannelCapacity(); err != nil {
+		return fmt.Errorf("senderChannel.capacity: %w", err)
+	}
 	if int64(p.Reader.ReadBatchSize.Max) > math.MaxInt64/int64(time.Second) {
 		return fmt.Errorf("reader.read_batch_size.max exceeds pacing duration limit")
 	}
@@ -237,9 +247,25 @@ func (p allowedPolicy) contains(value int) bool {
 	return false
 }
 
+func (p allowedPolicy) validateSenderChannelCapacity() error {
+	if err := p.validate(); err != nil {
+		return err
+	}
+	if p.Default != 0 || len(p.Allowed) != len(senderChannelCapacityAllowed) {
+		return fmt.Errorf("must use default 0 and the approved allowed scale")
+	}
+	for index, value := range senderChannelCapacityAllowed {
+		if p.Allowed[index] != value {
+			return fmt.Errorf("must use default 0 and the approved allowed scale")
+		}
+	}
+	return nil
+}
+
 type policySnapshot struct {
 	ReaderReadBatchSize       rangePolicy            `json:"readerReadBatchSize"`
 	ReaderChannelCapacity     allowedPolicy          `json:"readerChannelCapacity"`
+	SenderChannelCapacity     allowedPolicy          `json:"senderChannelCapacity"`
 	ThrottlerRequestedTPS     rangePolicy            `json:"throttlerRequestedTps"`
 	ThrottlerInstallationMode installationModePolicy `json:"throttlerInstallationMode"`
 }
@@ -248,6 +274,7 @@ func (p policy) snapshot() policySnapshot {
 	return policySnapshot{
 		ReaderReadBatchSize:       p.Reader.ReadBatchSize,
 		ReaderChannelCapacity:     p.ReaderChannel.Capacity,
+		SenderChannelCapacity:     p.SenderChannel.Capacity,
 		ThrottlerRequestedTPS:     p.Throttler.RequestedTPS,
 		ThrottlerInstallationMode: p.Throttler.InstallationMode,
 	}

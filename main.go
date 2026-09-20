@@ -27,6 +27,8 @@ type controlState struct {
 	configuredReadBatchSize         int
 	configuredReaderChannelCapacity int
 	readerChannelCapacityConfigured bool
+	configuredSenderChannelCapacity int
+	senderChannelCapacityConfigured bool
 	configuredRequestedTPS          int
 	requestedTPSConfigured          bool
 	configuredInstallationMode      string

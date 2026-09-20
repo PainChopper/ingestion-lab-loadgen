@@ -16,6 +16,7 @@ const (
 	cmdReset
 	cmdSetReadBatchSize
 	cmdSetReaderChannelCapacity
+	cmdSetSenderChannelCapacity
 	cmdSetRequestedTPS
 	cmdSetThrottlerInstallationMode
 )

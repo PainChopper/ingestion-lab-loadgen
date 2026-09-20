@@ -59,6 +59,7 @@ func (state *controlState) eventLoop(
 				senderChannel := state.senderChannel.snapshot(time.Now())
 				if state.lifecycle.currentState() == runStateIdle {
 					readerChannel.capacity = state.readerChannelCapacity()
+					senderChannel.capacity = state.senderChannelCapacity()
 				}
 				snapshot := statusSnapshot{
 					RunState:                                 state.lifecycle.currentState(),
@@ -127,7 +128,12 @@ func (state *controlState) eventLoop(
 					throttlerContext, cancel := context.WithCancel(context.Background())
 					cancelThrottler = cancel
 					senderBatches, throttlerDone, throttlerUpdates = startThrottler(
-						throttlerContext, batches, &state.readerChannel, &state.senderChannel, state.throttlerSettings(false),
+						throttlerContext,
+						batches,
+						&state.readerChannel,
+						&state.senderChannel,
+						state.senderChannelCapacity(),
+						state.throttlerSettings(false),
 					)
 				}
 				if state.lifecycle.run() {
@@ -204,6 +210,17 @@ func (state *controlState) eventLoop(
 				} else {
 					state.configuredReaderChannelCapacity = cmd.value
 					state.readerChannelCapacityConfigured = true
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- result
+				}
+			case cmdSetSenderChannelCapacity:
+				result := commandResult{status: commandAccepted}
+				if state.lifecycle.currentState() != runStateIdle || !validSenderChannelCapacity(state.policy, cmd.value) {
+					result.status = commandConflict
+				} else {
+					state.configuredSenderChannelCapacity = cmd.value
+					state.senderChannelCapacityConfigured = true
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
