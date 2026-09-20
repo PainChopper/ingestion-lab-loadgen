@@ -6,7 +6,6 @@ import type {
 } from '../../model/loadgen'
 import { useMemo } from 'react'
 import { HttpLink } from './HttpLink'
-import { PipelineMarkers } from './PipelineMarkers'
 import {
   createPipelineGeometry,
   type PipelineGeometry,
@@ -17,7 +16,6 @@ import { SenderActor } from './SenderActor'
 import { TargetActor } from './TargetActor'
 import { ThrottlerActor } from './ThrottlerActor'
 import { VALVE_APERTURE } from './throttlerValve'
-import { usePipelineMarkerLifecycle } from './usePipelineMarkerLifecycle'
 import type { WorkerActorId } from './WorkerActor'
 import type { PipelineOrientation } from './pipelineLayout'
 import { normalizedWorkerCount } from './workerActorLayout'
@@ -60,7 +58,6 @@ export function PipelineSvg({
     }),
     [geometry, orientation, snapshot.reader.workers, snapshot.sender.workers],
   )
-  const markers = usePipelineMarkerLifecycle(snapshot, resolvedGeometry)
   const readerChannelGeometry = resolvedGeometry.channels[snapshot.readerChannel.id]
   const senderChannelGeometry = resolvedGeometry.channels[snapshot.senderChannel.id]
   const throttlerTransform = resolvedGeometry.actors.throttler.transform
@@ -113,11 +110,6 @@ export function PipelineSvg({
         transform={throttlerTransform.x === 0 && throttlerTransform.y === 0
           ? undefined
           : `translate(${throttlerTransform.x} ${throttlerTransform.y})`}
-      />
-      <PipelineMarkers
-        snapshot={snapshot}
-        markers={markers}
-        geometry={resolvedGeometry}
       />
       <ReaderActor
         snapshot={snapshot.reader}

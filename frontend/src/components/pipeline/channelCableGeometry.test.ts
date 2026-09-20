@@ -10,8 +10,6 @@ import {
   getCapacityTicks,
   getChannelCapacityPresentation,
   getChannelCableGeometryPresentation,
-  getChannelCablePathLength,
-  getChannelMarkerCount,
   normalizeCapacity,
 } from './channelCableGeometry'
 
@@ -209,7 +207,6 @@ describe('channel cable capacity geometry', () => {
       )
 
       expect(preview.cablePath).toBe(canonical.cablePath)
-      expect(preview.markerPath).toBe(canonical.markerPath)
       expect(pending.cableY).toBe(testCase.candidateY)
       expect(pending.sliderY).toBe(testCase.candidateY)
       expect(pending.requestedPath).toBeNull()
@@ -228,13 +225,6 @@ describe('channel cable capacity geometry', () => {
     expect(buildChannelCablePath(start, end, 295)).toMatch(
       /^M150 415 H.+ Q.+ V.+ Q.+ H.+ Q.+ V.+ Q.+ H355$/,
     )
-    expect(getChannelCablePathLength(start, end, 415)).toBe(205)
-    expect(getChannelCablePathLength(start, end, 335)).toBeCloseTo(340.89, 2)
-    expect(getChannelCablePathLength(
-      { x: 505, y: 415 },
-      { x: 720, y: 415 },
-      265,
-    )).toBeCloseTo(490.89, 2)
   })
 
   it('builds portrait channels from exact vertical endpoints without overflow', () => {
@@ -279,31 +269,5 @@ describe('channel cable capacity geometry', () => {
       .toEqual([0, 6, 12])
     expect(largeTicks.filter((tick) => tick.major).map((tick) => tick.value))
       .toEqual([0, 80, 160])
-  })
-
-  it('bounds channel family density by depth and the fixed marker pool', () => {
-    expect([
-      getChannelMarkerCount(4, 0),
-      getChannelMarkerCount(4, 4),
-      getChannelMarkerCount(4, 12),
-      getChannelMarkerCount(15, 100),
-      getChannelMarkerCount(50, 100),
-      getChannelMarkerCount(100, 100),
-    ]).toEqual([0, 4, 4, 4, 12, 24])
-  })
-
-  it('never increases channel family density when capacity grows', () => {
-    const capacities = [1, 2, 3, 4, 5, 8, 12, 16, 24, 50, 100, 250]
-
-    for (const depth of [1, 4, 8, 15, 24, 50, 100]) {
-      const targets = capacities.map((capacity) =>
-        getChannelMarkerCount(depth, capacity),
-      )
-      expect(targets.every((target) => target <= depth && target <= 24))
-        .toBe(true)
-      expect(targets.every((target, index) =>
-        index === 0 || target <= targets[index - 1],
-      )).toBe(true)
-    }
   })
 })
