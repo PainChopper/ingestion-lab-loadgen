@@ -65,8 +65,8 @@ func main() {
 		requests,
 		metrics,
 		promMetrics,
-		func(ctx context.Context, batchSize, readerChannelCapacity int) (<-chan []Transaction, <-chan struct{}, error) {
-			return produceBatches(ctx, loadedPolicy.Source.Path, batchSize, readerChannelCapacity, &state.reader, &state.readerChannel)
+		func(ctx context.Context, batches chan<- []Transaction, batchSize int) (<-chan struct{}, error) {
+			return produceBatches(ctx, loadedPolicy.Source.Path, batchSize, batches, &state.reader, &state.readerChannel)
 		},
 	)
 }

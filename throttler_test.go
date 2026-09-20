@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestStartThrottlerPassesBatchesAndClosesOutput(t *testing.T) {
+func TestStartThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 	readerBatches := make(chan []Transaction, 2)
 	want := [][]Transaction{
 		{{ClientID: "first"}, {ClientID: "second"}},
@@ -21,12 +21,14 @@ func TestStartThrottlerPassesBatchesAndClosesOutput(t *testing.T) {
 
 	var telemetry readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
-	senderBatches, done, _ := startThrottler(
+	senderBatches := make(chan []Transaction)
+	senderChannel.start(senderBatches, 0)
+	done, _ := startThrottler(
 		context.Background(),
 		readerBatches,
+		senderBatches,
 		&telemetry,
 		&senderChannel,
-		0,
 		throttlerSettings{mode: throttlerBypass},
 	)
 	if got := cap(senderBatches); got != 0 {
@@ -45,11 +47,10 @@ func TestStartThrottlerPassesBatchesAndClosesOutput(t *testing.T) {
 	waitForThrottlerDone(t, done)
 	select {
 	case _, ok := <-senderBatches:
-		if ok {
-			t.Fatal("Sender channel remained open after input close")
+		if !ok {
+			t.Fatal("Throttler closed caller-owned Sender channel")
 		}
 	default:
-		t.Fatal("Sender channel was not closed after input close")
 	}
 
 	got := telemetry.snapshot(time.Now())
@@ -66,12 +67,14 @@ func TestStartThrottlerUsesConfiguredSenderChannelCapacity(t *testing.T) {
 			readerBatches := make(chan []Transaction)
 			var readerChannel readerChannelTelemetry
 			var senderChannel readerChannelTelemetry
-			senderBatches, done, _ := startThrottler(
+			senderBatches := make(chan []Transaction, capacity)
+			senderChannel.start(senderBatches, 0)
+			done, _ := startThrottler(
 				ctx,
 				readerBatches,
+				senderBatches,
 				&readerChannel,
 				&senderChannel,
-				capacity,
 				throttlerSettings{mode: throttlerBypass},
 			)
 			if got := cap(senderBatches); got != capacity {
@@ -91,18 +94,24 @@ func TestStartThrottlerCancelWhileWaitingForInput(t *testing.T) {
 	readerBatches := make(chan []Transaction)
 	var telemetry readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
-	senderBatches, done, _ := startThrottler(
+	senderBatches := make(chan []Transaction)
+	senderChannel.start(senderBatches, 0)
+	done, _ := startThrottler(
 		ctx,
 		readerBatches,
+		senderBatches,
 		&telemetry,
 		&senderChannel,
-		0,
 		throttlerSettings{mode: throttlerBypass},
 	)
 	cancel()
 	waitForThrottlerDone(t, done)
-	if _, ok := <-senderBatches; ok {
-		t.Fatal("Sender channel remained open after cancellation")
+	select {
+	case _, ok := <-senderBatches:
+		if !ok {
+			t.Fatal("Throttler closed caller-owned Sender channel")
+		}
+	default:
 	}
 }
 
@@ -112,12 +121,14 @@ func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 	readerBatches <- []Transaction{{ClientID: "pending"}}
 	var telemetry readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
-	senderBatches, done, _ := startThrottler(
+	senderBatches := make(chan []Transaction)
+	senderChannel.start(senderBatches, 0)
+	done, _ := startThrottler(
 		ctx,
 		readerBatches,
+		senderBatches,
 		&telemetry,
 		&senderChannel,
-		0,
 		throttlerSettings{mode: throttlerBypass},
 	)
 	deadline := time.After(time.Second)
@@ -136,8 +147,12 @@ func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 	}
 	cancel()
 	waitForThrottlerDone(t, done)
-	if _, ok := <-senderBatches; ok {
-		t.Fatal("Sender channel remained open after blocked send was cancelled")
+	select {
+	case _, ok := <-senderBatches:
+		if !ok {
+			t.Fatal("Throttler closed caller-owned Sender channel")
+		}
+	default:
 	}
 	completed := senderChannel.snapshot(time.Now())
 	if completed.blockedSenders != 0 || completed.sentBatchesTotal != 0 || completed.sentTransactionsTotal != 0 {
@@ -152,12 +167,14 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 	readerBatches <- make([]Transaction, 3)
 	var readerChannel readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
-	senderBatches, done, _ := startThrottler(
+	senderBatches := make(chan []Transaction)
+	senderChannel.start(senderBatches, 0)
+	done, _ := startThrottler(
 		ctx,
 		readerBatches,
+		senderBatches,
 		&readerChannel,
 		&senderChannel,
-		0,
 		throttlerSettings{mode: throttlerBypass},
 	)
 	waitForBlockedSender(t, &senderChannel)
@@ -194,12 +211,14 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 	readerBatches <- []Transaction{{}}
 	var readerChannel readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
-	senderBatches, done, updates := startThrottler(
+	senderBatches := make(chan []Transaction)
+	senderChannel.start(senderBatches, 0)
+	done, updates := startThrottler(
 		ctx,
 		readerBatches,
+		senderBatches,
 		&readerChannel,
 		&senderChannel,
-		0,
 		throttlerSettings{mode: throttlerBypass},
 	)
 	waitForBlockedSender(t, &senderChannel)
@@ -219,8 +238,12 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 	}
 	cancel()
 	waitForThrottlerDone(t, done)
-	if _, ok := <-senderBatches; ok {
-		t.Fatal("held batch was forwarded after Pause and cancellation")
+	select {
+	case _, ok := <-senderBatches:
+		if !ok {
+			t.Fatal("Throttler closed caller-owned Sender channel")
+		}
+	default:
 	}
 }
 
@@ -242,12 +265,14 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 			var telemetry readerChannelTelemetry
 			var senderChannel readerChannelTelemetry
 			started := time.Now()
-			senderBatches, done, _ := startThrottler(
+			senderBatches := make(chan []Transaction)
+			senderChannel.start(senderBatches, 0)
+			done, _ := startThrottler(
 				ctx,
 				readerBatches,
+				senderBatches,
 				&telemetry,
 				&senderChannel,
-				0,
 				throttlerSettings{requestedTPS: 25, mode: throttlerInstalled},
 			)
 			select {
@@ -281,12 +306,14 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 			readerBatches <- []Transaction{{ClientID: "held"}}
 			var telemetry readerChannelTelemetry
 			var senderChannel readerChannelTelemetry
-			senderBatches, done, updates := startThrottler(
+			senderBatches := make(chan []Transaction)
+			senderChannel.start(senderBatches, 0)
+			done, updates := startThrottler(
 				ctx,
 				readerBatches,
+				senderBatches,
 				&telemetry,
 				&senderChannel,
-				0,
 				throttlerSettings{requestedTPS: 0, mode: throttlerInstalled},
 			)
 			select {
@@ -323,12 +350,14 @@ func TestStartThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
 	readerBatches <- []Transaction{{ClientID: "second"}}
 	var telemetry readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
-	senderBatches, done, _ := startThrottler(
+	senderBatches := make(chan []Transaction)
+	senderChannel.start(senderBatches, 0)
+	done, _ := startThrottler(
 		ctx,
 		readerBatches,
+		senderBatches,
 		&telemetry,
 		&senderChannel,
-		0,
 		throttlerSettings{requestedTPS: 25, mode: throttlerInstalled},
 	)
 	time.Sleep(120 * time.Millisecond)

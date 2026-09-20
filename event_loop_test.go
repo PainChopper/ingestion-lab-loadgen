@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -287,7 +288,6 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 				case update := <-updates:
 					close(update.applied)
 				case senderBatches <- pending:
-					capturedIDs <- pending[0].ClientID
 					delivered++
 					if first {
 						select {
@@ -309,7 +309,9 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 		return senderBatches, done, updates
 	}
 
-	startCustomEventLoopForTestWithThrottler(t, requests, metrics, produce, start)
+	startCustomEventLoopForTestWithThrottlerAndDeliveryObserver(t, requests, metrics, produce, start, func(batch []Transaction) {
+		capturedIDs <- batch[0].ClientID
+	})
 	requests <- request{kind: cmdRun}
 	close(firstProducerReady)
 	select {
@@ -466,7 +468,13 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(requests, metrics, NewMetrics(), produce)
+		state.eventLoopWithThrottler(
+			requests,
+			metrics,
+			NewMetrics(),
+			adaptLegacyProducer(produce),
+			startThrottler,
+		)
 	}()
 	t.Cleanup(func() {
 		close(requests)
@@ -759,21 +767,43 @@ func startEventLoopForTest(t *testing.T, onProduce func()) (chan<- request, chan
 	return requests, batches, metrics
 }
 
+type legacyProducerStarter func(context.Context, int, int) (<-chan []Transaction, <-chan struct{}, error)
+
+type legacyThrottlerStarter func(
+	context.Context,
+	<-chan []Transaction,
+	*readerChannelTelemetry,
+	*readerChannelTelemetry,
+	int,
+	throttlerSettings,
+) (<-chan []Transaction, <-chan struct{}, chan<- throttlerUpdate)
+
 func startCustomEventLoopForTest(
 	t *testing.T,
 	requests chan request,
 	metrics <-chan time.Time,
-	produce func(context.Context, int, int) (<-chan []Transaction, <-chan struct{}, error),
+	produce legacyProducerStarter,
 ) {
-	startCustomEventLoopForTestWithThrottler(t, requests, metrics, produce, startThrottler)
+	startCustomEventLoopForTestWithThrottler(t, requests, metrics, produce, nil)
 }
 
 func startCustomEventLoopForTestWithThrottler(
 	t *testing.T,
 	requests chan request,
 	metrics <-chan time.Time,
-	produce func(context.Context, int, int) (<-chan []Transaction, <-chan struct{}, error),
-	start throttlerStarter,
+	produce legacyProducerStarter,
+	start legacyThrottlerStarter,
+) {
+	startCustomEventLoopForTestWithThrottlerAndDeliveryObserver(t, requests, metrics, produce, start, nil)
+}
+
+func startCustomEventLoopForTestWithThrottlerAndDeliveryObserver(
+	t *testing.T,
+	requests chan request,
+	metrics <-chan time.Time,
+	produce legacyProducerStarter,
+	start legacyThrottlerStarter,
+	onDelivered func([]Transaction),
 ) {
 	t.Helper()
 
@@ -781,7 +811,13 @@ func startCustomEventLoopForTestWithThrottler(
 	state := newTestControlState(t)
 	go func() {
 		defer close(done)
-		state.eventLoopWithThrottler(requests, metrics, NewMetrics(), produce, start)
+		state.eventLoopWithThrottler(
+			requests,
+			metrics,
+			NewMetrics(),
+			adaptLegacyProducer(produce),
+			adaptLegacyThrottler(start, onDelivered),
+		)
 	}()
 	t.Cleanup(func() {
 		close(requests)
@@ -791,6 +827,71 @@ func startCustomEventLoopForTestWithThrottler(
 			t.Error("event loop did not stop")
 		}
 	})
+}
+
+func adaptLegacyProducer(produce legacyProducerStarter) producerStarter {
+	return func(ctx context.Context, output chan<- []Transaction, batchSize int) (<-chan struct{}, error) {
+		input, done, err := produce(ctx, batchSize, cap(output))
+		if err != nil {
+			return nil, err
+		}
+		return relayBatches(ctx, input, output, done, nil), nil
+	}
+}
+
+func adaptLegacyThrottler(start legacyThrottlerStarter, onDelivered func([]Transaction)) throttlerStarter {
+	if start == nil {
+		return startThrottler
+	}
+	return func(
+		ctx context.Context,
+		input <-chan []Transaction,
+		output chan<- []Transaction,
+		readerChannel *readerChannelTelemetry,
+		senderChannel *readerChannelTelemetry,
+		settings throttlerSettings,
+	) (<-chan struct{}, chan<- throttlerUpdate) {
+		batches, done, updates := start(ctx, input, readerChannel, senderChannel, cap(output), settings)
+		return relayBatches(ctx, batches, output, done, onDelivered), updates
+	}
+}
+
+func relayBatches(
+	ctx context.Context,
+	input <-chan []Transaction,
+	output chan<- []Transaction,
+	done <-chan struct{},
+	onDelivered func([]Transaction),
+) <-chan struct{} {
+	relayDone := make(chan struct{})
+	go func() {
+		defer close(relayDone)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case batch, ok := <-input:
+				if !ok {
+					return
+				}
+				select {
+				case output <- batch:
+					if onDelivered != nil {
+						onDelivered(batch)
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	combinedDone := make(chan struct{})
+	go func() {
+		defer close(combinedDone)
+		<-done
+		<-relayDone
+	}()
+	return combinedDone
 }
 
 func waitForState(t *testing.T, requests chan<- request, want runState) {
@@ -809,6 +910,426 @@ func waitForState(t *testing.T, requests chan<- request, want runState) {
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("state did not reach %v", want)
+	}
+}
+
+func TestCloseAndDrainReturnsForClosedChannel(t *testing.T) {
+	batches := make(chan []Transaction, 1)
+	batches <- []Transaction{{ClientID: "retained"}}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		closeAndDrain(batches)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("closeAndDrain did not return for a closed channel")
+	}
+}
+
+func TestEventLoopRetainsActualChannelsAcrossPauseResumeAndSameCapacityReset(t *testing.T) {
+	for _, capacity := range []int{0, 1, 8_192} {
+		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
+			harness := startActualChannelEventLoopForTest(t)
+			defer harness.stop()
+
+			harness.setCapacity(t, cmdSetReaderChannelCapacity, capacity)
+			harness.setCapacity(t, cmdSetSenderChannelCapacity, capacity)
+			harness.command(t, cmdRun)
+			reader := harness.nextReader(t)
+			sender := harness.nextSender(t)
+			if cap(reader) != capacity || cap(sender) != capacity {
+				t.Fatalf("actual channel capacities = Reader %d, Sender %d, want %d", cap(reader), cap(sender), capacity)
+			}
+
+			harness.command(t, cmdPause)
+			harness.command(t, cmdRun)
+			harness.assertNoReplacement(t)
+			if harness.state.readerChannel.batches != reader || harness.state.senderChannel.batches != sender {
+				t.Fatal("Pause/Resume replaced an actual event-loop channel")
+			}
+
+			if capacity > 0 {
+				harness.send(t, []Transaction{{ClientID: "old"}})
+			}
+			harness.command(t, cmdPause)
+			harness.command(t, cmdReset)
+			if harness.state.readerChannel.batches != reader || harness.state.senderChannel.batches != sender {
+				t.Fatal("same-capacity Reset replaced an actual event-loop channel")
+			}
+			if cap(reader) != capacity || cap(sender) != capacity || len(reader) != 0 || len(sender) != 0 {
+				t.Fatalf("channels after Reset = Reader(cap=%d len=%d), Sender(cap=%d len=%d)", cap(reader), len(reader), cap(sender), len(sender))
+			}
+
+			harness.command(t, cmdRun)
+			if next := harness.nextReader(t); next != reader {
+				t.Fatal("same-capacity Reset did not retain actual Reader channel")
+			}
+			if next := harness.nextSender(t); next != sender {
+				t.Fatal("same-capacity Reset did not retain actual Sender channel")
+			}
+			harness.send(t, []Transaction{{ClientID: "fresh"}})
+			waitForTransactions(t, harness.requests, harness.metrics, 1)
+		})
+	}
+}
+
+func TestEventLoopSameCapacityResetDrainsRetainedActualReaderBatch(t *testing.T) {
+	for _, capacity := range []int{1, 8_192} {
+		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
+			harness := startActualChannelEventLoopWithHeldThrottlerForTest(t)
+			defer harness.stop()
+
+			harness.setCapacity(t, cmdSetReaderChannelCapacity, capacity)
+			harness.setCapacity(t, cmdSetSenderChannelCapacity, capacity)
+			harness.command(t, cmdRun)
+			reader := harness.nextReader(t)
+			sender := harness.nextSender(t)
+
+			harness.send(t, []Transaction{{ClientID: "old"}})
+			if len(reader) != 1 {
+				t.Fatalf("actual Reader channel retained %d batches, want 1 old batch", len(reader))
+			}
+			if len(sender) != 0 {
+				t.Fatalf("actual Sender channel retained %d batches before Reset, want 0", len(sender))
+			}
+
+			harness.command(t, cmdPause)
+			harness.command(t, cmdReset)
+			if harness.state.readerChannel.batches != reader || harness.state.senderChannel.batches != sender {
+				t.Fatal("same-capacity Reset replaced an actual event-loop channel")
+			}
+			if len(reader) != 0 || len(sender) != 0 {
+				t.Fatalf("actual queues after Reset = Reader %d, Sender %d, want empty", len(reader), len(sender))
+			}
+
+			harness.command(t, cmdRun)
+			if next := harness.nextReader(t); next != reader {
+				t.Fatal("same-capacity Reset did not retain actual Reader channel")
+			}
+			if next := harness.nextSender(t); next != sender {
+				t.Fatal("same-capacity Reset did not retain actual Sender channel")
+			}
+			harness.send(t, []Transaction{{ClientID: "fresh"}})
+			close(harness.allowThrottlerForward)
+
+			select {
+			case batch := <-harness.forwardedBatches:
+				if len(batch) != 1 || batch[0].ClientID != "fresh" {
+					t.Fatalf("batch forwarded after Reset = %+v, want fresh only", batch)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("fresh batch was not forwarded after Reset")
+			}
+			select {
+			case batch := <-harness.forwardedBatches:
+				t.Fatalf("unexpected extra forwarded batch after Reset: %+v", batch)
+			default:
+			}
+		})
+	}
+}
+
+func TestEventLoopSelectivelyReplacesActualChannelsAfterSoftReset(t *testing.T) {
+	harness := startActualChannelEventLoopForTest(t)
+	defer harness.stop()
+
+	harness.setCapacity(t, cmdSetReaderChannelCapacity, 1)
+	harness.setCapacity(t, cmdSetSenderChannelCapacity, 1)
+	harness.command(t, cmdRun)
+	reader := harness.nextReader(t)
+	sender := harness.nextSender(t)
+
+	harness.command(t, cmdPause)
+	harness.command(t, cmdReset)
+	harness.setCapacity(t, cmdSetReaderChannelCapacity, 8_192)
+	if harness.state.readerChannel.batches != reader || harness.state.senderChannel.batches != sender {
+		t.Fatal("idle Reader capacity setter replaced an actual channel")
+	}
+	harness.command(t, cmdRun)
+	replacedReader := harness.nextReader(t)
+	if replacedReader == reader || cap(replacedReader) != 8_192 {
+		t.Fatalf("Reader replacement = %p (capacity %d), want new channel with capacity 8192", replacedReader, cap(replacedReader))
+	}
+	if retainedSender := harness.nextSender(t); retainedSender != sender {
+		t.Fatal("Reader-only replacement changed Sender channel")
+	}
+	assertClosedActualChannel(t, reader)
+
+	harness.command(t, cmdPause)
+	harness.command(t, cmdReset)
+	harness.setCapacity(t, cmdSetSenderChannelCapacity, 0)
+	harness.command(t, cmdRun)
+	if retainedReader := harness.nextReader(t); retainedReader != replacedReader {
+		t.Fatal("Sender-only replacement changed Reader channel")
+	}
+	replacedSender := harness.nextSender(t)
+	if replacedSender == sender || cap(replacedSender) != 0 {
+		t.Fatalf("Sender replacement = %p (capacity %d), want new channel with capacity 0", replacedSender, cap(replacedSender))
+	}
+	assertClosedActualChannel(t, sender)
+
+	harness.command(t, cmdPause)
+	harness.command(t, cmdReset)
+	harness.setCapacity(t, cmdSetReaderChannelCapacity, 0)
+	harness.setCapacity(t, cmdSetSenderChannelCapacity, 8_192)
+	harness.command(t, cmdRun)
+	if next := harness.nextReader(t); next == replacedReader || cap(next) != 0 {
+		t.Fatal("both-capacity replacement did not replace Reader channel")
+	}
+	if next := harness.nextSender(t); next == replacedSender || cap(next) != 8_192 {
+		t.Fatal("both-capacity replacement did not replace Sender channel")
+	}
+	assertClosedActualChannel(t, replacedReader)
+	assertClosedActualChannel(t, replacedSender)
+}
+
+func TestEventLoopTeardownClosesActualChannelsAndDetachesTelemetry(t *testing.T) {
+	for _, afterSoftReset := range []bool{false, true} {
+		t.Run(strconv.FormatBool(afterSoftReset), func(t *testing.T) {
+			harness := startActualChannelEventLoopForTest(t)
+			harness.command(t, cmdRun)
+			reader := harness.nextReader(t)
+			sender := harness.nextSender(t)
+			if afterSoftReset {
+				harness.command(t, cmdPause)
+				harness.command(t, cmdReset)
+			}
+
+			harness.stop()
+			assertClosedActualChannel(t, reader)
+			assertClosedActualChannel(t, sender)
+			if harness.state.readerChannel.batches != nil || harness.state.senderChannel.batches != nil {
+				t.Fatal("event-loop teardown retained telemetry channel attachment")
+			}
+		})
+	}
+}
+
+type actualChannelEventLoopHarness struct {
+	requests              chan request
+	metrics               chan time.Time
+	state                 *controlState
+	producerBatches       chan []Transaction
+	readerHandoffs        chan struct{}
+	readerStarts          chan struct{}
+	senderStarts          chan struct{}
+	allowThrottlerForward chan struct{}
+	forwardedBatches      chan []Transaction
+	stop                  func()
+}
+
+func startActualChannelEventLoopForTest(t *testing.T) actualChannelEventLoopHarness {
+	return startActualChannelEventLoopForTestWithHeldThrottler(t, false)
+}
+
+func startActualChannelEventLoopWithHeldThrottlerForTest(t *testing.T) actualChannelEventLoopHarness {
+	return startActualChannelEventLoopForTestWithHeldThrottler(t, true)
+}
+
+func startActualChannelEventLoopForTestWithHeldThrottler(t *testing.T, holdThrottler bool) actualChannelEventLoopHarness {
+	t.Helper()
+
+	requests := make(chan request, 3)
+	metrics := make(chan time.Time)
+	state := newTestControlState(t)
+	producerBatches := make(chan []Transaction)
+	readerHandoffs := make(chan struct{}, 4)
+	readerStarts := make(chan struct{}, 4)
+	senderStarts := make(chan struct{}, 4)
+	var allowThrottlerForward chan struct{}
+	var forwardedBatches chan []Transaction
+	if holdThrottler {
+		allowThrottlerForward = make(chan struct{})
+		forwardedBatches = make(chan []Transaction, 1)
+	}
+	produce := func(ctx context.Context, output chan<- []Transaction, _ int) (<-chan struct{}, error) {
+		readerStarts <- struct{}{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case batch := <-producerBatches:
+					select {
+					case output <- batch:
+						readerHandoffs <- struct{}{}
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}()
+		return done, nil
+	}
+	start := func(
+		ctx context.Context,
+		input <-chan []Transaction,
+		output chan<- []Transaction,
+		readerChannel *readerChannelTelemetry,
+		senderChannel *readerChannelTelemetry,
+		settings throttlerSettings,
+	) (<-chan struct{}, chan<- throttlerUpdate) {
+		senderStarts <- struct{}{}
+		if holdThrottler {
+			return startHeldThrottlerForTest(
+				ctx,
+				input,
+				output,
+				readerChannel,
+				senderChannel,
+				allowThrottlerForward,
+				forwardedBatches,
+			)
+		}
+		return startThrottler(ctx, input, output, readerChannel, senderChannel, settings)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		state.eventLoopWithThrottler(requests, metrics, NewMetrics(), produce, start)
+	}()
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		close(requests)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("event loop did not stop")
+		}
+	}
+	t.Cleanup(stop)
+	return actualChannelEventLoopHarness{
+		requests:              requests,
+		metrics:               metrics,
+		state:                 &state,
+		producerBatches:       producerBatches,
+		readerHandoffs:        readerHandoffs,
+		readerStarts:          readerStarts,
+		senderStarts:          senderStarts,
+		allowThrottlerForward: allowThrottlerForward,
+		forwardedBatches:      forwardedBatches,
+		stop:                  stop,
+	}
+}
+
+func startHeldThrottlerForTest(
+	ctx context.Context,
+	input <-chan []Transaction,
+	output chan<- []Transaction,
+	readerChannel *readerChannelTelemetry,
+	senderChannel *readerChannelTelemetry,
+	allowForward <-chan struct{},
+	forwarded chan<- []Transaction,
+) (<-chan struct{}, chan<- throttlerUpdate) {
+	done := make(chan struct{})
+	updates := make(chan throttlerUpdate)
+	go func() {
+		defer close(done)
+
+		var batches <-chan []Transaction
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case update := <-updates:
+				close(update.applied)
+			case <-allowForward:
+				allowForward = nil
+				batches = input
+			case batch, ok := <-batches:
+				if !ok {
+					return
+				}
+				readerChannel.recordReceive(len(batch))
+				select {
+				case <-ctx.Done():
+					return
+				case output <- batch:
+					senderChannel.recordSend(len(batch))
+					forwarded <- batch
+				}
+			}
+		}
+	}()
+	return done, updates
+}
+
+func (h actualChannelEventLoopHarness) command(t *testing.T, kind requestKind) {
+	t.Helper()
+	if kind == cmdPause {
+		h.requests <- request{kind: kind}
+		waitForState(t, h.requests, runStatePaused)
+		return
+	}
+	reply := make(chan commandResult, 1)
+	h.requests <- request{kind: kind, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted || result.err != nil {
+		t.Fatalf("command %v = %+v, want accepted", kind, result)
+	}
+}
+
+func (h actualChannelEventLoopHarness) setCapacity(t *testing.T, kind requestKind, capacity int) {
+	t.Helper()
+	reply := make(chan commandResult, 1)
+	h.requests <- request{kind: kind, value: capacity, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("set capacity command %v = %+v, want accepted", kind, result)
+	}
+}
+
+func (h actualChannelEventLoopHarness) assertNoReplacement(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.readerStarts:
+		t.Fatal("Pause/Resume started replacement Reader channel")
+	default:
+	}
+	select {
+	case <-h.senderStarts:
+		t.Fatal("Pause/Resume started replacement Sender channel")
+	default:
+	}
+}
+
+func (h actualChannelEventLoopHarness) nextReader(t *testing.T) <-chan []Transaction {
+	t.Helper()
+	<-h.readerStarts
+	return h.state.readerChannel.batches
+}
+
+func (h actualChannelEventLoopHarness) nextSender(t *testing.T) <-chan []Transaction {
+	t.Helper()
+	<-h.senderStarts
+	return h.state.senderChannel.batches
+}
+
+func (h actualChannelEventLoopHarness) send(t *testing.T, batch []Transaction) {
+	t.Helper()
+	select {
+	case h.producerBatches <- batch:
+	case <-time.After(time.Second):
+		t.Fatal("test producer did not accept batch")
+	}
+	select {
+	case <-h.readerHandoffs:
+	case <-time.After(time.Second):
+		t.Fatal("test producer did not hand batch to actual Reader channel")
+	}
+}
+
+func assertClosedActualChannel(t *testing.T, batches <-chan []Transaction) {
+	t.Helper()
+	if _, ok := <-batches; ok {
+		t.Fatal("replaced or torn-down actual channel is still open")
 	}
 }
 

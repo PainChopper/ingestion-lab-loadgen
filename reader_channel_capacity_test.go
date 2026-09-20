@@ -109,7 +109,13 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				state.eventLoop(requests, metrics, NewMetrics(), produce)
+				state.eventLoopWithThrottler(
+					requests,
+					metrics,
+					NewMetrics(),
+					adaptLegacyProducer(produce),
+					startThrottler,
+				)
 			}()
 			t.Cleanup(func() {
 				close(requests)

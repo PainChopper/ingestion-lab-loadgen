@@ -19,18 +19,15 @@ type throttlerUpdate struct {
 func startThrottler(
 	ctx context.Context,
 	readerBatches <-chan []Transaction,
+	senderBatches chan<- []Transaction,
 	readerChannel *readerChannelTelemetry,
 	senderChannel *readerChannelTelemetry,
-	senderChannelCapacity int,
 	initial throttlerSettings,
-) (<-chan []Transaction, <-chan struct{}, chan<- throttlerUpdate) {
-	senderBatches := make(chan []Transaction, senderChannelCapacity)
-	senderChannel.start(senderBatches, 0)
+) (<-chan struct{}, chan<- throttlerUpdate) {
 	done := make(chan struct{})
 	updates := make(chan throttlerUpdate)
 	go func() {
 		defer close(done)
-		defer close(senderBatches)
 		settings := initial
 		for {
 			select {
@@ -50,7 +47,7 @@ func startThrottler(
 			}
 		}
 	}()
-	return senderBatches, done, updates
+	return done, updates
 }
 
 func forwardThrottledBatch(

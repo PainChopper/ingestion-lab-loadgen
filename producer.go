@@ -14,24 +14,21 @@ func produceBatches(
 	ctx context.Context,
 	dataPath string,
 	batchSize int,
-	readerChannelCapacity int,
+	batches chan<- []Transaction,
 	telemetry *readerTelemetry,
 	readerChannelTelemetry *readerChannelTelemetry,
-) (<-chan []Transaction, <-chan struct{}, error) {
+) (<-chan struct{}, error) {
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to glob path: %w", err)
+		return nil, fmt.Errorf("failed to glob path: %w", err)
 	}
 	if len(files) == 0 {
-		return nil, nil, fmt.Errorf("no files found matching pattern: %s", dataPath)
+		return nil, fmt.Errorf("no files found matching pattern: %s", dataPath)
 	}
 
-	batches := make(chan []Transaction, readerChannelCapacity)
 	done := make(chan struct{})
-	readerChannelTelemetry.start(batches, batchSize)
 	go func(files []string, batches chan<- []Transaction) {
 		defer func() {
-			close(batches)
 			close(done)
 		}()
 
@@ -90,5 +87,5 @@ func produceBatches(
 		}
 	}(files, batches)
 
-	return batches, done, nil
+	return done, nil
 }
