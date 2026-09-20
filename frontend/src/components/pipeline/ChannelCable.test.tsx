@@ -11,6 +11,7 @@ import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import { CHANNEL_CABLE_ENDPOINTS } from './geometry'
 import {
   buildChannelCablePath,
+  capacityFromVerticalDrag,
   capacityToCableY,
   CHANNEL_CABLE_MAX_LIFT,
 } from './channelCableGeometry'
@@ -229,6 +230,46 @@ describe('ChannelCable mounted behavior', () => {
 
     expect(onCapacityChange.mock.calls.map((call) => call[1]))
       .toEqual([8, 8_192, 0, 8_192])
+    adapter.dispose()
+  })
+
+  it('shows and selects senderChannel HTTP capacities by discrete scale index', async () => {
+    const user = userEvent.setup()
+    const adapter = new SimulationAdapter()
+    const source = derivedSnapshot(adapter).senderChannel
+    const channel = {
+      ...source,
+      capacity: {
+        ...source.capacity,
+        applied: 0,
+        min: 0,
+        max: 8_192,
+        step: 1,
+        applyMode: 'immediate' as const,
+      },
+    }
+    const onCapacityChange = vi.fn()
+    const view = renderCable(channel, {
+      onCapacityChange,
+      capacityValues: [0, 1, 2, 8, 64, 512, 8_192],
+    })
+    const slider = screen.getByRole('slider')
+
+    expect(slider.textContent).toBe('0')
+    expect([...view.container.querySelectorAll(
+      '.pipeline-channel-scale__label',
+    )].map((label) => label.textContent)).toEqual(['0', '8', '8,192'])
+    const values = [0, 1, 2, 8, 64, 512, 8_192]
+    expect(capacityToCableY(0, channel.capacity, 400, 240, values)).toBe(400)
+    expect(capacityToCableY(1, channel.capacity, 400, 240, values)).toBe(360)
+    expect(capacityFromVerticalDrag(0, -40, channel.capacity, 240, values))
+      .toBe(1)
+
+    await user.click(slider)
+    await user.keyboard('{ArrowUp}{PageUp}{Home}{End}')
+
+    expect(onCapacityChange.mock.calls.map((call) => call[1]))
+      .toEqual([1, 512, 8_192])
     adapter.dispose()
   })
 

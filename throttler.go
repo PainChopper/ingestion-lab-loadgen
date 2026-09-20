@@ -21,9 +21,10 @@ func startThrottler(
 	readerBatches <-chan []Transaction,
 	readerChannel *readerChannelTelemetry,
 	senderChannel *readerChannelTelemetry,
+	senderChannelCapacity int,
 	initial throttlerSettings,
 ) (<-chan []Transaction, <-chan struct{}, chan<- throttlerUpdate) {
-	senderBatches := make(chan []Transaction)
+	senderBatches := make(chan []Transaction, senderChannelCapacity)
 	senderChannel.start(senderBatches, 0)
 	done := make(chan struct{})
 	updates := make(chan throttlerUpdate)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -20,7 +21,14 @@ func TestStartThrottlerPassesBatchesAndClosesOutput(t *testing.T) {
 
 	var telemetry readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
-	senderBatches, done, _ := startThrottler(context.Background(), readerBatches, &telemetry, &senderChannel, throttlerSettings{mode: throttlerBypass})
+	senderBatches, done, _ := startThrottler(
+		context.Background(),
+		readerBatches,
+		&telemetry,
+		&senderChannel,
+		0,
+		throttlerSettings{mode: throttlerBypass},
+	)
 	if got := cap(senderBatches); got != 0 {
 		t.Fatalf("Sender channel capacity = %d, want 0", got)
 	}
@@ -50,12 +58,47 @@ func TestStartThrottlerPassesBatchesAndClosesOutput(t *testing.T) {
 	}
 }
 
+func TestStartThrottlerUsesConfiguredSenderChannelCapacity(t *testing.T) {
+	for _, capacity := range []int{0, 1, 8_192} {
+		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			readerBatches := make(chan []Transaction)
+			var readerChannel readerChannelTelemetry
+			var senderChannel readerChannelTelemetry
+			senderBatches, done, _ := startThrottler(
+				ctx,
+				readerBatches,
+				&readerChannel,
+				&senderChannel,
+				capacity,
+				throttlerSettings{mode: throttlerBypass},
+			)
+			if got := cap(senderBatches); got != capacity {
+				t.Fatalf("Sender channel capacity = %d, want %d", got, capacity)
+			}
+			if got := senderChannel.snapshot(time.Now()).capacity; got != capacity {
+				t.Fatalf("Sender telemetry capacity = %d, want %d", got, capacity)
+			}
+			cancel()
+			waitForThrottlerDone(t, done)
+		})
+	}
+}
+
 func TestStartThrottlerCancelWhileWaitingForInput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	readerBatches := make(chan []Transaction)
 	var telemetry readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
-	senderBatches, done, _ := startThrottler(ctx, readerBatches, &telemetry, &senderChannel, throttlerSettings{mode: throttlerBypass})
+	senderBatches, done, _ := startThrottler(
+		ctx,
+		readerBatches,
+		&telemetry,
+		&senderChannel,
+		0,
+		throttlerSettings{mode: throttlerBypass},
+	)
 	cancel()
 	waitForThrottlerDone(t, done)
 	if _, ok := <-senderBatches; ok {
@@ -69,7 +112,14 @@ func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 	readerBatches <- []Transaction{{ClientID: "pending"}}
 	var telemetry readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
-	senderBatches, done, _ := startThrottler(ctx, readerBatches, &telemetry, &senderChannel, throttlerSettings{mode: throttlerBypass})
+	senderBatches, done, _ := startThrottler(
+		ctx,
+		readerBatches,
+		&telemetry,
+		&senderChannel,
+		0,
+		throttlerSettings{mode: throttlerBypass},
+	)
 	deadline := time.After(time.Second)
 	for telemetry.snapshot(time.Now()).receivedBatchesTotal != 1 {
 		select {
@@ -103,7 +153,11 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 	var readerChannel readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
 	senderBatches, done, _ := startThrottler(
-		ctx, readerBatches, &readerChannel, &senderChannel,
+		ctx,
+		readerBatches,
+		&readerChannel,
+		&senderChannel,
+		0,
 		throttlerSettings{mode: throttlerBypass},
 	)
 	waitForBlockedSender(t, &senderChannel)
@@ -141,7 +195,11 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 	var readerChannel readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
 	senderBatches, done, updates := startThrottler(
-		ctx, readerBatches, &readerChannel, &senderChannel,
+		ctx,
+		readerBatches,
+		&readerChannel,
+		&senderChannel,
+		0,
 		throttlerSettings{mode: throttlerBypass},
 	)
 	waitForBlockedSender(t, &senderChannel)
@@ -185,7 +243,11 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 			var senderChannel readerChannelTelemetry
 			started := time.Now()
 			senderBatches, done, _ := startThrottler(
-				ctx, readerBatches, &telemetry, &senderChannel,
+				ctx,
+				readerBatches,
+				&telemetry,
+				&senderChannel,
+				0,
 				throttlerSettings{requestedTPS: 25, mode: throttlerInstalled},
 			)
 			select {
@@ -220,7 +282,11 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 			var telemetry readerChannelTelemetry
 			var senderChannel readerChannelTelemetry
 			senderBatches, done, updates := startThrottler(
-				ctx, readerBatches, &telemetry, &senderChannel,
+				ctx,
+				readerBatches,
+				&telemetry,
+				&senderChannel,
+				0,
 				throttlerSettings{requestedTPS: 0, mode: throttlerInstalled},
 			)
 			select {
@@ -258,7 +324,11 @@ func TestStartThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
 	var telemetry readerChannelTelemetry
 	var senderChannel readerChannelTelemetry
 	senderBatches, done, _ := startThrottler(
-		ctx, readerBatches, &telemetry, &senderChannel,
+		ctx,
+		readerBatches,
+		&telemetry,
+		&senderChannel,
+		0,
 		throttlerSettings{requestedTPS: 25, mode: throttlerInstalled},
 	)
 	time.Sleep(120 * time.Millisecond)

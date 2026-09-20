@@ -30,6 +30,7 @@ func testConfigContents() string {
 		"schema_version = 2", "", "[source]", "path = 'C:\\dataset\\*.parquet'", "unit = \"glob-pattern\"", "mutability = \"startup-only\"", "",
 		"[reader.read_batch_size]", "default = 50000", "min = 1000", "max = 100000", "step = 1000", "unit = \"transactions\"", "mutability = \"idle-only\"", "",
 		"[readerChannel.capacity]", "default = 2", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
+		"", "[senderChannel.capacity]", "default = 0", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
 		"", "[throttler.requested_tps]", "default = 200", "min = 0", "max = 400", "step = 25", "unit = \"transactions/s\"", "mutability = \"immediate\"",
 		"", "[throttler.installation_mode]", "default = \"installed\"", "allowed = [\"installed\", \"bypass\"]", "mutability = \"immediate\"",
 	}, "\n")
@@ -71,6 +72,15 @@ func TestLoadPolicyRequiresExplicitPolicyFields(t *testing.T) {
 			name:     "explicit zero reader channel capacity default",
 			contents: strings.Replace(testConfigContents(), "default = 2", "default = 0", 1),
 		},
+		{
+			name:     "missing sender channel capacity default",
+			contents: strings.Replace(testConfigContents(), "[senderChannel.capacity]\ndefault = 0\n", "[senderChannel.capacity]\n", 1),
+			wantErr:  true,
+		},
+		{
+			name:     "explicit zero sender channel capacity default",
+			contents: testConfigContents(),
+		},
 	}
 
 	for _, test := range tests {
@@ -82,6 +92,34 @@ func TestLoadPolicyRequiresExplicitPolicyFields(t *testing.T) {
 			_, _, err := loadPolicy(path)
 			if (err != nil) != test.wantErr {
 				t.Fatalf("loadPolicy() error = %v, wantErr %t", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadPolicyRejectsInvalidSenderChannelCapacityPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{name: "non-zero default", old: "[senderChannel.capacity]\ndefault = 0", new: "[senderChannel.capacity]\ndefault = 1"},
+		{name: "off-list allowed value", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 3]"},
+		{name: "wrong unit", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"transactions\""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			contents := strings.Replace(testConfigContents(), test.old, test.new, 1)
+			if contents == testConfigContents() {
+				t.Fatalf("test replacement %q did not apply", test.old)
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadPolicy(path); err == nil {
+				t.Fatal("loadPolicy accepted invalid sender channel capacity policy")
 			}
 		})
 	}

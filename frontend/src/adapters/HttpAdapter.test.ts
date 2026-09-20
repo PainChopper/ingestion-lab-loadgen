@@ -81,6 +81,12 @@ const VALID_WIRE: TestWireSnapshot = {
       unit: 'batches',
       mutability: 'idle-only',
     },
+    senderChannelCapacity: {
+      default: 0,
+      allowed: [0, 1, 2, 8, 16, 64, 8_192],
+      unit: 'batches',
+      mutability: 'idle-only',
+    },
     throttlerRequestedTps: {
       default: 200,
       min: 0,
@@ -342,7 +348,10 @@ function readerChannel(
   }
 }
 
-function senderChannel(wire: TestWireSnapshot | null): ChannelTelemetrySnapshot {
+function senderChannel(
+  wire: TestWireSnapshot | null,
+  connectionState: ConnectionState,
+): ChannelTelemetrySnapshot {
   const channel = neutralChannel(
     'throttler-to-sender',
     'throttler',
@@ -352,7 +361,14 @@ function senderChannel(wire: TestWireSnapshot | null): ChannelTelemetrySnapshot 
 
   return {
     ...channel,
-    capacity: control('batches', wire.senderChannelCapacity),
+    capacity: {
+      ...control('batches', wire.senderChannelCapacity),
+      min: wire.policy.senderChannelCapacity.allowed[0]!,
+      max: wire.policy.senderChannelCapacity.allowed.at(-1)!,
+      applyMode: connectionState === 'connected' && wire.runState === 'idle'
+        ? 'immediate'
+        : 'unavailable',
+    },
     depthBatches: wire.senderChannelDepthBatches,
     bufferedTransactions: wire.senderChannelBufferedTransactions,
     sentBatchesTotal: wire.senderChannelSentBatchesTotal,
@@ -427,7 +443,7 @@ function expectedSnapshot(
       state: runState,
     },
     readerChannel: readerChannel(wire, connectionState),
-    senderChannel: senderChannel(wire),
+    senderChannel: senderChannel(wire, connectionState),
     sender: {
       id: 'sender',
       workers: control('workers', wire?.senderWorkers ?? null),
@@ -527,6 +543,29 @@ const malformedCases: ReadonlyArray<{
     }),
   },
   {
+    name: 'missing senderChannel policy',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      policy: (() => {
+        const { senderChannelCapacity: _senderChannel, ...policy } = VALID_WIRE.policy
+        return policy
+      })(),
+    }),
+  },
+  {
+    name: 'malformed senderChannel policy',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      policy: {
+        ...VALID_WIRE.policy,
+        senderChannelCapacity: {
+          ...VALID_WIRE.policy.senderChannelCapacity,
+          allowed: [0, 2, 2],
+        },
+      },
+    }),
+  },
+  {
     name: 'missing throttler requested TPS policy',
     result: async () => mockResponse({
       ...VALID_WIRE,
@@ -568,8 +607,8 @@ const malformedCases: ReadonlyArray<{
     }),
   },
   {
-    name: 'nonzero fixed sender channel capacity',
-    result: async () => mockResponse({ ...VALID_WIRE, senderChannelCapacity: 1 }),
+    name: 'sender channel capacity outside policy',
+    result: async () => mockResponse({ ...VALID_WIRE, senderChannelCapacity: 3 }),
   },
   {
     name: 'unknown applied installation mode',
@@ -792,7 +831,7 @@ describe('HttpAdapter', () => {
     })
     expect(snapshot.senderChannel).toEqual({
       ...neutralChannel('throttler-to-sender', 'throttler', 'sender'),
-      capacity: control('batches', 0),
+      capacity: { ...control('batches', 0), min: 0, max: 8_192 },
       depthBatches: 0,
       bufferedTransactions: 0,
       sentBatchesTotal: 7,
@@ -870,7 +909,12 @@ describe('HttpAdapter', () => {
     })
     expect(adapter.getSnapshot().throttler.admittedTps).toBe(0)
     expect(adapter.getSnapshot().senderChannel).toMatchObject({
-      capacity: control('batches', 0),
+      capacity: {
+        ...control('batches', 0),
+        min: 0,
+        max: 8_192,
+        applyMode: 'immediate',
+      },
       depthBatches: 0,
       bufferedTransactions: 0,
       sentBatchesTotal: 0,
@@ -1213,6 +1257,82 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
+  it('sends an idle senderChannel capacity through the existing command channel', async () => {
+    const idleWire: TestWireSnapshot = {
+      ...VALID_WIRE,
+      runState: 'idle',
+      senderChannelCapacity: 0,
+    }
+    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+      ? Promise.resolve(mockCommandResponse())
+      : Promise.resolve(mockResponse(idleWire)))
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    expect(adapter.getSnapshot().senderChannel.capacity).toEqual({
+      applied: 0,
+      preview: null,
+      pending: null,
+      min: 0,
+      max: 8_192,
+      step: 1,
+      unit: 'batches',
+      applyMode: 'immediate',
+    })
+
+    const receipt = await adapter.dispatch({
+      type: 'set-sender-channel-capacity',
+      value: 8_192,
+    })
+
+    expect(receipt).toMatchObject({
+      accepted: true,
+      commandType: 'set-sender-channel-capacity',
+      applyMode: 'immediate',
+      snapshotRevision: 1,
+      error: null,
+    })
+    expect(commandFetchCalls()).toHaveLength(1)
+    expect(commandFetchCalls()[0]?.[1]).toMatchObject({
+      body: '{"action":"set-sender-channel-capacity","value":8192}',
+    })
+    expect(adapter.getSnapshot().senderChannel.capacity.applied).toBe(0)
+    adapter.dispose()
+  })
+
+  it('serializes idle senderChannel capacity commands', async () => {
+    const commandResponse = deferred<Response>()
+    const idleWire: TestWireSnapshot = { ...VALID_WIRE, runState: 'idle' }
+    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+      ? commandResponse.promise
+      : Promise.resolve(mockResponse(idleWire)))
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    const first = adapter.dispatch({
+      type: 'set-sender-channel-capacity',
+      value: 1,
+    })
+    const second = adapter.dispatch({
+      type: 'set-sender-channel-capacity',
+      value: 2,
+    })
+    await Promise.resolve()
+    expect(commandFetchCalls()).toHaveLength(1)
+
+    commandResponse.resolve(mockCommandResponse())
+    await first
+    await Promise.resolve()
+    expect(commandFetchCalls()).toHaveLength(2)
+    await second
+    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body))
+      .toEqual([
+        '{"action":"set-sender-channel-capacity","value":1}',
+        '{"action":"set-sender-channel-capacity","value":2}',
+      ])
+    adapter.dispose()
+  })
+
   it.each(['idle', 'running', 'paused'] as const)(
     'sends immediate throttler controls in $state and leaves applied state to snapshots',
     async (runState) => {
@@ -1324,6 +1444,31 @@ describe('HttpAdapter', () => {
     },
   )
 
+  it('rejects senderChannel capacity while the adapter has no connected snapshot', async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse({
+      ...VALID_WIRE,
+      policy: (() => {
+        const { senderChannelCapacity: _senderChannel, ...policy } = VALID_WIRE.policy
+        return policy
+      })(),
+    }))
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    expect(adapter.getSnapshot().connectionState).toBe('error')
+    const receipt = await adapter.dispatch({
+      type: 'set-sender-channel-capacity',
+      value: 1,
+    })
+
+    expect(receipt).toMatchObject({
+      accepted: false,
+      error: { code: 'unavailable', retryable: false },
+    })
+    expect(commandFetchCalls()).toHaveLength(0)
+    adapter.dispose()
+  })
+
   it('does not send a buffered readerChannel capacity after the snapshot enters Run', async () => {
     const idleWire: TestWireSnapshot = { ...VALID_WIRE, runState: 'idle' }
     const runningWire: TestWireSnapshot = {
@@ -1356,6 +1501,74 @@ describe('HttpAdapter', () => {
 
     runResponse.resolve(mockCommandResponse())
     await expect(runReceipt).resolves.toMatchObject({ accepted: true })
+    await expect(capacityReceipt).resolves.toMatchObject({
+      accepted: false,
+      error: { code: 'unavailable', retryable: false },
+    })
+    expect(commandFetchCalls()).toHaveLength(1)
+    adapter.dispose()
+  })
+
+  it.each([
+    { state: 'running' as const, value: 2 },
+    { state: 'paused' as const, value: 2 },
+    { state: 'idle' as const, value: 3 },
+  ])(
+    'rejects senderChannel capacity $value locally in $state',
+    async ({ state, value }) => {
+      const wire: TestWireSnapshot = { ...VALID_WIRE, runState: state }
+      fetchMock.mockResolvedValueOnce(mockResponse(wire))
+      const adapter = new HttpAdapter()
+
+      await flushPoll()
+      const receipt = await adapter.dispatch({
+        type: 'set-sender-channel-capacity',
+        value,
+      })
+
+      expect(receipt).toMatchObject({
+        accepted: false,
+        applyMode: 'unavailable',
+        error: { code: 'unavailable', retryable: false },
+      })
+      expect(commandFetchCalls()).toHaveLength(0)
+      expect(adapter.getSnapshot().senderChannel.capacity).toMatchObject({
+        applied: 0,
+        applyMode: state === 'idle' ? 'immediate' : 'unavailable',
+      })
+      adapter.dispose()
+    },
+  )
+
+  it('does not send a buffered senderChannel capacity after the snapshot enters Pause', async () => {
+    const idleWire: TestWireSnapshot = { ...VALID_WIRE, runState: 'idle' }
+    const pausedWire: TestWireSnapshot = { ...VALID_WIRE, runState: 'paused' }
+    const pauseResponse = deferred<Response>()
+    let snapshotRequests = 0
+    fetchMock.mockImplementation((input) => {
+      if (input === COMMAND_ENDPOINT) return pauseResponse.promise
+
+      snapshotRequests += 1
+      return Promise.resolve(mockResponse(
+        snapshotRequests === 1 ? idleWire : pausedWire,
+      ))
+    })
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    const pauseReceipt = adapter.dispatch({ type: 'pause' })
+    await Promise.resolve()
+    const capacityReceipt = adapter.dispatch({
+      type: 'set-sender-channel-capacity',
+      value: 4,
+    })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPoll()
+    expect(adapter.getSnapshot().runState).toBe('paused')
+
+    pauseResponse.resolve(mockCommandResponse())
+    await expect(pauseReceipt).resolves.toMatchObject({ accepted: true })
     await expect(capacityReceipt).resolves.toMatchObject({
       accepted: false,
       error: { code: 'unavailable', retryable: false },
