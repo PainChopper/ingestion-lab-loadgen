@@ -6,7 +6,7 @@ unit = "glob-pattern"
 mutability = "startup-only"
 
 [reader.read_batch_size]
-default = 50_000
+default = 1_000
 min = 1_000
 max = 100_000
 step = 1_000
@@ -26,10 +26,10 @@ unit = "batches"
 mutability = "idle-only"
 
 [throttler.requested_tps]
-default = 200
+default = 2_000
 min = 0
-max = 400
-step = 25
+max = 4_000
+step = 100
 unit = "transactions/s"
 mutability = "immediate"
 

@@ -558,7 +558,8 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 		requests <- request{kind: getSnapshot, snapshotReply: reply}
 		return <-reply
 	}
-	if got := snapshot(); got.ThrottlerRequestedTPS != 200 || got.ThrottlerInstallationMode != throttlerInstalled {
+	if got := snapshot(); got.ReaderReadBatchSize != 1_000 || got.ThrottlerRequestedTPS != 2_000 ||
+		got.ThrottlerInstallationMode != throttlerInstalled {
 		t.Fatalf("initial throttler snapshot = %+v", got)
 	}
 	post(`{"action":"set-requested-tps","value":0}`, http.StatusOK)
@@ -580,7 +581,7 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	}
 	post(`{"action":"pause"}`, http.StatusOK)
 	waitForState(t, requests, runStatePaused)
-	post(`{"action":"set-requested-tps","value":400}`, http.StatusOK)
+	post(`{"action":"set-requested-tps","value":4000}`, http.StatusOK)
 	post(`{"action":"set-throttler-installation-mode","value":"installed"}`, http.StatusOK)
 	select {
 	case batches <- []Transaction{{ClientID: "paused"}}:
@@ -589,21 +590,21 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	}
 	waitForReaderReceives(t, requests, 2)
 	metrics <- time.Now()
-	if got := snapshot(); got.TotalTransactions != 1 || got.ThrottlerRequestedTPS != 400 ||
+	if got := snapshot(); got.TotalTransactions != 1 || got.ThrottlerRequestedTPS != 4000 ||
 		got.ThrottlerInstallationMode != throttlerInstalled {
 		t.Fatalf("paused throttler snapshot = %+v", got)
 	}
 	post(`{"action":"run"}`, http.StatusOK)
 	waitForTransactions(t, requests, metrics, 2)
-	post(`{"action":"set-requested-tps","value":25}`, http.StatusOK)
-	if got := snapshot().ThrottlerRequestedTPS; got != 25 {
-		t.Fatalf("running TPS = %d, want 25", got)
+	post(`{"action":"set-requested-tps","value":100}`, http.StatusOK)
+	if got := snapshot().ThrottlerRequestedTPS; got != 100 {
+		t.Fatalf("running TPS = %d, want 100", got)
 	}
 	post(`{"action":"pause"}`, http.StatusOK)
 	waitForState(t, requests, runStatePaused)
 	post(`{"action":"reset"}`, http.StatusOK)
 	if got := snapshot(); got.RunState != runStateIdle || got.TotalTransactions != 0 ||
-		got.ThrottlerRequestedTPS != 25 || got.ThrottlerInstallationMode != throttlerInstalled {
+		got.ThrottlerRequestedTPS != 100 || got.ThrottlerInstallationMode != throttlerInstalled {
 		t.Fatalf("reset throttler snapshot = %+v", got)
 	}
 }

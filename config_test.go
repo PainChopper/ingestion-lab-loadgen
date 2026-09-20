@@ -28,10 +28,10 @@ func newTestControlState(t *testing.T) controlState {
 func testConfigContents() string {
 	return strings.Join([]string{
 		"schema_version = 2", "", "[source]", "path = 'C:\\dataset\\*.parquet'", "unit = \"glob-pattern\"", "mutability = \"startup-only\"", "",
-		"[reader.read_batch_size]", "default = 50000", "min = 1000", "max = 100000", "step = 1000", "unit = \"transactions\"", "mutability = \"idle-only\"", "",
+		"[reader.read_batch_size]", "default = 1000", "min = 1000", "max = 100000", "step = 1000", "unit = \"transactions\"", "mutability = \"idle-only\"", "",
 		"[readerChannel.capacity]", "default = 2", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
 		"", "[senderChannel.capacity]", "default = 0", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
-		"", "[throttler.requested_tps]", "default = 200", "min = 0", "max = 400", "step = 25", "unit = \"transactions/s\"", "mutability = \"immediate\"",
+		"", "[throttler.requested_tps]", "default = 2000", "min = 0", "max = 4000", "step = 100", "unit = \"transactions/s\"", "mutability = \"immediate\"",
 		"", "[throttler.installation_mode]", "default = \"installed\"", "allowed = [\"installed\", \"bypass\"]", "mutability = \"immediate\"",
 	}, "\n")
 }
@@ -127,9 +127,14 @@ func TestLoadPolicyRejectsInvalidSenderChannelCapacityPolicy(t *testing.T) {
 
 func TestThrottlerPolicyUsesApprovedProfile(t *testing.T) {
 	loaded := testPolicy(t)
+	reader := loaded.Reader.ReadBatchSize
+	if reader.Default != 1_000 || reader.Min != 1_000 || reader.Max != 100_000 ||
+		reader.Step != 1_000 || reader.Unit != batchSizeUnit || reader.Mutability != idleOnly {
+		t.Fatalf("reader batch size policy = %+v", reader)
+	}
 	requested := loaded.Throttler.RequestedTPS
-	if requested.Default != 200 || requested.Min != 0 || requested.Max != 400 ||
-		requested.Step != 25 || requested.Unit != requestedTPSUnit || requested.Mutability != immediate {
+	if requested.Default != 2_000 || requested.Min != 0 || requested.Max != 4_000 ||
+		requested.Step != 100 || requested.Unit != requestedTPSUnit || requested.Mutability != immediate {
 		t.Fatalf("requested TPS policy = %+v", requested)
 	}
 	mode := loaded.Throttler.InstallationMode
@@ -144,8 +149,9 @@ func TestCheckedInPolicyLoadsApprovedThrottlerProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load checked-in policy: %v", err)
 	}
-	if loaded.Throttler.RequestedTPS.Default != 200 || loaded.Throttler.RequestedTPS.Min != 0 ||
-		loaded.Throttler.RequestedTPS.Max != 400 || loaded.Throttler.RequestedTPS.Step != 25 ||
+	if loaded.Reader.ReadBatchSize.Default != 1_000 ||
+		loaded.Throttler.RequestedTPS.Default != 2_000 || loaded.Throttler.RequestedTPS.Min != 0 ||
+		loaded.Throttler.RequestedTPS.Max != 4_000 || loaded.Throttler.RequestedTPS.Step != 100 ||
 		loaded.Throttler.InstallationMode.Default != throttlerInstalled {
 		t.Fatalf("checked-in throttler policy = %+v", loaded.Throttler)
 	}
@@ -157,13 +163,13 @@ func TestLoadPolicyRejectsInvalidThrottlerPolicy(t *testing.T) {
 		old  string
 		new  string
 	}{
-		{name: "missing TPS default", old: "[throttler.requested_tps]\ndefault = 200", new: "[throttler.requested_tps]"},
+		{name: "missing TPS default", old: "[throttler.requested_tps]\ndefault = 2000", new: "[throttler.requested_tps]"},
 		{name: "missing mode allowed", old: "allowed = [\"installed\", \"bypass\"]", new: ""},
 		{name: "unknown key", old: "[throttler.installation_mode]", new: "[throttler.installation_mode]\nextra = true"},
-		{name: "negative minimum", old: "min = 0", new: "min = -25"},
-		{name: "off grid default", old: "default = 200", new: "default = 201"},
+		{name: "negative minimum", old: "min = 0", new: "min = -100"},
+		{name: "off grid default", old: "default = 2000", new: "default = 2001"},
 		{name: "invalid unit", old: "unit = \"transactions/s\"", new: "unit = \"batches/s\""},
-		{name: "invalid mutability", old: "[throttler.requested_tps]\ndefault = 200\nmin = 0\nmax = 400\nstep = 25\nunit = \"transactions/s\"\nmutability = \"immediate\"", new: "[throttler.requested_tps]\ndefault = 200\nmin = 0\nmax = 400\nstep = 25\nunit = \"transactions/s\"\nmutability = \"idle-only\""},
+		{name: "invalid mutability", old: "[throttler.requested_tps]\ndefault = 2000\nmin = 0\nmax = 4000\nstep = 100\nunit = \"transactions/s\"\nmutability = \"immediate\"", new: "[throttler.requested_tps]\ndefault = 2000\nmin = 0\nmax = 4000\nstep = 100\nunit = \"transactions/s\"\nmutability = \"idle-only\""},
 		{name: "duplicate mode", old: "[\"installed\", \"bypass\"]", new: "[\"installed\", \"installed\"]"},
 		{name: "unknown mode", old: "default = \"installed\"\nallowed", new: "default = \"unknown\"\nallowed"},
 	}
