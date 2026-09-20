@@ -91,16 +91,20 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 			startedCapacities := make(chan int, 2)
 			producedCapacities := make(chan int, 2)
 			state := newTestControlState(t)
-			produce := func(ctx context.Context, _ int, readerChannelCapacity int) (<-chan []Transaction, error) {
+			produce := func(ctx context.Context, _ int, readerChannelCapacity int) (<-chan []Transaction, <-chan struct{}, error) {
 				startedCapacities <- readerChannelCapacity
 				batches := make(chan []Transaction, readerChannelCapacity)
 				producedCapacities <- cap(batches)
 				state.readerChannel.start(batches, state.policy.Reader.ReadBatchSize.Default)
+				done := make(chan struct{})
 				go func() {
-					defer close(batches)
+					defer func() {
+						close(batches)
+						close(done)
+					}()
 					<-ctx.Done()
 				}()
-				return batches, nil
+				return batches, done, nil
 			}
 			done := make(chan struct{})
 			go func() {

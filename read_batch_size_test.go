@@ -73,14 +73,18 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	requests := make(chan request, 3)
 	metrics := make(chan time.Time)
 	startedSizes := make(chan int, 2)
-	produce := func(ctx context.Context, size int, _ int) (<-chan []Transaction, error) {
+	produce := func(ctx context.Context, size int, _ int) (<-chan []Transaction, <-chan struct{}, error) {
 		startedSizes <- size
 		batches := make(chan []Transaction)
+		done := make(chan struct{})
 		go func() {
-			defer close(batches)
+			defer func() {
+				close(batches)
+				close(done)
+			}()
 			<-ctx.Done()
 		}()
-		return batches, nil
+		return batches, done, nil
 	}
 	startCustomEventLoopForTest(t, requests, metrics, produce)
 	commands := commandsHandler(requests, testPolicy(t))

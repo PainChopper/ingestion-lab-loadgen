@@ -83,13 +83,17 @@ func TestSenderChannelCapacityIdleOnlyAppliesToThrottlerAndPersistsAfterReset(t 
 			requests := make(chan request, 3)
 			metrics := make(chan time.Time)
 			state := newTestControlState(t)
-			produce := func(ctx context.Context, _ int, _ int) (<-chan []Transaction, error) {
+			produce := func(ctx context.Context, _ int, _ int) (<-chan []Transaction, <-chan struct{}, error) {
 				batches := make(chan []Transaction)
+				done := make(chan struct{})
 				go func() {
-					defer close(batches)
+					defer func() {
+						close(batches)
+						close(done)
+					}()
 					<-ctx.Done()
 				}()
-				return batches, nil
+				return batches, done, nil
 			}
 			startCustomEventLoopForTest(t, requests, metrics, produce)
 			commands := commandsHandler(requests, state.policy)

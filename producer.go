@@ -17,19 +17,23 @@ func produceBatches(
 	readerChannelCapacity int,
 	telemetry *readerTelemetry,
 	readerChannelTelemetry *readerChannelTelemetry,
-) (<-chan []Transaction, error) {
+) (<-chan []Transaction, <-chan struct{}, error) {
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to glob path: %w", err)
+		return nil, nil, fmt.Errorf("failed to glob path: %w", err)
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("no files found matching pattern: %s", dataPath)
+		return nil, nil, fmt.Errorf("no files found matching pattern: %s", dataPath)
 	}
 
 	batches := make(chan []Transaction, readerChannelCapacity)
+	done := make(chan struct{})
 	readerChannelTelemetry.start(batches, batchSize)
 	go func(files []string, batches chan<- []Transaction) {
-		defer close(batches)
+		defer func() {
+			close(batches)
+			close(done)
+		}()
 
 		// Accumulate rows across files until a batch reaches the target size.
 		accumulator := make([]Transaction, 0, batchSize)
@@ -86,5 +90,5 @@ func produceBatches(
 		}
 	}(files, batches)
 
-	return batches, nil
+	return batches, done, nil
 }
