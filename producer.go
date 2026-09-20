@@ -66,12 +66,24 @@ func produceBatches(
 						n, err := reader.Read(rows)
 						if n > 0 {
 							telemetry.recordRead(n, filePath)
-							accumulator = append(accumulator, rows[:n]...)
-							if len(accumulator) >= batchSize {
-								if readerChannelTelemetry.send(ctx, batches, accumulator[:batchSize]) {
-									accumulator = append(make([]Transaction, 0, batchSize), accumulator[batchSize:]...)
-								} else {
+							remainingRows := rows[:n]
+							if accumulator == nil {
+								accumulator = make([]Transaction, 0, batchSize)
+							}
+							remainingCapacity := batchSize - len(accumulator)
+							if len(remainingRows) < remainingCapacity {
+								accumulator = append(accumulator, remainingRows...)
+							} else {
+								accumulator = append(accumulator, remainingRows[:remainingCapacity]...)
+								if !readerChannelTelemetry.send(ctx, batches, accumulator) {
 									return
+								}
+								remainingRows = remainingRows[remainingCapacity:]
+								if len(remainingRows) == 0 {
+									accumulator = nil
+								} else {
+									accumulator = make([]Transaction, 0, batchSize)
+									accumulator = append(accumulator, remainingRows...)
 								}
 							}
 						}
