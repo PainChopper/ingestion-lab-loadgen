@@ -174,12 +174,18 @@ func TestPauseStopsConsumptionUntilRun(t *testing.T) {
 	waitForReaderReceives(t, requests, 2)
 	metrics <- time.Now()
 	requests <- request{kind: getSnapshot, snapshotReply: reply}
-	if snapshot := <-reply; snapshot.TotalTransactions != 1 || snapshot.RunState != runStatePaused {
+	if snapshot := <-reply; snapshot.TotalTransactions != 1 || snapshot.RunState != runStatePaused ||
+		snapshot.SenderChannelReceivedBatchesTotal != 1 || snapshot.SenderChannelReceivedTransactionsTotal != 1 {
 		t.Fatalf("paused snapshot = %+v, want one consumed transaction", snapshot)
 	}
 
 	requests <- request{kind: cmdRun}
 	waitForTransactions(t, requests, metrics, 2)
+	requests <- request{kind: getSnapshot, snapshotReply: reply}
+	if snapshot := <-reply; snapshot.SenderChannelReceivedBatchesTotal != 2 ||
+		snapshot.SenderChannelReceivedTransactionsTotal != 2 {
+		t.Fatalf("resumed snapshot = %+v, want two received batches and transactions", snapshot)
+	}
 	if starts != 1 {
 		t.Fatalf("producer starts = %v, want 1", starts)
 	}

@@ -40,3 +40,47 @@ func TestConsumeBatchesCountsTransactions(t *testing.T) {
 		t.Fatalf("Sender channel output window = %+v", got)
 	}
 }
+
+func TestConsumeBatchesCompletesAcceptedBatchAfterCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	batches := make(chan []Transaction)
+	var consumed atomic.Int64
+	var senderChannel readerChannelTelemetry
+	enteredConsume := make(chan struct{})
+	allowCompletion := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		consumeBatchesWith(ctx, batches, &senderChannel, &consumed, func(*Transaction) {
+			close(enteredConsume)
+			<-allowCompletion
+		})
+	}()
+
+	go func() {
+		batches <- []Transaction{{}}
+	}()
+	<-enteredConsume
+	if got := senderChannel.snapshot(time.Now()); got.receivedBatchesTotal != 1 || got.receivedTransactionsTotal != 1 {
+		t.Fatalf("accepted batch telemetry = %+v, want one received batch and transaction", got)
+	}
+
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("consumer stopped before completing the accepted batch")
+	default:
+	}
+
+	close(allowCompletion)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumer did not finish the accepted batch")
+	}
+	if got := consumed.Load(); got != 1 {
+		t.Fatalf("consumed transactions = %d, want 1", got)
+	}
+}
