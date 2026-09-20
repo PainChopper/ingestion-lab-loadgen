@@ -79,7 +79,7 @@ func TestReaderChannelTelemetrySnapshotAccumulatesSubMillisecondBlockedDurations
 	}
 }
 
-func TestReaderChannelTelemetryRecordsCancelledBlockedSendAndReset(t *testing.T) {
+func TestReaderChannelTelemetryClearMeasurementsRetainsAttachmentAndDetachRemovesIt(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	batches <- []Transaction{{}}
 
@@ -109,16 +109,32 @@ func TestReaderChannelTelemetryRecordsCancelledBlockedSendAndReset(t *testing.T)
 		t.Fatalf("cancelled readerChannel measurements = %+v", completed)
 	}
 
-	telemetry.reset()
-	reset := telemetry.snapshot(time.Now())
-	if reset.capacity != 0 || reset.depthBatches != 0 ||
-		reset.bufferedTransactions != 0 || reset.blockedSenders != 0 ||
-		reset.oldestBlockedSenderMs != 0 || reset.blockedMs != 0 ||
-		reset.sentBatchesTotal != 0 || reset.sentTransactionsTotal != 0 ||
-		reset.receivedBatchesTotal != 0 || reset.receivedTransactionsTotal != 0 ||
-		reset.inputBatchesPerSecond != 0 || reset.inputTransactionsPerSecond != 0 ||
-		reset.outputBatchesPerSecond != 0 || reset.outputTransactionsPerSecond != 0 {
-		t.Fatalf("reset readerChannel measurements = %+v", reset)
+	telemetry.clearMeasurements()
+	cleared := telemetry.snapshot(time.Now())
+	if cleared.capacity != 1 || cleared.depthBatches != 1 ||
+		cleared.bufferedTransactions != 1 || cleared.blockedSenders != 0 ||
+		cleared.oldestBlockedSenderMs != 0 || cleared.blockedMs != 0 ||
+		cleared.sentBatchesTotal != 0 || cleared.sentTransactionsTotal != 0 ||
+		cleared.receivedBatchesTotal != 0 || cleared.receivedTransactionsTotal != 0 ||
+		cleared.inputBatchesPerSecond != 0 || cleared.inputTransactionsPerSecond != 0 ||
+		cleared.outputBatchesPerSecond != 0 || cleared.outputTransactionsPerSecond != 0 {
+		t.Fatalf("cleared readerChannel measurements = %+v", cleared)
+	}
+
+	<-batches
+	if drained := telemetry.snapshot(time.Now()); drained.depthBatches != 0 {
+		t.Fatalf("drained readerChannel depth = %d, want 0", drained.depthBatches)
+	}
+	telemetry.detach()
+	detached := telemetry.snapshot(time.Now())
+	if detached.capacity != 0 || detached.depthBatches != 0 ||
+		detached.bufferedTransactions != 0 || detached.blockedSenders != 0 ||
+		detached.oldestBlockedSenderMs != 0 || detached.blockedMs != 0 ||
+		detached.sentBatchesTotal != 0 || detached.sentTransactionsTotal != 0 ||
+		detached.receivedBatchesTotal != 0 || detached.receivedTransactionsTotal != 0 ||
+		detached.inputBatchesPerSecond != 0 || detached.inputTransactionsPerSecond != 0 ||
+		detached.outputBatchesPerSecond != 0 || detached.outputTransactionsPerSecond != 0 {
+		t.Fatalf("detached readerChannel measurements = %+v", detached)
 	}
 }
 
@@ -156,7 +172,7 @@ func TestReaderChannelTelemetryCountsSuccessfulSendAndSamplesWindow(t *testing.T
 	}
 
 	telemetry.recordReceive(len(<-batches))
-	telemetry.reset()
+	telemetry.clearMeasurements()
 	telemetry.sample(time.Second)
 	reset := telemetry.snapshot(time.Now())
 	if reset.sentBatchesTotal != 0 || reset.sentTransactionsTotal != 0 ||

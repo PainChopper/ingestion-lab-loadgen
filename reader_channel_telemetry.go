@@ -139,11 +139,21 @@ func (q *readerChannelTelemetry) sample(window time.Duration) {
 	q.outputTransactionsSinceTick = 0
 }
 
-func (q *readerChannelTelemetry) reset() {
+func (q *readerChannelTelemetry) clearMeasurements() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.clearMeasurementsLocked()
+}
+
+func (q *readerChannelTelemetry) detach() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.batches = nil
 	q.batchSize = 0
+	q.clearMeasurementsLocked()
+}
+
+func (q *readerChannelTelemetry) clearMeasurementsLocked() {
 	q.blockedAt = time.Time{}
 	q.blockedMs = 0
 	q.sentBatchesTotal = 0

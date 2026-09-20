@@ -10,17 +10,19 @@ import (
 type throttlerStarter func(
 	context.Context,
 	<-chan []Transaction,
+	chan<- []Transaction,
 	*readerChannelTelemetry,
 	*readerChannelTelemetry,
-	int,
 	throttlerSettings,
-) (<-chan []Transaction, <-chan struct{}, chan<- throttlerUpdate)
+) (<-chan struct{}, chan<- throttlerUpdate)
+
+type producerStarter func(context.Context, chan<- []Transaction, int) (<-chan struct{}, error)
 
 func (state *controlState) eventLoop(
 	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
-	produce func(context.Context, int, int) (<-chan []Transaction, <-chan struct{}, error),
+	produce producerStarter,
 ) {
 	state.eventLoopWithThrottler(requests, metrics, promMetrics, produce, startThrottler)
 }
@@ -29,12 +31,12 @@ func (state *controlState) eventLoopWithThrottler(
 	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
-	produce func(context.Context, int, int) (<-chan []Transaction, <-chan struct{}, error),
+	produce producerStarter,
 	start throttlerStarter,
 ) {
 	var consumedSinceTick atomic.Int64
-	var batches <-chan []Transaction
-	var senderBatches <-chan []Transaction
+	var batches chan []Transaction
+	var senderBatches chan []Transaction
 	var cancelConsumer context.CancelFunc
 	var consumerDone <-chan struct{}
 	var cancelThrottler context.CancelFunc
@@ -59,8 +61,12 @@ func (state *controlState) eventLoopWithThrottler(
 		if throttlerDone != nil {
 			<-throttlerDone
 		}
+		closeAndDrain(batches)
+		closeAndDrain(senderBatches)
 		batches = nil
 		senderBatches = nil
+		state.readerChannel.detach()
+		state.senderChannel.detach()
 		cancelConsumer = nil
 		consumerDone = nil
 		cancelProducer = nil
@@ -136,14 +142,28 @@ func (state *controlState) eventLoopWithThrottler(
 				resuming := state.lifecycle.currentState() == runStatePaused
 				if state.lifecycle.currentState() == runStateIdle {
 					state.reader.startInterval(time.Now())
+					var readerCreated bool
+					batches, readerCreated = state.prepareReaderChannel(batches)
+					var senderCreated bool
+					senderBatches, senderCreated = state.prepareSenderChannel(senderBatches)
 					producerContext, cancel := context.WithCancel(context.Background())
-					producedBatches, done, err := produce(
+					done, err := produce(
 						producerContext,
+						batches,
 						state.readBatchSize(),
-						state.readerChannelCapacity(),
 					)
 					if err != nil {
 						cancel()
+						if readerCreated {
+							closeAndDrain(batches)
+							batches = nil
+							state.readerChannel.detach()
+						}
+						if senderCreated {
+							closeAndDrain(senderBatches)
+							senderBatches = nil
+							state.senderChannel.detach()
+						}
 						state.reader.reset()
 						log.Printf("cannot start load generator: %v", err)
 						message := err.Error()
@@ -153,17 +173,16 @@ func (state *controlState) eventLoopWithThrottler(
 						}
 						continue
 					}
-					batches = producedBatches
 					producerDone = done
 					cancelProducer = cancel
 					throttlerContext, cancel := context.WithCancel(context.Background())
 					cancelThrottler = cancel
-					senderBatches, throttlerDone, throttlerUpdates = start(
+					throttlerDone, throttlerUpdates = start(
 						throttlerContext,
 						batches,
+						senderBatches,
 						&state.readerChannel,
 						&state.senderChannel,
-						state.senderChannelCapacity(),
 						state.throttlerSettings(false),
 					)
 				}
@@ -203,8 +222,8 @@ func (state *controlState) eventLoopWithThrottler(
 					cancelThrottler()
 					<-producerDone
 					<-throttlerDone
-					batches = nil
-					senderBatches = nil
+					drain(batches)
+					drain(senderBatches)
 					cancelProducer = nil
 					producerDone = nil
 					cancelThrottler = nil
@@ -335,8 +354,8 @@ func (state *controlState) notifyThrottler(
 
 func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMetrics *Metrics) {
 	state.reader.reset()
-	state.readerChannel.reset()
-	state.senderChannel.reset()
+	state.readerChannel.clearMeasurements()
+	state.senderChannel.clearMeasurements()
 	consumedSinceTick.Store(0)
 	state.totalTransactions = 0
 	state.actualTPS = 0
@@ -344,6 +363,56 @@ func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMe
 	state.runStartedAt = time.Time{}
 	state.startError = nil
 	promMetrics.actualTPS.Set(0)
+}
+
+func (state *controlState) prepareReaderChannel(batches chan []Transaction) (chan []Transaction, bool) {
+	capacity := state.readerChannelCapacity()
+	if batches != nil && cap(batches) == capacity {
+		return batches, false
+	}
+	closeAndDrain(batches)
+	state.readerChannel.detach()
+	batches = make(chan []Transaction, capacity)
+	state.readerChannel.start(batches, state.readBatchSize())
+	state.readerChannel.clearMeasurements()
+	return batches, true
+}
+
+func (state *controlState) prepareSenderChannel(batches chan []Transaction) (chan []Transaction, bool) {
+	capacity := state.senderChannelCapacity()
+	if batches != nil && cap(batches) == capacity {
+		return batches, false
+	}
+	closeAndDrain(batches)
+	state.senderChannel.detach()
+	batches = make(chan []Transaction, capacity)
+	state.senderChannel.start(batches, 0)
+	state.senderChannel.clearMeasurements()
+	return batches, true
+}
+
+func closeAndDrain(batches chan []Transaction) {
+	if batches == nil {
+		return
+	}
+	close(batches)
+	drain(batches)
+}
+
+func drain(batches chan []Transaction) {
+	if batches == nil {
+		return
+	}
+	for {
+		select {
+		case _, ok := <-batches:
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
+	}
 }
 
 func (state *controlState) elapsedMs(now time.Time) int64 {
