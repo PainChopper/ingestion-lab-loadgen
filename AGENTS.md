@@ -21,3 +21,5 @@ Go-код находится в корне этого репозитория; Re
 Пути 00_STATE.md, MAIL/, PLANS/, ARCHIVE/, BUILD/ и RUNLOGS/ из общих правил находятся в соседнем каталоге ../ingestion-lab-loadgen-agents-runtime/.
 
 Все временные артефакты проверок сохраняются только в ../ingestion-lab-loadgen-agents-runtime/: включая Playwright state, browser snapshots, console logs, fixtures, build output и run logs. Процессы по умолчанию запускаются оттуда; если продукт разрешает обязательный относительный asset от своего checkout, допускается CWD checkout только для его чтения, а все временные output/state явно направляются в runtime. В checkout нельзя создавать временные каталоги инструментов, включая `.playwright-cli`.
+
+Все tester-owned backend/frontend/Playwright helper-процессы запускаются скрытно: нельзя открывать видимые окна Windows Terminal, PowerShell или cmd. Видимый browser открывается только по прямой просьбе Виталёса; существующие пользовательские и IDE-процессы не трогаются.
