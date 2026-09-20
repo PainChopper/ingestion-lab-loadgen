@@ -977,6 +977,53 @@ func TestEventLoopRetainsActualChannelsAcrossPauseResumeAndSameCapacityReset(t *
 	}
 }
 
+func TestEventLoopSenderChannelTelemetryUsesAppliedReadBatchSizeAfterReuse(t *testing.T) {
+	harness := startActualChannelEventLoopWithHeldThrottlerForTest(t)
+	defer harness.stop()
+
+	const initialBatchSize = 1_000
+	const updatedBatchSize = 2_000
+	snapshotReply := make(chan statusSnapshot, 1)
+	snapshot := func() statusSnapshot {
+		t.Helper()
+		harness.requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+		return <-snapshotReply
+	}
+
+	harness.setCapacity(t, cmdSetSenderChannelCapacity, 1)
+	harness.command(t, cmdRun)
+	harness.nextReader(t)
+	sender := harness.nextSender(t)
+	harness.command(t, cmdPause)
+	close(harness.allowThrottlerForward)
+	harness.send(t, []Transaction{{ClientID: "initial"}})
+	<-harness.forwardedBatches
+	if got := snapshot(); got.SenderChannelDepthBatches != 1 ||
+		got.SenderChannelBufferedTransactions != initialBatchSize {
+		t.Fatalf("initial Sender channel telemetry = %+v, want depth 1 and %d buffered transactions", got, initialBatchSize)
+	}
+
+	harness.command(t, cmdReset)
+	reply := make(chan commandResult, 1)
+	harness.requests <- request{kind: cmdSetReadBatchSize, value: updatedBatchSize, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("set read batch size = %+v, want accepted", result)
+	}
+
+	harness.command(t, cmdRun)
+	harness.nextReader(t)
+	if next := harness.nextSender(t); next != sender {
+		t.Fatal("same-capacity Reset did not retain actual Sender channel")
+	}
+	harness.command(t, cmdPause)
+	harness.send(t, []Transaction{{ClientID: "updated"}})
+	<-harness.forwardedBatches
+	if got := snapshot(); got.SenderChannelDepthBatches != 1 ||
+		got.SenderChannelBufferedTransactions != updatedBatchSize {
+		t.Fatalf("reused Sender channel telemetry = %+v, want depth 1 and %d buffered transactions", got, updatedBatchSize)
+	}
+}
+
 func TestEventLoopSameCapacityResetDrainsRetainedActualReaderBatch(t *testing.T) {
 	for _, capacity := range []int{1, 8_192} {
 		t.Run(strconv.Itoa(capacity), func(t *testing.T) {

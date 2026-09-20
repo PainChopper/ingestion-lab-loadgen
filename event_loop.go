@@ -380,13 +380,15 @@ func (state *controlState) prepareReaderChannel(batches chan []Transaction) (cha
 
 func (state *controlState) prepareSenderChannel(batches chan []Transaction) (chan []Transaction, bool) {
 	capacity := state.senderChannelCapacity()
+	batchSize := state.readBatchSize()
 	if batches != nil && cap(batches) == capacity {
+		state.senderChannel.start(batches, batchSize)
 		return batches, false
 	}
 	closeAndDrain(batches)
 	state.senderChannel.detach()
 	batches = make(chan []Transaction, capacity)
-	state.senderChannel.start(batches, 0)
+	state.senderChannel.start(batches, batchSize)
 	state.senderChannel.clearMeasurements()
 	return batches, true
 }
