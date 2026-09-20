@@ -13,6 +13,16 @@ func consumeBatches(
 	senderChannel *readerChannelTelemetry,
 	consumedSinceTick *atomic.Int64,
 ) {
+	consumeBatchesWith(ctx, batches, senderChannel, consumedSinceTick, consumeTransaction)
+}
+
+func consumeBatchesWith(
+	ctx context.Context,
+	batches <-chan []Transaction,
+	senderChannel *readerChannelTelemetry,
+	consumedSinceTick *atomic.Int64,
+	consume func(*Transaction),
+) {
 	var pending int64
 	for {
 		if ctx.Err() != nil {
@@ -30,7 +40,7 @@ func consumeBatches(
 			senderChannel.recordReceive(len(batch))
 		}
 		for i := range batch {
-			consumeTransaction(&batch[i])
+			consume(&batch[i])
 			pending++
 			if pending == progressEvery {
 				consumedSinceTick.Add(pending)
