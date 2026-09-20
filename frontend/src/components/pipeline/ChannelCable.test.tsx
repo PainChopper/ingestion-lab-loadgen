@@ -593,8 +593,6 @@ describe('ChannelCable mounted behavior', () => {
         'var(--pipeline-channel-handle-state-color)',
       )
       expect(translatedY(slider)).toBe(candidateY)
-      expect(channelGroup.querySelector('.pipeline-channel-markers')).toBeNull()
-      expect(channelGroup.querySelector('.pipeline-marker')).toBeNull()
       expect(appliedLabel.getAttribute('transform')).toBe(
         `translate(${(endpoints.start.x + endpoints.end.x) / 2 - 50} ${appliedY})`,
       )

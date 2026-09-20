@@ -669,38 +669,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.pipeline-marker-layer {
-  pointer-events: none;
-}
-
-.pipeline-marker {
-  fill: currentColor;
-  stroke: var(--navy-950);
-  stroke-width: 1.5;
-  filter: drop-shadow(0 0 2px currentColor);
-  offset-rotate: 0deg;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-marker--buffered {
-  opacity: 0.58;
-  stroke: currentColor;
-}
-
-.pipeline-marker--retiring {
-  opacity: 0.76;
-}
-
-.pipeline-marker--outcome {
-  stroke: currentColor;
-  stroke-width: 2;
-}
-
-.pipeline-marker-layer[data-reduced-motion='true'] .pipeline-marker {
-  filter: none;
-  transition: none;
-}
-
 .pipeline-channel-handle {
   cursor: ns-resize;
   outline: none;
