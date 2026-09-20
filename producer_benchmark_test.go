@@ -22,7 +22,7 @@ func BenchmarkReaderBatchAssembly(b *testing.B) {
 			readSizes: []int{1_000},
 		},
 		{
-			name:      "default_residual_1",
+			name:      "default_boundary_999_plus_1",
 			batchSize: 1_000,
 			readSizes: []int{999, 1},
 		},
@@ -76,13 +76,26 @@ func benchmarkReaderBatchAssembly(batchSize int, readSizes []int, rows []Transac
 	accumulator := make([]Transaction, 0, batchSize)
 
 	for _, readSize := range readSizes {
-		accumulator = append(accumulator, rows[:readSize]...)
-		if len(accumulator) >= batchSize {
-			emitted := accumulator[:batchSize]
-			accumulator = append(make([]Transaction, 0, batchSize), accumulator[batchSize:]...)
-			readerBatchAssemblyBenchmarkSink.emitted = emitted
-			readerBatchAssemblyBenchmarkSink.accumulator = accumulator
+		remainingRows := rows[:readSize]
+		if accumulator == nil {
+			accumulator = make([]Transaction, 0, batchSize)
 		}
+		remainingCapacity := batchSize - len(accumulator)
+		if len(remainingRows) < remainingCapacity {
+			accumulator = append(accumulator, remainingRows...)
+			continue
+		}
+
+		accumulator = append(accumulator, remainingRows[:remainingCapacity]...)
+		readerBatchAssemblyBenchmarkSink.emitted = accumulator
+		remainingRows = remainingRows[remainingCapacity:]
+		if len(remainingRows) == 0 {
+			accumulator = nil
+		} else {
+			accumulator = make([]Transaction, 0, batchSize)
+			accumulator = append(accumulator, remainingRows...)
+		}
+		readerBatchAssemblyBenchmarkSink.accumulator = accumulator
 	}
 
 	runtime.KeepAlive(readerBatchAssemblyBenchmarkSink)

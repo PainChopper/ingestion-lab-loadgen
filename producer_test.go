@@ -156,6 +156,97 @@ func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
 	drain(batches)
 }
 
+func TestProduceBatchesPreservesBatchOrderAndOwnershipAcrossResiduals(t *testing.T) {
+	const batchSize = 1_000
+
+	for _, residual := range []int{1, 500, 999} {
+		t.Run(fmt.Sprintf("residual-%d", residual), func(t *testing.T) {
+			dir := t.TempDir()
+			firstRows := producerFixtureTransactions("first", residual)
+			secondRows := producerFixtureTransactions("second", batchSize)
+			writeProducerFixture(t, filepath.Join(dir, "part-000.parquet"), firstRows)
+			writeProducerFixture(t, filepath.Join(dir, "part-001.parquet"), secondRows)
+
+			want := append([]Transaction{}, firstRows...)
+			want = append(want, secondRows...)
+			want = append(want, firstRows...)
+			want = append(want, secondRows...)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var telemetry readerTelemetry
+			var readerChannelTelemetry readerChannelTelemetry
+			batches := make(chan []Transaction, 1)
+			readerChannelTelemetry.start(batches, batchSize)
+			done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), batchSize, batches, &telemetry, &readerChannelTelemetry)
+			if err != nil {
+				t.Fatalf("start producer: %v", err)
+			}
+
+			first := receiveProducerBatch(t, batches, batchSize)
+			firstIDs := producerFixtureIDs(first)
+			assertProducerFixtureIDs(t, first, producerFixtureIDs(want[:batchSize]))
+
+			second := receiveProducerBatch(t, batches, batchSize)
+			assertProducerFixtureIDs(t, second, producerFixtureIDs(want[batchSize:2*batchSize]))
+			assertProducerFixtureIDs(t, first, firstIDs)
+
+			cancel()
+			<-done
+			drain(batches)
+		})
+	}
+}
+
+func writeProducerFixture(t *testing.T, path string, rows []Transaction) {
+	t.Helper()
+	if err := parquet.WriteFile(path, rows); err != nil {
+		t.Fatalf("write parquet fixture %q: %v", path, err)
+	}
+}
+
+func producerFixtureTransactions(prefix string, count int) []Transaction {
+	rows := make([]Transaction, count)
+	for index := range rows {
+		rows[index].ClientID = fmt.Sprintf("%s-%d", prefix, index)
+	}
+	return rows
+}
+
+func receiveProducerBatch(t *testing.T, batches <-chan []Transaction, wantSize int) []Transaction {
+	t.Helper()
+	select {
+	case batch := <-batches:
+		if len(batch) != wantSize {
+			t.Fatalf("batch size = %d, want %d", len(batch), wantSize)
+		}
+		return batch
+	case <-time.After(5 * time.Second):
+		t.Fatal("producer did not emit a batch")
+		return nil
+	}
+}
+
+func producerFixtureIDs(rows []Transaction) []string {
+	ids := make([]string, len(rows))
+	for index := range rows {
+		ids[index] = rows[index].ClientID
+	}
+	return ids
+}
+
+func assertProducerFixtureIDs(t *testing.T, rows []Transaction, want []string) {
+	t.Helper()
+	if len(rows) != len(want) {
+		t.Fatalf("row count = %d, want %d", len(rows), len(want))
+	}
+	for index := range want {
+		if rows[index].ClientID != want[index] {
+			t.Fatalf("row %d client ID = %q, want %q", index, rows[index].ClientID, want[index])
+		}
+	}
+}
+
 func TestProduceBatchesUsesConfiguredReaderChannelCapacity(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input.parquet")
