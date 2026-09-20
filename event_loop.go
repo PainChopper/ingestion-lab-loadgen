@@ -7,11 +7,30 @@ import (
 	"time"
 )
 
+type throttlerStarter func(
+	context.Context,
+	<-chan []Transaction,
+	*readerChannelTelemetry,
+	*readerChannelTelemetry,
+	int,
+	throttlerSettings,
+) (<-chan []Transaction, <-chan struct{}, chan<- throttlerUpdate)
+
 func (state *controlState) eventLoop(
 	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
-	produce func(context.Context, int, int) (<-chan []Transaction, error),
+	produce func(context.Context, int, int) (<-chan []Transaction, <-chan struct{}, error),
+) {
+	state.eventLoopWithThrottler(requests, metrics, promMetrics, produce, startThrottler)
+}
+
+func (state *controlState) eventLoopWithThrottler(
+	requests <-chan request,
+	metrics <-chan time.Time,
+	promMetrics *Metrics,
+	produce func(context.Context, int, int) (<-chan []Transaction, <-chan struct{}, error),
+	start throttlerStarter,
 ) {
 	var consumedSinceTick atomic.Int64
 	var batches <-chan []Transaction
@@ -22,6 +41,7 @@ func (state *controlState) eventLoop(
 	var throttlerDone <-chan struct{}
 	var throttlerUpdates chan<- throttlerUpdate
 	var cancelProducer context.CancelFunc
+	var producerDone <-chan struct{}
 	defer func() {
 		if cancelConsumer != nil {
 			cancelConsumer()
@@ -32,16 +52,22 @@ func (state *controlState) eventLoop(
 		}
 		if cancelThrottler != nil {
 			cancelThrottler()
+		}
+		if producerDone != nil {
+			<-producerDone
+		}
+		if throttlerDone != nil {
 			<-throttlerDone
 		}
-		if batches != nil {
-			for range batches {
-			}
-		}
-		if senderBatches != nil {
-			for range senderBatches {
-			}
-		}
+		batches = nil
+		senderBatches = nil
+		cancelConsumer = nil
+		consumerDone = nil
+		cancelProducer = nil
+		producerDone = nil
+		cancelThrottler = nil
+		throttlerDone = nil
+		throttlerUpdates = nil
 	}()
 
 	for {
@@ -111,8 +137,11 @@ func (state *controlState) eventLoop(
 				if state.lifecycle.currentState() == runStateIdle {
 					state.reader.startInterval(time.Now())
 					producerContext, cancel := context.WithCancel(context.Background())
-					var err error
-					batches, err = produce(producerContext, state.readBatchSize(), state.readerChannelCapacity())
+					producedBatches, done, err := produce(
+						producerContext,
+						state.readBatchSize(),
+						state.readerChannelCapacity(),
+					)
 					if err != nil {
 						cancel()
 						state.reader.reset()
@@ -124,10 +153,12 @@ func (state *controlState) eventLoop(
 						}
 						continue
 					}
+					batches = producedBatches
+					producerDone = done
 					cancelProducer = cancel
 					throttlerContext, cancel := context.WithCancel(context.Background())
 					cancelThrottler = cancel
-					senderBatches, throttlerDone, throttlerUpdates = startThrottler(
+					senderBatches, throttlerDone, throttlerUpdates = start(
 						throttlerContext,
 						batches,
 						&state.readerChannel,
@@ -170,14 +201,12 @@ func (state *controlState) eventLoop(
 					state.lifecycle.reset()
 					cancelProducer()
 					cancelThrottler()
+					<-producerDone
 					<-throttlerDone
-					for range batches {
-					}
-					for range senderBatches {
-					}
 					batches = nil
 					senderBatches = nil
 					cancelProducer = nil
+					producerDone = nil
 					cancelThrottler = nil
 					throttlerDone = nil
 					throttlerUpdates = nil
