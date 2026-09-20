@@ -291,6 +291,18 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 	}
 }
 
+func TestThrottlerPolicyWholeBatchPacingInterval(t *testing.T) {
+	const (
+		batchSize    = 1_000
+		requestedTPS = 2_000
+	)
+
+	interval := time.Duration(batchSize) * time.Second / time.Duration(requestedTPS)
+	if interval != 500*time.Millisecond {
+		t.Fatalf("whole-batch pacing interval = %v, want 500ms", interval)
+	}
+}
+
 func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 	for _, test := range []struct {
 		name     string
