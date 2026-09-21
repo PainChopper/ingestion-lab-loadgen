@@ -38,7 +38,7 @@ func testConfigContents() string {
 
 func TestLoadPolicyRejectsInvalidConfiguration(t *testing.T) {
 	tests := []struct{ name, contents string }{
-		{name: "unknown key", contents: "unknown = true"},
+		{name: "unknown top-level key", contents: testConfigContents() + "\nunknown = true\n"},
 		{name: "incomplete", contents: "[source]\npath = 'C:\\dataset\\*.parquet'"},
 		{name: "relative source", contents: strings.ReplaceAll(testConfigContents(), "C:\\dataset\\*.parquet", "data/*.parquet")},
 		{name: "invalid range", contents: strings.ReplaceAll(testConfigContents(), "step = 1000", "step = 0")},
@@ -59,39 +59,90 @@ func TestLoadPolicyRejectsInvalidConfiguration(t *testing.T) {
 
 func TestLoadPolicyRequiresExplicitPolicyFields(t *testing.T) {
 	tests := []struct {
-		name     string
-		contents string
-		wantErr  bool
+		name string
+		old  string
+		new  string
+	}{
+		{name: "schema version", old: "schema_version = 2\n", new: ""},
+		{name: "source path", old: "[source]\npath = 'C:\\dataset\\*.parquet'\n", new: "[source]\n"},
+		{name: "source unit", old: "path = 'C:\\dataset\\*.parquet'\nunit = \"glob-pattern\"\n", new: "path = 'C:\\dataset\\*.parquet'\n"},
+		{name: "source mutability", old: "unit = \"glob-pattern\"\nmutability = \"startup-only\"\n", new: "unit = \"glob-pattern\"\n"},
+		{name: "reader batch default", old: "[reader.read_batch_size]\ndefault = 1000\n", new: "[reader.read_batch_size]\n"},
+		{name: "reader batch min", old: "default = 1000\nmin = 1000\n", new: "default = 1000\n"},
+		{name: "reader batch max", old: "min = 1000\nmax = 100000\n", new: "min = 1000\n"},
+		{name: "reader batch step", old: "max = 100000\nstep = 1000\n", new: "max = 100000\n"},
+		{name: "reader batch unit", old: "step = 1000\nunit = \"transactions\"\n", new: "step = 1000\n"},
+		{name: "reader batch mutability", old: "unit = \"transactions\"\nmutability = \"idle-only\"\n", new: "unit = \"transactions\"\n"},
+		{name: "reader channel default", old: "[readerChannel.capacity]\ndefault = 2\n", new: "[readerChannel.capacity]\n"},
+		{name: "reader channel allowed", old: "default = 2\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n", new: "default = 2\n"},
+		{name: "reader channel unit", old: "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n", new: "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n"},
+		{name: "reader channel mutability", old: "[readerChannel.capacity]\ndefault = 2\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"idle-only\"\n", new: "[readerChannel.capacity]\ndefault = 2\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n"},
+		{name: "sender channel default", old: "[senderChannel.capacity]\ndefault = 0\n", new: "[senderChannel.capacity]\n"},
+		{name: "sender channel allowed", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n", new: "[senderChannel.capacity]\ndefault = 0\n"},
+		{name: "sender channel unit", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n"},
+		{name: "sender channel mutability", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"idle-only\"\n", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n"},
+		{name: "requested TPS default", old: "[throttler.requested_tps]\ndefault = 2000\n", new: "[throttler.requested_tps]\n"},
+		{name: "requested TPS min", old: "default = 2000\nmin = 0\n", new: "default = 2000\n"},
+		{name: "requested TPS max", old: "min = 0\nmax = 4000\n", new: "min = 0\n"},
+		{name: "requested TPS step", old: "max = 4000\nstep = 100\n", new: "max = 4000\n"},
+		{name: "requested TPS unit", old: "step = 100\nunit = \"transactions/s\"\n", new: "step = 100\n"},
+		{name: "requested TPS mutability", old: "unit = \"transactions/s\"\nmutability = \"immediate\"\n", new: "unit = \"transactions/s\"\n"},
+		{name: "installation mode default", old: "[throttler.installation_mode]\ndefault = \"installed\"\n", new: "[throttler.installation_mode]\n"},
+		{name: "installation mode allowed", old: "default = \"installed\"\nallowed = [\"installed\", \"bypass\"]\n", new: "default = \"installed\"\n"},
+		{name: "installation mode mutability", old: "allowed = [\"installed\", \"bypass\"]\nmutability = \"immediate\"", new: "allowed = [\"installed\", \"bypass\"]\n"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			contents := strings.Replace(testConfigContents(), test.old, test.new, 1)
+			if contents == testConfigContents() {
+				t.Fatalf("test replacement %q did not apply", test.old)
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadPolicy(path); err == nil {
+				t.Fatal("loadPolicy accepted config with a missing policy field")
+			}
+		})
+	}
+}
+
+func TestLoadPolicyAllowsExplicitZeroValues(t *testing.T) {
+	tests := []struct {
+		name        string
+		contents    string
+		mustContain string
 	}{
 		{
-			name:     "missing reader channel capacity default",
-			contents: strings.Replace(testConfigContents(), "default = 2\nallowed", "allowed", 1),
-			wantErr:  true,
+			name:        "reader channel capacity default",
+			contents:    strings.Replace(testConfigContents(), "[readerChannel.capacity]\ndefault = 2\n", "[readerChannel.capacity]\ndefault = 0\n", 1),
+			mustContain: "[readerChannel.capacity]\ndefault = 0\n",
 		},
 		{
-			name:     "explicit zero reader channel capacity default",
-			contents: strings.Replace(testConfigContents(), "default = 2", "default = 0", 1),
+			name:        "sender channel capacity default",
+			contents:    testConfigContents(),
+			mustContain: "[senderChannel.capacity]\ndefault = 0\n",
 		},
 		{
-			name:     "missing sender channel capacity default",
-			contents: strings.Replace(testConfigContents(), "[senderChannel.capacity]\ndefault = 0\n", "[senderChannel.capacity]\n", 1),
-			wantErr:  true,
-		},
-		{
-			name:     "explicit zero sender channel capacity default",
-			contents: testConfigContents(),
+			name:        "requested TPS minimum",
+			contents:    testConfigContents(),
+			mustContain: "[throttler.requested_tps]\ndefault = 2000\nmin = 0\n",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if !strings.Contains(test.contents, test.mustContain) {
+				t.Fatalf("explicit zero config does not contain %q", test.mustContain)
+			}
 			path := filepath.Join(t.TempDir(), "config.toml")
 			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			_, _, err := loadPolicy(path)
-			if (err != nil) != test.wantErr {
-				t.Fatalf("loadPolicy() error = %v, wantErr %t", err, test.wantErr)
+			if _, _, err := loadPolicy(path); err != nil {
+				t.Fatalf("loadPolicy explicit zero: %v", err)
 			}
 		})
 	}
