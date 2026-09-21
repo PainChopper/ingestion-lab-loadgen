@@ -62,8 +62,10 @@ func TestReaderChannelTelemetryMeasuresBlockedSendUntilConsumerReceives(t *testi
 func TestReaderChannelTelemetrySnapshotAccumulatesSubMillisecondBlockedDurations(t *testing.T) {
 	now := time.Date(2026, time.September, 19, 0, 0, 0, 0, time.UTC)
 	telemetry := channelTelemetry{
-		blockedAt: now.Add(-800 * time.Microsecond),
-		blockedMs: 800 * time.Microsecond,
+		measurements: channelTelemetryMeasurements{
+			blockedAt: now.Add(-800 * time.Microsecond),
+			blockedMs: 800 * time.Microsecond,
+		},
 	}
 
 	active := telemetry.snapshot(now)
