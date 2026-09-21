@@ -11,18 +11,31 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Configuration location and supported schema version.
 const (
-	defaultConfigPath         = "config.toml"
-	policySchemaVersion       = 2
-	sourceUnit                = "glob-pattern"
-	batchSizeUnit             = "transactions"
-	readerChannelCapacityUnit = "batches"
-	startupOnly               = "startup-only"
-	idleOnly                  = "idle-only"
-	requestedTPSUnit          = "transactions/s"
-	immediate                 = "immediate"
-	throttlerInstalled        = "installed"
-	throttlerBypass           = "bypass"
+	defaultConfigPath   = "config.toml"
+	policySchemaVersion = 2
+)
+
+// Units accepted by policy fields.
+const (
+	sourceUnit       = "glob-pattern"
+	batchSizeUnit    = "transactions"
+	unitBatches      = "batches"
+	requestedTPSUnit = "transactions/s"
+)
+
+// Mutability values accepted by policy fields.
+const (
+	startupOnly = "startup-only"
+	idleOnly    = "idle-only"
+	immediate   = "immediate"
+)
+
+// Values accepted by throttler installation mode.
+const (
+	throttlerInstalled = "installed"
+	throttlerBypass    = "bypass"
 )
 
 type policy struct {
@@ -179,8 +192,8 @@ func (p rangePolicy) contains(value int) bool {
 }
 
 func (p allowedPolicy) validate() error {
-	if p.Unit != readerChannelCapacityUnit || p.Mutability != idleOnly {
-		return fmt.Errorf("must use unit %q and mutability %q", readerChannelCapacityUnit, idleOnly)
+	if p.Unit != unitBatches || p.Mutability != idleOnly {
+		return fmt.Errorf("must use unit %q and mutability %q", unitBatches, idleOnly)
 	}
 	if len(p.Allowed) == 0 {
 		return fmt.Errorf("allowed must not be empty")
