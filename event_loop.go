@@ -8,12 +8,12 @@ import (
 )
 
 type throttlerStarter func(
-	context.Context,
-	<-chan []Transaction,
-	chan<- []Transaction,
-	*readerChannelTelemetry,
-	*readerChannelTelemetry,
-	throttlerSettings,
+	ctx context.Context,
+	readerBatches <-chan []Transaction,
+	senderBatches chan<- []Transaction,
+	readerChannelTelemetry *channelTelemetry,
+	senderChannelTelemetry *channelTelemetry,
+	initial throttlerSettings,
 ) (<-chan struct{}, chan<- throttlerUpdate)
 
 type producerStarter func(context.Context, chan<- []Transaction, int) (<-chan struct{}, error)
@@ -443,7 +443,7 @@ func (state *controlState) pauseElapsed(now time.Time) {
 
 func startConsumer(
 	batches <-chan []Transaction,
-	senderChannel *readerChannelTelemetry,
+	senderChannel *channelTelemetry,
 	consumedSinceTick *atomic.Int64,
 ) (context.CancelFunc, <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
