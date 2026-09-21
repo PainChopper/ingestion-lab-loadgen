@@ -219,7 +219,6 @@ func (state *controlState) eventLoopWithThrottler(
 				delta := consumedSinceTick.Swap(0)
 				state.run.totalTransactions += delta
 				promMetrics.transactionsTotal.Add(float64(delta))
-				state.run.actualTPS = 0
 				promMetrics.actualTPS.Set(0)
 				state.run.lifecycle.pause()
 				state.notifyThrottler(throttlerUpdates, throttlerDone, true)
@@ -290,6 +289,7 @@ func (state *controlState) eventLoopWithThrottler(
 				} else if state.requestedTPS() != cmd.value {
 					state.controls.configuredRequestedTPS = cmd.value
 					state.controls.requestedTPSConfigured = true
+					promMetrics.targetTPS.Set(float64(state.requestedTPS()))
 					state.notifyThrottler(throttlerUpdates, throttlerDone, state.run.lifecycle.currentState() == runStatePaused)
 				}
 				if cmd.commandReply != nil {
@@ -310,12 +310,11 @@ func (state *controlState) eventLoopWithThrottler(
 
 		case <-metrics:
 			state.telemetry.reader.sample(time.Now())
-			state.telemetry.readerChannel.sample(windowLength)
-			state.telemetry.senderChannel.sample(windowLength)
+			state.telemetry.readerChannel.sample(state.metricsWindow)
+			state.telemetry.senderChannel.sample(state.metricsWindow)
 			delta := consumedSinceTick.Swap(0)
-			state.run.actualTPS = delta * int64(time.Second/windowLength)
 			state.run.totalTransactions += delta
-			promMetrics.actualTPS.Set(float64(state.run.actualTPS))
+			promMetrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
 			promMetrics.transactionsTotal.Add(float64(delta))
 		}
 	}
@@ -368,7 +367,6 @@ func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMe
 	state.telemetry.senderChannel.clearMeasurements()
 	consumedSinceTick.Store(0)
 	state.run.totalTransactions = 0
-	state.run.actualTPS = 0
 	state.run.elapsedBeforeRun = 0
 	state.run.runStartedAt = time.Time{}
 	state.run.startError = nil

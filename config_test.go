@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testPolicy(t *testing.T) policy {
@@ -22,9 +24,11 @@ func testPolicy(t *testing.T) policy {
 
 func newTestControlState(t *testing.T) controlState {
 	t.Helper()
+	loaded := testPolicy(t)
 	return controlState{
-		run:      controlRunState{lifecycle: newLifecycle()},
-		controls: configuredControls{policy: testPolicy(t)},
+		metricsWindow: time.Duration(loaded.Metrics.WindowMS.Default) * time.Millisecond,
+		run:           controlRunState{lifecycle: newLifecycle()},
+		controls:      configuredControls{policy: loaded},
 	}
 }
 
@@ -36,6 +40,7 @@ func testConfigContents() string {
 		"", "[senderChannel.capacity]", "default = 0", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
 		"", "[throttler.requested_tps]", "default = 2000", "min = 0", "max = 4000", "step = 100", "unit = \"transactions/s\"", "mutability = \"immediate\"",
 		"", "[throttler.installation_mode]", "default = \"installed\"", "allowed = [\"installed\", \"bypass\"]", "mutability = \"immediate\"",
+		"", "[metrics.window_ms]", "default = 1000", "min = 100", "max = 10000", "step = 100", "unit = \"milliseconds\"", "mutability = \"startup-only\"",
 	}, "\n")
 }
 
@@ -217,6 +222,65 @@ func TestThrottlerPolicyUsesApprovedProfile(t *testing.T) {
 	if mode.Default != throttlerInstalled || !mode.contains(throttlerInstalled) ||
 		!mode.contains(throttlerBypass) || mode.Mutability != immediate {
 		t.Fatalf("installation mode policy = %+v", mode)
+	}
+}
+
+func TestMetricsWindowPolicyUsesApprovedProfile(t *testing.T) {
+	window := testPolicy(t).Metrics.WindowMS
+	if window.Default != 1_000 || window.Min != 100 || window.Max != 10_000 ||
+		window.Step != 100 || window.Unit != metricsWindowUnit || window.Mutability != startupOnly {
+		t.Fatalf("metrics window policy = %+v", window)
+	}
+}
+
+func TestLoadPolicyRejectsInvalidMetricsWindowPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{name: "missing default", old: "[metrics.window_ms]\ndefault = 1000", new: "[metrics.window_ms]"},
+		{name: "wrong unit", old: "unit = \"milliseconds\"", new: "unit = \"seconds\""},
+		{name: "wrong mutability", old: "[metrics.window_ms]\ndefault = 1000\nmin = 100\nmax = 10000\nstep = 100\nunit = \"milliseconds\"\nmutability = \"startup-only\"", new: "[metrics.window_ms]\ndefault = 1000\nmin = 100\nmax = 10000\nstep = 100\nunit = \"milliseconds\"\nmutability = \"immediate\""},
+		{name: "below minimum", old: "[metrics.window_ms]\ndefault = 1000\nmin = 100", new: "[metrics.window_ms]\ndefault = 1000\nmin = 99"},
+		{name: "above maximum", old: "[metrics.window_ms]\ndefault = 1000\nmin = 100\nmax = 10000", new: "[metrics.window_ms]\ndefault = 1000\nmin = 100\nmax = 10100"},
+		{name: "off grid default", old: "[metrics.window_ms]\ndefault = 1000", new: "[metrics.window_ms]\ndefault = 1050"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			contents := strings.Replace(testConfigContents(), test.old, test.new, 1)
+			if contents == testConfigContents() {
+				t.Fatalf("test replacement %q did not apply", test.old)
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadPolicy(path); err == nil {
+				t.Fatal("loadPolicy accepted invalid metrics window policy")
+			}
+		})
+	}
+}
+
+func TestLoadPolicyAllowsSafeMetricsWindowDefaults(t *testing.T) {
+	for _, value := range []int{100, 300, 1_000, 10_000} {
+		t.Run(fmt.Sprintf("%d milliseconds", value), func(t *testing.T) {
+			contents := strings.Replace(
+				testConfigContents(),
+				"[metrics.window_ms]\ndefault = 1000",
+				fmt.Sprintf("[metrics.window_ms]\ndefault = %d", value),
+				1,
+			)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadPolicy(path); err != nil {
+				t.Fatalf("loadPolicy metrics window %d: %v", value, err)
+			}
+		})
 	}
 }
 

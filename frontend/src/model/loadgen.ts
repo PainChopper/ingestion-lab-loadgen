@@ -89,6 +89,7 @@ export interface LoadgenPolicySnapshot {
   readonly readerReadBatchSize: RangeControlPolicySnapshot
   readonly readerChannelCapacity: AllowedControlPolicySnapshot
   readonly senderChannelCapacity: AllowedControlPolicySnapshot
+  readonly metricsWindowMs: RangeControlPolicySnapshot
   readonly throttlerRequestedTps: RangeControlPolicySnapshot
   readonly throttlerInstallationMode: InstallationModePolicySnapshot
 }

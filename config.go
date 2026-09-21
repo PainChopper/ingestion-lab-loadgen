@@ -19,10 +19,11 @@ const (
 
 // Units accepted by policy fields.
 const (
-	sourceUnit       = "glob-pattern"
-	batchSizeUnit    = "transactions"
-	unitBatches      = "batches"
-	requestedTPSUnit = "transactions/s"
+	sourceUnit        = "glob-pattern"
+	batchSizeUnit     = "transactions"
+	unitBatches       = "batches"
+	requestedTPSUnit  = "transactions/s"
+	metricsWindowUnit = "milliseconds"
 )
 
 // Mutability values accepted by policy fields.
@@ -45,6 +46,7 @@ type policy struct {
 	ReaderChannel readerChannelPolicy `mapstructure:"readerChannel"`
 	SenderChannel readerChannelPolicy `mapstructure:"senderChannel"`
 	Throttler     throttlerPolicy     `mapstructure:"throttler"`
+	Metrics       metricsPolicy       `mapstructure:"metrics"`
 }
 
 type sourcePolicy struct {
@@ -64,6 +66,10 @@ type readerChannelPolicy struct {
 type throttlerPolicy struct {
 	RequestedTPS     rangePolicy            `mapstructure:"requested_tps"`
 	InstallationMode installationModePolicy `mapstructure:"installation_mode"`
+}
+
+type metricsPolicy struct {
+	WindowMS rangePolicy `mapstructure:"window_ms"`
 }
 
 type installationModePolicy struct {
@@ -144,6 +150,22 @@ func (p policy) validate() error {
 	}
 	if err := p.Throttler.InstallationMode.validate(); err != nil {
 		return fmt.Errorf("throttler.installation_mode: %w", err)
+	}
+	if err := p.Metrics.WindowMS.validateMetricsWindow(); err != nil {
+		return fmt.Errorf("metrics.window_ms: %w", err)
+	}
+	return nil
+}
+
+func (p rangePolicy) validateMetricsWindow() error {
+	if p.Unit != metricsWindowUnit || p.Mutability != startupOnly {
+		return fmt.Errorf("must use unit %q and mutability %q", metricsWindowUnit, startupOnly)
+	}
+	if p.Min < 100 || p.Max > 10_000 || p.Max < p.Min || p.Step <= 0 {
+		return fmt.Errorf("must stay within 100..10000 milliseconds with a positive step")
+	}
+	if !p.contains(p.Default) {
+		return fmt.Errorf("default must be within the range and aligned to step")
 	}
 	return nil
 }
@@ -229,6 +251,7 @@ type policySnapshot struct {
 	SenderChannelCapacity     allowedPolicy          `json:"senderChannelCapacity"`
 	ThrottlerRequestedTPS     rangePolicy            `json:"throttlerRequestedTps"`
 	ThrottlerInstallationMode installationModePolicy `json:"throttlerInstallationMode"`
+	MetricsWindowMS           rangePolicy            `json:"metricsWindowMs"`
 }
 
 func (p policy) snapshot() policySnapshot {
@@ -238,5 +261,6 @@ func (p policy) snapshot() policySnapshot {
 		SenderChannelCapacity:     p.SenderChannel.Capacity,
 		ThrottlerRequestedTPS:     p.Throttler.RequestedTPS,
 		ThrottlerInstallationMode: p.Throttler.InstallationMode,
+		MetricsWindowMS:           p.Metrics.WindowMS,
 	}
 }
