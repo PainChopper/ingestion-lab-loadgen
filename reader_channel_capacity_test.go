@@ -145,11 +145,11 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 				}
 			}
 
-			if got := snapshot().ReaderChannelCapacity; got != state.policy.ReaderChannel.Capacity.Default {
+			if got := snapshot().ReaderChannel.Capacity; got != state.policy.ReaderChannel.Capacity.Default {
 				t.Fatalf("default capacity = %d, want %d", got, state.policy.ReaderChannel.Capacity.Default)
 			}
 			post(`{"action":"set-reader-channel-capacity","value":`+strconv.Itoa(capacity)+`}`, http.StatusOK)
-			if got := snapshot().ReaderChannelCapacity; got != capacity {
+			if got := snapshot().ReaderChannel.Capacity; got != capacity {
 				t.Fatalf("idle capacity = %d, want %d", got, capacity)
 			}
 
@@ -165,14 +165,14 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 			if got := <-producedCapacities; got != capacity {
 				t.Fatalf("actual producer channel capacity = %d, want %d", got, capacity)
 			}
-			if got := snapshot(); got.ReaderChannelCapacity != capacity || got.RunState != runStateRunning {
+			if got := snapshot(); got.ReaderChannel.Capacity != capacity || got.Run.State != runStateRunning {
 				t.Fatalf("running snapshot = %+v", got)
 			}
 			post(`{"action":"set-reader-channel-capacity","value":4}`, http.StatusConflict)
 			post(`{"action":"pause"}`, http.StatusOK)
 			post(`{"action":"set-reader-channel-capacity","value":4}`, http.StatusConflict)
 			post(`{"action":"reset"}`, http.StatusOK)
-			if got := snapshot(); got.ReaderChannelCapacity != capacity || got.RunState != runStateIdle {
+			if got := snapshot(); got.ReaderChannel.Capacity != capacity || got.Run.State != runStateIdle {
 				t.Fatalf("reset snapshot = %+v", got)
 			}
 			post(`{"action":"run"}`, http.StatusOK)

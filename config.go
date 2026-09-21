@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/spf13/viper"
@@ -52,8 +53,6 @@ var requiredPolicyKeys = []string{
 	"throttler.installation_mode.allowed",
 	"throttler.installation_mode.mutability",
 }
-
-var senderChannelCapacityAllowed = []int{0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192}
 
 type policy struct {
 	SchemaVersion int                 `mapstructure:"schema_version"`
@@ -192,12 +191,7 @@ func (p installationModePolicy) validate() error {
 }
 
 func (p installationModePolicy) contains(value string) bool {
-	for _, allowed := range p.Allowed {
-		if value == allowed {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.Allowed, value)
 }
 
 func (p rangePolicy) validate() error {
@@ -239,25 +233,12 @@ func (p allowedPolicy) validate() error {
 }
 
 func (p allowedPolicy) contains(value int) bool {
-	for _, allowed := range p.Allowed {
-		if value == allowed {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.Allowed, value)
 }
 
 func (p allowedPolicy) validateSenderChannelCapacity() error {
 	if err := p.validate(); err != nil {
 		return err
-	}
-	if p.Default != 0 || len(p.Allowed) != len(senderChannelCapacityAllowed) {
-		return fmt.Errorf("must use default 0 and the approved allowed scale")
-	}
-	for index, value := range senderChannelCapacityAllowed {
-		if p.Allowed[index] != value {
-			return fmt.Errorf("must use default 0 and the approved allowed scale")
-		}
 	}
 	return nil
 }

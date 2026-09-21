@@ -107,11 +107,11 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 		}
 	}
 	setSize := `{"action":"set-read-batch-size","value":25000}`
-	if got := snapshot().ReaderReadBatchSize; got != testPolicy(t).Reader.ReadBatchSize.Default {
+	if got := snapshot().Reader.ReadBatchSize; got != testPolicy(t).Reader.ReadBatchSize.Default {
 		t.Fatalf("default size = %d, want %d", got, testPolicy(t).Reader.ReadBatchSize.Default)
 	}
 	post(setSize, http.StatusOK)
-	if got := snapshot().ReaderReadBatchSize; got != 25_000 {
+	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
 		t.Fatalf("configured size = %d, want 25000", got)
 	}
 	ownerReply := make(chan commandResult, 1)
@@ -119,7 +119,7 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	if result := <-ownerReply; result.status != commandConflict {
 		t.Fatalf("invalid direct command status = %d, want conflict", result.status)
 	}
-	if got := snapshot().ReaderReadBatchSize; got != 25_000 {
+	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
 		t.Fatalf("size changed after invalid direct command: %d", got)
 	}
 	post(`{"action":"run"}`, http.StatusOK)
@@ -127,16 +127,16 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 		t.Fatalf("producer size = %d, want 25000", got)
 	}
 	post(`{"action":"set-read-batch-size","value":30000}`, http.StatusConflict)
-	if got := snapshot().ReaderReadBatchSize; got != 25_000 {
+	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
 		t.Fatalf("size changed during Run: %d", got)
 	}
 	post(`{"action":"pause"}`, http.StatusOK)
-	if got := snapshot().RunState; got != runStatePaused {
+	if got := snapshot().Run.State; got != runStatePaused {
 		t.Fatalf("state after Pause = %s", got)
 	}
 	post(`{"action":"set-read-batch-size","value":30000}`, http.StatusConflict)
 	post(`{"action":"reset"}`, http.StatusOK)
-	if got := snapshot(); got.RunState != runStateIdle || got.ReaderReadBatchSize != 25_000 {
+	if got := snapshot(); got.Run.State != runStateIdle || got.Reader.ReadBatchSize != 25_000 {
 		t.Fatalf("snapshot after Reset = %+v", got)
 	}
 	post(`{"action":"run"}`, http.StatusOK)

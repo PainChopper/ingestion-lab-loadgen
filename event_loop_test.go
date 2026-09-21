@@ -72,7 +72,7 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 		}
 		requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 		snapshot := <-snapshotReply
-		if snapshot.RunState != runStateIdle || snapshot.ElapsedMs != 0 || snapshot.StartError == nil || *snapshot.StartError != want {
+		if snapshot.Run.State != runStateIdle || snapshot.Run.ElapsedMs != 0 || snapshot.Run.StartError == nil || *snapshot.Run.StartError != want {
 			t.Fatalf("failed Run snapshot = %+v, want idle, zero elapsed, %q", snapshot, want)
 		}
 		if index == 0 {
@@ -81,7 +81,7 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 				t.Fatalf("Reset status = %v, want accepted", result.status)
 			}
 			requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
-			if snapshot := <-snapshotReply; snapshot.StartError != nil || snapshot.ElapsedMs != 0 {
+			if snapshot := <-snapshotReply; snapshot.Run.StartError != nil || snapshot.Run.ElapsedMs != 0 {
 				t.Fatalf("Reset snapshot = %+v, want cleared error and elapsed", snapshot)
 			}
 		}
@@ -92,7 +92,7 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 		t.Fatalf("retry Run error = %v, want nil", result.err)
 	}
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
-	if snapshot := <-snapshotReply; snapshot.RunState != runStateRunning || snapshot.StartError != nil {
+	if snapshot := <-snapshotReply; snapshot.Run.State != runStateRunning || snapshot.Run.StartError != nil {
 		t.Fatalf("successful Run snapshot = %+v", snapshot)
 	}
 	requests <- request{kind: cmdRun, commandReply: reply}
@@ -101,7 +101,7 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 	}
 	requests <- request{kind: cmdPause}
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
-	if snapshot := <-snapshotReply; snapshot.RunState != runStatePaused || snapshot.ElapsedMs < 0 {
+	if snapshot := <-snapshotReply; snapshot.Run.State != runStatePaused || snapshot.Run.ElapsedMs < 0 {
 		t.Fatalf("Pause snapshot = %+v", snapshot)
 	}
 	requests <- request{kind: cmdReset, commandReply: reply}
@@ -109,7 +109,7 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 		t.Fatalf("paused Reset status = %v, want accepted", result.status)
 	}
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
-	if snapshot := <-snapshotReply; snapshot.RunState != runStateIdle || snapshot.ElapsedMs != 0 {
+	if snapshot := <-snapshotReply; snapshot.Run.State != runStateIdle || snapshot.Run.ElapsedMs != 0 {
 		t.Fatalf("paused Reset snapshot = %+v", snapshot)
 	}
 }
@@ -125,8 +125,8 @@ func TestRunCommandStartsPipelineOnce(t *testing.T) {
 	requests <- request{kind: cmdRun}
 	requests <- request{kind: getSnapshot, snapshotReply: reply}
 	runningSnapshot := <-reply
-	if runningSnapshot.RunState != runStateRunning {
-		t.Fatalf("state after first Run = %v, want %v", runningSnapshot.RunState, runStateRunning)
+	if runningSnapshot.Run.State != runStateRunning {
+		t.Fatalf("state after first Run = %v, want %v", runningSnapshot.Run.State, runStateRunning)
 	}
 	if starts != 1 {
 		t.Fatalf("starts after first Run = %v, want 1", starts)
@@ -135,8 +135,8 @@ func TestRunCommandStartsPipelineOnce(t *testing.T) {
 	requests <- request{kind: cmdRun}
 	requests <- request{kind: getSnapshot, snapshotReply: reply}
 	repeatedRunSnapshot := <-reply
-	if repeatedRunSnapshot.RunState != runStateRunning {
-		t.Fatalf("state after second Run = %v, want %v", repeatedRunSnapshot.RunState, runStateRunning)
+	if repeatedRunSnapshot.Run.State != runStateRunning {
+		t.Fatalf("state after second Run = %v, want %v", repeatedRunSnapshot.Run.State, runStateRunning)
 	}
 	if starts != 1 {
 		t.Fatalf("starts after repeated Run = %v, want 1", starts)
@@ -174,16 +174,16 @@ func TestPauseStopsConsumptionUntilRun(t *testing.T) {
 	waitForReaderReceives(t, requests, 2)
 	metrics <- time.Now()
 	requests <- request{kind: getSnapshot, snapshotReply: reply}
-	if snapshot := <-reply; snapshot.TotalTransactions != 1 || snapshot.RunState != runStatePaused ||
-		snapshot.SenderChannelReceivedBatchesTotal != 1 || snapshot.SenderChannelReceivedTransactionsTotal != 1 {
+	if snapshot := <-reply; snapshot.Run.TotalTransactions != 1 || snapshot.Run.State != runStatePaused ||
+		snapshot.SenderChannel.ReceivedBatchesTotal != 1 || snapshot.SenderChannel.ReceivedTransactionsTotal != 1 {
 		t.Fatalf("paused snapshot = %+v, want one consumed transaction", snapshot)
 	}
 
 	requests <- request{kind: cmdRun}
 	waitForTransactions(t, requests, metrics, 2)
 	requests <- request{kind: getSnapshot, snapshotReply: reply}
-	if snapshot := <-reply; snapshot.SenderChannelReceivedBatchesTotal != 2 ||
-		snapshot.SenderChannelReceivedTransactionsTotal != 2 {
+	if snapshot := <-reply; snapshot.SenderChannel.ReceivedBatchesTotal != 2 ||
+		snapshot.SenderChannel.ReceivedTransactionsTotal != 2 {
 		t.Fatalf("resumed snapshot = %+v, want two received batches and transactions", snapshot)
 	}
 	if starts != 1 {
@@ -507,20 +507,20 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	snapshotReply := make(chan statusSnapshot, 1)
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot := <-snapshotReply
-	if snapshot.ReaderRowsRead != 5 || snapshot.ReaderSource == nil ||
-		*snapshot.ReaderSource != "data/second.parquet" || snapshot.ReaderChannelCapacity != 2 ||
-		snapshot.ReaderChannelDepthBatches != 1 || snapshot.ReaderChannelBufferedTransactions != 2 ||
-		snapshot.ReaderChannelSentBatchesTotal != 1 || snapshot.ReaderChannelSentTransactionsTotal != 2 ||
-		snapshot.ReaderChannelInputBatchesPerSecond != 1 || snapshot.ReaderChannelInputTransactionsPerSecond != 2 {
+	if snapshot.Reader.RowsRead != 5 || snapshot.Reader.Source == nil ||
+		*snapshot.Reader.Source != "data/second.parquet" || snapshot.ReaderChannel.Capacity != 2 ||
+		snapshot.ReaderChannel.DepthBatches != 1 || snapshot.ReaderChannel.BufferedTransactions != 2 ||
+		snapshot.ReaderChannel.SentBatchesTotal != 1 || snapshot.ReaderChannel.SentTransactionsTotal != 2 ||
+		snapshot.ReaderChannel.InputBatchesPerSecond != 1 || snapshot.ReaderChannel.InputTransactionsPerSecond != 2 {
 		t.Fatalf("paused snapshot = %+v, want reader and readerChannel measurements", snapshot)
 	}
 	state.readerChannel.recordReceive(len(<-readerChannel))
 	metrics <- time.Now()
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
-	if snapshot.ReaderChannelReceivedBatchesTotal != 1 || snapshot.ReaderChannelReceivedTransactionsTotal != 2 ||
-		snapshot.ReaderChannelInputBatchesPerSecond != 0 || snapshot.ReaderChannelInputTransactionsPerSecond != 0 ||
-		snapshot.ReaderChannelOutputBatchesPerSecond != 1 || snapshot.ReaderChannelOutputTransactionsPerSecond != 2 {
+	if snapshot.ReaderChannel.ReceivedBatchesTotal != 1 || snapshot.ReaderChannel.ReceivedTransactionsTotal != 2 ||
+		snapshot.ReaderChannel.InputBatchesPerSecond != 0 || snapshot.ReaderChannel.InputTransactionsPerSecond != 0 ||
+		snapshot.ReaderChannel.OutputBatchesPerSecond != 1 || snapshot.ReaderChannel.OutputTransactionsPerSecond != 2 {
 		t.Fatalf("drained readerChannel snapshot = %+v", snapshot)
 	}
 
@@ -535,14 +535,14 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	}
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
-	if snapshot.ReaderReadTPS != 0 || snapshot.ReaderRowsRead != 0 || snapshot.ReaderSource != nil ||
-		snapshot.ReaderChannelCapacity != state.policy.ReaderChannel.Capacity.Default || snapshot.ReaderChannelDepthBatches != 0 ||
-		snapshot.ReaderChannelBufferedTransactions != 0 || snapshot.ReaderChannelBlockedSenders != 0 ||
-		snapshot.ReaderChannelOldestBlockedSenderMs != 0 || snapshot.ReaderChannelBlockedMs != 0 ||
-		snapshot.ReaderChannelSentBatchesTotal != 0 || snapshot.ReaderChannelSentTransactionsTotal != 0 ||
-		snapshot.ReaderChannelReceivedBatchesTotal != 0 || snapshot.ReaderChannelReceivedTransactionsTotal != 0 ||
-		snapshot.ReaderChannelInputBatchesPerSecond != 0 || snapshot.ReaderChannelInputTransactionsPerSecond != 0 ||
-		snapshot.ReaderChannelOutputBatchesPerSecond != 0 || snapshot.ReaderChannelOutputTransactionsPerSecond != 0 {
+	if snapshot.Reader.ReadTps != 0 || snapshot.Reader.RowsRead != 0 || snapshot.Reader.Source != nil ||
+		snapshot.ReaderChannel.Capacity != state.policy.ReaderChannel.Capacity.Default || snapshot.ReaderChannel.DepthBatches != 0 ||
+		snapshot.ReaderChannel.BufferedTransactions != 0 || snapshot.ReaderChannel.BlockedSenders != 0 ||
+		snapshot.ReaderChannel.OldestBlockedSenderMs != 0 || snapshot.ReaderChannel.BlockedMs != 0 ||
+		snapshot.ReaderChannel.SentBatchesTotal != 0 || snapshot.ReaderChannel.SentTransactionsTotal != 0 ||
+		snapshot.ReaderChannel.ReceivedBatchesTotal != 0 || snapshot.ReaderChannel.ReceivedTransactionsTotal != 0 ||
+		snapshot.ReaderChannel.InputBatchesPerSecond != 0 || snapshot.ReaderChannel.InputTransactionsPerSecond != 0 ||
+		snapshot.ReaderChannel.OutputBatchesPerSecond != 0 || snapshot.ReaderChannel.OutputTransactionsPerSecond != 0 {
 		t.Fatalf("snapshot after Reset = %+v, want zero measurements", snapshot)
 	}
 }
@@ -564,8 +564,8 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 		requests <- request{kind: getSnapshot, snapshotReply: reply}
 		return <-reply
 	}
-	if got := snapshot(); got.ReaderReadBatchSize != 1_000 || got.ThrottlerRequestedTPS != 2_000 ||
-		got.ThrottlerInstallationMode != throttlerInstalled {
+	if got := snapshot(); got.Reader.ReadBatchSize != 1_000 || got.Throttler.RequestedTps != 2_000 ||
+		got.Throttler.InstallationMode != throttlerInstalled {
 		t.Fatalf("initial throttler snapshot = %+v", got)
 	}
 	post(`{"action":"set-requested-tps","value":0}`, http.StatusOK)
@@ -577,12 +577,12 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	}
 	waitForReaderReceives(t, requests, 1)
 	metrics <- time.Now()
-	if got := snapshot(); got.TotalTransactions != 0 || got.ThrottlerRequestedTPS != 0 {
+	if got := snapshot(); got.Run.TotalTransactions != 0 || got.Throttler.RequestedTps != 0 {
 		t.Fatalf("zero-TPS running snapshot = %+v", got)
 	}
 	post(`{"action":"set-throttler-installation-mode","value":"bypass"}`, http.StatusOK)
 	waitForTransactions(t, requests, metrics, 1)
-	if got := snapshot(); got.ThrottlerRequestedTPS != 0 || got.ThrottlerInstallationMode != throttlerBypass {
+	if got := snapshot(); got.Throttler.RequestedTps != 0 || got.Throttler.InstallationMode != throttlerBypass {
 		t.Fatalf("bypass snapshot = %+v", got)
 	}
 	post(`{"action":"pause"}`, http.StatusOK)
@@ -596,21 +596,21 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	}
 	waitForReaderReceives(t, requests, 2)
 	metrics <- time.Now()
-	if got := snapshot(); got.TotalTransactions != 1 || got.ThrottlerRequestedTPS != 4000 ||
-		got.ThrottlerInstallationMode != throttlerInstalled {
+	if got := snapshot(); got.Run.TotalTransactions != 1 || got.Throttler.RequestedTps != 4000 ||
+		got.Throttler.InstallationMode != throttlerInstalled {
 		t.Fatalf("paused throttler snapshot = %+v", got)
 	}
 	post(`{"action":"run"}`, http.StatusOK)
 	waitForTransactions(t, requests, metrics, 2)
 	post(`{"action":"set-requested-tps","value":100}`, http.StatusOK)
-	if got := snapshot().ThrottlerRequestedTPS; got != 100 {
+	if got := snapshot().Throttler.RequestedTps; got != 100 {
 		t.Fatalf("running TPS = %d, want 100", got)
 	}
 	post(`{"action":"pause"}`, http.StatusOK)
 	waitForState(t, requests, runStatePaused)
 	post(`{"action":"reset"}`, http.StatusOK)
-	if got := snapshot(); got.RunState != runStateIdle || got.TotalTransactions != 0 ||
-		got.ThrottlerRequestedTPS != 100 || got.ThrottlerInstallationMode != throttlerInstalled {
+	if got := snapshot(); got.Run.State != runStateIdle || got.Run.TotalTransactions != 0 ||
+		got.Throttler.RequestedTps != 100 || got.Throttler.InstallationMode != throttlerInstalled {
 		t.Fatalf("reset throttler snapshot = %+v", got)
 	}
 }
@@ -645,7 +645,7 @@ func TestResetWhileZeroTPSHoldsBatchCompletes(t *testing.T) {
 	}
 	snapshotReply := make(chan statusSnapshot, 1)
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
-	if got := <-snapshotReply; got.RunState != runStateIdle || got.TotalTransactions != 0 || got.ThrottlerRequestedTPS != 0 {
+	if got := <-snapshotReply; got.Run.State != runStateIdle || got.Run.TotalTransactions != 0 || got.Throttler.RequestedTps != 0 {
 		t.Fatalf("snapshot after zero-TPS Reset = %+v", got)
 	}
 }
@@ -659,8 +659,8 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 		return <-snapshotReply
 	}
 	initial := snapshot()
-	if initial.SenderChannelCapacity != 0 || initial.SenderChannelSentBatchesTotal != 0 ||
-		initial.ThrottlerAdmittedTPS != 0 {
+	if initial.SenderChannel.Capacity != 0 || initial.SenderChannel.SentBatchesTotal != 0 ||
+		initial.Throttler.AdmittedTps != 0 {
 		t.Fatalf("initial Sender channel = %+v", initial)
 	}
 
@@ -673,19 +673,19 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 	if result := <-reply; result.status != commandAccepted {
 		t.Fatalf("Run = %+v", result)
 	}
-	if first := snapshot(); first.ThrottlerAdmittedTPS != 0 || first.SenderChannelInputTransactionsPerSecond != 0 {
+	if first := snapshot(); first.Throttler.AdmittedTps != 0 || first.SenderChannel.InputTransactionsPerSecond != 0 {
 		t.Fatalf("pre-window Sender rate = %+v", first)
 	}
 	batches <- make([]Transaction, 2)
 	waitForSenderHandoff(t, requests, 1)
 	metrics <- time.Now()
 	active := snapshot()
-	if active.SenderChannelCapacity != 0 || active.SenderChannelDepthBatches != 0 ||
-		active.SenderChannelBufferedTransactions != 0 || active.SenderChannelSentBatchesTotal != 1 ||
-		active.SenderChannelSentTransactionsTotal != 2 || active.SenderChannelReceivedBatchesTotal != 1 ||
-		active.SenderChannelReceivedTransactionsTotal != 2 || active.SenderChannelInputBatchesPerSecond != 1 ||
-		active.SenderChannelInputTransactionsPerSecond != 2 || active.SenderChannelOutputBatchesPerSecond != 1 ||
-		active.SenderChannelOutputTransactionsPerSecond != 2 || active.ThrottlerAdmittedTPS != active.SenderChannelInputTransactionsPerSecond {
+	if active.SenderChannel.Capacity != 0 || active.SenderChannel.DepthBatches != 0 ||
+		active.SenderChannel.BufferedTransactions != 0 || active.SenderChannel.SentBatchesTotal != 1 ||
+		active.SenderChannel.SentTransactionsTotal != 2 || active.SenderChannel.ReceivedBatchesTotal != 1 ||
+		active.SenderChannel.ReceivedTransactionsTotal != 2 || active.SenderChannel.InputBatchesPerSecond != 1 ||
+		active.SenderChannel.InputTransactionsPerSecond != 2 || active.SenderChannel.OutputBatchesPerSecond != 1 ||
+		active.SenderChannel.OutputTransactionsPerSecond != 2 || active.Throttler.AdmittedTps != active.SenderChannel.InputTransactionsPerSecond {
 		t.Fatalf("active Sender channel = %+v", active)
 	}
 
@@ -695,10 +695,10 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 	waitForReaderReceives(t, requests, 2)
 	metrics <- time.Now()
 	paused := snapshot()
-	if paused.SenderChannelSentBatchesTotal != 1 || paused.SenderChannelReceivedBatchesTotal != 1 ||
-		paused.SenderChannelBlockedSenders != 0 || paused.SenderChannelDepthBatches != 0 ||
-		paused.ThrottlerAdmittedTPS != 0 || paused.SenderChannelInputTransactionsPerSecond != 0 ||
-		paused.SenderChannelOutputTransactionsPerSecond != 0 {
+	if paused.SenderChannel.SentBatchesTotal != 1 || paused.SenderChannel.ReceivedBatchesTotal != 1 ||
+		paused.SenderChannel.BlockedSenders != 0 || paused.SenderChannel.DepthBatches != 0 ||
+		paused.Throttler.AdmittedTps != 0 || paused.SenderChannel.InputTransactionsPerSecond != 0 ||
+		paused.SenderChannel.OutputTransactionsPerSecond != 0 {
 		t.Fatalf("paused Sender channel = %+v", paused)
 	}
 
@@ -709,8 +709,8 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 	waitForSenderHandoff(t, requests, 2)
 	metrics <- time.Now()
 	resumed := snapshot()
-	if resumed.SenderChannelSentBatchesTotal != 2 || resumed.SenderChannelReceivedBatchesTotal != 2 ||
-		resumed.ThrottlerAdmittedTPS != 1 || resumed.SenderChannelInputTransactionsPerSecond != 1 {
+	if resumed.SenderChannel.SentBatchesTotal != 2 || resumed.SenderChannel.ReceivedBatchesTotal != 2 ||
+		resumed.Throttler.AdmittedTps != 1 || resumed.SenderChannel.InputTransactionsPerSecond != 1 {
 		t.Fatalf("resumed Sender channel = %+v", resumed)
 	}
 
@@ -721,14 +721,14 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 		t.Fatalf("Reset = %+v", result)
 	}
 	reset := snapshot()
-	if reset.RunState != runStateIdle || reset.SenderChannelCapacity != 0 ||
-		reset.SenderChannelDepthBatches != 0 || reset.SenderChannelBufferedTransactions != 0 ||
-		reset.SenderChannelBlockedSenders != 0 || reset.SenderChannelOldestBlockedSenderMs != 0 ||
-		reset.SenderChannelBlockedMs != 0 || reset.SenderChannelSentBatchesTotal != 0 ||
-		reset.SenderChannelSentTransactionsTotal != 0 || reset.SenderChannelReceivedBatchesTotal != 0 ||
-		reset.SenderChannelReceivedTransactionsTotal != 0 || reset.SenderChannelInputBatchesPerSecond != 0 ||
-		reset.SenderChannelInputTransactionsPerSecond != 0 || reset.SenderChannelOutputBatchesPerSecond != 0 ||
-		reset.SenderChannelOutputTransactionsPerSecond != 0 || reset.ThrottlerAdmittedTPS != 0 {
+	if reset.Run.State != runStateIdle || reset.SenderChannel.Capacity != 0 ||
+		reset.SenderChannel.DepthBatches != 0 || reset.SenderChannel.BufferedTransactions != 0 ||
+		reset.SenderChannel.BlockedSenders != 0 || reset.SenderChannel.OldestBlockedSenderMs != 0 ||
+		reset.SenderChannel.BlockedMs != 0 || reset.SenderChannel.SentBatchesTotal != 0 ||
+		reset.SenderChannel.SentTransactionsTotal != 0 || reset.SenderChannel.ReceivedBatchesTotal != 0 ||
+		reset.SenderChannel.ReceivedTransactionsTotal != 0 || reset.SenderChannel.InputBatchesPerSecond != 0 ||
+		reset.SenderChannel.InputTransactionsPerSecond != 0 || reset.SenderChannel.OutputBatchesPerSecond != 0 ||
+		reset.SenderChannel.OutputTransactionsPerSecond != 0 || reset.Throttler.AdmittedTps != 0 {
 		t.Fatalf("Sender channel after Reset = %+v", reset)
 	}
 }
@@ -740,7 +740,7 @@ func waitForSenderHandoff(t *testing.T, requests chan<- request, want int64) {
 	for {
 		requests <- request{kind: getSnapshot, snapshotReply: reply}
 		got := <-reply
-		if got.SenderChannelSentBatchesTotal == want && got.SenderChannelReceivedBatchesTotal == want {
+		if got.SenderChannel.SentBatchesTotal == want && got.SenderChannel.ReceivedBatchesTotal == want {
 			return
 		}
 		select {
@@ -912,8 +912,8 @@ func waitForState(t *testing.T, requests chan<- request, want runState) {
 	}
 	select {
 	case snapshot := <-reply:
-		if snapshot.RunState != want {
-			t.Fatalf("state = %v, want %v", snapshot.RunState, want)
+		if snapshot.Run.State != want {
+			t.Fatalf("state = %v, want %v", snapshot.Run.State, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatalf("state did not reach %v", want)
@@ -1004,8 +1004,8 @@ func TestEventLoopSenderChannelTelemetryUsesAppliedReadBatchSizeAfterReuse(t *te
 	close(harness.allowThrottlerForward)
 	harness.send(t, []Transaction{{ClientID: "initial"}})
 	<-harness.forwardedBatches
-	if got := snapshot(); got.SenderChannelDepthBatches != 1 ||
-		got.SenderChannelBufferedTransactions != initialBatchSize {
+	if got := snapshot(); got.SenderChannel.DepthBatches != 1 ||
+		got.SenderChannel.BufferedTransactions != initialBatchSize {
 		t.Fatalf("initial Sender channel telemetry = %+v, want depth 1 and %d buffered transactions", got, initialBatchSize)
 	}
 
@@ -1024,8 +1024,8 @@ func TestEventLoopSenderChannelTelemetryUsesAppliedReadBatchSizeAfterReuse(t *te
 	harness.command(t, cmdPause)
 	harness.send(t, []Transaction{{ClientID: "updated"}})
 	<-harness.forwardedBatches
-	if got := snapshot(); got.SenderChannelDepthBatches != 1 ||
-		got.SenderChannelBufferedTransactions != updatedBatchSize {
+	if got := snapshot(); got.SenderChannel.DepthBatches != 1 ||
+		got.SenderChannel.BufferedTransactions != updatedBatchSize {
 		t.Fatalf("reused Sender channel telemetry = %+v, want depth 1 and %d buffered transactions", got, updatedBatchSize)
 	}
 }
@@ -1405,7 +1405,7 @@ func waitForTransactions(t *testing.T, requests chan<- request, metrics chan<- t
 		}
 		select {
 		case snapshot := <-reply:
-			if snapshot.TotalTransactions == want {
+			if snapshot.Run.TotalTransactions == want {
 				return
 			}
 		case <-deadline:
@@ -1427,7 +1427,7 @@ func waitForReaderReceives(t *testing.T, requests chan<- request, want int64) {
 		}
 		select {
 		case snapshot := <-reply:
-			if snapshot.ReaderChannelReceivedBatchesTotal == want {
+			if snapshot.ReaderChannel.ReceivedBatchesTotal == want {
 				return
 			}
 		case <-deadline:
