@@ -7,48 +7,55 @@ import (
 )
 
 type statusSnapshot struct {
-	RunState                                 runState       `json:"runState"`
-	TotalTransactions                        int64          `json:"totalTransactions"`
-	ReaderWorkers                            int            `json:"readerWorkers"`
-	ReaderReadBatchSize                      int            `json:"readerReadBatchSize"`
-	ThrottlerRequestedTPS                    int            `json:"throttlerRequestedTps"`
-	ThrottlerAdmittedTPS                     float64        `json:"throttlerAdmittedTps"`
-	ThrottlerInstallationMode                string         `json:"throttlerInstallationMode"`
-	SenderWorkers                            int            `json:"senderWorkers"`
-	ElapsedMs                                int64          `json:"elapsedMs"`
-	StartError                               *string        `json:"startError"`
-	ReaderReadTPS                            float64        `json:"readerReadTps"`
-	ReaderRowsRead                           int64          `json:"readerRowsRead"`
-	ReaderSource                             *string        `json:"readerSource"`
-	ReaderChannelCapacity                    int            `json:"readerChannelCapacity"`
-	ReaderChannelDepthBatches                int            `json:"readerChannelDepthBatches"`
-	ReaderChannelBufferedTransactions        int            `json:"readerChannelBufferedTransactions"`
-	ReaderChannelBlockedSenders              int            `json:"readerChannelBlockedSenders"`
-	ReaderChannelOldestBlockedSenderMs       int64          `json:"readerChannelOldestBlockedSenderMs"`
-	ReaderChannelBlockedMs                   int64          `json:"readerChannelBlockedMs"`
-	ReaderChannelSentBatchesTotal            int64          `json:"readerChannelSentBatchesTotal"`
-	ReaderChannelSentTransactionsTotal       int64          `json:"readerChannelSentTransactionsTotal"`
-	ReaderChannelReceivedBatchesTotal        int64          `json:"readerChannelReceivedBatchesTotal"`
-	ReaderChannelReceivedTransactionsTotal   int64          `json:"readerChannelReceivedTransactionsTotal"`
-	ReaderChannelInputBatchesPerSecond       float64        `json:"readerChannelInputBatchesPerSecond"`
-	ReaderChannelInputTransactionsPerSecond  float64        `json:"readerChannelInputTransactionsPerSecond"`
-	ReaderChannelOutputBatchesPerSecond      float64        `json:"readerChannelOutputBatchesPerSecond"`
-	ReaderChannelOutputTransactionsPerSecond float64        `json:"readerChannelOutputTransactionsPerSecond"`
-	SenderChannelCapacity                    int            `json:"senderChannelCapacity"`
-	SenderChannelDepthBatches                int            `json:"senderChannelDepthBatches"`
-	SenderChannelBufferedTransactions        int            `json:"senderChannelBufferedTransactions"`
-	SenderChannelBlockedSenders              int            `json:"senderChannelBlockedSenders"`
-	SenderChannelOldestBlockedSenderMs       int64          `json:"senderChannelOldestBlockedSenderMs"`
-	SenderChannelBlockedMs                   int64          `json:"senderChannelBlockedMs"`
-	SenderChannelSentBatchesTotal            int64          `json:"senderChannelSentBatchesTotal"`
-	SenderChannelSentTransactionsTotal       int64          `json:"senderChannelSentTransactionsTotal"`
-	SenderChannelReceivedBatchesTotal        int64          `json:"senderChannelReceivedBatchesTotal"`
-	SenderChannelReceivedTransactionsTotal   int64          `json:"senderChannelReceivedTransactionsTotal"`
-	SenderChannelInputBatchesPerSecond       float64        `json:"senderChannelInputBatchesPerSecond"`
-	SenderChannelInputTransactionsPerSecond  float64        `json:"senderChannelInputTransactionsPerSecond"`
-	SenderChannelOutputBatchesPerSecond      float64        `json:"senderChannelOutputBatchesPerSecond"`
-	SenderChannelOutputTransactionsPerSecond float64        `json:"senderChannelOutputTransactionsPerSecond"`
-	Policy                                   policySnapshot `json:"policy"`
+	Run           runSnapshot       `json:"run"`
+	Reader        readerSnapshot    `json:"reader"`
+	Throttler     throttlerSnapshot `json:"throttler"`
+	Sender        senderSnapshot    `json:"sender"`
+	ReaderChannel channelSnapshot   `json:"readerChannel"`
+	SenderChannel channelSnapshot   `json:"senderChannel"`
+	Policy        policySnapshot    `json:"policy"`
+}
+
+type runSnapshot struct {
+	State             runState `json:"state"`
+	TotalTransactions int64    `json:"totalTransactions"`
+	ElapsedMs         int64    `json:"elapsedMs"`
+	StartError        *string  `json:"startError"`
+}
+
+type readerSnapshot struct {
+	Workers       int     `json:"workers"`
+	ReadBatchSize int     `json:"readBatchSize"`
+	ReadTps       float64 `json:"readTps"`
+	RowsRead      int64   `json:"rowsRead"`
+	Source        *string `json:"source"`
+}
+
+type throttlerSnapshot struct {
+	RequestedTps     int     `json:"requestedTps"`
+	AdmittedTps      float64 `json:"admittedTps"`
+	InstallationMode string  `json:"installationMode"`
+}
+
+type senderSnapshot struct {
+	Workers int `json:"workers"`
+}
+
+type channelSnapshot struct {
+	Capacity                    int     `json:"capacity"`
+	DepthBatches                int     `json:"depthBatches"`
+	BufferedTransactions        int     `json:"bufferedTransactions"`
+	BlockedSenders              int     `json:"blockedSenders"`
+	OldestBlockedSenderMs       int64   `json:"oldestBlockedSenderMs"`
+	BlockedMs                   int64   `json:"blockedMs"`
+	SentBatchesTotal            int64   `json:"sentBatchesTotal"`
+	SentTransactionsTotal       int64   `json:"sentTransactionsTotal"`
+	ReceivedBatchesTotal        int64   `json:"receivedBatchesTotal"`
+	ReceivedTransactionsTotal   int64   `json:"receivedTransactionsTotal"`
+	InputBatchesPerSecond       float64 `json:"inputBatchesPerSecond"`
+	InputTransactionsPerSecond  float64 `json:"inputTransactionsPerSecond"`
+	OutputBatchesPerSecond      float64 `json:"outputBatchesPerSecond"`
+	OutputTransactionsPerSecond float64 `json:"outputTransactionsPerSecond"`
 }
 
 func snapshotHandler(requests chan<- request) http.Handler {

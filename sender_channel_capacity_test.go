@@ -116,11 +116,11 @@ func TestSenderChannelCapacityIdleOnlyAppliesToThrottlerAndPersistsAfterReset(t 
 				}
 			}
 
-			if got := snapshot().SenderChannelCapacity; got != 0 {
+			if got := snapshot().SenderChannel.Capacity; got != 0 {
 				t.Fatalf("default capacity = %d, want 0", got)
 			}
 			post(`{"action":"set-sender-channel-capacity","value":`+strconv.Itoa(capacity)+`}`, http.StatusOK)
-			if got := snapshot().SenderChannelCapacity; got != capacity {
+			if got := snapshot().SenderChannel.Capacity; got != capacity {
 				t.Fatalf("idle capacity = %d, want %d", got, capacity)
 			}
 
@@ -130,18 +130,18 @@ func TestSenderChannelCapacityIdleOnlyAppliesToThrottlerAndPersistsAfterReset(t 
 				t.Fatalf("invalid direct command status = %d, want conflict", result.status)
 			}
 			post(`{"action":"run"}`, http.StatusOK)
-			if got := snapshot(); got.RunState != runStateRunning || got.SenderChannelCapacity != capacity {
+			if got := snapshot(); got.Run.State != runStateRunning || got.SenderChannel.Capacity != capacity {
 				t.Fatalf("running snapshot = %+v", got)
 			}
 			post(`{"action":"set-sender-channel-capacity","value":4}`, http.StatusConflict)
 			post(`{"action":"pause"}`, http.StatusOK)
 			post(`{"action":"set-sender-channel-capacity","value":4}`, http.StatusConflict)
 			post(`{"action":"reset"}`, http.StatusOK)
-			if got := snapshot(); got.RunState != runStateIdle || got.SenderChannelCapacity != capacity {
+			if got := snapshot(); got.Run.State != runStateIdle || got.SenderChannel.Capacity != capacity {
 				t.Fatalf("reset snapshot = %+v", got)
 			}
 			post(`{"action":"run"}`, http.StatusOK)
-			if got := snapshot(); got.RunState != runStateRunning || got.SenderChannelCapacity != capacity {
+			if got := snapshot(); got.Run.State != runStateRunning || got.SenderChannel.Capacity != capacity {
 				t.Fatalf("running snapshot after Reset = %+v", got)
 			}
 		})

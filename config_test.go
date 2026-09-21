@@ -97,15 +97,37 @@ func TestLoadPolicyRequiresExplicitPolicyFields(t *testing.T) {
 	}
 }
 
+func TestLoadPolicyAllowsSenderChannelCapacityPolicy(t *testing.T) {
+	contents := strings.Replace(
+		testConfigContents(),
+		"[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]",
+		"[senderChannel.capacity]\ndefault = 3\nallowed = [0, 3, 7]",
+		1,
+	)
+	if contents == testConfigContents() {
+		t.Fatal("sender channel capacity policy replacement did not apply")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadPolicy(path); err != nil {
+		t.Fatalf("loadPolicy sender channel capacity policy: %v", err)
+	}
+}
+
 func TestLoadPolicyRejectsInvalidSenderChannelCapacityPolicy(t *testing.T) {
 	tests := []struct {
 		name string
 		old  string
 		new  string
 	}{
-		{name: "non-zero default", old: "[senderChannel.capacity]\ndefault = 0", new: "[senderChannel.capacity]\ndefault = 1"},
-		{name: "off-list allowed value", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 3]"},
 		{name: "wrong unit", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"transactions\""},
+		{name: "wrong mutability", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"idle-only\"", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"immediate\""},
+		{name: "negative allowed value", old: "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", new: "allowed = [-1, 0, 1]"},
+		{name: "not strictly increasing allowed values", old: "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", new: "allowed = [0, 2, 1]"},
+		{name: "default outside allowed", old: "[senderChannel.capacity]\ndefault = 0", new: "[senderChannel.capacity]\ndefault = 3"},
 	}
 
 	for _, test := range tests {
