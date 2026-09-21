@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -14,14 +13,14 @@ func TestReaderTelemetryMeasuresElapsedIntervals(t *testing.T) {
 	}
 
 	telemetry.startInterval(start)
-	telemetry.recordRead(3, filepath.Join("data", "part-1.parquet"))
+	telemetry.recordRead(3, "data/part-1.parquet")
 	telemetry.sample(start.Add(1500 * time.Millisecond))
 	got := telemetry.snapshot()
 	if got.readTPS != 2 || got.rowsRead != 3 || got.source == nil || *got.source != "data/part-1.parquet" {
 		t.Fatalf("first interval = %+v, want 2 rows/s, 3 rows, first source", got)
 	}
 
-	telemetry.recordRead(6, filepath.Join("data", "part-2.parquet"))
+	telemetry.recordRead(6, "data/part-2.parquet")
 	telemetry.sample(start.Add(3500 * time.Millisecond))
 	got = telemetry.snapshot()
 	if got.readTPS != 3 || got.rowsRead != 9 || got.source == nil || *got.source != "data/part-2.parquet" {

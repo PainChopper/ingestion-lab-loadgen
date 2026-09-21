@@ -34,6 +34,7 @@ func produceBatches(
 
 		// Accumulate rows across files until a batch reaches the target size.
 		accumulator := make([]Transaction, 0, batchSize)
+		rows := make([]Transaction, batchSize)
 
 		for {
 			for _, filePath := range files {
@@ -44,6 +45,7 @@ func produceBatches(
 				if err != nil {
 					panic(fmt.Sprintf("failed to open file %s: %v", filePath, err))
 				}
+				source := filepath.ToSlash(filePath)
 				func() {
 					defer func() {
 						if err := file.Close(); err != nil {
@@ -51,7 +53,6 @@ func produceBatches(
 						}
 					}()
 
-					rows := make([]Transaction, batchSize)
 					reader := parquet.NewGenericReader[Transaction](file)
 					defer func() {
 						if err := reader.Close(); err != nil {
@@ -65,7 +66,7 @@ func produceBatches(
 						}
 						n, err := reader.Read(rows)
 						if n > 0 {
-							telemetry.recordRead(n, filePath)
+							telemetry.recordRead(n, source)
 							remainingRows := rows[:n]
 							if accumulator == nil {
 								accumulator = make([]Transaction, 0, batchSize)
