@@ -36,14 +36,15 @@ type channelTelemetry struct {
 	sentTransactionsTotal         int64
 	receivedBatchesTotal          int64
 	receivedTransactionsTotal     int64
-	sentBatchesSinceTick          int64
-	sentTransactionsSinceTick     int64
-	receivedBatchesSinceTick      int64
-	receivedTransactionsSinceTick int64
 	sentBatchesPerSecond          float64
 	sentTransactionsPerSecond     float64
 	receivedBatchesPerSecond      float64
 	receivedTransactionsPerSecond float64
+
+	sentBatchesSinceTick          int64
+	sentTransactionsSinceTick     int64
+	receivedBatchesSinceTick      int64
+	receivedTransactionsSinceTick int64
 }
 
 func (q *channelTelemetry) start(batches <-chan []Transaction, batchSize int) {
@@ -160,14 +161,14 @@ func (q *channelTelemetry) clearMeasurementsLocked() {
 	q.sentTransactionsTotal = 0
 	q.receivedBatchesTotal = 0
 	q.receivedTransactionsTotal = 0
-	q.sentBatchesSinceTick = 0
-	q.sentTransactionsSinceTick = 0
-	q.receivedBatchesSinceTick = 0
-	q.receivedTransactionsSinceTick = 0
 	q.sentBatchesPerSecond = 0
 	q.sentTransactionsPerSecond = 0
 	q.receivedBatchesPerSecond = 0
 	q.receivedTransactionsPerSecond = 0
+	q.sentBatchesSinceTick = 0
+	q.sentTransactionsSinceTick = 0
+	q.receivedBatchesSinceTick = 0
+	q.receivedTransactionsSinceTick = 0
 }
 
 func (q *channelTelemetry) startBlocked(now time.Time) {
