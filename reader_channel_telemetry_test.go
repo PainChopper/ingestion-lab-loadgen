@@ -28,8 +28,7 @@ func TestReaderChannelTelemetryMeasuresBlockedSendUntilConsumerReceives(t *testi
 
 	var telemetry channelTelemetry
 	telemetry.start(batches, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sent := make(chan bool, 1)
 	go func() {
 		sent <- telemetry.send(ctx, batches, []Transaction{{}})
@@ -187,8 +186,7 @@ func TestReaderChannelTelemetryUnbufferedHandoffCountsOnlyAfterSend(t *testing.T
 	batches := make(chan []Transaction)
 	var telemetry channelTelemetry
 	telemetry.start(batches, 2)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	sent := make(chan bool, 1)
 	go func() {
 		sent <- telemetry.send(ctx, batches, make([]Transaction, 2))
