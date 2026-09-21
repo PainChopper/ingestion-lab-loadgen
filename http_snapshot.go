@@ -42,20 +42,20 @@ type senderSnapshot struct {
 }
 
 type channelSnapshot struct {
-	Capacity                    int     `json:"capacity"`
-	DepthBatches                int     `json:"depthBatches"`
-	BufferedTransactions        int     `json:"bufferedTransactions"`
-	BlockedSenders              int     `json:"blockedSenders"`
-	OldestBlockedSenderMs       int64   `json:"oldestBlockedSenderMs"`
-	BlockedMs                   int64   `json:"blockedMs"`
-	SentBatchesTotal            int64   `json:"sentBatchesTotal"`
-	SentTransactionsTotal       int64   `json:"sentTransactionsTotal"`
-	ReceivedBatchesTotal        int64   `json:"receivedBatchesTotal"`
-	ReceivedTransactionsTotal   int64   `json:"receivedTransactionsTotal"`
-	InputBatchesPerSecond       float64 `json:"inputBatchesPerSecond"`
-	InputTransactionsPerSecond  float64 `json:"inputTransactionsPerSecond"`
-	OutputBatchesPerSecond      float64 `json:"outputBatchesPerSecond"`
-	OutputTransactionsPerSecond float64 `json:"outputTransactionsPerSecond"`
+	Capacity                      int     `json:"capacity"`
+	DepthBatches                  int     `json:"depthBatches"`
+	BufferedTransactions          int     `json:"bufferedTransactions"`
+	BlockedSenders                int     `json:"blockedSenders"`
+	OldestBlockedSenderMs         int64   `json:"oldestBlockedSenderMs"`
+	BlockedMs                     int64   `json:"blockedMs"`
+	SentBatchesTotal              int64   `json:"sentBatchesTotal"`
+	SentTransactionsTotal         int64   `json:"sentTransactionsTotal"`
+	ReceivedBatchesTotal          int64   `json:"receivedBatchesTotal"`
+	ReceivedTransactionsTotal     int64   `json:"receivedTransactionsTotal"`
+	SentBatchesPerSecond          float64 `json:"inputBatchesPerSecond"`
+	SentTransactionsPerSecond     float64 `json:"inputTransactionsPerSecond"`
+	ReceivedBatchesPerSecond      float64 `json:"outputBatchesPerSecond"`
+	ReceivedTransactionsPerSecond float64 `json:"outputTransactionsPerSecond"`
 }
 
 func snapshotHandler(requests chan<- request) http.Handler {

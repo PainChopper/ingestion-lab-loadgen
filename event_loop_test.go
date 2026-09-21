@@ -90,12 +90,12 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 		t.Fatalf("actual TPS = %v, want 10", got)
 	}
 	reader := state.telemetry.readerChannel.snapshot(time.Now())
-	if reader.outputTransactionsPerSecond != 10 {
-		t.Fatalf("reader channel output TPS = %v, want 10", reader.outputTransactionsPerSecond)
+	if reader.receivedTransactionsPerSecond != 10 {
+		t.Fatalf("reader channel received TPS = %v, want 10", reader.receivedTransactionsPerSecond)
 	}
 	sender := state.telemetry.senderChannel.snapshot(time.Now())
-	if sender.outputTransactionsPerSecond != 10 {
-		t.Fatalf("sender channel output TPS = %v, want 10", sender.outputTransactionsPerSecond)
+	if sender.receivedTransactionsPerSecond != 10 {
+		t.Fatalf("sender channel received TPS = %v, want 10", sender.receivedTransactionsPerSecond)
 	}
 
 	requests <- request{kind: cmdSetRequestedTPS, value: 2_100, commandReply: reply}
@@ -589,7 +589,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 		*snapshot.Reader.Source != "data/second.parquet" || snapshot.ReaderChannel.Capacity != 2 ||
 		snapshot.ReaderChannel.DepthBatches != 1 || snapshot.ReaderChannel.BufferedTransactions != 2 ||
 		snapshot.ReaderChannel.SentBatchesTotal != 1 || snapshot.ReaderChannel.SentTransactionsTotal != 2 ||
-		snapshot.ReaderChannel.InputBatchesPerSecond != 1 || snapshot.ReaderChannel.InputTransactionsPerSecond != 2 {
+		snapshot.ReaderChannel.SentBatchesPerSecond != 1 || snapshot.ReaderChannel.SentTransactionsPerSecond != 2 {
 		t.Fatalf("paused snapshot = %+v, want reader and readerChannel measurements", snapshot)
 	}
 	state.telemetry.readerChannel.recordReceive(len(<-readerChannel))
@@ -597,8 +597,8 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
 	if snapshot.ReaderChannel.ReceivedBatchesTotal != 1 || snapshot.ReaderChannel.ReceivedTransactionsTotal != 2 ||
-		snapshot.ReaderChannel.InputBatchesPerSecond != 0 || snapshot.ReaderChannel.InputTransactionsPerSecond != 0 ||
-		snapshot.ReaderChannel.OutputBatchesPerSecond != 1 || snapshot.ReaderChannel.OutputTransactionsPerSecond != 2 {
+		snapshot.ReaderChannel.SentBatchesPerSecond != 0 || snapshot.ReaderChannel.SentTransactionsPerSecond != 0 ||
+		snapshot.ReaderChannel.ReceivedBatchesPerSecond != 1 || snapshot.ReaderChannel.ReceivedTransactionsPerSecond != 2 {
 		t.Fatalf("drained readerChannel snapshot = %+v", snapshot)
 	}
 
@@ -619,8 +619,8 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 		snapshot.ReaderChannel.OldestBlockedSenderMs != 0 || snapshot.ReaderChannel.BlockedMs != 0 ||
 		snapshot.ReaderChannel.SentBatchesTotal != 0 || snapshot.ReaderChannel.SentTransactionsTotal != 0 ||
 		snapshot.ReaderChannel.ReceivedBatchesTotal != 0 || snapshot.ReaderChannel.ReceivedTransactionsTotal != 0 ||
-		snapshot.ReaderChannel.InputBatchesPerSecond != 0 || snapshot.ReaderChannel.InputTransactionsPerSecond != 0 ||
-		snapshot.ReaderChannel.OutputBatchesPerSecond != 0 || snapshot.ReaderChannel.OutputTransactionsPerSecond != 0 {
+		snapshot.ReaderChannel.SentBatchesPerSecond != 0 || snapshot.ReaderChannel.SentTransactionsPerSecond != 0 ||
+		snapshot.ReaderChannel.ReceivedBatchesPerSecond != 0 || snapshot.ReaderChannel.ReceivedTransactionsPerSecond != 0 {
 		t.Fatalf("snapshot after Reset = %+v, want zero measurements", snapshot)
 	}
 }
@@ -751,7 +751,7 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 	if result := <-reply; result.status != commandAccepted {
 		t.Fatalf("Run = %+v", result)
 	}
-	if first := snapshot(); first.Throttler.AdmittedTps != 0 || first.SenderChannel.InputTransactionsPerSecond != 0 {
+	if first := snapshot(); first.Throttler.AdmittedTps != 0 || first.SenderChannel.SentTransactionsPerSecond != 0 {
 		t.Fatalf("pre-window Sender rate = %+v", first)
 	}
 	batches <- make([]Transaction, 2)
@@ -761,9 +761,9 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 	if active.SenderChannel.Capacity != 0 || active.SenderChannel.DepthBatches != 0 ||
 		active.SenderChannel.BufferedTransactions != 0 || active.SenderChannel.SentBatchesTotal != 1 ||
 		active.SenderChannel.SentTransactionsTotal != 2 || active.SenderChannel.ReceivedBatchesTotal != 1 ||
-		active.SenderChannel.ReceivedTransactionsTotal != 2 || active.SenderChannel.InputBatchesPerSecond != 1 ||
-		active.SenderChannel.InputTransactionsPerSecond != 2 || active.SenderChannel.OutputBatchesPerSecond != 1 ||
-		active.SenderChannel.OutputTransactionsPerSecond != 2 || active.Throttler.AdmittedTps != active.SenderChannel.InputTransactionsPerSecond {
+		active.SenderChannel.ReceivedTransactionsTotal != 2 || active.SenderChannel.SentBatchesPerSecond != 1 ||
+		active.SenderChannel.SentTransactionsPerSecond != 2 || active.SenderChannel.ReceivedBatchesPerSecond != 1 ||
+		active.SenderChannel.ReceivedTransactionsPerSecond != 2 || active.Throttler.AdmittedTps != active.SenderChannel.SentTransactionsPerSecond {
 		t.Fatalf("active Sender channel = %+v", active)
 	}
 
@@ -775,8 +775,8 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 	paused := snapshot()
 	if paused.SenderChannel.SentBatchesTotal != 1 || paused.SenderChannel.ReceivedBatchesTotal != 1 ||
 		paused.SenderChannel.BlockedSenders != 0 || paused.SenderChannel.DepthBatches != 0 ||
-		paused.Throttler.AdmittedTps != 0 || paused.SenderChannel.InputTransactionsPerSecond != 0 ||
-		paused.SenderChannel.OutputTransactionsPerSecond != 0 {
+		paused.Throttler.AdmittedTps != 0 || paused.SenderChannel.SentTransactionsPerSecond != 0 ||
+		paused.SenderChannel.ReceivedTransactionsPerSecond != 0 {
 		t.Fatalf("paused Sender channel = %+v", paused)
 	}
 
@@ -788,7 +788,7 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 	metrics <- time.Now()
 	resumed := snapshot()
 	if resumed.SenderChannel.SentBatchesTotal != 2 || resumed.SenderChannel.ReceivedBatchesTotal != 2 ||
-		resumed.Throttler.AdmittedTps != 1 || resumed.SenderChannel.InputTransactionsPerSecond != 1 {
+		resumed.Throttler.AdmittedTps != 1 || resumed.SenderChannel.SentTransactionsPerSecond != 1 {
 		t.Fatalf("resumed Sender channel = %+v", resumed)
 	}
 
@@ -804,9 +804,9 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 		reset.SenderChannel.BlockedSenders != 0 || reset.SenderChannel.OldestBlockedSenderMs != 0 ||
 		reset.SenderChannel.BlockedMs != 0 || reset.SenderChannel.SentBatchesTotal != 0 ||
 		reset.SenderChannel.SentTransactionsTotal != 0 || reset.SenderChannel.ReceivedBatchesTotal != 0 ||
-		reset.SenderChannel.ReceivedTransactionsTotal != 0 || reset.SenderChannel.InputBatchesPerSecond != 0 ||
-		reset.SenderChannel.InputTransactionsPerSecond != 0 || reset.SenderChannel.OutputBatchesPerSecond != 0 ||
-		reset.SenderChannel.OutputTransactionsPerSecond != 0 || reset.Throttler.AdmittedTps != 0 {
+		reset.SenderChannel.ReceivedTransactionsTotal != 0 || reset.SenderChannel.SentBatchesPerSecond != 0 ||
+		reset.SenderChannel.SentTransactionsPerSecond != 0 || reset.SenderChannel.ReceivedBatchesPerSecond != 0 ||
+		reset.SenderChannel.ReceivedTransactionsPerSecond != 0 || reset.Throttler.AdmittedTps != 0 {
 		t.Fatalf("Sender channel after Reset = %+v", reset)
 	}
 }

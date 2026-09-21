@@ -7,20 +7,20 @@ import (
 )
 
 type channelMeasurements struct {
-	capacity                    int
-	depthBatches                int
-	bufferedTransactions        int
-	blockedSenders              int
-	oldestBlockedSenderMs       int64
-	blockedMs                   int64
-	sentBatchesTotal            int64
-	sentTransactionsTotal       int64
-	receivedBatchesTotal        int64
-	receivedTransactionsTotal   int64
-	inputBatchesPerSecond       float64
-	inputTransactionsPerSecond  float64
-	outputBatchesPerSecond      float64
-	outputTransactionsPerSecond float64
+	capacity                      int
+	depthBatches                  int
+	bufferedTransactions          int
+	blockedSenders                int
+	oldestBlockedSenderMs         int64
+	blockedMs                     int64
+	sentBatchesTotal              int64
+	sentTransactionsTotal         int64
+	receivedBatchesTotal          int64
+	receivedTransactionsTotal     int64
+	sentBatchesPerSecond          float64
+	sentTransactionsPerSecond     float64
+	receivedBatchesPerSecond      float64
+	receivedTransactionsPerSecond float64
 }
 
 type channelTelemetry struct {
@@ -32,18 +32,18 @@ type channelTelemetry struct {
 	blockedAt time.Time
 	blockedMs time.Duration
 
-	sentBatchesTotal            int64
-	sentTransactionsTotal       int64
-	receivedBatchesTotal        int64
-	receivedTransactionsTotal   int64
-	inputBatchesSinceTick       int64
-	inputTransactionsSinceTick  int64
-	outputBatchesSinceTick      int64
-	outputTransactionsSinceTick int64
-	inputBatchesPerSecond       float64
-	inputTransactionsPerSecond  float64
-	outputBatchesPerSecond      float64
-	outputTransactionsPerSecond float64
+	sentBatchesTotal              int64
+	sentTransactionsTotal         int64
+	receivedBatchesTotal          int64
+	receivedTransactionsTotal     int64
+	sentBatchesSinceTick          int64
+	sentTransactionsSinceTick     int64
+	receivedBatchesSinceTick      int64
+	receivedTransactionsSinceTick int64
+	sentBatchesPerSecond          float64
+	sentTransactionsPerSecond     float64
+	receivedBatchesPerSecond      float64
+	receivedTransactionsPerSecond float64
 }
 
 func (q *channelTelemetry) start(batches <-chan []Transaction, batchSize int) {
@@ -100,10 +100,10 @@ func (q *channelTelemetry) snapshot(now time.Time) channelMeasurements {
 	measurements.sentTransactionsTotal = q.sentTransactionsTotal
 	measurements.receivedBatchesTotal = q.receivedBatchesTotal
 	measurements.receivedTransactionsTotal = q.receivedTransactionsTotal
-	measurements.inputBatchesPerSecond = q.inputBatchesPerSecond
-	measurements.inputTransactionsPerSecond = q.inputTransactionsPerSecond
-	measurements.outputBatchesPerSecond = q.outputBatchesPerSecond
-	measurements.outputTransactionsPerSecond = q.outputTransactionsPerSecond
+	measurements.sentBatchesPerSecond = q.sentBatchesPerSecond
+	measurements.sentTransactionsPerSecond = q.sentTransactionsPerSecond
+	measurements.receivedBatchesPerSecond = q.receivedBatchesPerSecond
+	measurements.receivedTransactionsPerSecond = q.receivedTransactionsPerSecond
 	return measurements
 }
 
@@ -112,8 +112,8 @@ func (q *channelTelemetry) recordSend(transactions int) {
 	defer q.mu.Unlock()
 	q.sentBatchesTotal++
 	q.sentTransactionsTotal += int64(transactions)
-	q.inputBatchesSinceTick++
-	q.inputTransactionsSinceTick += int64(transactions)
+	q.sentBatchesSinceTick++
+	q.sentTransactionsSinceTick += int64(transactions)
 }
 
 func (q *channelTelemetry) recordReceive(transactions int) {
@@ -121,22 +121,22 @@ func (q *channelTelemetry) recordReceive(transactions int) {
 	defer q.mu.Unlock()
 	q.receivedBatchesTotal++
 	q.receivedTransactionsTotal += int64(transactions)
-	q.outputBatchesSinceTick++
-	q.outputTransactionsSinceTick += int64(transactions)
+	q.receivedBatchesSinceTick++
+	q.receivedTransactionsSinceTick += int64(transactions)
 }
 
 func (q *channelTelemetry) sample(window time.Duration) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	seconds := window.Seconds()
-	q.inputBatchesPerSecond = float64(q.inputBatchesSinceTick) / seconds
-	q.inputTransactionsPerSecond = float64(q.inputTransactionsSinceTick) / seconds
-	q.outputBatchesPerSecond = float64(q.outputBatchesSinceTick) / seconds
-	q.outputTransactionsPerSecond = float64(q.outputTransactionsSinceTick) / seconds
-	q.inputBatchesSinceTick = 0
-	q.inputTransactionsSinceTick = 0
-	q.outputBatchesSinceTick = 0
-	q.outputTransactionsSinceTick = 0
+	q.sentBatchesPerSecond = float64(q.sentBatchesSinceTick) / seconds
+	q.sentTransactionsPerSecond = float64(q.sentTransactionsSinceTick) / seconds
+	q.receivedBatchesPerSecond = float64(q.receivedBatchesSinceTick) / seconds
+	q.receivedTransactionsPerSecond = float64(q.receivedTransactionsSinceTick) / seconds
+	q.sentBatchesSinceTick = 0
+	q.sentTransactionsSinceTick = 0
+	q.receivedBatchesSinceTick = 0
+	q.receivedTransactionsSinceTick = 0
 }
 
 func (q *channelTelemetry) clearMeasurements() {
@@ -160,14 +160,14 @@ func (q *channelTelemetry) clearMeasurementsLocked() {
 	q.sentTransactionsTotal = 0
 	q.receivedBatchesTotal = 0
 	q.receivedTransactionsTotal = 0
-	q.inputBatchesSinceTick = 0
-	q.inputTransactionsSinceTick = 0
-	q.outputBatchesSinceTick = 0
-	q.outputTransactionsSinceTick = 0
-	q.inputBatchesPerSecond = 0
-	q.inputTransactionsPerSecond = 0
-	q.outputBatchesPerSecond = 0
-	q.outputTransactionsPerSecond = 0
+	q.sentBatchesSinceTick = 0
+	q.sentTransactionsSinceTick = 0
+	q.receivedBatchesSinceTick = 0
+	q.receivedTransactionsSinceTick = 0
+	q.sentBatchesPerSecond = 0
+	q.sentTransactionsPerSecond = 0
+	q.receivedBatchesPerSecond = 0
+	q.receivedTransactionsPerSecond = 0
 }
 
 func (q *channelTelemetry) startBlocked(now time.Time) {
