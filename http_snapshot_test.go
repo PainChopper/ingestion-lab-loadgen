@@ -56,6 +56,11 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if string(root["policy"]) == "null" {
 		t.Error("policy must be a JSON object")
 	}
+	var policy map[string]json.RawMessage
+	if err := json.Unmarshal(root["policy"], &policy); err != nil {
+		t.Fatalf("decode policy: %v", err)
+	}
+	assertExactJSONKeys(t, policy, []string{"metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "senderChannelCapacity", "throttlerInstallationMode", "throttlerRequestedTps"})
 }
 
 func assertExactJSONKeys(t *testing.T, object map[string]json.RawMessage, want []string) {

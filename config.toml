@@ -37,3 +37,11 @@ mutability = "immediate"
 default = "installed"
 allowed = ["installed", "bypass"]
 mutability = "immediate"
+
+[metrics.window_ms]
+default = 1_000
+min = 100
+max = 10_000
+step = 100
+unit = "milliseconds"
+mutability = "startup-only"

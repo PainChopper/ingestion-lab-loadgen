@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestElapsedMsUsesRunStartAndAccumulatedTime(t *testing.T) {
@@ -36,6 +38,82 @@ func TestElapsedMsUsesRunStartAndAccumulatedTime(t *testing.T) {
 	if got := state.elapsedMs(start.Add(10*time.Second + 750*time.Millisecond)); got != 2000 {
 		t.Fatalf("resumed elapsed = %d, want 2000", got)
 	}
+}
+
+func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
+	requests := make(chan request)
+	metrics := make(chan time.Time)
+	state := newTestControlState(t)
+	state.metricsWindow = 300 * time.Millisecond
+	promMetrics := NewMetrics()
+	started := make(chan struct{})
+	var output chan<- []Transaction
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		state.eventLoop(requests, metrics, promMetrics, func(ctx context.Context, batches chan<- []Transaction, _ int) (<-chan struct{}, error) {
+			output = batches
+			close(started)
+			producerDone := make(chan struct{})
+			go func() {
+				defer close(producerDone)
+				<-ctx.Done()
+			}()
+			return producerDone, nil
+		})
+	}()
+	t.Cleanup(func() {
+		close(requests)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("event loop did not stop")
+		}
+	})
+
+	reply := make(chan commandResult, 1)
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("run = %+v", result)
+	}
+	<-started
+	output <- []Transaction{{}, {}, {}}
+	waitForSenderHandoff(t, requests, 1)
+	metrics <- time.Now()
+	snapshotReply := make(chan statusSnapshot, 1)
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	if snapshot := <-snapshotReply; snapshot.Run.TotalTransactions != 3 {
+		t.Fatalf("total transactions = %d, want 3", snapshot.Run.TotalTransactions)
+	}
+
+	if got := gaugeValue(t, promMetrics.actualTPS); got != 10 {
+		t.Fatalf("actual TPS = %v, want 10", got)
+	}
+	reader := state.telemetry.readerChannel.snapshot(time.Now())
+	if reader.outputTransactionsPerSecond != 10 {
+		t.Fatalf("reader channel output TPS = %v, want 10", reader.outputTransactionsPerSecond)
+	}
+	sender := state.telemetry.senderChannel.snapshot(time.Now())
+	if sender.outputTransactionsPerSecond != 10 {
+		t.Fatalf("sender channel output TPS = %v, want 10", sender.outputTransactionsPerSecond)
+	}
+
+	requests <- request{kind: cmdSetRequestedTPS, value: 2_100, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("set requested TPS = %+v", result)
+	}
+	if got := gaugeValue(t, promMetrics.targetTPS); got != 2_100 {
+		t.Fatalf("target TPS = %v, want 2100", got)
+	}
+}
+
+func gaugeValue(t *testing.T, gauge interface{ Write(*dto.Metric) error }) float64 {
+	t.Helper()
+	metric := &dto.Metric{}
+	if err := gauge.Write(metric); err != nil {
+		t.Fatalf("write gauge: %v", err)
+	}
+	return metric.GetGauge().GetValue()
 }
 
 func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {

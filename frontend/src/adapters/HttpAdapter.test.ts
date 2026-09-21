@@ -94,6 +94,14 @@ const VALID_WIRE: TestWireSnapshot = {
       unit: 'batches',
       mutability: 'idle-only',
     },
+    metricsWindowMs: {
+      default: 1_000,
+      min: 100,
+      max: 10_000,
+      step: 100,
+      unit: 'milliseconds',
+      mutability: 'startup-only',
+    },
     throttlerRequestedTps: {
       default: 200,
       min: 0,
@@ -542,6 +550,29 @@ const malformedCases: ReadonlyArray<{
         const { throttlerRequestedTps: _requestedTps, ...policy } = VALID_WIRE.policy
         return policy
       })(),
+    }),
+  },
+  {
+    name: 'missing metrics window policy',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      policy: (() => {
+        const { metricsWindowMs: _metricsWindow, ...policy } = VALID_WIRE.policy
+        return policy
+      })(),
+    }),
+  },
+  {
+    name: 'malformed metrics window policy',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      policy: {
+        ...VALID_WIRE.policy,
+        metricsWindowMs: {
+          ...VALID_WIRE.policy.metricsWindowMs,
+          mutability: 'immediate',
+        },
+      },
     }),
   },
   {

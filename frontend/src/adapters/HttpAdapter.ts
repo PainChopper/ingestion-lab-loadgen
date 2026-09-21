@@ -406,13 +406,14 @@ function isExactObject(
 
 function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   if (!isExactObject(value, [
+    'metricsWindowMs',
     'readerChannelCapacity',
     'readerReadBatchSize',
     'senderChannelCapacity',
     'throttlerInstallationMode',
     'throttlerRequestedTps',
   ])) {
-    throw new Error('snapshot policy must contain exactly reader, readerChannel, senderChannel, and throttler controls')
+    throw new Error('snapshot policy must contain exactly reader, readerChannel, senderChannel, throttler, and metrics controls')
   }
   const reader = value.readerReadBatchSize
   if (!isExactObject(reader, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
@@ -436,6 +437,31 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   }
   if (!isRangeValue(readerPolicy.default, readerPolicy)) {
     throw new Error('snapshot reader policy default is invalid')
+  }
+
+  const metricsWindow = value.metricsWindowMs
+  if (!isExactObject(metricsWindow, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
+    throw new Error('snapshot metrics window policy is invalid')
+  }
+  if (
+    !isWireInteger(metricsWindow.default) || !isWireInteger(metricsWindow.min) ||
+    !isWireInteger(metricsWindow.max) || !isWireInteger(metricsWindow.step) ||
+    metricsWindow.min < 100 || metricsWindow.max > 10_000 ||
+    metricsWindow.max < metricsWindow.min || metricsWindow.step <= 0 ||
+    metricsWindow.unit !== 'milliseconds' || metricsWindow.mutability !== 'startup-only'
+  ) {
+    throw new Error('snapshot metrics window policy is invalid')
+  }
+  const metricsWindowPolicy = {
+    default: metricsWindow.default,
+    min: metricsWindow.min,
+    max: metricsWindow.max,
+    step: metricsWindow.step,
+    unit: metricsWindow.unit,
+    mutability: metricsWindow.mutability,
+  }
+  if (!isRangeValue(metricsWindowPolicy.default, metricsWindowPolicy)) {
+    throw new Error('snapshot metrics window policy default is invalid')
   }
 
   const readerChannel = value.readerChannelCapacity
@@ -517,6 +543,7 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   }
   return Object.freeze({
     readerReadBatchSize: Object.freeze(readerPolicy),
+    metricsWindowMs: Object.freeze(metricsWindowPolicy),
     readerChannelCapacity: Object.freeze({
       default: readerChannel.default,
       allowed,

@@ -8,21 +8,16 @@ import (
 	"time"
 )
 
-const (
-	windowLength = time.Second / 1
-	startTPS     = 100_000
-)
-
 var blackHole uint64
 
 type controlState struct {
-	run       controlRunState
-	controls  configuredControls
-	telemetry controlTelemetry
+	metricsWindow time.Duration
+	run           controlRunState
+	controls      configuredControls
+	telemetry     controlTelemetry
 }
 
 type controlRunState struct {
-	actualTPS         int64
 	totalTransactions int64
 	elapsedBeforeRun  time.Duration
 	runStartedAt      time.Time
@@ -60,18 +55,20 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	metricsWindow := time.Duration(loadedPolicy.Metrics.WindowMS.Default) * time.Millisecond
 	state := controlState{
-		run:      controlRunState{lifecycle: newLifecycle()},
-		controls: configuredControls{policy: loadedPolicy},
+		metricsWindow: metricsWindow,
+		run:           controlRunState{lifecycle: newLifecycle()},
+		controls:      configuredControls{policy: loadedPolicy},
 	}
 
 	requests := make(chan request, 10)
 
-	metricsTicker := time.NewTicker(windowLength)
+	metricsTicker := time.NewTicker(metricsWindow)
 	defer metricsTicker.Stop()
 	metrics := metricsTicker.C
 	promMetrics := NewMetrics()
-	promMetrics.targetTPS.Set(float64(startTPS))
+	promMetrics.targetTPS.Set(float64(loadedPolicy.Throttler.RequestedTPS.Default))
 
 	startHttpServer(requests, promMetrics, loadedPolicy)
 
