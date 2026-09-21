@@ -12,8 +12,8 @@ type throttlerSettings struct {
 }
 
 type throttlerUpdate struct {
-	settings throttlerSettings
-	applied  chan struct{}
+	settings     throttlerSettings
+	acknowledged chan struct{}
 }
 
 func startThrottler(
@@ -35,7 +35,7 @@ func startThrottler(
 				return
 			case update := <-updates:
 				settings = update.settings
-				close(update.applied)
+				close(update.acknowledged)
 			case batch, ok := <-readerBatches:
 				if !ok {
 					return
@@ -67,7 +67,7 @@ func forwardThrottledBatch(
 			case update := <-updates:
 				*settings = update.settings
 				waitStarted = time.Now()
-				close(update.applied)
+				close(update.acknowledged)
 			}
 			continue
 		}
@@ -84,7 +84,7 @@ func forwardThrottledBatch(
 					timer.Stop()
 					*settings = update.settings
 					waitStarted = time.Now()
-					close(update.applied)
+					close(update.acknowledged)
 				case <-timer.C:
 				}
 				continue
@@ -97,7 +97,7 @@ func forwardThrottledBatch(
 		case update := <-updates:
 			*settings = update.settings
 			waitStarted = time.Now()
-			close(update.applied)
+			close(update.acknowledged)
 			continue
 		case senderBatches <- batch:
 			senderChannel.recordSend(len(batch))
@@ -114,7 +114,7 @@ func forwardThrottledBatch(
 			senderChannel.finishBlocked(time.Now())
 			*settings = update.settings
 			waitStarted = time.Now()
-			close(update.applied)
+			close(update.acknowledged)
 		case senderBatches <- batch:
 			senderChannel.finishBlocked(time.Now())
 			senderChannel.recordSend(len(batch))

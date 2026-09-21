@@ -353,7 +353,7 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 				if pending == nil {
 					select {
 					case update := <-updates:
-						close(update.applied)
+						close(update.acknowledged)
 					case batch := <-batches:
 						pending = batch
 						if first && delivered == 1 {
@@ -370,7 +370,7 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 				}
 				select {
 				case update := <-updates:
-					close(update.applied)
+					close(update.acknowledged)
 				case senderBatches <- pending:
 					delivered++
 					if first {
@@ -1373,7 +1373,7 @@ func startHeldThrottlerForTest(
 			case <-ctx.Done():
 				return
 			case update := <-updates:
-				close(update.applied)
+				close(update.acknowledged)
 			case <-allowForward:
 				allowForward = nil
 				batches = input

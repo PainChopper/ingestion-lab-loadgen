@@ -351,12 +351,12 @@ func (state *controlState) notifyThrottler(
 		return
 	}
 	update := throttlerUpdate{
-		settings: state.throttlerSettings(paused),
-		applied:  make(chan struct{}),
+		settings:     state.throttlerSettings(paused),
+		acknowledged: make(chan struct{}),
 	}
 	select {
 	case updates <- update:
-		<-update.applied
+		<-update.acknowledged
 	case <-done:
 	}
 }
