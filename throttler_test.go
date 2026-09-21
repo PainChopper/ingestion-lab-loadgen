@@ -224,8 +224,8 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 	waitForBlockedSender(t, &senderChannel)
 	applied := make(chan struct{})
 	updates <- throttlerUpdate{
-		settings: throttlerSettings{mode: throttlerBypass, paused: true},
-		applied:  applied,
+		settings:     throttlerSettings{mode: throttlerBypass, paused: true},
+		acknowledged: applied,
 	}
 	<-applied
 	paused := senderChannel.snapshot(time.Now())
@@ -338,7 +338,7 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 				t.Fatalf("zero TPS Sender channel = %+v", got)
 			}
 			applied := make(chan struct{})
-			updates <- throttlerUpdate{settings: test.settings, applied: applied}
+			updates <- throttlerUpdate{settings: test.settings, acknowledged: applied}
 			<-applied
 			select {
 			case batch := <-senderBatches:
