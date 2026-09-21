@@ -5,8 +5,8 @@ func validReadBatchSize(policy policy, value int) bool {
 }
 
 func (state *controlState) readBatchSize() int {
-	if state.configuredReadBatchSize != 0 {
-		return state.configuredReadBatchSize
+	if state.controls.configuredReadBatchSize != 0 {
+		return state.controls.configuredReadBatchSize
 	}
-	return state.policy.Reader.ReadBatchSize.Default
+	return state.controls.policy.Reader.ReadBatchSize.Default
 }

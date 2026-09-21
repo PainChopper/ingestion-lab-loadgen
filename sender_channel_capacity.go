@@ -5,8 +5,8 @@ func validSenderChannelCapacity(policy policy, value int) bool {
 }
 
 func (state *controlState) senderChannelCapacity() int {
-	if state.senderChannelCapacityConfigured {
-		return state.configuredSenderChannelCapacity
+	if state.controls.senderChannelCapacityConfigured {
+		return state.controls.configuredSenderChannelCapacity
 	}
-	return state.policy.SenderChannel.Capacity.Default
+	return state.controls.policy.SenderChannel.Capacity.Default
 }

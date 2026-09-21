@@ -19,20 +19,20 @@ func TestElapsedMsUsesRunStartAndAccumulatedTime(t *testing.T) {
 		t.Fatalf("idle elapsed = %d, want 0", got)
 	}
 
-	state.lifecycle.run()
-	state.runStartedAt = start
+	state.run.lifecycle.run()
+	state.run.runStartedAt = start
 	if got := state.elapsedMs(start.Add(1250 * time.Millisecond)); got != 1250 {
 		t.Fatalf("running elapsed = %d, want 1250", got)
 	}
 
-	state.lifecycle.pause()
+	state.run.lifecycle.pause()
 	state.pauseElapsed(start.Add(1250 * time.Millisecond))
 	if got := state.elapsedMs(start.Add(10 * time.Second)); got != 1250 {
 		t.Fatalf("paused elapsed = %d, want 1250", got)
 	}
 
-	state.lifecycle.run()
-	state.runStartedAt = start.Add(10 * time.Second)
+	state.run.lifecycle.run()
+	state.run.runStartedAt = start.Add(10 * time.Second)
 	if got := state.elapsedMs(start.Add(10*time.Second + 750*time.Millisecond)); got != 2000 {
 		t.Fatalf("resumed elapsed = %d, want 2000", got)
 	}
@@ -493,15 +493,15 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 	requests <- request{kind: cmdRun}
 	waitForState(t, requests, runStateRunning)
-	readerChannel := make(chan []Transaction, state.policy.ReaderChannel.Capacity.Default)
-	state.readerChannel.start(readerChannel, 2)
-	if !state.readerChannel.send(context.Background(), readerChannel, make([]Transaction, 2)) {
+	readerChannel := make(chan []Transaction, state.controls.policy.ReaderChannel.Capacity.Default)
+	state.telemetry.readerChannel.start(readerChannel, 2)
+	if !state.telemetry.readerChannel.send(context.Background(), readerChannel, make([]Transaction, 2)) {
 		t.Fatal("readerChannel send failed")
 	}
-	state.reader.recordRead(2, filepath.Join("data", "first.parquet"))
+	state.telemetry.reader.recordRead(2, filepath.Join("data", "first.parquet"))
 	requests <- request{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
-	state.reader.recordRead(3, filepath.Join("data", "second.parquet"))
+	state.telemetry.reader.recordRead(3, filepath.Join("data", "second.parquet"))
 	metrics <- time.Now()
 
 	snapshotReply := make(chan statusSnapshot, 1)
@@ -514,7 +514,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 		snapshot.ReaderChannel.InputBatchesPerSecond != 1 || snapshot.ReaderChannel.InputTransactionsPerSecond != 2 {
 		t.Fatalf("paused snapshot = %+v, want reader and readerChannel measurements", snapshot)
 	}
-	state.readerChannel.recordReceive(len(<-readerChannel))
+	state.telemetry.readerChannel.recordReceive(len(<-readerChannel))
 	metrics <- time.Now()
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
@@ -536,7 +536,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
 	if snapshot.Reader.ReadTps != 0 || snapshot.Reader.RowsRead != 0 || snapshot.Reader.Source != nil ||
-		snapshot.ReaderChannel.Capacity != state.policy.ReaderChannel.Capacity.Default || snapshot.ReaderChannel.DepthBatches != 0 ||
+		snapshot.ReaderChannel.Capacity != state.controls.policy.ReaderChannel.Capacity.Default || snapshot.ReaderChannel.DepthBatches != 0 ||
 		snapshot.ReaderChannel.BufferedTransactions != 0 || snapshot.ReaderChannel.BlockedSenders != 0 ||
 		snapshot.ReaderChannel.OldestBlockedSenderMs != 0 || snapshot.ReaderChannel.BlockedMs != 0 ||
 		snapshot.ReaderChannel.SentBatchesTotal != 0 || snapshot.ReaderChannel.SentTransactionsTotal != 0 ||
@@ -954,7 +954,7 @@ func TestEventLoopRetainsActualChannelsAcrossPauseResumeAndSameCapacityReset(t *
 			harness.command(t, cmdPause)
 			harness.command(t, cmdRun)
 			harness.assertNoReplacement(t)
-			if harness.state.readerChannel.batches != reader || harness.state.senderChannel.batches != sender {
+			if harness.state.telemetry.readerChannel.batches != reader || harness.state.telemetry.senderChannel.batches != sender {
 				t.Fatal("Pause/Resume replaced an actual event-loop channel")
 			}
 
@@ -963,7 +963,7 @@ func TestEventLoopRetainsActualChannelsAcrossPauseResumeAndSameCapacityReset(t *
 			}
 			harness.command(t, cmdPause)
 			harness.command(t, cmdReset)
-			if harness.state.readerChannel.batches != reader || harness.state.senderChannel.batches != sender {
+			if harness.state.telemetry.readerChannel.batches != reader || harness.state.telemetry.senderChannel.batches != sender {
 				t.Fatal("same-capacity Reset replaced an actual event-loop channel")
 			}
 			if cap(reader) != capacity || cap(sender) != capacity || len(reader) != 0 || len(sender) != 0 {
@@ -1052,7 +1052,7 @@ func TestEventLoopSameCapacityResetDrainsRetainedActualReaderBatch(t *testing.T)
 
 			harness.command(t, cmdPause)
 			harness.command(t, cmdReset)
-			if harness.state.readerChannel.batches != reader || harness.state.senderChannel.batches != sender {
+			if harness.state.telemetry.readerChannel.batches != reader || harness.state.telemetry.senderChannel.batches != sender {
 				t.Fatal("same-capacity Reset replaced an actual event-loop channel")
 			}
 			if len(reader) != 0 || len(sender) != 0 {
@@ -1099,7 +1099,7 @@ func TestEventLoopSelectivelyReplacesActualChannelsAfterSoftReset(t *testing.T) 
 	harness.command(t, cmdPause)
 	harness.command(t, cmdReset)
 	harness.setCapacity(t, cmdSetReaderChannelCapacity, 8_192)
-	if harness.state.readerChannel.batches != reader || harness.state.senderChannel.batches != sender {
+	if harness.state.telemetry.readerChannel.batches != reader || harness.state.telemetry.senderChannel.batches != sender {
 		t.Fatal("idle Reader capacity setter replaced an actual channel")
 	}
 	harness.command(t, cmdRun)
@@ -1155,7 +1155,7 @@ func TestEventLoopTeardownClosesActualChannelsAndDetachesTelemetry(t *testing.T)
 			harness.stop()
 			assertClosedActualChannel(t, reader)
 			assertClosedActualChannel(t, sender)
-			if harness.state.readerChannel.batches != nil || harness.state.senderChannel.batches != nil {
+			if harness.state.telemetry.readerChannel.batches != nil || harness.state.telemetry.senderChannel.batches != nil {
 				t.Fatal("event-loop teardown retained telemetry channel attachment")
 			}
 		})
@@ -1357,13 +1357,13 @@ func (h actualChannelEventLoopHarness) assertNoReplacement(t *testing.T) {
 func (h actualChannelEventLoopHarness) nextReader(t *testing.T) <-chan []Transaction {
 	t.Helper()
 	<-h.readerStarts
-	return h.state.readerChannel.batches
+	return h.state.telemetry.readerChannel.batches
 }
 
 func (h actualChannelEventLoopHarness) nextSender(t *testing.T) <-chan []Transaction {
 	t.Helper()
 	<-h.senderStarts
-	return h.state.senderChannel.batches
+	return h.state.telemetry.senderChannel.batches
 }
 
 func (h actualChannelEventLoopHarness) send(t *testing.T, batch []Transaction) {

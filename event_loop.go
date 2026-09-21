@@ -65,8 +65,8 @@ func (state *controlState) eventLoopWithThrottler(
 		closeAndDrain(senderBatches)
 		batches = nil
 		senderBatches = nil
-		state.readerChannel.detach()
-		state.senderChannel.detach()
+		state.telemetry.readerChannel.detach()
+		state.telemetry.senderChannel.detach()
 		cancelConsumer = nil
 		consumerDone = nil
 		cancelProducer = nil
@@ -86,19 +86,19 @@ func (state *controlState) eventLoopWithThrottler(
 			}
 			switch cmd.kind {
 			case getSnapshot:
-				reader := state.reader.snapshot()
-				readerChannel := state.readerChannel.snapshot(time.Now())
-				senderChannel := state.senderChannel.snapshot(time.Now())
-				if state.lifecycle.currentState() == runStateIdle {
+				reader := state.telemetry.reader.snapshot()
+				readerChannel := state.telemetry.readerChannel.snapshot(time.Now())
+				senderChannel := state.telemetry.senderChannel.snapshot(time.Now())
+				if state.run.lifecycle.currentState() == runStateIdle {
 					readerChannel.capacity = state.readerChannelCapacity()
 					senderChannel.capacity = state.senderChannelCapacity()
 				}
 				snapshot := statusSnapshot{
 					Run: runSnapshot{
-						State:             state.lifecycle.currentState(),
-						TotalTransactions: state.totalTransactions,
+						State:             state.run.lifecycle.currentState(),
+						TotalTransactions: state.run.totalTransactions,
 						ElapsedMs:         state.elapsedMs(time.Now()),
-						StartError:        state.startError,
+						StartError:        state.run.startError,
 					},
 					Reader: readerSnapshot{
 						Workers:       1,
@@ -145,13 +145,13 @@ func (state *controlState) eventLoopWithThrottler(
 						OutputBatchesPerSecond:      senderChannel.outputBatchesPerSecond,
 						OutputTransactionsPerSecond: senderChannel.outputTransactionsPerSecond,
 					},
-					Policy: state.policy.snapshot(),
+					Policy: state.controls.policy.snapshot(),
 				}
 				cmd.snapshotReply <- snapshot
 			case cmdRun:
-				resuming := state.lifecycle.currentState() == runStatePaused
-				if state.lifecycle.currentState() == runStateIdle {
-					state.reader.startInterval(time.Now())
+				resuming := state.run.lifecycle.currentState() == runStatePaused
+				if state.run.lifecycle.currentState() == runStateIdle {
+					state.telemetry.reader.startInterval(time.Now())
 					var readerCreated bool
 					batches, readerCreated = state.prepareReaderChannel(batches)
 					var senderCreated bool
@@ -167,17 +167,17 @@ func (state *controlState) eventLoopWithThrottler(
 						if readerCreated {
 							closeAndDrain(batches)
 							batches = nil
-							state.readerChannel.detach()
+							state.telemetry.readerChannel.detach()
 						}
 						if senderCreated {
 							closeAndDrain(senderBatches)
 							senderBatches = nil
-							state.senderChannel.detach()
+							state.telemetry.senderChannel.detach()
 						}
-						state.reader.reset()
+						state.telemetry.reader.reset()
 						log.Printf("cannot start load generator: %v", err)
 						message := err.Error()
-						state.startError = &message
+						state.run.startError = &message
 						if cmd.commandReply != nil {
 							cmd.commandReply <- commandResult{err: err}
 						}
@@ -191,24 +191,24 @@ func (state *controlState) eventLoopWithThrottler(
 						throttlerContext,
 						batches,
 						senderBatches,
-						&state.readerChannel,
-						&state.senderChannel,
+						&state.telemetry.readerChannel,
+						&state.telemetry.senderChannel,
 						state.throttlerSettings(false),
 					)
 				}
-				if state.lifecycle.run() {
-					state.runStartedAt = time.Now()
-					state.startError = nil
+				if state.run.lifecycle.run() {
+					state.run.runStartedAt = time.Now()
+					state.run.startError = nil
 					if resuming {
 						state.notifyThrottler(throttlerUpdates, throttlerDone, false)
 					}
-					cancelConsumer, consumerDone = startConsumer(senderBatches, &state.senderChannel, &consumedSinceTick)
+					cancelConsumer, consumerDone = startConsumer(senderBatches, &state.telemetry.senderChannel, &consumedSinceTick)
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- commandResult{}
 				}
 			case cmdPause:
-				if state.lifecycle.currentState() != runStateRunning {
+				if state.run.lifecycle.currentState() != runStateRunning {
 					continue
 				}
 				cancelConsumer()
@@ -217,17 +217,17 @@ func (state *controlState) eventLoopWithThrottler(
 				cancelConsumer = nil
 				consumerDone = nil
 				delta := consumedSinceTick.Swap(0)
-				state.totalTransactions += delta
+				state.run.totalTransactions += delta
 				promMetrics.transactionsTotal.Add(float64(delta))
-				state.actualTPS = 0
+				state.run.actualTPS = 0
 				promMetrics.actualTPS.Set(0)
-				state.lifecycle.pause()
+				state.run.lifecycle.pause()
 				state.notifyThrottler(throttlerUpdates, throttlerDone, true)
 			case cmdReset:
 				result := commandResult{status: commandAccepted}
-				switch state.lifecycle.currentState() {
+				switch state.run.lifecycle.currentState() {
 				case runStatePaused:
-					state.lifecycle.reset()
+					state.run.lifecycle.reset()
 					cancelProducer()
 					cancelThrottler()
 					<-producerDone
@@ -240,7 +240,7 @@ func (state *controlState) eventLoopWithThrottler(
 					throttlerDone = nil
 					throttlerUpdates = nil
 					state.resetProgress(&consumedSinceTick, promMetrics)
-					state.lifecycle.completeReset()
+					state.run.lifecycle.completeReset()
 				case runStateIdle:
 					state.resetProgress(&consumedSinceTick, promMetrics)
 				default:
@@ -251,57 +251,57 @@ func (state *controlState) eventLoopWithThrottler(
 				}
 			case cmdSetReadBatchSize:
 				result := commandResult{status: commandAccepted}
-				if state.lifecycle.currentState() != runStateIdle {
+				if state.run.lifecycle.currentState() != runStateIdle {
 					result.status = commandConflict
-				} else if !validReadBatchSize(state.policy, cmd.value) {
+				} else if !validReadBatchSize(state.controls.policy, cmd.value) {
 					result.status = commandConflict
 				} else {
-					state.configuredReadBatchSize = cmd.value
+					state.controls.configuredReadBatchSize = cmd.value
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
 				}
 			case cmdSetReaderChannelCapacity:
 				result := commandResult{status: commandAccepted}
-				if state.lifecycle.currentState() != runStateIdle || !validReaderChannelCapacity(state.policy, cmd.value) {
+				if state.run.lifecycle.currentState() != runStateIdle || !validReaderChannelCapacity(state.controls.policy, cmd.value) {
 					result.status = commandConflict
 				} else {
-					state.configuredReaderChannelCapacity = cmd.value
-					state.readerChannelCapacityConfigured = true
+					state.controls.configuredReaderChannelCapacity = cmd.value
+					state.controls.readerChannelCapacityConfigured = true
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
 				}
 			case cmdSetSenderChannelCapacity:
 				result := commandResult{status: commandAccepted}
-				if state.lifecycle.currentState() != runStateIdle || !validSenderChannelCapacity(state.policy, cmd.value) {
+				if state.run.lifecycle.currentState() != runStateIdle || !validSenderChannelCapacity(state.controls.policy, cmd.value) {
 					result.status = commandConflict
 				} else {
-					state.configuredSenderChannelCapacity = cmd.value
-					state.senderChannelCapacityConfigured = true
+					state.controls.configuredSenderChannelCapacity = cmd.value
+					state.controls.senderChannelCapacityConfigured = true
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
 				}
 			case cmdSetRequestedTPS:
 				result := commandResult{status: commandAccepted}
-				if !state.policy.Throttler.RequestedTPS.contains(cmd.value) {
+				if !state.controls.policy.Throttler.RequestedTPS.contains(cmd.value) {
 					result.status = commandConflict
 				} else if state.requestedTPS() != cmd.value {
-					state.configuredRequestedTPS = cmd.value
-					state.requestedTPSConfigured = true
-					state.notifyThrottler(throttlerUpdates, throttlerDone, state.lifecycle.currentState() == runStatePaused)
+					state.controls.configuredRequestedTPS = cmd.value
+					state.controls.requestedTPSConfigured = true
+					state.notifyThrottler(throttlerUpdates, throttlerDone, state.run.lifecycle.currentState() == runStatePaused)
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
 				}
 			case cmdSetThrottlerInstallationMode:
 				result := commandResult{status: commandAccepted}
-				if !state.policy.Throttler.InstallationMode.contains(cmd.textValue) {
+				if !state.controls.policy.Throttler.InstallationMode.contains(cmd.textValue) {
 					result.status = commandConflict
 				} else if state.installationMode() != cmd.textValue {
-					state.configuredInstallationMode = cmd.textValue
-					state.notifyThrottler(throttlerUpdates, throttlerDone, state.lifecycle.currentState() == runStatePaused)
+					state.controls.configuredInstallationMode = cmd.textValue
+					state.notifyThrottler(throttlerUpdates, throttlerDone, state.run.lifecycle.currentState() == runStatePaused)
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
@@ -309,30 +309,30 @@ func (state *controlState) eventLoopWithThrottler(
 			}
 
 		case <-metrics:
-			state.reader.sample(time.Now())
-			state.readerChannel.sample(windowLength)
-			state.senderChannel.sample(windowLength)
+			state.telemetry.reader.sample(time.Now())
+			state.telemetry.readerChannel.sample(windowLength)
+			state.telemetry.senderChannel.sample(windowLength)
 			delta := consumedSinceTick.Swap(0)
-			state.actualTPS = delta * int64(time.Second/windowLength)
-			state.totalTransactions += delta
-			promMetrics.actualTPS.Set(float64(state.actualTPS))
+			state.run.actualTPS = delta * int64(time.Second/windowLength)
+			state.run.totalTransactions += delta
+			promMetrics.actualTPS.Set(float64(state.run.actualTPS))
 			promMetrics.transactionsTotal.Add(float64(delta))
 		}
 	}
 }
 
 func (state *controlState) requestedTPS() int {
-	if state.requestedTPSConfigured {
-		return state.configuredRequestedTPS
+	if state.controls.requestedTPSConfigured {
+		return state.controls.configuredRequestedTPS
 	}
-	return state.policy.Throttler.RequestedTPS.Default
+	return state.controls.policy.Throttler.RequestedTPS.Default
 }
 
 func (state *controlState) installationMode() string {
-	if state.configuredInstallationMode != "" {
-		return state.configuredInstallationMode
+	if state.controls.configuredInstallationMode != "" {
+		return state.controls.configuredInstallationMode
 	}
-	return state.policy.Throttler.InstallationMode.Default
+	return state.controls.policy.Throttler.InstallationMode.Default
 }
 
 func (state *controlState) throttlerSettings(paused bool) throttlerSettings {
@@ -363,15 +363,15 @@ func (state *controlState) notifyThrottler(
 }
 
 func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMetrics *Metrics) {
-	state.reader.reset()
-	state.readerChannel.clearMeasurements()
-	state.senderChannel.clearMeasurements()
+	state.telemetry.reader.reset()
+	state.telemetry.readerChannel.clearMeasurements()
+	state.telemetry.senderChannel.clearMeasurements()
 	consumedSinceTick.Store(0)
-	state.totalTransactions = 0
-	state.actualTPS = 0
-	state.elapsedBeforeRun = 0
-	state.runStartedAt = time.Time{}
-	state.startError = nil
+	state.run.totalTransactions = 0
+	state.run.actualTPS = 0
+	state.run.elapsedBeforeRun = 0
+	state.run.runStartedAt = time.Time{}
+	state.run.startError = nil
 	promMetrics.actualTPS.Set(0)
 }
 
@@ -381,10 +381,10 @@ func (state *controlState) prepareReaderChannel(batches chan []Transaction) (cha
 		return batches, false
 	}
 	closeAndDrain(batches)
-	state.readerChannel.detach()
+	state.telemetry.readerChannel.detach()
 	batches = make(chan []Transaction, capacity)
-	state.readerChannel.start(batches, state.readBatchSize())
-	state.readerChannel.clearMeasurements()
+	state.telemetry.readerChannel.start(batches, state.readBatchSize())
+	state.telemetry.readerChannel.clearMeasurements()
 	return batches, true
 }
 
@@ -392,14 +392,14 @@ func (state *controlState) prepareSenderChannel(batches chan []Transaction) (cha
 	capacity := state.senderChannelCapacity()
 	batchSize := state.readBatchSize()
 	if batches != nil && cap(batches) == capacity {
-		state.senderChannel.start(batches, batchSize)
+		state.telemetry.senderChannel.start(batches, batchSize)
 		return batches, false
 	}
 	closeAndDrain(batches)
-	state.senderChannel.detach()
+	state.telemetry.senderChannel.detach()
 	batches = make(chan []Transaction, capacity)
-	state.senderChannel.start(batches, batchSize)
-	state.senderChannel.clearMeasurements()
+	state.telemetry.senderChannel.start(batches, batchSize)
+	state.telemetry.senderChannel.clearMeasurements()
 	return batches, true
 }
 
@@ -428,9 +428,9 @@ func drain(batches chan []Transaction) {
 }
 
 func (state *controlState) elapsedMs(now time.Time) int64 {
-	elapsed := state.elapsedBeforeRun
-	if state.lifecycle.currentState() == runStateRunning {
-		elapsed += now.Sub(state.runStartedAt)
+	elapsed := state.run.elapsedBeforeRun
+	if state.run.lifecycle.currentState() == runStateRunning {
+		elapsed += now.Sub(state.run.runStartedAt)
 	}
 	if elapsed < 0 {
 		return 0
@@ -439,8 +439,8 @@ func (state *controlState) elapsedMs(now time.Time) int64 {
 }
 
 func (state *controlState) pauseElapsed(now time.Time) {
-	state.elapsedBeforeRun += now.Sub(state.runStartedAt)
-	state.runStartedAt = time.Time{}
+	state.run.elapsedBeforeRun += now.Sub(state.run.runStartedAt)
+	state.run.runStartedAt = time.Time{}
 }
 
 func startConsumer(

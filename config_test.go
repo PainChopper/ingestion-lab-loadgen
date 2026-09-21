@@ -22,7 +22,10 @@ func testPolicy(t *testing.T) policy {
 
 func newTestControlState(t *testing.T) controlState {
 	t.Helper()
-	return controlState{lifecycle: newLifecycle(), policy: testPolicy(t)}
+	return controlState{
+		run:      controlRunState{lifecycle: newLifecycle()},
+		controls: configuredControls{policy: testPolicy(t)},
+	}
 }
 
 func testConfigContents() string {

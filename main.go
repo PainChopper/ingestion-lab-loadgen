@@ -16,14 +16,21 @@ const (
 var blackHole uint64
 
 type controlState struct {
-	actualTPS                       int64
-	totalTransactions               int64
-	elapsedBeforeRun                time.Duration
-	runStartedAt                    time.Time
-	startError                      *string
-	reader                          readerTelemetry
-	readerChannel                   readerChannelTelemetry
-	senderChannel                   readerChannelTelemetry
+	run       controlRunState
+	controls  configuredControls
+	telemetry controlTelemetry
+}
+
+type controlRunState struct {
+	actualTPS         int64
+	totalTransactions int64
+	elapsedBeforeRun  time.Duration
+	runStartedAt      time.Time
+	startError        *string
+	lifecycle         *lifecycle
+}
+
+type configuredControls struct {
 	configuredReadBatchSize         int
 	configuredReaderChannelCapacity int
 	readerChannelCapacityConfigured bool
@@ -33,8 +40,12 @@ type controlState struct {
 	requestedTPSConfigured          bool
 	configuredInstallationMode      string
 	policy                          policy
+}
 
-	lifecycle *lifecycle
+type controlTelemetry struct {
+	reader        readerTelemetry
+	readerChannel readerChannelTelemetry
+	senderChannel readerChannelTelemetry
 }
 
 func main() {
@@ -49,7 +60,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	state := controlState{lifecycle: newLifecycle(), policy: loadedPolicy}
+	state := controlState{
+		run:      controlRunState{lifecycle: newLifecycle()},
+		controls: configuredControls{policy: loadedPolicy},
+	}
 
 	requests := make(chan request, 10)
 
@@ -66,7 +80,7 @@ func main() {
 		metrics,
 		promMetrics,
 		func(ctx context.Context, batches chan<- []Transaction, batchSize int) (<-chan struct{}, error) {
-			return produceBatches(ctx, loadedPolicy.Source.Path, batchSize, batches, &state.reader, &state.readerChannel)
+			return produceBatches(ctx, loadedPolicy.Source.Path, batchSize, batches, &state.telemetry.reader, &state.telemetry.readerChannel)
 		},
 	)
 }

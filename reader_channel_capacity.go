@@ -5,8 +5,8 @@ func validReaderChannelCapacity(policy policy, value int) bool {
 }
 
 func (state *controlState) readerChannelCapacity() int {
-	if state.readerChannelCapacityConfigured {
-		return state.configuredReaderChannelCapacity
+	if state.controls.readerChannelCapacityConfigured {
+		return state.controls.configuredReaderChannelCapacity
 	}
-	return state.policy.ReaderChannel.Capacity.Default
+	return state.controls.policy.ReaderChannel.Capacity.Default
 }
