@@ -576,10 +576,10 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	if !state.telemetry.readerChannel.send(context.Background(), readerChannel, make([]Transaction, 2)) {
 		t.Fatal("readerChannel send failed")
 	}
-	state.telemetry.reader.recordRead(2, filepath.Join("data", "first.parquet"))
+	state.telemetry.reader.recordRead(2, filepath.ToSlash(filepath.Join("data", "first.parquet")))
 	requests <- request{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
-	state.telemetry.reader.recordRead(3, filepath.Join("data", "second.parquet"))
+	state.telemetry.reader.recordRead(3, filepath.ToSlash(filepath.Join("data", "second.parquet")))
 	metrics <- time.Now()
 
 	snapshotReply := make(chan statusSnapshot, 1)

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -28,14 +27,14 @@ func (r *readerTelemetry) startInterval(now time.Time) {
 	r.intervalRows = r.rowsRead
 }
 
-func (r *readerTelemetry) recordRead(n int, path string) {
+func (r *readerTelemetry) recordRead(n int, source string) {
 	if n <= 0 {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rowsRead += int64(n)
-	r.source = filepath.ToSlash(path)
+	r.source = source
 }
 
 func (r *readerTelemetry) sample(now time.Time) {

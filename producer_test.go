@@ -119,6 +119,45 @@ func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 	drain(batches)
 }
 
+func TestProduceBatchesKeepsSourcePerFileVisitAndPreservesEmittedBatches(t *testing.T) {
+	const batchSize = 1_000
+
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "part-000.parquet")
+	secondPath := filepath.Join(dir, "part-001.parquet")
+	firstRows := producerFixtureTransactions("first", 2*batchSize)
+	secondRows := producerFixtureTransactions("second", batchSize)
+	writeProducerFixture(t, firstPath, firstRows)
+	writeProducerFixture(t, secondPath, secondRows)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var telemetry readerTelemetry
+	var channelTelemetry channelTelemetry
+	batches := make(chan []Transaction)
+	channelTelemetry.start(batches, batchSize)
+	done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), batchSize, batches, &telemetry, &channelTelemetry)
+	if err != nil {
+		t.Fatalf("start producer: %v", err)
+	}
+
+	first := receiveProducerBatch(t, batches, batchSize)
+	firstIDs := producerFixtureIDs(first)
+	waitForReaderSource(t, &telemetry, 2*batchSize, filepath.ToSlash(firstPath))
+
+	second := receiveProducerBatch(t, batches, batchSize)
+	assertProducerFixtureIDs(t, second, producerFixtureIDs(firstRows[batchSize:]))
+	assertProducerFixtureIDs(t, first, firstIDs)
+	waitForReaderSource(t, &telemetry, 3*batchSize, filepath.ToSlash(secondPath))
+
+	third := receiveProducerBatch(t, batches, batchSize)
+	assertProducerFixtureIDs(t, third, producerFixtureIDs(secondRows))
+	assertProducerFixtureIDs(t, first, firstIDs)
+
+	cancel()
+	<-done
+}
+
 func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input.parquet")
@@ -224,6 +263,25 @@ func receiveProducerBatch(t *testing.T, batches <-chan []Transaction, wantSize i
 	case <-time.After(5 * time.Second):
 		t.Fatal("producer did not emit a batch")
 		return nil
+	}
+}
+
+func waitForReaderSource(t *testing.T, telemetry *readerTelemetry, wantRows int, wantSource string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		got := telemetry.snapshot()
+		if got.rowsRead >= int64(wantRows) {
+			if got.source == nil || *got.source != wantSource {
+				t.Fatalf("source after %d rows = %v, want %q", got.rowsRead, got.source, wantSource)
+			}
+			return
+		}
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline:
+			t.Fatalf("rows read = %d, want at least %d", got.rowsRead, wantRows)
+		}
 	}
 }
 
