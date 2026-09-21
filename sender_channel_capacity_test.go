@@ -96,7 +96,7 @@ func TestSenderChannelCapacityIdleOnlyAppliesToThrottlerAndPersistsAfterReset(t 
 				return batches, done, nil
 			}
 			startCustomEventLoopForTest(t, requests, metrics, produce)
-			commands := commandsHandler(requests, state.policy)
+			commands := commandsHandler(requests, state.controls.policy)
 			snapshot := func() statusSnapshot {
 				t.Helper()
 				recorder := httptest.NewRecorder()

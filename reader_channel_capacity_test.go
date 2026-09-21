@@ -95,7 +95,7 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 				startedCapacities <- readerChannelCapacity
 				batches := make(chan []Transaction, readerChannelCapacity)
 				producedCapacities <- cap(batches)
-				state.readerChannel.start(batches, state.policy.Reader.ReadBatchSize.Default)
+				state.telemetry.readerChannel.start(batches, state.controls.policy.Reader.ReadBatchSize.Default)
 				done := make(chan struct{})
 				go func() {
 					defer func() {
@@ -125,7 +125,7 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 					t.Error("event loop did not stop")
 				}
 			})
-			commands := commandsHandler(requests, state.policy)
+			commands := commandsHandler(requests, state.controls.policy)
 			snapshot := func() statusSnapshot {
 				t.Helper()
 				recorder := httptest.NewRecorder()
@@ -145,8 +145,8 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 				}
 			}
 
-			if got := snapshot().ReaderChannel.Capacity; got != state.policy.ReaderChannel.Capacity.Default {
-				t.Fatalf("default capacity = %d, want %d", got, state.policy.ReaderChannel.Capacity.Default)
+			if got := snapshot().ReaderChannel.Capacity; got != state.controls.policy.ReaderChannel.Capacity.Default {
+				t.Fatalf("default capacity = %d, want %d", got, state.controls.policy.ReaderChannel.Capacity.Default)
 			}
 			post(`{"action":"set-reader-channel-capacity","value":`+strconv.Itoa(capacity)+`}`, http.StatusOK)
 			if got := snapshot().ReaderChannel.Capacity; got != capacity {
