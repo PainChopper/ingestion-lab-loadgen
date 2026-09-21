@@ -23,12 +23,7 @@ type channelMeasurements struct {
 	receivedTransactionsPerSecond float64
 }
 
-type channelTelemetry struct {
-	mu sync.Mutex
-
-	batches   <-chan []Transaction
-	batchSize int
-
+type channelTelemetryMeasurements struct {
 	blockedAt time.Time
 	blockedMs time.Duration
 
@@ -45,6 +40,14 @@ type channelTelemetry struct {
 	sentTransactionsSinceTick     int64
 	receivedBatchesSinceTick      int64
 	receivedTransactionsSinceTick int64
+}
+
+type channelTelemetry struct {
+	mu sync.Mutex
+
+	batches      <-chan []Transaction
+	batchSize    int
+	measurements channelTelemetryMeasurements
 }
 
 func (q *channelTelemetry) start(batches <-chan []Transaction, batchSize int) {
@@ -82,62 +85,62 @@ func (q *channelTelemetry) snapshot(now time.Time) channelMeasurements {
 	defer q.mu.Unlock()
 
 	measurements := channelMeasurements{}
-	totalBlocked := q.blockedMs
+	totalBlocked := q.measurements.blockedMs
 	if q.batches != nil {
 		measurements.capacity = cap(q.batches)
 		measurements.depthBatches = len(q.batches)
 		measurements.bufferedTransactions = measurements.depthBatches * q.batchSize
 	}
-	if !q.blockedAt.IsZero() {
+	if !q.measurements.blockedAt.IsZero() {
 		measurements.blockedSenders = 1
-		blocked := now.Sub(q.blockedAt)
+		blocked := now.Sub(q.measurements.blockedAt)
 		if blocked > 0 {
 			measurements.oldestBlockedSenderMs = blocked.Milliseconds()
 			totalBlocked += blocked
 		}
 	}
 	measurements.blockedMs = totalBlocked.Milliseconds()
-	measurements.sentBatchesTotal = q.sentBatchesTotal
-	measurements.sentTransactionsTotal = q.sentTransactionsTotal
-	measurements.receivedBatchesTotal = q.receivedBatchesTotal
-	measurements.receivedTransactionsTotal = q.receivedTransactionsTotal
-	measurements.sentBatchesPerSecond = q.sentBatchesPerSecond
-	measurements.sentTransactionsPerSecond = q.sentTransactionsPerSecond
-	measurements.receivedBatchesPerSecond = q.receivedBatchesPerSecond
-	measurements.receivedTransactionsPerSecond = q.receivedTransactionsPerSecond
+	measurements.sentBatchesTotal = q.measurements.sentBatchesTotal
+	measurements.sentTransactionsTotal = q.measurements.sentTransactionsTotal
+	measurements.receivedBatchesTotal = q.measurements.receivedBatchesTotal
+	measurements.receivedTransactionsTotal = q.measurements.receivedTransactionsTotal
+	measurements.sentBatchesPerSecond = q.measurements.sentBatchesPerSecond
+	measurements.sentTransactionsPerSecond = q.measurements.sentTransactionsPerSecond
+	measurements.receivedBatchesPerSecond = q.measurements.receivedBatchesPerSecond
+	measurements.receivedTransactionsPerSecond = q.measurements.receivedTransactionsPerSecond
 	return measurements
 }
 
 func (q *channelTelemetry) recordSend(transactions int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.sentBatchesTotal++
-	q.sentTransactionsTotal += int64(transactions)
-	q.sentBatchesSinceTick++
-	q.sentTransactionsSinceTick += int64(transactions)
+	q.measurements.sentBatchesTotal++
+	q.measurements.sentTransactionsTotal += int64(transactions)
+	q.measurements.sentBatchesSinceTick++
+	q.measurements.sentTransactionsSinceTick += int64(transactions)
 }
 
 func (q *channelTelemetry) recordReceive(transactions int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.receivedBatchesTotal++
-	q.receivedTransactionsTotal += int64(transactions)
-	q.receivedBatchesSinceTick++
-	q.receivedTransactionsSinceTick += int64(transactions)
+	q.measurements.receivedBatchesTotal++
+	q.measurements.receivedTransactionsTotal += int64(transactions)
+	q.measurements.receivedBatchesSinceTick++
+	q.measurements.receivedTransactionsSinceTick += int64(transactions)
 }
 
 func (q *channelTelemetry) sample(window time.Duration) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	seconds := window.Seconds()
-	q.sentBatchesPerSecond = float64(q.sentBatchesSinceTick) / seconds
-	q.sentTransactionsPerSecond = float64(q.sentTransactionsSinceTick) / seconds
-	q.receivedBatchesPerSecond = float64(q.receivedBatchesSinceTick) / seconds
-	q.receivedTransactionsPerSecond = float64(q.receivedTransactionsSinceTick) / seconds
-	q.sentBatchesSinceTick = 0
-	q.sentTransactionsSinceTick = 0
-	q.receivedBatchesSinceTick = 0
-	q.receivedTransactionsSinceTick = 0
+	q.measurements.sentBatchesPerSecond = float64(q.measurements.sentBatchesSinceTick) / seconds
+	q.measurements.sentTransactionsPerSecond = float64(q.measurements.sentTransactionsSinceTick) / seconds
+	q.measurements.receivedBatchesPerSecond = float64(q.measurements.receivedBatchesSinceTick) / seconds
+	q.measurements.receivedTransactionsPerSecond = float64(q.measurements.receivedTransactionsSinceTick) / seconds
+	q.measurements.sentBatchesSinceTick = 0
+	q.measurements.sentTransactionsSinceTick = 0
+	q.measurements.receivedBatchesSinceTick = 0
+	q.measurements.receivedTransactionsSinceTick = 0
 }
 
 func (q *channelTelemetry) clearMeasurements() {
@@ -155,36 +158,23 @@ func (q *channelTelemetry) detach() {
 }
 
 func (q *channelTelemetry) clearMeasurementsLocked() {
-	q.blockedAt = time.Time{}
-	q.blockedMs = 0
-	q.sentBatchesTotal = 0
-	q.sentTransactionsTotal = 0
-	q.receivedBatchesTotal = 0
-	q.receivedTransactionsTotal = 0
-	q.sentBatchesPerSecond = 0
-	q.sentTransactionsPerSecond = 0
-	q.receivedBatchesPerSecond = 0
-	q.receivedTransactionsPerSecond = 0
-	q.sentBatchesSinceTick = 0
-	q.sentTransactionsSinceTick = 0
-	q.receivedBatchesSinceTick = 0
-	q.receivedTransactionsSinceTick = 0
+	q.measurements = channelTelemetryMeasurements{}
 }
 
 func (q *channelTelemetry) startBlocked(now time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.blockedAt = now
+	q.measurements.blockedAt = now
 }
 
 func (q *channelTelemetry) finishBlocked(now time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.blockedAt.IsZero() {
+	if q.measurements.blockedAt.IsZero() {
 		return
 	}
-	if blocked := now.Sub(q.blockedAt); blocked > 0 {
-		q.blockedMs += blocked
+	if blocked := now.Sub(q.measurements.blockedAt); blocked > 0 {
+		q.measurements.blockedMs += blocked
 	}
-	q.blockedAt = time.Time{}
+	q.measurements.blockedAt = time.Time{}
 }
