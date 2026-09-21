@@ -31,12 +31,12 @@ func TestConsumeBatchesCountsTransactions(t *testing.T) {
 	}
 	got := senderChannel.snapshot(time.Now())
 	if got.receivedBatchesTotal != 1 || got.receivedTransactionsTotal != 2 ||
-		got.outputBatchesPerSecond != 0 || got.outputTransactionsPerSecond != 0 {
+		got.receivedBatchesPerSecond != 0 || got.receivedTransactionsPerSecond != 0 {
 		t.Fatalf("Sender channel receives before sample = %+v", got)
 	}
 	senderChannel.sample(time.Second)
 	got = senderChannel.snapshot(time.Now())
-	if got.outputBatchesPerSecond != 1 || got.outputTransactionsPerSecond != 2 {
+	if got.receivedBatchesPerSecond != 1 || got.receivedTransactionsPerSecond != 2 {
 		t.Fatalf("Sender channel output window = %+v", got)
 	}
 }

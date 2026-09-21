@@ -182,7 +182,7 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 	before := senderChannel.snapshot(time.Now())
 	if before.capacity != 0 || before.depthBatches != 0 || before.bufferedTransactions != 0 ||
 		before.blockedSenders != 1 || before.oldestBlockedSenderMs <= 0 || before.blockedMs <= 0 ||
-		before.sentBatchesTotal != 0 || before.inputTransactionsPerSecond != 0 {
+		before.sentBatchesTotal != 0 || before.sentTransactionsPerSecond != 0 {
 		t.Fatalf("Sender channel before handoff = %+v", before)
 	}
 	if batch := <-senderBatches; len(batch) != 3 {
@@ -194,12 +194,12 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 	after := senderChannel.snapshot(time.Now())
 	if after.blockedSenders != 0 || after.oldestBlockedSenderMs != 0 || after.blockedMs <= 0 ||
 		after.sentBatchesTotal != 1 || after.sentTransactionsTotal != 3 ||
-		after.inputBatchesPerSecond != 1 || after.inputTransactionsPerSecond != 3 {
+		after.sentBatchesPerSecond != 1 || after.sentTransactionsPerSecond != 3 {
 		t.Fatalf("Sender channel after handoff = %+v", after)
 	}
 	senderChannel.sample(time.Second)
-	if empty := senderChannel.snapshot(time.Now()); empty.inputBatchesPerSecond != 0 ||
-		empty.inputTransactionsPerSecond != 0 || empty.sentTransactionsTotal != 3 {
+	if empty := senderChannel.snapshot(time.Now()); empty.sentBatchesPerSecond != 0 ||
+		empty.sentTransactionsPerSecond != 0 || empty.sentTransactionsTotal != 3 {
 		t.Fatalf("Sender channel after empty window = %+v", empty)
 	}
 }
@@ -233,8 +233,8 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 		t.Fatalf("Sender channel after Pause = %+v", paused)
 	}
 	senderChannel.sample(time.Second)
-	if got := senderChannel.snapshot(time.Now()); got.inputTransactionsPerSecond != 0 {
-		t.Fatalf("Sender input rate after Pause = %v, want 0", got.inputTransactionsPerSecond)
+	if got := senderChannel.snapshot(time.Now()); got.sentTransactionsPerSecond != 0 {
+		t.Fatalf("Sender sent rate after Pause = %v, want 0", got.sentTransactionsPerSecond)
 	}
 	cancel()
 	waitForThrottlerDone(t, done)

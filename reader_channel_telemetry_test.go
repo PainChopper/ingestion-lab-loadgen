@@ -116,8 +116,8 @@ func TestReaderChannelTelemetryClearMeasurementsRetainsAttachmentAndDetachRemove
 		cleared.oldestBlockedSenderMs != 0 || cleared.blockedMs != 0 ||
 		cleared.sentBatchesTotal != 0 || cleared.sentTransactionsTotal != 0 ||
 		cleared.receivedBatchesTotal != 0 || cleared.receivedTransactionsTotal != 0 ||
-		cleared.inputBatchesPerSecond != 0 || cleared.inputTransactionsPerSecond != 0 ||
-		cleared.outputBatchesPerSecond != 0 || cleared.outputTransactionsPerSecond != 0 {
+		cleared.sentBatchesPerSecond != 0 || cleared.sentTransactionsPerSecond != 0 ||
+		cleared.receivedBatchesPerSecond != 0 || cleared.receivedTransactionsPerSecond != 0 {
 		t.Fatalf("cleared readerChannel measurements = %+v", cleared)
 	}
 
@@ -132,8 +132,8 @@ func TestReaderChannelTelemetryClearMeasurementsRetainsAttachmentAndDetachRemove
 		detached.oldestBlockedSenderMs != 0 || detached.blockedMs != 0 ||
 		detached.sentBatchesTotal != 0 || detached.sentTransactionsTotal != 0 ||
 		detached.receivedBatchesTotal != 0 || detached.receivedTransactionsTotal != 0 ||
-		detached.inputBatchesPerSecond != 0 || detached.inputTransactionsPerSecond != 0 ||
-		detached.outputBatchesPerSecond != 0 || detached.outputTransactionsPerSecond != 0 {
+		detached.sentBatchesPerSecond != 0 || detached.sentTransactionsPerSecond != 0 ||
+		detached.receivedBatchesPerSecond != 0 || detached.receivedTransactionsPerSecond != 0 {
 		t.Fatalf("detached readerChannel measurements = %+v", detached)
 	}
 }
@@ -153,21 +153,21 @@ func TestReaderChannelTelemetryCountsSuccessfulSendAndSamplesWindow(t *testing.T
 	beforeSample := telemetry.snapshot(time.Now())
 	if beforeSample.sentBatchesTotal != 2 || beforeSample.sentTransactionsTotal != 5 ||
 		beforeSample.receivedBatchesTotal != 1 || beforeSample.receivedTransactionsTotal != 2 ||
-		beforeSample.inputBatchesPerSecond != 0 || beforeSample.outputBatchesPerSecond != 0 {
+		beforeSample.sentBatchesPerSecond != 0 || beforeSample.receivedBatchesPerSecond != 0 {
 		t.Fatalf("before sample = %+v", beforeSample)
 	}
 
 	telemetry.sample(500 * time.Millisecond)
 	first := telemetry.snapshot(time.Now())
-	if first.inputBatchesPerSecond != 4 || first.inputTransactionsPerSecond != 10 ||
-		first.outputBatchesPerSecond != 2 || first.outputTransactionsPerSecond != 4 {
+	if first.sentBatchesPerSecond != 4 || first.sentTransactionsPerSecond != 10 ||
+		first.receivedBatchesPerSecond != 2 || first.receivedTransactionsPerSecond != 4 {
 		t.Fatalf("first window = %+v", first)
 	}
 	telemetry.sample(500 * time.Millisecond)
 	second := telemetry.snapshot(time.Now())
 	if second.sentBatchesTotal != 2 || second.receivedBatchesTotal != 1 ||
-		second.inputBatchesPerSecond != 0 || second.inputTransactionsPerSecond != 0 ||
-		second.outputBatchesPerSecond != 0 || second.outputTransactionsPerSecond != 0 {
+		second.sentBatchesPerSecond != 0 || second.sentTransactionsPerSecond != 0 ||
+		second.receivedBatchesPerSecond != 0 || second.receivedTransactionsPerSecond != 0 {
 		t.Fatalf("empty window = %+v", second)
 	}
 
@@ -177,8 +177,8 @@ func TestReaderChannelTelemetryCountsSuccessfulSendAndSamplesWindow(t *testing.T
 	reset := telemetry.snapshot(time.Now())
 	if reset.sentBatchesTotal != 0 || reset.sentTransactionsTotal != 0 ||
 		reset.receivedBatchesTotal != 0 || reset.receivedTransactionsTotal != 0 ||
-		reset.inputBatchesPerSecond != 0 || reset.inputTransactionsPerSecond != 0 ||
-		reset.outputBatchesPerSecond != 0 || reset.outputTransactionsPerSecond != 0 {
+		reset.sentBatchesPerSecond != 0 || reset.sentTransactionsPerSecond != 0 ||
+		reset.receivedBatchesPerSecond != 0 || reset.receivedTransactionsPerSecond != 0 {
 		t.Fatalf("reset window = %+v", reset)
 	}
 }
@@ -208,8 +208,8 @@ func TestReaderChannelTelemetryUnbufferedHandoffCountsOnlyAfterSend(t *testing.T
 	handoff := telemetry.snapshot(time.Now())
 	if handoff.depthBatches != 0 || handoff.sentBatchesTotal != 1 ||
 		handoff.sentTransactionsTotal != 2 || handoff.receivedBatchesTotal != 1 ||
-		handoff.receivedTransactionsTotal != 2 || handoff.inputBatchesPerSecond != 1 ||
-		handoff.outputBatchesPerSecond != 1 {
+		handoff.receivedTransactionsTotal != 2 || handoff.sentBatchesPerSecond != 1 ||
+		handoff.receivedBatchesPerSecond != 1 {
 		t.Fatalf("unbuffered handoff = %+v", handoff)
 	}
 }
