@@ -19,8 +19,8 @@ func TestStartThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 	}
 	close(readerBatches)
 
-	var telemetry readerChannelTelemetry
-	var senderChannel readerChannelTelemetry
+	var telemetry channelTelemetry
+	var senderChannel channelTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
 	done, _ := startThrottler(
@@ -65,8 +65,8 @@ func TestStartThrottlerUsesConfiguredSenderChannelCapacity(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			readerBatches := make(chan []Transaction)
-			var readerChannel readerChannelTelemetry
-			var senderChannel readerChannelTelemetry
+			var readerChannel channelTelemetry
+			var senderChannel channelTelemetry
 			senderBatches := make(chan []Transaction, capacity)
 			senderChannel.start(senderBatches, 0)
 			done, _ := startThrottler(
@@ -92,8 +92,8 @@ func TestStartThrottlerUsesConfiguredSenderChannelCapacity(t *testing.T) {
 func TestStartThrottlerCancelWhileWaitingForInput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	readerBatches := make(chan []Transaction)
-	var telemetry readerChannelTelemetry
-	var senderChannel readerChannelTelemetry
+	var telemetry channelTelemetry
+	var senderChannel channelTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
 	done, _ := startThrottler(
@@ -119,8 +119,8 @@ func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	readerBatches := make(chan []Transaction, 1)
 	readerBatches <- []Transaction{{ClientID: "pending"}}
-	var telemetry readerChannelTelemetry
-	var senderChannel readerChannelTelemetry
+	var telemetry channelTelemetry
+	var senderChannel channelTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
 	done, _ := startThrottler(
@@ -165,8 +165,8 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 	defer cancel()
 	readerBatches := make(chan []Transaction, 1)
 	readerBatches <- make([]Transaction, 3)
-	var readerChannel readerChannelTelemetry
-	var senderChannel readerChannelTelemetry
+	var readerChannel channelTelemetry
+	var senderChannel channelTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
 	done, _ := startThrottler(
@@ -209,8 +209,8 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 	defer cancel()
 	readerBatches := make(chan []Transaction, 1)
 	readerBatches <- []Transaction{{}}
-	var readerChannel readerChannelTelemetry
-	var senderChannel readerChannelTelemetry
+	var readerChannel channelTelemetry
+	var senderChannel channelTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
 	done, updates := startThrottler(
@@ -262,8 +262,8 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 			readerBatches := make(chan []Transaction, 1)
 			readerBatches <- make([]Transaction, test.batchSize)
 			close(readerBatches)
-			var telemetry readerChannelTelemetry
-			var senderChannel readerChannelTelemetry
+			var telemetry channelTelemetry
+			var senderChannel channelTelemetry
 			started := time.Now()
 			senderBatches := make(chan []Transaction)
 			senderChannel.start(senderBatches, 0)
@@ -316,8 +316,8 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 			defer cancel()
 			readerBatches := make(chan []Transaction, 1)
 			readerBatches <- []Transaction{{ClientID: "held"}}
-			var telemetry readerChannelTelemetry
-			var senderChannel readerChannelTelemetry
+			var telemetry channelTelemetry
+			var senderChannel channelTelemetry
 			senderBatches := make(chan []Transaction)
 			senderChannel.start(senderBatches, 0)
 			done, updates := startThrottler(
@@ -360,8 +360,8 @@ func TestStartThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
 	readerBatches := make(chan []Transaction, 2)
 	readerBatches <- []Transaction{{ClientID: "first"}}
 	readerBatches <- []Transaction{{ClientID: "second"}}
-	var telemetry readerChannelTelemetry
-	var senderChannel readerChannelTelemetry
+	var telemetry channelTelemetry
+	var senderChannel channelTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
 	done, _ := startThrottler(

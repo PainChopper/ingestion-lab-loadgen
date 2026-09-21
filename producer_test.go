@@ -27,12 +27,12 @@ func TestProduceBatchesReadsNestedDefaultParquet(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var telemetry readerTelemetry
-	var readerChannelTelemetry readerChannelTelemetry
+	var channelTelemetry channelTelemetry
 	policy := testPolicy(t)
 	pattern := filepath.Join(dir, "data", "MBD-mini", "trx", "fold=*", "*.parquet")
 	batches := make(chan []Transaction, policy.ReaderChannel.Capacity.Default)
-	readerChannelTelemetry.start(batches, 1)
-	done, err := produceBatches(ctx, pattern, 1, batches, &telemetry, &readerChannelTelemetry)
+	channelTelemetry.start(batches, 1)
+	done, err := produceBatches(ctx, pattern, 1, batches, &telemetry, &channelTelemetry)
 	if err != nil {
 		t.Fatalf("start producer with default pattern: %v", err)
 	}
@@ -61,9 +61,9 @@ func TestProduceBatchesRejectsEmptyAndInvalidPatterns(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var telemetry readerTelemetry
-			var readerChannelTelemetry readerChannelTelemetry
+			var channelTelemetry channelTelemetry
 			batches := make(chan []Transaction, 1)
-			done, err := produceBatches(context.Background(), test.pattern, 1, batches, &telemetry, &readerChannelTelemetry)
+			done, err := produceBatches(context.Background(), test.pattern, 1, batches, &telemetry, &channelTelemetry)
 			if err == nil || done != nil {
 				t.Fatalf("produceBatches(%q) = (%v, %v), want nil done and error", test.pattern, done, err)
 			}
@@ -88,12 +88,12 @@ func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var telemetry readerTelemetry
-	var readerChannelTelemetry readerChannelTelemetry
+	var channelTelemetry channelTelemetry
 	telemetry.startInterval(time.Now())
 	policy := testPolicy(t)
 	batches := make(chan []Transaction, policy.ReaderChannel.Capacity.Default)
-	readerChannelTelemetry.start(batches, policy.Reader.ReadBatchSize.Default)
-	done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Default, batches, &telemetry, &readerChannelTelemetry)
+	channelTelemetry.start(batches, policy.Reader.ReadBatchSize.Default)
+	done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Default, batches, &telemetry, &channelTelemetry)
 	if err != nil {
 		t.Fatalf("start producer: %v", err)
 	}
@@ -133,11 +133,11 @@ func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var telemetry readerTelemetry
-	var readerChannelTelemetry readerChannelTelemetry
+	var channelTelemetry channelTelemetry
 	policy := testPolicy(t)
 	batches := make(chan []Transaction, policy.ReaderChannel.Capacity.Default)
-	readerChannelTelemetry.start(batches, policy.Reader.ReadBatchSize.Min)
-	done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Min, batches, &telemetry, &readerChannelTelemetry)
+	channelTelemetry.start(batches, policy.Reader.ReadBatchSize.Min)
+	done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Min, batches, &telemetry, &channelTelemetry)
 	if err != nil {
 		t.Fatalf("start producer: %v", err)
 	}
@@ -175,10 +175,10 @@ func TestProduceBatchesPreservesBatchOrderAndOwnershipAcrossResiduals(t *testing
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			var telemetry readerTelemetry
-			var readerChannelTelemetry readerChannelTelemetry
+			var channelTelemetry channelTelemetry
 			batches := make(chan []Transaction, 1)
-			readerChannelTelemetry.start(batches, batchSize)
-			done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), batchSize, batches, &telemetry, &readerChannelTelemetry)
+			channelTelemetry.start(batches, batchSize)
+			done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), batchSize, batches, &telemetry, &channelTelemetry)
 			if err != nil {
 				t.Fatalf("start producer: %v", err)
 			}
@@ -259,10 +259,10 @@ func TestProduceBatchesUsesConfiguredReaderChannelCapacity(t *testing.T) {
 		t.Run(fmt.Sprintf("capacity-%d", capacity), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			var telemetry readerTelemetry
-			var readerChannelTelemetry readerChannelTelemetry
+			var channelTelemetry channelTelemetry
 			batches := make(chan []Transaction, capacity)
-			readerChannelTelemetry.start(batches, 1)
-			done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), 1, batches, &telemetry, &readerChannelTelemetry)
+			channelTelemetry.start(batches, 1)
+			done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), 1, batches, &telemetry, &channelTelemetry)
 			if err != nil {
 				cancel()
 				t.Fatalf("start producer: %v", err)
@@ -271,7 +271,7 @@ func TestProduceBatchesUsesConfiguredReaderChannelCapacity(t *testing.T) {
 				cancel()
 				t.Fatalf("producer channel capacity = %d, want %d", got, capacity)
 			}
-			if got := readerChannelTelemetry.snapshot(time.Now()).capacity; got != capacity {
+			if got := channelTelemetry.snapshot(time.Now()).capacity; got != capacity {
 				cancel()
 				t.Fatalf("telemetry capacity = %d, want %d", got, capacity)
 			}

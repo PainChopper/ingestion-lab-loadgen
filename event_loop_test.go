@@ -332,8 +332,8 @@ func TestResetFromPausedStopsProducerClearsProgressAndStartsFreshRun(t *testing.
 	start := func(
 		ctx context.Context,
 		batches <-chan []Transaction,
-		_ *readerChannelTelemetry,
-		_ *readerChannelTelemetry,
+		_ *channelTelemetry,
+		_ *channelTelemetry,
 		_ int,
 		_ throttlerSettings,
 	) (<-chan []Transaction, <-chan struct{}, chan<- throttlerUpdate) {
@@ -855,12 +855,12 @@ func startEventLoopForTest(t *testing.T, onProduce func()) (chan<- request, chan
 type legacyProducerStarter func(context.Context, int, int) (<-chan []Transaction, <-chan struct{}, error)
 
 type legacyThrottlerStarter func(
-	context.Context,
-	<-chan []Transaction,
-	*readerChannelTelemetry,
-	*readerChannelTelemetry,
-	int,
-	throttlerSettings,
+	ctx context.Context,
+	input <-chan []Transaction,
+	readerChannelTelemetry *channelTelemetry,
+	senderChannelTelemetry *channelTelemetry,
+	outputCapacity int,
+	settings throttlerSettings,
 ) (<-chan []Transaction, <-chan struct{}, chan<- throttlerUpdate)
 
 func startCustomEventLoopForTest(
@@ -932,11 +932,11 @@ func adaptLegacyThrottler(start legacyThrottlerStarter, onDelivered func([]Trans
 		ctx context.Context,
 		input <-chan []Transaction,
 		output chan<- []Transaction,
-		readerChannel *readerChannelTelemetry,
-		senderChannel *readerChannelTelemetry,
+		readerChannelTelemetry *channelTelemetry,
+		senderChannelTelemetry *channelTelemetry,
 		settings throttlerSettings,
 	) (<-chan struct{}, chan<- throttlerUpdate) {
-		batches, done, updates := start(ctx, input, readerChannel, senderChannel, cap(output), settings)
+		batches, done, updates := start(ctx, input, readerChannelTelemetry, senderChannelTelemetry, cap(output), settings)
 		return relayBatches(ctx, batches, output, done, onDelivered), updates
 	}
 }
@@ -1302,8 +1302,8 @@ func startActualChannelEventLoopForTestWithHeldThrottler(t *testing.T, holdThrot
 		ctx context.Context,
 		input <-chan []Transaction,
 		output chan<- []Transaction,
-		readerChannel *readerChannelTelemetry,
-		senderChannel *readerChannelTelemetry,
+		readerChannelTelemetry *channelTelemetry,
+		senderChannelTelemetry *channelTelemetry,
 		settings throttlerSettings,
 	) (<-chan struct{}, chan<- throttlerUpdate) {
 		senderStarts <- struct{}{}
@@ -1312,13 +1312,13 @@ func startActualChannelEventLoopForTestWithHeldThrottler(t *testing.T, holdThrot
 				ctx,
 				input,
 				output,
-				readerChannel,
-				senderChannel,
+				readerChannelTelemetry,
+				senderChannelTelemetry,
 				allowThrottlerForward,
 				forwardedBatches,
 			)
 		}
-		return startThrottler(ctx, input, output, readerChannel, senderChannel, settings)
+		return startThrottler(ctx, input, output, readerChannelTelemetry, senderChannelTelemetry, settings)
 	}
 	done := make(chan struct{})
 	go func() {
@@ -1357,8 +1357,8 @@ func startHeldThrottlerForTest(
 	ctx context.Context,
 	input <-chan []Transaction,
 	output chan<- []Transaction,
-	readerChannel *readerChannelTelemetry,
-	senderChannel *readerChannelTelemetry,
+	readerChannelTelemetry *channelTelemetry,
+	senderChannelTelemetry *channelTelemetry,
 	allowForward <-chan struct{},
 	forwarded chan<- []Transaction,
 ) (<-chan struct{}, chan<- throttlerUpdate) {
@@ -1381,12 +1381,12 @@ func startHeldThrottlerForTest(
 				if !ok {
 					return
 				}
-				readerChannel.recordReceive(len(batch))
+				readerChannelTelemetry.recordReceive(len(batch))
 				select {
 				case <-ctx.Done():
 					return
 				case output <- batch:
-					senderChannel.recordSend(len(batch))
+					senderChannelTelemetry.recordSend(len(batch))
 					forwarded <- batch
 				}
 			}

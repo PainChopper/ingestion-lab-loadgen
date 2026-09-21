@@ -39,8 +39,8 @@ type configuredControls struct {
 
 type controlTelemetry struct {
 	reader        readerTelemetry
-	readerChannel readerChannelTelemetry
-	senderChannel readerChannelTelemetry
+	readerChannel channelTelemetry
+	senderChannel channelTelemetry
 }
 
 func main() {

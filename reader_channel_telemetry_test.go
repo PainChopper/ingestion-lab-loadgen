@@ -12,7 +12,7 @@ func TestReaderChannelTelemetryReportsBufferedBatchesAndTransactions(t *testing.
 	batches <- make([]Transaction, 3)
 	batches <- make([]Transaction, 3)
 
-	var telemetry readerChannelTelemetry
+	var telemetry channelTelemetry
 	telemetry.start(batches, 3)
 	measurements := telemetry.snapshot(time.Now())
 	if measurements.capacity != policy.ReaderChannel.Capacity.Default || measurements.depthBatches != 2 ||
@@ -26,7 +26,7 @@ func TestReaderChannelTelemetryMeasuresBlockedSendUntilConsumerReceives(t *testi
 	batches := make(chan []Transaction, 1)
 	batches <- []Transaction{{}}
 
-	var telemetry readerChannelTelemetry
+	var telemetry channelTelemetry
 	telemetry.start(batches, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -62,7 +62,7 @@ func TestReaderChannelTelemetryMeasuresBlockedSendUntilConsumerReceives(t *testi
 
 func TestReaderChannelTelemetrySnapshotAccumulatesSubMillisecondBlockedDurations(t *testing.T) {
 	now := time.Date(2026, time.September, 19, 0, 0, 0, 0, time.UTC)
-	telemetry := readerChannelTelemetry{
+	telemetry := channelTelemetry{
 		blockedAt: now.Add(-800 * time.Microsecond),
 		blockedMs: 800 * time.Microsecond,
 	}
@@ -83,7 +83,7 @@ func TestReaderChannelTelemetryClearMeasurementsRetainsAttachmentAndDetachRemove
 	batches := make(chan []Transaction, 1)
 	batches <- []Transaction{{}}
 
-	var telemetry readerChannelTelemetry
+	var telemetry channelTelemetry
 	telemetry.start(batches, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	sent := make(chan bool, 1)
@@ -140,7 +140,7 @@ func TestReaderChannelTelemetryClearMeasurementsRetainsAttachmentAndDetachRemove
 
 func TestReaderChannelTelemetryCountsSuccessfulSendAndSamplesWindow(t *testing.T) {
 	batches := make(chan []Transaction, 2)
-	var telemetry readerChannelTelemetry
+	var telemetry channelTelemetry
 	telemetry.start(batches, 2)
 	if !telemetry.send(context.Background(), batches, make([]Transaction, 2)) {
 		t.Fatal("first send failed")
@@ -185,7 +185,7 @@ func TestReaderChannelTelemetryCountsSuccessfulSendAndSamplesWindow(t *testing.T
 
 func TestReaderChannelTelemetryUnbufferedHandoffCountsOnlyAfterSend(t *testing.T) {
 	batches := make(chan []Transaction)
-	var telemetry readerChannelTelemetry
+	var telemetry channelTelemetry
 	telemetry.start(batches, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -214,7 +214,7 @@ func TestReaderChannelTelemetryUnbufferedHandoffCountsOnlyAfterSend(t *testing.T
 	}
 }
 
-func waitForBlockedSender(t *testing.T, telemetry *readerChannelTelemetry) {
+func waitForBlockedSender(t *testing.T, telemetry *channelTelemetry) {
 	t.Helper()
 
 	deadline := time.After(time.Second)

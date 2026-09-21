@@ -16,7 +16,7 @@ func produceBatches(
 	batchSize int,
 	batches chan<- []Transaction,
 	telemetry *readerTelemetry,
-	readerChannelTelemetry *readerChannelTelemetry,
+	channelTelemetry *channelTelemetry,
 ) (<-chan struct{}, error) {
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
@@ -75,7 +75,7 @@ func produceBatches(
 								accumulator = append(accumulator, remainingRows...)
 							} else {
 								accumulator = append(accumulator, remainingRows[:remainingCapacity]...)
-								if !readerChannelTelemetry.send(ctx, batches, accumulator) {
+								if !channelTelemetry.send(ctx, batches, accumulator) {
 									return
 								}
 								remainingRows = remainingRows[remainingCapacity:]

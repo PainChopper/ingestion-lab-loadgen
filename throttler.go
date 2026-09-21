@@ -20,8 +20,8 @@ func startThrottler(
 	ctx context.Context,
 	readerBatches <-chan []Transaction,
 	senderBatches chan<- []Transaction,
-	readerChannel *readerChannelTelemetry,
-	senderChannel *readerChannelTelemetry,
+	readerChannelTelemetry *channelTelemetry,
+	senderChannelTelemetry *channelTelemetry,
 	initial throttlerSettings,
 ) (<-chan struct{}, chan<- throttlerUpdate) {
 	done := make(chan struct{})
@@ -40,8 +40,8 @@ func startThrottler(
 				if !ok {
 					return
 				}
-				readerChannel.recordReceive(len(batch))
-				if !forwardThrottledBatch(ctx, senderBatches, senderChannel, batch, updates, &settings) {
+				readerChannelTelemetry.recordReceive(len(batch))
+				if !forwardThrottledBatch(ctx, senderBatches, senderChannelTelemetry, batch, updates, &settings) {
 					return
 				}
 			}
@@ -53,7 +53,7 @@ func startThrottler(
 func forwardThrottledBatch(
 	ctx context.Context,
 	senderBatches chan<- []Transaction,
-	senderChannel *readerChannelTelemetry,
+	senderChannel *channelTelemetry,
 	batch []Transaction,
 	updates <-chan throttlerUpdate,
 	settings *throttlerSettings,

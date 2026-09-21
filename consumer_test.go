@@ -10,7 +10,7 @@ import (
 func TestConsumeBatchesCountsTransactions(t *testing.T) {
 	batches := make(chan []Transaction)
 	var consumed atomic.Int64
-	var senderChannel readerChannelTelemetry
+	var senderChannel channelTelemetry
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -47,7 +47,7 @@ func TestConsumeBatchesCompletesAcceptedBatchAfterCancel(t *testing.T) {
 
 	batches := make(chan []Transaction)
 	var consumed atomic.Int64
-	var senderChannel readerChannelTelemetry
+	var senderChannel channelTelemetry
 	enteredConsume := make(chan struct{})
 	allowCompletion := make(chan struct{})
 	done := make(chan struct{})

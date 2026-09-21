@@ -10,7 +10,7 @@ const progressEvery int64 = 500
 func consumeBatches(
 	ctx context.Context,
 	batches <-chan []Transaction,
-	senderChannel *readerChannelTelemetry,
+	senderChannel *channelTelemetry,
 	consumedSinceTick *atomic.Int64,
 ) {
 	consumeBatchesWith(ctx, batches, senderChannel, consumedSinceTick, consumeTransaction)
@@ -19,7 +19,7 @@ func consumeBatches(
 func consumeBatchesWith(
 	ctx context.Context,
 	batches <-chan []Transaction,
-	senderChannel *readerChannelTelemetry,
+	senderChannel *channelTelemetry,
 	consumedSinceTick *atomic.Int64,
 	consume func(*Transaction),
 ) {
