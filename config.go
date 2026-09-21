@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -23,36 +24,6 @@ const (
 	throttlerInstalled        = "installed"
 	throttlerBypass           = "bypass"
 )
-
-var requiredPolicyKeys = []string{
-	"schema_version",
-	"source.path",
-	"source.unit",
-	"source.mutability",
-	"reader.read_batch_size.default",
-	"reader.read_batch_size.min",
-	"reader.read_batch_size.max",
-	"reader.read_batch_size.step",
-	"reader.read_batch_size.unit",
-	"reader.read_batch_size.mutability",
-	"readerChannel.capacity.default",
-	"readerChannel.capacity.allowed",
-	"readerChannel.capacity.unit",
-	"readerChannel.capacity.mutability",
-	"senderChannel.capacity.default",
-	"senderChannel.capacity.allowed",
-	"senderChannel.capacity.unit",
-	"senderChannel.capacity.mutability",
-	"throttler.requested_tps.default",
-	"throttler.requested_tps.min",
-	"throttler.requested_tps.max",
-	"throttler.requested_tps.step",
-	"throttler.requested_tps.unit",
-	"throttler.requested_tps.mutability",
-	"throttler.installation_mode.default",
-	"throttler.installation_mode.allowed",
-	"throttler.installation_mode.mutability",
-}
 
 type policy struct {
 	SchemaVersion int                 `mapstructure:"schema_version"`
@@ -120,14 +91,10 @@ func loadPolicy(configArgument string) (policy, string, error) {
 	if err := config.ReadInConfig(); err != nil {
 		return policy{}, "", fmt.Errorf("read config %q: %w", absConfigPath, err)
 	}
-	for _, key := range requiredPolicyKeys {
-		if !config.IsSet(key) {
-			return policy{}, "", fmt.Errorf("config %q is missing required key %q", absConfigPath, key)
-		}
-	}
-
 	var loaded policy
-	if err := config.UnmarshalExact(&loaded); err != nil {
+	if err := config.UnmarshalExact(&loaded, func(decoderConfig *mapstructure.DecoderConfig) {
+		decoderConfig.ErrorUnset = true
+	}); err != nil {
 		return policy{}, "", fmt.Errorf("decode config %q: %w", absConfigPath, err)
 	}
 	if err := loaded.validate(); err != nil {
