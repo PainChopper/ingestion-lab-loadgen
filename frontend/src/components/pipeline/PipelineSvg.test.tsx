@@ -450,7 +450,7 @@ function pipelineElement(snapshot: LoadgenSnapshot) {
 }
 
 describe('PipelineSvg rendering', () => {
-  it('keeps Simulation Reader activity lifecycle-driven while HTTP uses read rate', () => {
+  it('does not synthesize Reader chips from requested count or read rate', () => {
     const adapter = new SimulationAdapter()
     const base = adapter.getSnapshot()
     adapter.dispose()
@@ -469,8 +469,8 @@ describe('PipelineSvg rendering', () => {
       }, 0)
 
     const simulation = renderPipeline(withReadRate('simulation', 'running', 0))
-    expect(simulation.container.querySelectorAll('#reader-actor .pipeline-worker--active'))
-      .toHaveLength(base.reader.workers.applied ?? 0)
+    expect(simulation.container.querySelectorAll('#reader-actor [data-worker-slot-id]'))
+      .toHaveLength(0)
     simulation.unmount()
 
     const idle = renderPipeline(withReadRate('http', 'idle', 0))
@@ -998,6 +998,87 @@ describe('PipelineSvg rendering', () => {
       .toBe('#ff6748')
   })
 
+  it('uses valve sides and slider keys without activating bypass control', () => {
+    const base = activeSnapshot()
+    const snapshot: LoadgenSnapshot = {
+      ...base,
+      throttler: {
+        ...base.throttler,
+        requestedTps: {
+          ...base.throttler.requestedTps,
+          applied: 120_000,
+          preview: null,
+          pending: null,
+        },
+      },
+    }
+    const onRequestedTpsChange = vi.fn().mockResolvedValue(true)
+    const onInstallationModeChange = vi.fn().mockResolvedValue(true)
+    const geometry = createPipelineGeometry({
+      orientation: 'landscape',
+      readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+      senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+    })
+    const view = render(
+      <PipelineSvg
+        snapshot={snapshot}
+        selectedId={null}
+        onSelect={vi.fn()}
+        onWorkerCountChange={vi.fn()}
+        onChannelCapacityChange={vi.fn()}
+        requestedTpsPreview={null}
+        onRequestedTpsPreviewChange={vi.fn()}
+        onRequestedTpsChange={onRequestedTpsChange}
+        onInstallationModeChange={onInstallationModeChange}
+        orientation="landscape"
+        geometry={geometry}
+      />,
+    )
+    const slider = view.container.querySelector<SVGGElement>(
+      '[role="slider"][aria-label="Throttle opening"]',
+    )!
+    const decrease = view.container.querySelector<SVGRectElement>(
+      '[data-direction="decrease"]',
+    )!
+    const increase = view.container.querySelector<SVGRectElement>(
+      '[data-direction="increase"]',
+    )!
+
+    expect(view.container.querySelector('[data-installation-grip="wheel"]')
+      ?.getAttribute('y')).toBe('368')
+    expect(view.container.querySelector('[data-installation-grip="wheel"]')
+      ?.getAttribute('height')).toBe('29')
+    expect([decrease, increase].map((element) => [
+      element.getAttribute('x'), element.getAttribute('y'),
+      element.getAttribute('width'), element.getAttribute('height'),
+    ])).toEqual([
+      Object.values(VALVE_OPENING_CONTROLS.decrease).map(String),
+      Object.values(VALVE_OPENING_CONTROLS.increase).map(String),
+    ])
+    for (const side of Object.values(VALVE_OPENING_CONTROLS)) {
+      expect(side.y).toBeGreaterThanOrEqual(
+        VALVE_INSTALLATION_CONTROL.installedTarget.y +
+          VALVE_INSTALLATION_CONTROL.installedTarget.height,
+      )
+    }
+    fireEvent.pointerDown(decrease)
+    fireEvent.pointerUp(window)
+    fireEvent.pointerDown(increase)
+    fireEvent.pointerUp(window)
+    fireEvent.focus(slider)
+    fireEvent.keyDown(slider, { key: 'End' })
+    fireEvent.keyDown(slider, { key: 'ArrowDown' })
+
+    const requestedValues = onRequestedTpsChange.mock.calls.map(([value]) => value)
+    expect(requestedValues).toHaveLength(4)
+    expect(requestedValues[0]).not.toBe(snapshot.throttler.requestedTps.applied)
+    expect(requestedValues[1]).not.toBe(snapshot.throttler.requestedTps.applied)
+    expect(requestedValues[0]).not.toBe(requestedValues[1])
+    expect(requestedValues[2]).toBe(snapshot.throttler.requestedTps.max)
+    expect(requestedValues[3]).not.toBe(snapshot.throttler.requestedTps.max)
+    expect(onInstallationModeChange).not.toHaveBeenCalled()
+  })
+
   it('renders portrait viewBox, vertical ports, elbows, and cable paths', () => {
     const snapshot = activeSnapshot()
     const view = renderPipeline(snapshot, 'portrait')
@@ -1288,6 +1369,101 @@ describe('PipelineSvg rendering', () => {
       view.unmount()
     },
   )
+
+  it.each(['landscape', 'portrait'] as const)(
+    'renders Reader live slots and state precedence in %s',
+    (orientation) => {
+      const base = activeSnapshot()
+      const view = renderPipeline({
+        ...base,
+        reader: {
+          ...base.reader,
+          workers: { ...base.reader.workers, applied: 1 },
+          liveWorkers: 5,
+          drainingWorkers: 2,
+          workerSlots: [
+            { id: 'reader-worker-0', ordinal: 0, activity: 'reading', lifecycle: 'active', source: 'a' },
+            { id: 'reader-worker-1', ordinal: 1, activity: 'idle', lifecycle: 'active', source: null },
+            { id: 'reader-worker-2', ordinal: 2, activity: 'completed', lifecycle: 'active', source: 'b' },
+            { id: 'reader-worker-3', ordinal: 3, activity: 'reading', lifecycle: 'draining', source: 'c' },
+            { id: 'reader-worker-4', ordinal: 4, activity: 'blocked', lifecycle: 'draining', source: 'd' },
+          ],
+        },
+      }, orientation)
+      const reader = view.container.querySelector('#reader-actor')!
+      expect(reader.getAttribute('aria-label')).toBe('Inspect reader')
+      expect(reader.querySelectorAll('[data-worker-slot-id]')).toHaveLength(5)
+      for (const [ordinal, state, color] of [
+        [0, 'reading', 'var(--cyan)'],
+        [1, 'idle', 'var(--green)'],
+        [2, 'success', 'var(--green)'],
+        [3, 'draining', 'var(--purple)'],
+        [4, 'blocked', 'var(--red)'],
+      ] as const) {
+        const chip = reader.querySelector(`[data-worker-ordinal="${ordinal}"]`)!
+        expect(chip.classList).toContain(`pipeline-worker--${state}`)
+        expect(getComputedStyle(chip.querySelector('.pipeline-worker-led')!).fill).toBe(color)
+      }
+      expect(getComputedStyle(reader.querySelector('.pipeline-worker--idle')!).opacity).toBe('0.34')
+      view.unmount()
+    },
+  )
+
+  it('holds observed Reader completion green for exactly one second and clears it on interruption', () => {
+    vi.useFakeTimers()
+    try {
+      const base = activeSnapshot()
+      const slot = { id: 'reader-worker-0', ordinal: 0, activity: 'reading' as const, lifecycle: 'active' as const, source: 'a' }
+      const snapshot = (activity: 'reading' | 'completed' | 'idle' | 'blocked', lifecycle: 'active' | 'draining' = 'active'): LoadgenSnapshot => ({
+        ...base,
+        reader: { ...base.reader, liveWorkers: 1, workerSlots: [{ ...slot, activity, lifecycle }] },
+      })
+      const view = renderPipeline(snapshot('reading'))
+      const rerender = (current: LoadgenSnapshot) => view.rerender(
+        <PipelineSvg
+          snapshot={current}
+          selectedId={null}
+          onSelect={vi.fn()}
+          onWorkerCountChange={vi.fn()}
+          onChannelCapacityChange={vi.fn()}
+          requestedTpsPreview={null}
+          onRequestedTpsPreviewChange={vi.fn()}
+          onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
+          onInstallationModeChange={vi.fn().mockResolvedValue(true)}
+          geometry={createPipelineGeometry({
+            orientation: 'landscape',
+            readerWorkers: normalizedWorkerCount(current.reader.workers),
+            senderWorkers: normalizedWorkerCount(current.sender.workers),
+          })}
+        />,
+      )
+      const chip = () => view.container.querySelector('[data-worker-slot-id="reader-worker-0"]')!
+      rerender(snapshot('completed'))
+      expect(chip().classList).toContain('pipeline-worker--success')
+      rerender(snapshot('idle'))
+      act(() => { vi.advanceTimersByTime(999) })
+      expect(chip().classList).toContain('pipeline-worker--success')
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(chip().classList).toContain('pipeline-worker--idle')
+
+      rerender(snapshot('reading'))
+      rerender(snapshot('completed'))
+      rerender(snapshot('blocked'))
+      expect(chip().classList).toContain('pipeline-worker--blocked')
+      rerender(snapshot('reading'))
+      rerender(snapshot('completed'))
+      rerender(snapshot('idle', 'draining'))
+      expect(chip().classList).toContain('pipeline-worker--draining')
+      rerender(snapshot('reading'))
+      rerender(snapshot('completed'))
+      rerender({ ...base, reader: { ...base.reader, workerSlots: [], liveWorkers: 0 } })
+      expect(view.container.querySelector('[data-worker-slot-id="reader-worker-0"]')).toBeNull()
+      view.unmount()
+      act(() => { vi.advanceTimersByTime(1_000) })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 
   it('shows an observed Sender success transition for one second', () => {
     vi.useFakeTimers()

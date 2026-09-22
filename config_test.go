@@ -36,6 +36,7 @@ func testConfigContents() string {
 	return strings.Join([]string{
 		"schema_version = 2", "", "[source]", "path = 'C:\\dataset\\*.parquet'", "unit = \"glob-pattern\"", "mutability = \"startup-only\"", "",
 		"[reader.read_batch_size]", "default = 1000", "min = 1000", "max = 100000", "step = 1000", "unit = \"transactions\"", "mutability = \"idle-only\"", "",
+		"[reader.workers]", "default = 1", "min = 1", "max = 7", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"", "",
 		"[readerChannel.capacity]", "default = 2", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
 		"", "[senderChannel.capacity]", "default = 0", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
 		"", "[throttler.requested_tps]", "default = 2000", "min = 0", "max = 4000", "step = 100", "unit = \"transactions/s\"", "mutability = \"immediate\"",
@@ -344,6 +345,40 @@ func TestSenderPolicyUsesApprovedProfile(t *testing.T) {
 	}
 	if sender.Simulated.ErrorRatePercent != (rangePolicy{Default: 2, Min: 0, Max: 100, Step: 1, Unit: percentUnit, Mutability: immediate}) {
 		t.Fatalf("error rate policy = %+v", sender.Simulated.ErrorRatePercent)
+	}
+}
+
+func TestReaderWorkersPolicyUsesApprovedProfile(t *testing.T) {
+	workers := testPolicy(t).Reader.Workers
+	want := rangePolicy{Default: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}
+	if workers != want || !workers.contains(1) || !workers.contains(7) || workers.contains(0) || workers.contains(8) {
+		t.Fatalf("Reader workers policy = %+v, want %+v", workers, want)
+	}
+}
+
+func TestLoadPolicyRejectsReaderWorkersProfileDrift(t *testing.T) {
+	tests := []struct{ name, old, replacement string }{
+		{"missing workers", "[reader.workers]\ndefault = 1", "[reader.workers]"},
+		{"default zero", "[reader.workers]\ndefault = 1", "[reader.workers]\ndefault = 0"},
+		{"minimum zero", "[reader.workers]\ndefault = 1\nmin = 1", "[reader.workers]\ndefault = 1\nmin = 0"},
+		{"maximum eight", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 8"},
+		{"step two", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7\nstep = 1", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7\nstep = 2"},
+		{"wrong mutability", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7\nstep = 1\nunit = \"workers\"\nmutability = \"immediate\"", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7\nstep = 1\nunit = \"workers\"\nmutability = \"idle-only\""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			contents := strings.Replace(testConfigContents(), test.old, test.replacement, 1)
+			if contents == testConfigContents() {
+				t.Fatal("replacement did not apply")
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadPolicy(path); err == nil {
+				t.Fatal("loadPolicy accepted invalid Reader workers policy")
+			}
+		})
 	}
 }
 

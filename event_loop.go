@@ -16,7 +16,12 @@ type throttlerStarter func(
 	initial throttlerSettings,
 ) (<-chan struct{}, chan<- throttlerUpdate)
 
-type readerStarter func(context.Context, chan<- []Transaction, int) (<-chan struct{}, error)
+type readerRun struct {
+	done      <-chan struct{}
+	reconcile func(int)
+}
+
+type readerStarter func(context.Context, chan<- []Transaction, int, int) (readerRun, error)
 
 func (state *controlState) eventLoop(
 	requests <-chan request,
@@ -43,6 +48,7 @@ func (state *controlState) eventLoopWithThrottler(
 	var throttlerUpdates chan<- throttlerUpdate
 	var cancelReader context.CancelFunc
 	var readerDone <-chan struct{}
+	var readerReconcile func(int)
 	defer func() {
 		if pool != nil {
 			<-pool.stop()
@@ -68,6 +74,7 @@ func (state *controlState) eventLoopWithThrottler(
 		pool = nil
 		cancelReader = nil
 		readerDone = nil
+		readerReconcile = nil
 		cancelThrottler = nil
 		throttlerDone = nil
 		throttlerUpdates = nil
@@ -97,11 +104,10 @@ func (state *controlState) eventLoopWithThrottler(
 						StartError:        state.run.startError,
 					},
 					Reader: readerSnapshot{
-						Workers:       1,
-						ReadBatchSize: state.readBatchSize(),
-						ReadTps:       reader.readTPS,
-						RowsRead:      reader.rowsRead,
-						Source:        reader.source,
+						Workers: state.readerWorkers(), LiveWorkers: reader.liveWorkers,
+						DrainingWorkers: reader.drainingWorkers, WorkerSlots: reader.workerSlots,
+						ReadBatchSize: state.readBatchSize(), ReadTps: reader.readTPS,
+						RowsRead: reader.rowsRead, Source: reader.source,
 					},
 					Throttler: throttlerSnapshot{
 						RequestedTps:     state.requestedTPS(),
@@ -158,10 +164,11 @@ func (state *controlState) eventLoopWithThrottler(
 					var senderCreated bool
 					senderBatches, senderCreated = state.prepareSenderChannel(senderBatches)
 					readerContext, cancel := context.WithCancel(context.Background())
-					done, err := read(
+					started, err := read(
 						readerContext,
 						batches,
 						state.readBatchSize(),
+						state.readerWorkers(),
 					)
 					if err != nil {
 						cancel()
@@ -184,7 +191,8 @@ func (state *controlState) eventLoopWithThrottler(
 						}
 						continue
 					}
-					readerDone = done
+					readerDone = started.done
+					readerReconcile = started.reconcile
 					cancelReader = cancel
 					throttlerContext, cancel := context.WithCancel(context.Background())
 					cancelThrottler = cancel
@@ -238,6 +246,7 @@ func (state *controlState) eventLoopWithThrottler(
 					drain(senderBatches)
 					cancelReader = nil
 					readerDone = nil
+					readerReconcile = nil
 					cancelThrottler = nil
 					throttlerDone = nil
 					throttlerUpdates = nil
@@ -259,6 +268,20 @@ func (state *controlState) eventLoopWithThrottler(
 					result.status = commandConflict
 				} else {
 					state.controls.configuredReadBatchSize = cmd.value
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- result
+				}
+			case cmdSetReaderWorkers:
+				result := commandResult{status: commandAccepted}
+				if !state.controls.policy.Reader.Workers.contains(cmd.value) {
+					result.status = commandConflict
+				} else {
+					state.controls.configuredReaderWorkers = cmd.value
+					state.controls.readerWorkersConfigured = true
+					if readerReconcile != nil {
+						readerReconcile(cmd.value)
+					}
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
@@ -366,6 +389,13 @@ func (state *controlState) eventLoopWithThrottler(
 			promMetrics.transactionsTotal.Add(float64(delta))
 		}
 	}
+}
+
+func (state *controlState) readerWorkers() int {
+	if state.controls.readerWorkersConfigured {
+		return state.controls.configuredReaderWorkers
+	}
+	return state.controls.policy.Reader.Workers.Default
 }
 
 func (state *controlState) senderWorkers() int {

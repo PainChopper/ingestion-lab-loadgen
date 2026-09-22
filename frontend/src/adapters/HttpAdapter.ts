@@ -21,7 +21,8 @@ const WIRE_KEYS = Object.freeze([
   'policy', 'reader', 'readerChannel', 'run', 'sender', 'senderChannel', 'throttler',
 ])
 const RUN_KEYS = Object.freeze(['elapsedMs', 'startError', 'state', 'totalTransactions'])
-const READER_KEYS = Object.freeze(['readBatchSize', 'readTps', 'rowsRead', 'source', 'workers'])
+const READER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'readBatchSize', 'readTps', 'rowsRead', 'source', 'workerSlots', 'workers'])
+const READER_SLOT_KEYS = Object.freeze(['activity', 'id', 'lifecycle', 'ordinal', 'source'])
 const THROTTLER_KEYS = Object.freeze(['admittedTps', 'installationMode', 'requestedTps'])
 const SENDER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'simulatedDelayMs', 'simulatedErrorRatePercent', 'workerSlots', 'workers'])
 const SENDER_SLOT_KEYS = Object.freeze(['activity', 'id', 'lifecycle', 'ordinal', 'terminalError'])
@@ -33,7 +34,7 @@ const CHANNEL_KEYS = Object.freeze([
 ])
 
 interface WireRun { readonly state: RunState; readonly totalTransactions: number; readonly elapsedMs: number; readonly startError: string | null }
-interface WireReader { readonly workers: number; readonly readBatchSize: number; readonly readTps: number; readonly rowsRead: number; readonly source: string | null }
+interface WireReader { readonly workers: number; readonly liveWorkers: number; readonly drainingWorkers: number; readonly workerSlots: readonly { readonly id: string; readonly ordinal: number; readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'; readonly lifecycle: 'active' | 'draining'; readonly source: string | null }[]; readonly readBatchSize: number; readonly readTps: number; readonly rowsRead: number; readonly source: string | null }
 interface WireThrottler { readonly requestedTps: number; readonly admittedTps: number; readonly installationMode: ThrottlerInstallationMode }
 interface WireSender {
   readonly workers: number
@@ -64,6 +65,7 @@ type SupportedCommand = Extract<
       | 'set-read-batch-size'
       | 'set-requested-tps'
       | 'set-throttler-installation-mode'
+      | 'set-worker-count'
       | 'set-sender-workers'
       | 'set-sender-simulated-delay-ms'
       | 'set-sender-simulated-error-rate-percent'
@@ -92,6 +94,7 @@ function isSupportedCommand(
     command.type === 'set-read-batch-size' ||
     command.type === 'set-requested-tps' ||
     command.type === 'set-throttler-installation-mode' ||
+    command.type === 'set-worker-count' ||
     command.type === 'set-sender-workers' ||
     command.type === 'set-sender-simulated-delay-ms' ||
     command.type === 'set-sender-simulated-error-rate-percent'
@@ -110,10 +113,6 @@ function unavailableControl(unit: string): NumericControlSnapshot {
   }
 }
 
-function workerControl(value: number | null): NumericControlSnapshot {
-  return fixedControl(value, 'workers')
-}
-
 function senderControl(
   value: number | null,
   policy: LoadgenPolicySnapshot['senderWorkers'] | null,
@@ -130,24 +129,6 @@ function senderControl(
     step: policy.step,
     unit: policy.unit,
     applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
-  }
-}
-
-function fixedControl(
-  value: number | null,
-  unit: string,
-): NumericControlSnapshot {
-  if (value === null) return unavailableControl(unit)
-
-  return {
-    applied: value,
-    preview: null,
-    pending: null,
-    min: value,
-    max: value,
-    step: 1,
-    unit,
-    applyMode: 'unavailable',
   }
 }
 
@@ -299,7 +280,10 @@ function createSnapshot(
     policy: wire?.policy ?? null,
     reader: {
       id: 'reader',
-      workers: workerControl(wire?.reader.workers ?? null),
+      workers: senderControl(wire?.reader.workers ?? null, wire?.policy.readerWorkers ?? null, connectionState),
+      liveWorkers: wire?.reader.liveWorkers ?? 0,
+      drainingWorkers: wire?.reader.drainingWorkers ?? 0,
+      workerSlots: wire?.reader.workerSlots ?? null,
       readBatchSize: readBatchSizeControl(
         wire?.reader.readBatchSize ?? null,
         wire?.policy.readerReadBatchSize ?? null,
@@ -448,7 +432,7 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   if (!isExactObject(value, [
     'metricsWindowMs',
     'readerChannelCapacity',
-    'readerReadBatchSize',
+    'readerReadBatchSize', 'readerWorkers',
     'senderChannelCapacity',
     'senderRetry',
     'senderSimulatedDelayMs',
@@ -482,6 +466,11 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   if (!isRangeValue(readerPolicy.default, readerPolicy)) {
     throw new Error('snapshot reader policy default is invalid')
   }
+  const readerWorkers = value.readerWorkers
+  if (!isExactObject(readerWorkers, ['default', 'max', 'min', 'mutability', 'step', 'unit']) ||
+    !isWireInteger(readerWorkers.default) || !isWireInteger(readerWorkers.min) || !isWireInteger(readerWorkers.max) || !isWireInteger(readerWorkers.step) ||
+    readerWorkers.min <= 0 || readerWorkers.max < readerWorkers.min || readerWorkers.step <= 0 || readerWorkers.unit !== 'workers' || readerWorkers.mutability !== 'immediate' ||
+    !isRangeValue(readerWorkers.default, readerWorkers as unknown as NonNullable<LoadgenPolicySnapshot['readerWorkers']>)) throw new Error('snapshot reader workers policy is invalid')
 
   const metricsWindow = value.metricsWindowMs
   if (!isExactObject(metricsWindow, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
@@ -607,6 +596,7 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   }
   return Object.freeze({
     readerReadBatchSize: Object.freeze(readerPolicy),
+    readerWorkers: Object.freeze(readerWorkers as unknown as LoadgenPolicySnapshot['readerWorkers']),
     metricsWindowMs: Object.freeze(metricsWindowPolicy),
     readerChannelCapacity: Object.freeze({
       default: readerChannel.default,
@@ -665,7 +655,15 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   if (run.state !== 'idle' && run.state !== 'running' && run.state !== 'paused') throw new Error('snapshot run state is invalid')
   if (!isWireInteger(run.elapsedMs) || !isWireInteger(run.totalTransactions)) throw new Error('snapshot run values are invalid')
   if (run.startError !== null && (typeof run.startError !== 'string' || run.startError.length === 0)) throw new Error('snapshot startError must be null or a nonempty string')
-  if (!isWireInteger(reader.workers) || !isRangeValue(reader.readBatchSize, policy.readerReadBatchSize) || !isWireNumber(reader.readTps) || !isWireInteger(reader.rowsRead)) throw new Error('snapshot reader values are invalid')
+  if (!isRangeValue(reader.workers, policy.readerWorkers!) || !isRangeValue(reader.readBatchSize, policy.readerReadBatchSize) || !isWireNumber(reader.readTps) || !isWireInteger(reader.rowsRead) || !isWireInteger(reader.liveWorkers) || !isWireInteger(reader.drainingWorkers) || !Array.isArray(reader.workerSlots) || reader.workerSlots.length !== reader.liveWorkers || reader.drainingWorkers > reader.liveWorkers) throw new Error('snapshot reader values are invalid')
+  let previousReaderOrdinal = -1
+  let drainingReaders = 0
+  for (const slot of reader.workerSlots) {
+    if (!isExactObject(slot, READER_SLOT_KEYS) || !isWireInteger(slot.ordinal) || slot.ordinal <= previousReaderOrdinal || slot.id !== `reader-worker-${slot.ordinal}` || (slot.activity !== 'idle' && slot.activity !== 'reading' && slot.activity !== 'completed' && slot.activity !== 'blocked') || (slot.lifecycle !== 'active' && slot.lifecycle !== 'draining') || (slot.source !== null && (typeof slot.source !== 'string' || slot.source.length === 0))) throw new Error('snapshot Reader slot is invalid')
+    previousReaderOrdinal = slot.ordinal
+    if (slot.lifecycle === 'draining') drainingReaders++
+  }
+  if (drainingReaders !== reader.drainingWorkers || (run.state === 'idle' && (reader.liveWorkers !== 0 || reader.drainingWorkers !== 0))) throw new Error('snapshot reader workers are invalid')
   if (reader.source !== null && (typeof reader.source !== 'string' || reader.source.length === 0)) throw new Error('snapshot reader source is invalid')
   if (!isRangeValue(throttler.requestedTps, policy.throttlerRequestedTps) || !isWireNumber(throttler.admittedTps) || (throttler.installationMode !== 'installed' && throttler.installationMode !== 'bypass') || !policy.throttlerInstallationMode.allowed.includes(throttler.installationMode)) throw new Error('snapshot throttler values are invalid')
   if (!isRangeValue(sender.workers, policy.senderWorkers) ||
@@ -747,6 +745,9 @@ function canDispatchPolicyCommand(
   if (command.type === 'set-sender-workers') {
     return snapshot.connectionState === 'connected' && policy !== null &&
       isRangeValue(command.value, policy.senderWorkers)
+  }
+  if (command.type === 'set-worker-count' && command.actor === 'reader') {
+    return snapshot.connectionState === 'connected' && policy?.readerWorkers !== undefined && isRangeValue(command.value, policy.readerWorkers)
   }
   if (command.type === 'set-sender-simulated-delay-ms') {
     return snapshot.connectionState === 'connected' && policy !== null &&
@@ -969,6 +970,8 @@ export class HttpAdapter implements LoadgenAdapter {
           command.type === 'set-sender-simulated-delay-ms' ||
           command.type === 'set-sender-simulated-error-rate-percent'
             ? { action: command.type, value: command.value }
+            : command.type === 'set-worker-count' && command.actor === 'reader'
+              ? { action: 'set-reader-workers', value: command.value }
             : { action: command.type },
         ),
       })

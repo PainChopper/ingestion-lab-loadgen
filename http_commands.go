@@ -34,6 +34,7 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 		strictAction := cr.Action == "set-requested-tps" ||
 			cr.Action == "set-throttler-installation-mode" ||
 			cr.Action == "set-sender-channel-capacity" ||
+			cr.Action == "set-reader-workers" ||
 			cr.Action == "set-sender-workers" ||
 			cr.Action == "set-sender-simulated-delay-ms" ||
 			cr.Action == "set-sender-simulated-error-rate-percent"
@@ -80,6 +81,17 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			}
 			reply := make(chan commandResult, 1)
 			commands <- request{kind: cmdSetReadBatchSize, value: value, commandReply: reply}
+			if result := <-reply; result.status == commandConflict {
+				w.WriteHeader(http.StatusConflict)
+			}
+		case "set-reader-workers":
+			var value int
+			if len(cr.Value) == 0 || string(cr.Value) == "null" || json.Unmarshal(cr.Value, &value) != nil || !policy.Reader.Workers.contains(value) {
+				http.Error(w, "Invalid Reader workers", http.StatusBadRequest)
+				return
+			}
+			reply := make(chan commandResult, 1)
+			commands <- request{kind: cmdSetReaderWorkers, value: value, commandReply: reply}
 			if result := <-reply; result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}

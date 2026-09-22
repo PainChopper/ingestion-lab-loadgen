@@ -15,6 +15,7 @@ const (
 	cmdPause
 	cmdReset
 	cmdSetReadBatchSize
+	cmdSetReaderWorkers
 	cmdSetReaderChannelCapacity
 	cmdSetSenderChannelCapacity
 	cmdSetRequestedTPS

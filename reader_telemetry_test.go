@@ -39,3 +39,33 @@ func TestReaderTelemetryMeasuresElapsedIntervals(t *testing.T) {
 		t.Fatalf("after Reset = %+v, want zero measurements and null source", got)
 	}
 }
+
+func TestReaderWorkerActivityPreservesSourceUntilIdle(t *testing.T) {
+	var telemetry readerTelemetry
+	telemetry.startWorker(0)
+	assertSlot := func(activity, lifecycle string, source *string) {
+		t.Helper()
+		slot := telemetry.snapshot().workerSlots[0]
+		if slot.Activity != activity || slot.Lifecycle != lifecycle ||
+			(slot.Source == nil) != (source == nil) || (source != nil && *slot.Source != *source) {
+			t.Fatalf("slot = %+v, want activity=%q lifecycle=%q source=%v", slot, activity, lifecycle, source)
+		}
+	}
+	assertSlot("idle", "active", nil)
+	source := "data/a.parquet"
+	telemetry.setWorkerReading(0, source)
+	assertSlot("reading", "active", &source)
+	telemetry.setWorkerBlocked(0)
+	assertSlot("blocked", "active", &source)
+	telemetry.setWorkerReading(0, source)
+	telemetry.setWorkerCompleted(0)
+	assertSlot("completed", "active", &source)
+	telemetry.setWorkerLifecycle(0, "draining")
+	assertSlot("completed", "draining", &source)
+	telemetry.setWorkerIdle(0)
+	assertSlot("idle", "draining", nil)
+	telemetry.finishWorker(0)
+	if got := telemetry.snapshot().workerSlots; len(got) != 0 {
+		t.Fatalf("finished slots = %+v", got)
+	}
+}

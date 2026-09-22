@@ -116,6 +116,15 @@ export function getInspectorViewModel(
         title: 'READER',
         kind: 'Parquet source',
         rows: [
+		  {
+			label: 'Workers desired / live / draining',
+			value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
+		  },
+		  {
+			label: 'Reader slots',
+			value: (snapshot.reader.workerSlots ?? []).map((slot) => `${slot.id}: ${slot.lifecycle} ${slot.activity}${slot.source === null ? '' : ` (${slot.source})`}`).join(' · ') || '—',
+			layout: 'full-width',
+		  },
           { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
           {
             label: 'Configured capacity',

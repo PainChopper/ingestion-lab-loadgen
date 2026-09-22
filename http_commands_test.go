@@ -136,7 +136,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "TPS string", body: `{"action":"set-requested-tps","value":"100"}`, want: http.StatusBadRequest},
 		{name: "TPS negative", body: `{"action":"set-requested-tps","value":-100}`, want: http.StatusBadRequest},
 		{name: "TPS off step", body: `{"action":"set-requested-tps","value":101}`, want: http.StatusBadRequest},
-		{name: "TPS over max", body: `{"action":"set-requested-tps","value":4100}`, want: http.StatusBadRequest},
+		{name: "TPS over max", body: `{"action":"set-requested-tps","value":4100000}`, want: http.StatusBadRequest},
 		{name: "TPS extra field", body: `{"action":"set-requested-tps","value":100,"other":1}`, want: http.StatusBadRequest},
 		{name: "TPS trailing JSON", body: `{"action":"set-requested-tps","value":100}{}`, want: http.StatusBadRequest},
 		{name: "mode missing", body: `{"action":"set-throttler-installation-mode"}`, want: http.StatusBadRequest},
@@ -145,8 +145,8 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "mode unknown", body: `{"action":"set-throttler-installation-mode","value":"other"}`, want: http.StatusBadRequest},
 		{name: "mode extra field", body: `{"action":"set-throttler-installation-mode","value":"bypass","other":1}`, want: http.StatusBadRequest},
 		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
-		{name: "TPS default", body: `{"action":"set-requested-tps","value":2000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
-		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
+		{name: "TPS default", body: `{"action":"set-requested-tps","value":2000000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
+		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
 		{name: "mode installed", body: `{"action":"set-throttler-installation-mode","value":"installed"}`, want: http.StatusOK, kind: cmdSetThrottlerInstallationMode},
 		{name: "mode bypass", body: `{"action":"set-throttler-installation-mode","value":"bypass"}`, want: http.StatusOK, kind: cmdSetThrottlerInstallationMode},
 	}
@@ -240,6 +240,56 @@ func TestSenderCommandValidation(t *testing.T) {
 			}
 			if recorder.Code != test.want || len(commands) != 0 {
 				t.Fatalf("status = %d, queued commands = %d, want %d and zero", recorder.Code, len(commands), test.want)
+			}
+		})
+	}
+}
+
+func TestReaderWorkersCommandValidation(t *testing.T) {
+	tests := []struct {
+		name, body string
+		want       int
+		value      int
+	}{
+		{"minimum", `{"action":"set-reader-workers","value":1}`, http.StatusOK, 1},
+		{"maximum", `{"action":"set-reader-workers","value":7}`, http.StatusOK, 7},
+		{"zero", `{"action":"set-reader-workers","value":0}`, http.StatusBadRequest, 0},
+		{"eight", `{"action":"set-reader-workers","value":8}`, http.StatusBadRequest, 0},
+		{"missing", `{"action":"set-reader-workers"}`, http.StatusBadRequest, 0},
+		{"null", `{"action":"set-reader-workers","value":null}`, http.StatusBadRequest, 0},
+		{"fractional", `{"action":"set-reader-workers","value":1.5}`, http.StatusBadRequest, 0},
+		{"string", `{"action":"set-reader-workers","value":"1"}`, http.StatusBadRequest, 0},
+		{"extra key", `{"action":"set-reader-workers","value":1,"other":1}`, http.StatusBadRequest, 0},
+		{"trailing JSON", `{"action":"set-reader-workers","value":1}{}`, http.StatusBadRequest, 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			commands := make(chan request, 1)
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				commandsHandler(commands, testPolicy(t)).ServeHTTP(recorder, req)
+			}()
+			if test.want == http.StatusOK {
+				select {
+				case command := <-commands:
+					if command.kind != cmdSetReaderWorkers || command.value != test.value {
+						t.Errorf("command = %+v, want Reader workers %d", command, test.value)
+					}
+					command.commandReply <- commandResult{status: commandAccepted}
+				case <-time.After(time.Second):
+					t.Fatal("valid Reader command was not dispatched")
+				}
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("Reader command handler did not return")
+			}
+			if recorder.Code != test.want || len(commands) != 0 {
+				t.Fatalf("status = %d, queued = %d, want %d and zero", recorder.Code, len(commands), test.want)
 			}
 		})
 	}
