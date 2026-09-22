@@ -136,6 +136,55 @@ describe('LabShell', () => {
     expect(screen.queryByRole('spinbutton', { name: /^Simulated error rate/ })).toBeNull()
   })
 
+  it('renders all Sender sections and keeps long policy rows full width', async () => {
+    const user = userEvent.setup()
+    adapter = new SimulationAdapter()
+    render(<LabShell adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
+
+    const sectionTitles = screen.getAllByRole('heading', { level: 3 })
+      .map((heading) => heading.textContent)
+    expect(sectionTitles).toEqual([
+      'Управление',
+      'Состояние pool',
+      'Метрики и результаты',
+      'Диагностика и retry policy',
+    ])
+    for (const label of [
+      'Workers desired / live / draining',
+      'Worker states',
+      'Attempted TPS',
+      'Retry TPS',
+      'Terminal failed TPS',
+      'In-flight',
+      'Backoff',
+      'Attempts',
+      'Retry attempts',
+      '2xx responses',
+      'Rejected responses',
+      'Timeouts',
+      'Terminal failed batches',
+      'Terminal failed transactions',
+      'Ambiguous timeout transactions',
+      'Duplicate-risk transactions',
+      'Ambiguous terminal transactions',
+      'Retry policy',
+      'Diagnostic interpretation',
+    ]) {
+      expect(screen.getByText(label)).not.toBeNull()
+    }
+    expect(screen.getByText('Retry policy').parentElement?.className)
+      .toContain('inspector-data__row--full-width')
+    expect(screen.getByText('Diagnostic interpretation').parentElement?.className)
+      .toContain('inspector-data__row--full-width')
+    const workerSummary = screen.getByText('Worker states').parentElement
+    expect(workerSummary?.className).toContain('inspector-data__row--full-width')
+    expect(workerSummary?.querySelectorAll('.worker-state')).toHaveLength(4)
+    expect(screen.getAllByTestId('sender-inspector-section-data'))
+      .toHaveLength(3)
+  })
+
   it('shares numeric TPS preview and absolute command with the valve', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()
@@ -274,6 +323,8 @@ describe('LabShell', () => {
 
     expect(screen.getByTestId('pipeline-viewport').dataset.layout)
       .toBe('portrait')
+    expect(screen.getByLabelText('Load generator laboratory')
+      .getAttribute('data-layout')).toBe('portrait')
     expect(screen.getByRole('heading', { name: 'READER' })).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Inspect reader' })
       .getAttribute('aria-pressed')).toBe('true')

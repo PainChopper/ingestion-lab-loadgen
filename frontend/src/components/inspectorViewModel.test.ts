@@ -78,7 +78,7 @@ describe('inspector view model', () => {
     expect(model?.rows.find((row) => row.label === 'Retry attempts')?.value)
       .toBe('0')
     expect(model?.rows.find((row) => row.label === 'Worker states')?.value)
-      .toBe('0 idle · 0 in-flight · 0 backoff')
+      .toBe('0 idle · 0 in-flight · 0 backoff · 0 errors')
     expect(model?.rows.find((row) => row.label === 'Workers desired / live / draining')?.value)
       .toBe('3 / 0 / 0')
     expect(model?.rows.find((row) => row.label === 'Retry policy')?.value)
@@ -125,7 +125,10 @@ describe('inspector view model', () => {
 
     expect(model?.rows).toEqual(expect.arrayContaining([
       { label: 'Workers desired / live / draining', value: '32 / 32 / 8' },
-      { label: 'Worker states', value: '2 idle · 11 in-flight · 19 backoff' },
+      expect.objectContaining({
+        label: 'Worker states',
+        value: '2 idle · 11 in-flight · 19 backoff · 0 errors',
+      }),
       { label: 'Attempted TPS', value: '80,000 tx/s' },
       { label: 'Retry TPS', value: '30,000 tx/s' },
       { label: 'Terminal failed TPS', value: '10,000 tx/s' },
@@ -136,6 +139,24 @@ describe('inspector view model', () => {
       { label: 'Terminal failed transactions', value: '20,000' },
       { label: 'Duplicate-risk transactions', value: '8,000' },
       { label: 'Ambiguous terminal transactions', value: '4,000' },
+    ]))
+    adapter.dispose()
+  })
+
+  it('groups all Sender rows in a stable semantic order', () => {
+    const adapter = new SimulationAdapter()
+    const model = getInspectorViewModel(derivedSnapshot(adapter), 'sender')
+
+    expect(model?.sections?.map((section) => section.title)).toEqual([
+      'Состояние pool',
+      'Метрики и результаты',
+      'Диагностика и retry policy',
+    ])
+    expect(model?.sections?.flatMap((section) => section.rows.map((row) => row.label)))
+      .toEqual(model?.rows.map((row) => row.label))
+    expect(model?.sections?.[2]?.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Retry policy', layout: 'full-width' }),
+      expect.objectContaining({ label: 'Diagnostic interpretation', layout: 'full-width' }),
     ]))
     adapter.dispose()
   })

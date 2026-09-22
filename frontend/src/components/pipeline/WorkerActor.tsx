@@ -1,4 +1,5 @@
 import { Minus, Plus } from 'lucide-react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type {
   NumericControlSnapshot,
   RunState,
@@ -7,7 +8,6 @@ import type {
   SenderWorkerSlotSnapshot,
 } from '../../model/loadgen'
 import type { Point, TextPlacement, WorkerActorBounds } from './geometry'
-import type { KeyboardEvent } from 'react'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
   getWorkerActorLayout,
@@ -16,6 +16,8 @@ import {
 } from './workerActorLayout'
 
 export type WorkerActorId = 'reader' | 'sender'
+
+const SENDER_SUCCESS_DURATION_MS = 1_000
 
 interface WorkerActorProps {
   actor: WorkerActorId
@@ -58,7 +60,7 @@ function WorkerChip({
   state,
   slot,
 }: WorkerChipLayout & {
-  state: SenderWorkerState | 'active' | 'inactive' | 'draining' | 'terminal-error'
+  state: SenderWorkerState | 'active' | 'inactive' | 'success' | 'draining' | 'terminal-error'
   slot?: SenderWorkerSlotSnapshot
 }) {
   const pinOffsets = [6, 13, 20, 27]
@@ -149,13 +151,81 @@ export function WorkerActor({
   onSelect,
   onWorkerCountChange,
 }: WorkerActorProps) {
+  const [recentlySuccessfulWorkerIds, setRecentlySuccessfulWorkerIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  )
+  const previousWorkerActivity = useRef<ReadonlyMap<string, SenderWorkerState>>(new Map())
+  const successTimeouts = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+
+  useEffect(() => {
+    if (actor !== 'sender' || workerSlots === null || workerSlots === undefined) {
+      previousWorkerActivity.current = new Map()
+      for (const timeout of successTimeouts.current.values()) clearTimeout(timeout)
+      successTimeouts.current.clear()
+      setRecentlySuccessfulWorkerIds((current) => current.size === 0 ? current : new Set())
+      return
+    }
+
+    const nextWorkerActivity = new Map<string, SenderWorkerState>()
+    const newlySuccessfulWorkerIds: string[] = []
+    for (const slot of workerSlots) {
+      nextWorkerActivity.set(slot.id, slot.activity)
+      if (
+        previousWorkerActivity.current.get(slot.id) === 'in-flight' &&
+        slot.activity === 'idle'
+      ) {
+        newlySuccessfulWorkerIds.push(slot.id)
+      }
+    }
+    previousWorkerActivity.current = nextWorkerActivity
+
+    for (const [workerId, timeout] of successTimeouts.current) {
+      if (nextWorkerActivity.has(workerId)) continue
+      clearTimeout(timeout)
+      successTimeouts.current.delete(workerId)
+    }
+    setRecentlySuccessfulWorkerIds((current) => {
+      const visibleWorkerIds = new Set(
+        [...current].filter((workerId) => nextWorkerActivity.has(workerId)),
+      )
+      return visibleWorkerIds.size === current.size ? current : visibleWorkerIds
+    })
+
+    for (const workerId of newlySuccessfulWorkerIds) {
+      const previousTimeout = successTimeouts.current.get(workerId)
+      if (previousTimeout !== undefined) clearTimeout(previousTimeout)
+      const timeout = setTimeout(() => {
+        if (successTimeouts.current.get(workerId) !== timeout) return
+        successTimeouts.current.delete(workerId)
+        setRecentlySuccessfulWorkerIds((visible) => {
+          if (!visible.has(workerId)) return visible
+          const withoutExpiredWorker = new Set(visible)
+          withoutExpiredWorker.delete(workerId)
+          return withoutExpiredWorker
+        })
+      }, SENDER_SUCCESS_DURATION_MS)
+      successTimeouts.current.set(workerId, timeout)
+    }
+
+    if (newlySuccessfulWorkerIds.length === 0) return
+    setRecentlySuccessfulWorkerIds((current) => new Set([
+      ...current,
+      ...newlySuccessfulWorkerIds,
+    ]))
+  }, [actor, workerSlots])
+
+  useEffect(() => () => {
+    for (const timeout of successTimeouts.current.values()) clearTimeout(timeout)
+    successTimeouts.current.clear()
+  }, [])
+
   const desiredWorkers = normalizedWorkerCount(workers)
   const visibleWorkers = actor === 'sender' ? workerSlots?.length ?? 0 : desiredWorkers
   const layout = getWorkerActorLayout(actor, bounds, workers, orientation, visibleWorkers)
   const workerMin = Math.round(workers.min)
   const workerMax = Math.round(workers.max)
   const workerStep = Math.max(1, Math.round(workers.step))
-  const chipState = (index: number): SenderWorkerState | 'active' | 'inactive' | 'draining' | 'terminal-error' => {
+  const chipState = (index: number): SenderWorkerState | 'active' | 'inactive' | 'success' | 'draining' | 'terminal-error' => {
     if (workerSlots === undefined || workerSlots === null) {
       return (active ?? (runState === 'running')) ? 'active' : 'inactive'
     }
@@ -164,6 +234,7 @@ export function WorkerActor({
     if (slot.terminalError) return 'terminal-error'
     if (slot.activity === 'backoff') return 'backoff'
     if (slot.lifecycle === 'draining') return 'draining'
+    if (slot.activity === 'idle' && recentlySuccessfulWorkerIds.has(slot.id)) return 'success'
     return slot.activity
   }
   const actorAriaLabel = liveWorkers === undefined

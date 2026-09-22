@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { render } from '@testing-library/react'
+import { act, render } from '@testing-library/react'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
@@ -1288,6 +1288,92 @@ describe('PipelineSvg rendering', () => {
       view.unmount()
     },
   )
+
+  it('shows an observed Sender success transition for one second', () => {
+    vi.useFakeTimers()
+    try {
+      const base = activeSnapshot()
+      const inFlight: LoadgenSnapshot = {
+        ...base,
+        sender: {
+          ...base.sender,
+          liveWorkers: 1,
+          workerSlots: [
+            { id: 'sender-worker-0', ordinal: 0, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+          ],
+        },
+      }
+      const idle: LoadgenSnapshot = {
+        ...inFlight,
+        sender: {
+          ...inFlight.sender,
+          workerSlots: [
+            { id: 'sender-worker-0', ordinal: 0, activity: 'idle', lifecycle: 'active', terminalError: false },
+          ],
+        },
+      }
+      const view = renderPipeline(inFlight)
+      const rerender = (snapshot: LoadgenSnapshot) => view.rerender(
+        <PipelineSvg
+          snapshot={snapshot}
+          selectedId={null}
+          onSelect={vi.fn()}
+          onWorkerCountChange={vi.fn()}
+          onChannelCapacityChange={vi.fn()}
+          requestedTpsPreview={null}
+          onRequestedTpsPreviewChange={vi.fn()}
+          onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
+          onInstallationModeChange={vi.fn().mockResolvedValue(true)}
+          geometry={createPipelineGeometry({
+            orientation: 'landscape',
+            readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+            senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+          })}
+        />,
+      )
+
+      rerender(idle)
+      const worker = () => view.container.querySelector('[data-worker-slot-id="sender-worker-0"]')!
+      expect(worker().classList).toContain('pipeline-worker--success')
+
+      rerender({
+        ...idle,
+        sender: { ...idle.sender, workerSlots: [{ ...idle.sender.workerSlots![0]!, terminalError: true }] },
+      })
+      expect(worker().classList).toContain('pipeline-worker--terminal-error')
+      rerender({
+        ...idle,
+        sender: { ...idle.sender, workerSlots: [{ ...idle.sender.workerSlots![0]!, activity: 'backoff' }] },
+      })
+      expect(worker().classList).toContain('pipeline-worker--backoff')
+      rerender({
+        ...idle,
+        sender: { ...idle.sender, workerSlots: [{ ...idle.sender.workerSlots![0]!, lifecycle: 'draining' }] },
+      })
+      expect(worker().classList).toContain('pipeline-worker--draining')
+      rerender(idle)
+
+      act(() => { vi.advanceTimersByTime(999) })
+      expect(worker().classList).toContain('pipeline-worker--success')
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(worker().classList).toContain('pipeline-worker--idle')
+
+      rerender(inFlight)
+      rerender(idle)
+      expect(worker().classList).toContain('pipeline-worker--success')
+      rerender({
+        ...idle,
+        sender: { ...idle.sender, workerSlots: null },
+      })
+      rerender(idle)
+      expect(worker().classList).toContain('pipeline-worker--idle')
+      act(() => { vi.advanceTimersByTime(1_000) })
+      expect(worker().classList).toContain('pipeline-worker--idle')
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 
   it('prioritizes terminal error, retry and draining, then clears red after success', () => {
     const base = activeSnapshot()
