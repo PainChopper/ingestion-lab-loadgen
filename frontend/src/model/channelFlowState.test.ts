@@ -347,7 +347,6 @@ describe('channel flow state derivation', () => {
       revision: base.revision + 1,
       sender: {
         ...base.sender,
-        workerStates: { idle: 0, inFlight: 12, backoff: 20 },
         attemptsStartedTotal: 900,
         retryAttemptsStartedTotal: 600,
         retries: 600,

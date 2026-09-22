@@ -117,6 +117,25 @@ describe('LabShell', () => {
       .getAttribute('aria-pressed')).toBe('false')
   })
 
+  it('owns Sender controls and leaves Target without migrated controls', async () => {
+    const user = userEvent.setup()
+    adapter = new SimulationAdapter()
+    const dispatch = vi.spyOn(adapter, 'dispatch')
+    render(<LabShell adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
+    expect(screen.getByLabelText('Sender configuration')).not.toBeNull()
+    expect(screen.getByRole('spinbutton', { name: /^Simulated delay/ })).not.toBeNull()
+    expect(screen.getByRole('spinbutton', { name: /^Simulated error rate/ })).not.toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Add sender worker' }))
+    expect(dispatch).toHaveBeenCalledWith({ type: 'set-sender-workers', value: 4 })
+
+    await user.click(screen.getByRole('button', { name: 'Inspect target' }))
+    expect(screen.queryByLabelText('Sender configuration')).toBeNull()
+    expect(screen.queryByRole('spinbutton', { name: /^Simulated delay/ })).toBeNull()
+    expect(screen.queryByRole('spinbutton', { name: /^Simulated error rate/ })).toBeNull()
+  })
+
   it('shares numeric TPS preview and absolute command with the valve', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()

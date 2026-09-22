@@ -82,8 +82,9 @@ export function getWorkerActorLayout(
   bounds: WorkerActorBounds,
   workers: NumericControlSnapshot,
   orientation: PipelineOrientation = 'landscape',
+  visibleWorkerCount = normalizedWorkerCount(workers),
 ): WorkerActorLayout {
-  const workerCount = normalizedWorkerCount(workers)
+  const workerCount = Math.max(normalizedWorkerCount(workers), visibleWorkerCount)
   const compact = actor === 'sender' && workerCount > DETAILED_WORKER_LIMIT
   if (orientation === 'portrait') {
     const metrics = getPortraitWorkerGridMetrics(actor, workerCount)

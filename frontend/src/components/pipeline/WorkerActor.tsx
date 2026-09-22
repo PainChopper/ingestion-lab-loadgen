@@ -4,7 +4,6 @@ import type {
   RunState,
   SelectableId,
   SenderWorkerState,
-  SenderWorkerStateCounts,
   SenderWorkerSlotSnapshot,
 } from '../../model/loadgen'
 import type { Point, TextPlacement, WorkerActorBounds } from './geometry'
@@ -12,6 +11,7 @@ import type { KeyboardEvent } from 'react'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
   getWorkerActorLayout,
+  normalizedWorkerCount,
   type WorkerChipLayout,
 } from './workerActorLayout'
 
@@ -30,7 +30,8 @@ interface WorkerActorProps {
     readonly height: number
   }
   workers: NumericControlSnapshot
-  workerStates?: SenderWorkerStateCounts
+  liveWorkers?: number
+  drainingWorkers?: number
   workerSlots?: readonly SenderWorkerSlotSnapshot[] | null
   runState: RunState
   active?: boolean
@@ -57,7 +58,7 @@ function WorkerChip({
   state,
   slot,
 }: WorkerChipLayout & {
-  state: SenderWorkerState | 'active' | 'inactive'
+  state: SenderWorkerState | 'active' | 'inactive' | 'draining' | 'terminal-error'
   slot?: SenderWorkerSlotSnapshot
 }) {
   const pinOffsets = [6, 13, 20, 27]
@@ -70,7 +71,9 @@ function WorkerChip({
       transform={`translate(${x} ${y}) scale(${scale})`}
       data-worker-slot-id={slot?.id}
       data-worker-ordinal={slot?.ordinal}
-      data-worker-state={slot?.state}
+      data-worker-activity={slot?.activity}
+      data-worker-lifecycle={slot?.lifecycle}
+      data-worker-terminal-error={slot?.terminalError}
     >
       <rect
         x={chipX}
@@ -130,7 +133,8 @@ export function WorkerActor({
   bounds,
   controls,
   workers,
-  workerStates,
+  liveWorkers,
+  drainingWorkers,
   workerSlots,
   runState,
   active,
@@ -145,19 +149,26 @@ export function WorkerActor({
   onSelect,
   onWorkerCountChange,
 }: WorkerActorProps) {
-  const layout = getWorkerActorLayout(actor, bounds, workers, orientation)
+  const desiredWorkers = normalizedWorkerCount(workers)
+  const visibleWorkers = actor === 'sender' ? workerSlots?.length ?? 0 : desiredWorkers
+  const layout = getWorkerActorLayout(actor, bounds, workers, orientation, visibleWorkers)
   const workerMin = Math.round(workers.min)
   const workerMax = Math.round(workers.max)
   const workerStep = Math.max(1, Math.round(workers.step))
-  const chipState = (index: number): SenderWorkerState | 'active' | 'inactive' => {
+  const chipState = (index: number): SenderWorkerState | 'active' | 'inactive' | 'draining' | 'terminal-error' => {
     if (workerSlots === undefined || workerSlots === null) {
       return (active ?? (runState === 'running')) ? 'active' : 'inactive'
     }
-    return workerSlots[index]?.state ?? 'inactive'
+    const slot = workerSlots[index]
+    if (slot === undefined) return 'inactive'
+    if (slot.terminalError) return 'terminal-error'
+    if (slot.activity === 'backoff') return 'backoff'
+    if (slot.lifecycle === 'draining') return 'draining'
+    return slot.activity
   }
-  const actorAriaLabel = workerStates === undefined
+  const actorAriaLabel = liveWorkers === undefined
     ? `Inspect ${actor}`
-    : `Inspect ${actor}, ${workerStates.idle} idle, ${workerStates.inFlight} in-flight, ${workerStates.backoff} backoff`
+    : `Inspect ${actor}, ${workers.applied ?? 0} desired, ${liveWorkers} live, ${drainingWorkers ?? 0} draining`
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
@@ -191,10 +202,10 @@ export function WorkerActor({
             onClick={() =>
               onWorkerCountChange(
                 actor,
-                Math.max(workerMin, layout.workerCount - workerStep),
+                Math.max(workerMin, desiredWorkers - workerStep),
               )
             }
-            disabled={layout.workerCount <= workerMin}
+            disabled={desiredWorkers <= workerMin}
             title={`Remove ${actor} worker`}
             aria-label={`Remove ${actor} worker`}
           >
@@ -204,11 +215,11 @@ export function WorkerActor({
             id={`${actor}-count`}
             aria-label={
               workers.pending === null
-                ? `${title} worker count, ${layout.workerCount} applied`
-                : `${title} worker count, ${layout.workerCount} applied, ${workers.pending} pending`
+                ? `${title} worker count, ${desiredWorkers} applied`
+                : `${title} worker count, ${desiredWorkers} applied, ${workers.pending} pending`
             }
           >
-            {layout.workerCount}
+            {desiredWorkers}
           </output>
           <button
             id={`${actor}-plus`}
@@ -216,10 +227,10 @@ export function WorkerActor({
             onClick={() =>
               onWorkerCountChange(
                 actor,
-                Math.min(workerMax, layout.workerCount + workerStep),
+                Math.min(workerMax, desiredWorkers + workerStep),
               )
             }
-            disabled={layout.workerCount >= workerMax}
+            disabled={desiredWorkers >= workerMax}
             title={`Add ${actor} worker`}
             aria-label={`Add ${actor} worker`}
           >
@@ -234,7 +245,7 @@ export function WorkerActor({
         tabIndex={0}
         aria-label={actorAriaLabel}
         aria-pressed={selected}
-        data-worker-count={layout.workerCount}
+        data-worker-count={desiredWorkers}
         data-worker-layout={layout.mode}
         data-worker-columns={layout.columns}
         data-worker-rows={layout.rows}
@@ -249,7 +260,7 @@ export function WorkerActor({
           rx="5"
           className="pipeline-actor-box"
         />
-        {layout.chips.map((chip, index) => (
+        {layout.chips.filter((_, index) => actor !== 'sender' || (workerSlots !== null && workerSlots !== undefined && index < workerSlots.length)).map((chip, index) => (
           <WorkerChip
             key={workerSlots?.[index]?.id ?? index}
             {...chip}

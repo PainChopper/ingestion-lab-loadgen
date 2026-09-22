@@ -22,7 +22,7 @@ func TestReaderChannelTelemetryReportsBufferedBatchesAndTransactions(t *testing.
 	}
 }
 
-func TestReaderChannelTelemetryMeasuresBlockedSendUntilConsumerReceives(t *testing.T) {
+func TestReaderChannelTelemetryMeasuresBlockedSendUntilThrottlerReceives(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	batches <- []Transaction{{}}
 

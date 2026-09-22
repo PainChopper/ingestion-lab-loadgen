@@ -73,20 +73,16 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	requests := make(chan request, 3)
 	metrics := make(chan time.Time)
 	startedSizes := make(chan int, 2)
-	produce := func(ctx context.Context, size int, _ int) (<-chan []Transaction, <-chan struct{}, error) {
+	read := func(ctx context.Context, _ chan<- []Transaction, size int) (<-chan struct{}, error) {
 		startedSizes <- size
-		batches := make(chan []Transaction)
 		done := make(chan struct{})
 		go func() {
-			defer func() {
-				close(batches)
-				close(done)
-			}()
+			defer close(done)
 			<-ctx.Done()
 		}()
-		return batches, done, nil
+		return done, nil
 	}
-	startCustomEventLoopForTest(t, requests, metrics, produce)
+	startCustomEventLoopForTest(t, requests, metrics, read)
 	commands := commandsHandler(requests, testPolicy(t))
 	snapshot := func() statusSnapshot {
 		t.Helper()
@@ -124,7 +120,7 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	}
 	post(`{"action":"run"}`, http.StatusOK)
 	if got := <-startedSizes; got != 25_000 {
-		t.Fatalf("producer size = %d, want 25000", got)
+		t.Fatalf("reader size = %d, want 25000", got)
 	}
 	post(`{"action":"set-read-batch-size","value":30000}`, http.StatusConflict)
 	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
@@ -141,6 +137,6 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	}
 	post(`{"action":"run"}`, http.StatusOK)
 	if got := <-startedSizes; got != 25_000 {
-		t.Fatalf("producer size after Reset = %d, want 25000", got)
+		t.Fatalf("reader size after Reset = %d, want 25000", got)
 	}
 }

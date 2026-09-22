@@ -33,7 +33,10 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 		}
 		strictAction := cr.Action == "set-requested-tps" ||
 			cr.Action == "set-throttler-installation-mode" ||
-			cr.Action == "set-sender-channel-capacity"
+			cr.Action == "set-sender-channel-capacity" ||
+			cr.Action == "set-sender-workers" ||
+			cr.Action == "set-sender-simulated-delay-ms" ||
+			cr.Action == "set-sender-simulated-error-rate-percent"
 		if strictAction {
 			decoder := json.NewDecoder(bytes.NewReader(body))
 			decoder.DisallowUnknownFields()
@@ -133,6 +136,35 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			}
 			reply := make(chan commandResult, 1)
 			commands <- request{kind: cmdSetThrottlerInstallationMode, textValue: value, commandReply: reply}
+			if result := <-reply; result.status == commandConflict {
+				w.WriteHeader(http.StatusConflict)
+			}
+		case "set-sender-workers", "set-sender-simulated-delay-ms", "set-sender-simulated-error-rate-percent":
+			var value int
+			if len(cr.Value) == 0 || string(cr.Value) == "null" {
+				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
+				return
+			}
+			if err := json.Unmarshal(cr.Value, &value); err != nil {
+				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
+				return
+			}
+			var setting rangePolicy
+			var kind requestKind
+			switch cr.Action {
+			case "set-sender-workers":
+				setting, kind = policy.Sender.Workers, cmdSetSenderWorkers
+			case "set-sender-simulated-delay-ms":
+				setting, kind = policy.Sender.Simulated.DelayMS, cmdSetSenderSimulatedDelayMS
+			case "set-sender-simulated-error-rate-percent":
+				setting, kind = policy.Sender.Simulated.ErrorRatePercent, cmdSetSenderSimulatedErrorRatePercent
+			}
+			if !setting.contains(value) {
+				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
+				return
+			}
+			reply := make(chan commandResult, 1)
+			commands <- request{kind: kind, value: value, commandReply: reply}
 			if result := <-reply; result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}

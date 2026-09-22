@@ -78,28 +78,21 @@ func TestValidReaderChannelCapacityAcceptsOnlyConfiguredSteps(t *testing.T) {
 	}
 }
 
-func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *testing.T) {
+func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *testing.T) {
 	for _, capacity := range []int{0, 1, 8_192} {
 		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
 			requests := make(chan request, 3)
 			metrics := make(chan time.Time)
 			startedCapacities := make(chan int, 2)
-			producedCapacities := make(chan int, 2)
 			state := newTestControlState(t)
-			produce := func(ctx context.Context, _ int, readerChannelCapacity int) (<-chan []Transaction, <-chan struct{}, error) {
-				startedCapacities <- readerChannelCapacity
-				batches := make(chan []Transaction, readerChannelCapacity)
-				producedCapacities <- cap(batches)
-				state.telemetry.readerChannel.start(batches, state.controls.policy.Reader.ReadBatchSize.Default)
+			read := func(ctx context.Context, output chan<- []Transaction, _ int) (<-chan struct{}, error) {
+				startedCapacities <- cap(output)
 				done := make(chan struct{})
 				go func() {
-					defer func() {
-						close(batches)
-						close(done)
-					}()
+					defer close(done)
 					<-ctx.Done()
 				}()
-				return batches, done, nil
+				return done, nil
 			}
 			done := make(chan struct{})
 			go func() {
@@ -108,7 +101,7 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 					requests,
 					metrics,
 					NewMetrics(),
-					adaptLegacyProducer(produce),
+					read,
 					startThrottler,
 				)
 			}()
@@ -155,10 +148,7 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 			}
 			post(`{"action":"run"}`, http.StatusOK)
 			if got := <-startedCapacities; got != capacity {
-				t.Fatalf("producer configured capacity = %d, want %d", got, capacity)
-			}
-			if got := <-producedCapacities; got != capacity {
-				t.Fatalf("actual producer channel capacity = %d, want %d", got, capacity)
+				t.Fatalf("reader configured capacity = %d, want %d", got, capacity)
 			}
 			if got := snapshot(); got.ReaderChannel.Capacity != capacity || got.Run.State != runStateRunning {
 				t.Fatalf("running snapshot = %+v", got)
@@ -172,10 +162,7 @@ func TestReaderChannelCapacityIdleOnlyAppliesToProducerAndPersistsAfterReset(t *
 			}
 			post(`{"action":"run"}`, http.StatusOK)
 			if got := <-startedCapacities; got != capacity {
-				t.Fatalf("producer capacity after Reset = %d, want %d", got, capacity)
-			}
-			if got := <-producedCapacities; got != capacity {
-				t.Fatalf("actual producer channel capacity after Reset = %d, want %d", got, capacity)
+				t.Fatalf("reader capacity after Reset = %d, want %d", got, capacity)
 			}
 		})
 	}

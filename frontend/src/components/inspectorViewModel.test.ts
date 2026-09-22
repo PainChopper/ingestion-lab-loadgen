@@ -78,7 +78,9 @@ describe('inspector view model', () => {
     expect(model?.rows.find((row) => row.label === 'Retry attempts')?.value)
       .toBe('0')
     expect(model?.rows.find((row) => row.label === 'Worker states')?.value)
-      .toBe('3 idle · 0 in-flight · 0 backoff')
+      .toBe('0 idle · 0 in-flight · 0 backoff')
+    expect(model?.rows.find((row) => row.label === 'Workers desired / live / draining')?.value)
+      .toBe('3 / 0 / 0')
     expect(model?.rows.find((row) => row.label === 'Retry policy')?.value)
       .toBe('3 attempts · 250/500 ms · ±20% deterministic jitter')
     adapter.dispose()
@@ -96,7 +98,15 @@ describe('inspector view model', () => {
           applied: 32,
           pending: 8,
         },
-        workerStates: { idle: 2, inFlight: 11, backoff: 19 },
+        liveWorkers: 32,
+        drainingWorkers: 8,
+        workerSlots: Array.from({ length: 32 }, (_, ordinal) => ({
+          id: `sender-worker-${ordinal}`,
+          ordinal,
+          activity: ordinal < 2 ? 'idle' as const : ordinal < 13 ? 'in-flight' as const : 'backoff' as const,
+          lifecycle: ordinal < 24 ? 'active' as const : 'draining' as const,
+          terminalError: false,
+        })),
         attemptedTps: 80_000,
         retryAttemptedTps: 30_000,
         terminalFailedTps: 10_000,
@@ -114,7 +124,7 @@ describe('inspector view model', () => {
     }, 'sender')
 
     expect(model?.rows).toEqual(expect.arrayContaining([
-      { label: 'Workers', value: '32 applied · 8 pending' },
+      { label: 'Workers desired / live / draining', value: '32 / 32 / 8' },
       { label: 'Worker states', value: '2 idle · 11 in-flight · 19 backoff' },
       { label: 'Attempted TPS', value: '80,000 tx/s' },
       { label: 'Retry TPS', value: '30,000 tx/s' },
@@ -156,7 +166,6 @@ describe('inspector view model', () => {
     ).toBe('TIMEOUT')
     expect(getInspectorViewModel(timeoutSnapshot, 'target')?.rows)
       .toEqual(expect.arrayContaining([
-        { label: '503 rate', value: '2%' },
         { label: 'Rejected TPS', value: '0 tx/s' },
         { label: 'HTTP 503', value: '0' },
       ]))

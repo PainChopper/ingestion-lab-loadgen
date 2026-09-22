@@ -22,8 +22,9 @@ export function SenderActor({
   orientation,
 }: SenderActorProps) {
   const workerSummary =
-    `${formatInteger(snapshot.workerStates.inFlight)} in-flight · ` +
-    `${formatInteger(snapshot.workerStates.backoff)} backoff`
+    `${formatInteger(snapshot.workers.applied)} desired · ` +
+    `${formatInteger(snapshot.liveWorkers)} live · ` +
+    `${formatInteger(snapshot.drainingWorkers)} draining`
 
   return (
     <WorkerActor
@@ -34,7 +35,8 @@ export function SenderActor({
       bounds={geometry.bounds}
       controls={geometry.controls}
       workers={snapshot.workers}
-      workerStates={snapshot.workerStates}
+      liveWorkers={snapshot.liveWorkers}
+      drainingWorkers={snapshot.drainingWorkers}
       workerSlots={snapshot.workerSlots}
       runState={snapshot.state}
       inputPort={geometry.ports.input}

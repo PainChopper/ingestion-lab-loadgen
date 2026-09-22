@@ -38,6 +38,37 @@ default = "installed"
 allowed = ["installed", "bypass"]
 mutability = "immediate"
 
+[sender.workers]
+default = 32
+min = 1
+max = 32
+step = 1
+unit = "workers"
+mutability = "immediate"
+
+[sender.simulated.delay_ms]
+default = 10
+min = 0
+max = 2_000
+step = 10
+unit = "milliseconds"
+mutability = "immediate"
+
+[sender.simulated.error_rate_percent]
+default = 2
+min = 0
+max = 100
+step = 1
+unit = "percent"
+mutability = "immediate"
+
+[sender.retry]
+max_attempts = 3
+backoff_base_ms = 250
+backoff_multiplier = 2
+jitter_percent = 20
+mutability = "startup-only"
+
 [metrics.window_ms]
 default = 1_000
 min = 100

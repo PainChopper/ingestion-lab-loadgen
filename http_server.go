@@ -19,6 +19,9 @@ const (
 	cmdSetSenderChannelCapacity
 	cmdSetRequestedTPS
 	cmdSetThrottlerInstallationMode
+	cmdSetSenderWorkers
+	cmdSetSenderSimulatedDelayMS
+	cmdSetSenderSimulatedErrorRatePercent
 )
 
 type request struct {

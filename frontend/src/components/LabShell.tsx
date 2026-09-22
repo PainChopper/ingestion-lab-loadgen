@@ -310,10 +310,23 @@ function InspectorControls({
             control={snapshot.sender.workers}
             onValueChange={(value) =>
               void adapter.dispatch({
-                type: 'set-worker-count',
-                actor: 'sender',
+                type: 'set-sender-workers',
                 value,
               })
+            }
+          />
+          <NumericControl
+            label="Simulated delay"
+            control={snapshot.sender.simulatedDelayMs}
+            onValueChange={(value) =>
+              void adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value })
+            }
+          />
+          <NumericControl
+            label="Simulated error rate"
+            control={snapshot.sender.simulatedErrorRatePercent}
+            onValueChange={(value) =>
+              void adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value })
             }
           />
           <NumericControl
@@ -333,27 +346,7 @@ function InspectorControls({
         </div>
       )
     case 'target':
-      return (
-        <div className="inspector-controls" aria-label="Target configuration">
-          <NumericControl
-            label="Artificial delay"
-            control={snapshot.target.artificialDelayMs}
-            onValueChange={(valueMs) =>
-              void adapter.dispatch({ type: 'set-target-delay', valueMs })
-            }
-          />
-          <NumericControl
-            label="503 rate"
-            control={snapshot.target.errorRatePercent}
-            onValueChange={(valuePercent) =>
-              void adapter.dispatch({
-                type: 'set-target-error-rate',
-                valuePercent,
-              })
-            }
-          />
-        </div>
-      )
+      return null
     default:
       return null
   }
@@ -550,7 +543,9 @@ export function LabShell({ adapter }: AdapterProps) {
     }
   }
   const handleWorkerCountChange = (actor: WorkerActorId, value: number) => {
-    void adapter.dispatch({ type: 'set-worker-count', actor, value })
+    void adapter.dispatch(actor === 'sender'
+      ? { type: 'set-sender-workers', value }
+      : { type: 'set-worker-count', actor: 'reader', value })
   }
   const handleChannelCapacityChange = (channel: ChannelId, value: number) => {
     void adapter.dispatch(

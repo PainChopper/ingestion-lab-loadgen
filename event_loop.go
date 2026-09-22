@@ -16,47 +16,45 @@ type throttlerStarter func(
 	initial throttlerSettings,
 ) (<-chan struct{}, chan<- throttlerUpdate)
 
-type producerStarter func(context.Context, chan<- []Transaction, int) (<-chan struct{}, error)
+type readerStarter func(context.Context, chan<- []Transaction, int) (<-chan struct{}, error)
 
 func (state *controlState) eventLoop(
 	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
-	produce producerStarter,
+	read readerStarter,
 ) {
-	state.eventLoopWithThrottler(requests, metrics, promMetrics, produce, startThrottler)
+	state.eventLoopWithThrottler(requests, metrics, promMetrics, read, startThrottler)
 }
 
 func (state *controlState) eventLoopWithThrottler(
 	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
-	produce producerStarter,
+	read readerStarter,
 	start throttlerStarter,
 ) {
-	var consumedSinceTick atomic.Int64
+	var terminallyCompletedTransactionsSinceTick atomic.Int64
 	var batches chan []Transaction
 	var senderBatches chan []Transaction
-	var cancelConsumer context.CancelFunc
-	var consumerDone <-chan struct{}
+	var pool *senderPool
 	var cancelThrottler context.CancelFunc
 	var throttlerDone <-chan struct{}
 	var throttlerUpdates chan<- throttlerUpdate
-	var cancelProducer context.CancelFunc
-	var producerDone <-chan struct{}
+	var cancelReader context.CancelFunc
+	var readerDone <-chan struct{}
 	defer func() {
-		if cancelConsumer != nil {
-			cancelConsumer()
-			<-consumerDone
+		if pool != nil {
+			<-pool.stop()
 		}
-		if cancelProducer != nil {
-			cancelProducer()
+		if cancelReader != nil {
+			cancelReader()
 		}
 		if cancelThrottler != nil {
 			cancelThrottler()
 		}
-		if producerDone != nil {
-			<-producerDone
+		if readerDone != nil {
+			<-readerDone
 		}
 		if throttlerDone != nil {
 			<-throttlerDone
@@ -67,10 +65,9 @@ func (state *controlState) eventLoopWithThrottler(
 		senderBatches = nil
 		state.telemetry.readerChannel.detach()
 		state.telemetry.senderChannel.detach()
-		cancelConsumer = nil
-		consumerDone = nil
-		cancelProducer = nil
-		producerDone = nil
+		pool = nil
+		cancelReader = nil
+		readerDone = nil
 		cancelThrottler = nil
 		throttlerDone = nil
 		throttlerUpdates = nil
@@ -78,8 +75,6 @@ func (state *controlState) eventLoopWithThrottler(
 
 	for {
 		select {
-		case <-consumerDone:
-			return
 		case cmd, ok := <-requests:
 			if !ok {
 				return
@@ -89,6 +84,7 @@ func (state *controlState) eventLoopWithThrottler(
 				reader := state.telemetry.reader.snapshot()
 				readerChannel := state.telemetry.readerChannel.snapshot(time.Now())
 				senderChannel := state.telemetry.senderChannel.snapshot(time.Now())
+				sender := state.telemetry.sender.snapshot()
 				if state.run.lifecycle.currentState() == runStateIdle {
 					readerChannel.capacity = state.readerChannelCapacity()
 					senderChannel.capacity = state.senderChannelCapacity()
@@ -112,7 +108,12 @@ func (state *controlState) eventLoopWithThrottler(
 						AdmittedTps:      senderChannel.sentTransactionsPerSecond,
 						InstallationMode: state.installationMode(),
 					},
-					Sender: senderSnapshot{Workers: 0},
+					Sender: senderSnapshot{
+						Workers: state.senderWorkers(), LiveWorkers: sender.liveWorkers,
+						DrainingWorkers: sender.drainingWorkers, WorkerSlots: sender.workerSlots,
+						SimulatedDelayMS:          state.senderDelayMS(),
+						SimulatedErrorRatePercent: state.senderErrorRate(),
+					},
 					ReaderChannel: channelSnapshot{
 						Capacity:                      readerChannel.capacity,
 						DepthBatches:                  readerChannel.depthBatches,
@@ -156,9 +157,9 @@ func (state *controlState) eventLoopWithThrottler(
 					batches, readerCreated = state.prepareReaderChannel(batches)
 					var senderCreated bool
 					senderBatches, senderCreated = state.prepareSenderChannel(senderBatches)
-					producerContext, cancel := context.WithCancel(context.Background())
-					done, err := produce(
-						producerContext,
+					readerContext, cancel := context.WithCancel(context.Background())
+					done, err := read(
+						readerContext,
 						batches,
 						state.readBatchSize(),
 					)
@@ -183,8 +184,8 @@ func (state *controlState) eventLoopWithThrottler(
 						}
 						continue
 					}
-					producerDone = done
-					cancelProducer = cancel
+					readerDone = done
+					cancelReader = cancel
 					throttlerContext, cancel := context.WithCancel(context.Background())
 					cancelThrottler = cancel
 					throttlerDone, throttlerUpdates = start(
@@ -202,7 +203,11 @@ func (state *controlState) eventLoopWithThrottler(
 					if resuming {
 						state.notifyThrottler(throttlerUpdates, throttlerDone, false)
 					}
-					cancelConsumer, consumerDone = startConsumer(senderBatches, &state.telemetry.senderChannel, &consumedSinceTick)
+					pool = startSenderPool(
+						senderBatches, &state.telemetry.senderChannel, &state.telemetry.sender,
+						&terminallyCompletedTransactionsSinceTick, state.senderWorkers(), state.senderDelayMS(),
+						state.senderErrorRate(), state.controls.policy.Sender.Retry,
+					)
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- commandResult{}
@@ -211,12 +216,10 @@ func (state *controlState) eventLoopWithThrottler(
 				if state.run.lifecycle.currentState() != runStateRunning {
 					continue
 				}
-				cancelConsumer()
-				<-consumerDone
+				<-pool.stop()
 				state.pauseElapsed(time.Now())
-				cancelConsumer = nil
-				consumerDone = nil
-				delta := consumedSinceTick.Swap(0)
+				pool = nil
+				delta := terminallyCompletedTransactionsSinceTick.Swap(0)
 				state.run.totalTransactions += delta
 				promMetrics.transactionsTotal.Add(float64(delta))
 				promMetrics.actualTPS.Set(0)
@@ -227,21 +230,21 @@ func (state *controlState) eventLoopWithThrottler(
 				switch state.run.lifecycle.currentState() {
 				case runStatePaused:
 					state.run.lifecycle.reset()
-					cancelProducer()
+					cancelReader()
 					cancelThrottler()
-					<-producerDone
+					<-readerDone
 					<-throttlerDone
 					drain(batches)
 					drain(senderBatches)
-					cancelProducer = nil
-					producerDone = nil
+					cancelReader = nil
+					readerDone = nil
 					cancelThrottler = nil
 					throttlerDone = nil
 					throttlerUpdates = nil
-					state.resetProgress(&consumedSinceTick, promMetrics)
+					state.resetProgress(&terminallyCompletedTransactionsSinceTick, promMetrics)
 					state.run.lifecycle.completeReset()
 				case runStateIdle:
-					state.resetProgress(&consumedSinceTick, promMetrics)
+					state.resetProgress(&terminallyCompletedTransactionsSinceTick, promMetrics)
 				default:
 					result.status = commandConflict
 				}
@@ -306,18 +309,84 @@ func (state *controlState) eventLoopWithThrottler(
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
 				}
+			case cmdSetSenderWorkers:
+				if !state.controls.policy.Sender.Workers.contains(cmd.value) {
+					if cmd.commandReply != nil {
+						cmd.commandReply <- commandResult{status: commandConflict}
+					}
+					continue
+				}
+				state.controls.configuredSenderWorkers = cmd.value
+				state.controls.senderWorkersConfigured = true
+				if pool != nil {
+					pool.reconcile(cmd.value)
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- commandResult{}
+				}
+			case cmdSetSenderSimulatedDelayMS:
+				if !state.controls.policy.Sender.Simulated.DelayMS.contains(cmd.value) {
+					if cmd.commandReply != nil {
+						cmd.commandReply <- commandResult{status: commandConflict}
+					}
+					continue
+				}
+				state.controls.configuredSenderDelayMS = cmd.value
+				state.controls.senderDelayConfigured = true
+				if pool != nil {
+					pool.updateSimulation(state.senderDelayMS(), state.senderErrorRate())
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- commandResult{}
+				}
+			case cmdSetSenderSimulatedErrorRatePercent:
+				if !state.controls.policy.Sender.Simulated.ErrorRatePercent.contains(cmd.value) {
+					if cmd.commandReply != nil {
+						cmd.commandReply <- commandResult{status: commandConflict}
+					}
+					continue
+				}
+				state.controls.configuredSenderErrorRate = cmd.value
+				state.controls.senderErrorRateConfigured = true
+				if pool != nil {
+					pool.updateSimulation(state.senderDelayMS(), state.senderErrorRate())
+				}
+				if cmd.commandReply != nil {
+					cmd.commandReply <- commandResult{}
+				}
 			}
 
 		case <-metrics:
 			state.telemetry.reader.sample(time.Now())
 			state.telemetry.readerChannel.sample(state.metricsWindow)
 			state.telemetry.senderChannel.sample(state.metricsWindow)
-			delta := consumedSinceTick.Swap(0)
+			delta := terminallyCompletedTransactionsSinceTick.Swap(0)
 			state.run.totalTransactions += delta
 			promMetrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
 			promMetrics.transactionsTotal.Add(float64(delta))
 		}
 	}
+}
+
+func (state *controlState) senderWorkers() int {
+	if state.controls.senderWorkersConfigured {
+		return state.controls.configuredSenderWorkers
+	}
+	return state.controls.policy.Sender.Workers.Default
+}
+
+func (state *controlState) senderDelayMS() int {
+	if state.controls.senderDelayConfigured {
+		return state.controls.configuredSenderDelayMS
+	}
+	return state.controls.policy.Sender.Simulated.DelayMS.Default
+}
+
+func (state *controlState) senderErrorRate() int {
+	if state.controls.senderErrorRateConfigured {
+		return state.controls.configuredSenderErrorRate
+	}
+	return state.controls.policy.Sender.Simulated.ErrorRatePercent.Default
 }
 
 func (state *controlState) requestedTPS() int {
@@ -361,11 +430,12 @@ func (state *controlState) notifyThrottler(
 	}
 }
 
-func (state *controlState) resetProgress(consumedSinceTick *atomic.Int64, promMetrics *Metrics) {
+func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTick *atomic.Int64, promMetrics *Metrics) {
 	state.telemetry.reader.reset()
+	state.telemetry.sender.reset()
 	state.telemetry.readerChannel.clearMeasurements()
 	state.telemetry.senderChannel.clearMeasurements()
-	consumedSinceTick.Store(0)
+	terminallyCompletedTransactionsSinceTick.Store(0)
 	state.run.totalTransactions = 0
 	state.run.elapsedBeforeRun = 0
 	state.run.runStartedAt = time.Time{}
@@ -439,18 +509,4 @@ func (state *controlState) elapsedMs(now time.Time) int64 {
 func (state *controlState) pauseElapsed(now time.Time) {
 	state.run.elapsedBeforeRun += now.Sub(state.run.runStartedAt)
 	state.run.runStartedAt = time.Time{}
-}
-
-func startConsumer(
-	batches <-chan []Transaction,
-	senderChannel *channelTelemetry,
-	consumedSinceTick *atomic.Int64,
-) (context.CancelFunc, <-chan struct{}) {
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		consumeBatches(ctx, batches, senderChannel, consumedSinceTick)
-	}()
-	return cancel, done
 }
