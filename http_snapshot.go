@@ -24,11 +24,14 @@ type runSnapshot struct {
 }
 
 type readerSnapshot struct {
-	Workers       int     `json:"workers"`
-	ReadBatchSize int     `json:"readBatchSize"`
-	ReadTps       float64 `json:"readTps"`
-	RowsRead      int64   `json:"rowsRead"`
-	Source        *string `json:"source"`
+	Workers         int                `json:"workers"`
+	LiveWorkers     int                `json:"liveWorkers"`
+	DrainingWorkers int                `json:"drainingWorkers"`
+	WorkerSlots     []readerWorkerSlot `json:"workerSlots"`
+	ReadBatchSize   int                `json:"readBatchSize"`
+	ReadTps         float64            `json:"readTps"`
+	RowsRead        int64              `json:"rowsRead"`
+	Source          *string            `json:"source"`
 }
 
 type throttlerSnapshot struct {

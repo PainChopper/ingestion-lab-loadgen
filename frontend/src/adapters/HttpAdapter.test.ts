@@ -19,6 +19,15 @@ interface TestWireSnapshot {
   }
   readonly reader: {
     readonly workers: number
+    readonly liveWorkers: number
+    readonly drainingWorkers: number
+    readonly workerSlots: readonly {
+      readonly id: string
+      readonly ordinal: number
+      readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'
+      readonly lifecycle: 'active' | 'draining'
+      readonly source: string | null
+    }[]
     readonly readTps: number
     readonly readBatchSize: number
     readonly rowsRead: number
@@ -73,7 +82,7 @@ interface MockResponseOptions {
 
 const VALID_WIRE: TestWireSnapshot = {
   run: { state: 'running', elapsedMs: 12_345, startError: null, totalTransactions: 42_000 },
-  reader: { workers: 1, readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, source: 'MBD-mini/trx/part/input.parquet' },
+  reader: { workers: 1, liveWorkers: 1, drainingWorkers: 0, workerSlots: [{ id: 'reader-worker-0', ordinal: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/input.parquet' }], readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, source: 'MBD-mini/trx/part/input.parquet' },
   throttler: { requestedTps: 200, admittedTps: 125_000.5, installationMode: 'installed' },
   sender: { workers: 32, liveWorkers: 0, drainingWorkers: 0, workerSlots: [], simulatedDelayMs: 10, simulatedErrorRatePercent: 2 },
   readerChannel: {
@@ -107,6 +116,14 @@ const VALID_WIRE: TestWireSnapshot = {
       unit: 'batches',
       mutability: 'idle-only',
     },
+    readerWorkers: {
+      default: 1,
+      min: 1,
+      max: 7,
+      step: 1,
+      unit: 'workers',
+      mutability: 'immediate',
+    },
     metricsWindowMs: {
       default: 1_000,
       min: 100,
@@ -133,6 +150,16 @@ const VALID_WIRE: TestWireSnapshot = {
     senderSimulatedErrorRatePercent: { default: 2, min: 0, max: 100, step: 1, unit: 'percent', mutability: 'immediate' },
     senderRetry: { maxAttempts: 3, backoffBaseMs: 250, backoffMultiplier: 2, jitterPercent: 20, mutability: 'startup-only' },
   },
+}
+
+function withRunState(state: RunState): TestWireSnapshot {
+  return {
+    ...VALID_WIRE,
+    run: { ...VALID_WIRE.run, state },
+    reader: state === 'idle'
+      ? { ...VALID_WIRE.reader, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] }
+      : VALID_WIRE.reader,
+  }
 }
 
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
@@ -385,7 +412,21 @@ function expectedSnapshot(
     policy: wire?.policy ?? null,
     reader: {
       id: 'reader',
-      workers: control('workers', wire?.reader.workers ?? null),
+      workers: wire === null
+        ? control('workers', null)
+        : {
+            applied: wire.reader.workers,
+            preview: null,
+            pending: null,
+            min: wire.policy.readerWorkers!.min,
+            max: wire.policy.readerWorkers!.max,
+            step: wire.policy.readerWorkers!.step,
+            unit: wire.policy.readerWorkers!.unit,
+            applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
+          },
+      liveWorkers: wire?.reader.liveWorkers ?? 0,
+      drainingWorkers: wire?.reader.drainingWorkers ?? 0,
+      workerSlots: wire?.reader.workerSlots ?? null,
       readBatchSize: readBatchSizeControl(
         wire?.reader.readBatchSize ?? null,
         wire?.policy.readerReadBatchSize ?? null,
@@ -490,6 +531,20 @@ const malformedCases: ReadonlyArray<{
   readonly name: string
   readonly result: () => Promise<Response>
 }> = [
+  {
+    name: 'unknown Reader activity',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      reader: { ...VALID_WIRE.reader, workerSlots: [{ ...VALID_WIRE.reader.workerSlots[0], activity: 'unknown' }] },
+    }),
+  },
+  {
+    name: 'extra Reader slot key',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      reader: { ...VALID_WIRE.reader, workerSlots: [{ ...VALID_WIRE.reader.workerSlots[0], extra: true }] },
+    }),
+  },
   {
     name: 'missing key',
     result: async () => mockResponse({
@@ -886,8 +941,8 @@ describe('HttpAdapter', () => {
     expect(snapshot.reader.workers).toMatchObject({
       applied: 1,
       min: 1,
-      max: 1,
-      applyMode: 'unavailable',
+      max: 7,
+      applyMode: 'immediate',
     })
     expect(snapshot.reader).toMatchObject({
       readBatchSize: {
@@ -996,7 +1051,7 @@ describe('HttpAdapter', () => {
     const resetWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'idle' },
-      reader: { ...VALID_WIRE.reader, readTps: 0, rowsRead: 0, source: null },
+      reader: { ...VALID_WIRE.reader, liveWorkers: 0, drainingWorkers: 0, workerSlots: [], readTps: 0, rowsRead: 0, source: null },
       throttler: { ...VALID_WIRE.throttler, admittedTps: 0 },
       senderChannel: { ...VALID_WIRE.senderChannel, sentBatchesTotal: 0, sentTransactionsTotal: 0, receivedBatchesTotal: 0, receivedTransactionsTotal: 0, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 0, inputBatchesPerSecond: 0, inputTransactionsPerSecond: 0, outputBatchesPerSecond: 0, outputTransactionsPerSecond: 0 },
     }
@@ -1056,7 +1111,10 @@ describe('HttpAdapter', () => {
     const recoveredWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'paused', elapsedMs: 67_890, startError: 'previous start failed', totalTransactions: 84_000 },
-      reader: { ...VALID_WIRE.reader, workers: 2, readTps: 2_000, readBatchSize: 25_000, rowsRead: 28_000, source: 'MBD-mini/trx/part/recovered.parquet' },
+      reader: { ...VALID_WIRE.reader, workers: 2, liveWorkers: 2, workerSlots: [
+        { id: 'reader-worker-0', ordinal: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/recovered.parquet' },
+        { id: 'reader-worker-1', ordinal: 1, activity: 'idle', lifecycle: 'active', source: null },
+      ], readTps: 2_000, readBatchSize: 25_000, rowsRead: 28_000, source: 'MBD-mini/trx/part/recovered.parquet' },
       sender: { ...VALID_WIRE.sender, workers: 3 },
       readerChannel: { ...VALID_WIRE.readerChannel, capacity: 16, depthBatches: 4, bufferedTransactions: 100_000, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 2_000 },
     }
@@ -1198,7 +1256,7 @@ describe('HttpAdapter', () => {
   )
 
   it('sends an idle read batch size through the command channel without updating the snapshot', async () => {
-    const idleWire: TestWireSnapshot = { ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'idle' } }
+    const idleWire = withRunState('idle')
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? Promise.resolve(mockCommandResponse())
       : Promise.resolve(mockResponse(idleWire)))
@@ -1283,7 +1341,7 @@ describe('HttpAdapter', () => {
   ])(
     'rejects read batch size $value locally in $state',
     async ({ state, value }) => {
-      const wire: TestWireSnapshot = { ...VALID_WIRE, run: { ...VALID_WIRE.run, state } }
+      const wire = withRunState(state)
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
       const adapter = new HttpAdapter()
 
@@ -1311,6 +1369,7 @@ describe('HttpAdapter', () => {
     const idleWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'idle' },
+      reader: { ...VALID_WIRE.reader, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] },
       readerChannel: { ...VALID_WIRE.readerChannel, capacity: 2 },
     }
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
@@ -1353,6 +1412,7 @@ describe('HttpAdapter', () => {
     const idleWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'idle' },
+      reader: { ...VALID_WIRE.reader, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] },
       senderChannel: { ...VALID_WIRE.senderChannel, capacity: 0 },
     }
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
@@ -1394,7 +1454,7 @@ describe('HttpAdapter', () => {
 
   it('serializes idle senderChannel capacity commands', async () => {
     const commandResponse = deferred<Response>()
-    const idleWire: TestWireSnapshot = { ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'idle' } }
+    const idleWire = withRunState('idle')
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? commandResponse.promise
       : Promise.resolve(mockResponse(idleWire)))
@@ -1428,10 +1488,7 @@ describe('HttpAdapter', () => {
   it.each(['idle', 'running', 'paused'] as const)(
     'sends exact immediate Sender commands in %s and reads applied values from the next snapshot',
     async (runState) => {
-      const firstWire: TestWireSnapshot = {
-        ...VALID_WIRE,
-        run: { ...VALID_WIRE.run, state: runState },
-      }
+      const firstWire = withRunState(runState)
       const appliedWire: TestWireSnapshot = {
         ...firstWire,
         sender: {
@@ -1474,12 +1531,69 @@ describe('HttpAdapter', () => {
     },
   )
 
+  it.each(['idle', 'reading', 'completed', 'blocked'] as const)(
+    'accepts Reader activity %s with unchanged five-key slot wire shape',
+    async (activity) => {
+      const slot = { ...VALID_WIRE.reader.workerSlots[0]!, activity }
+      const wire = { ...VALID_WIRE, reader: { ...VALID_WIRE.reader, workerSlots: [slot] } }
+      fetchMock.mockResolvedValueOnce(mockResponse(wire))
+      const adapter = new HttpAdapter()
+      await flushPoll()
+      expect(adapter.getSnapshot().reader.workerSlots?.[0]).toEqual(slot)
+      expect(Object.keys(adapter.getSnapshot().reader.workerSlots![0]!)).toHaveLength(5)
+      adapter.dispose()
+    },
+  )
+
+  it.each(['idle', 'running', 'paused'] as const)(
+    'sends exact Reader worker commands in %s and reads each applied value from the next snapshot',
+    async (runState) => {
+      const firstWire = withRunState(runState)
+      const oneReaderWire: TestWireSnapshot = {
+        ...firstWire,
+        reader: { ...firstWire.reader, workers: 1 },
+      }
+      const sevenReaderWire: TestWireSnapshot = {
+        ...oneReaderWire,
+        reader: { ...oneReaderWire.reader, workers: 7 },
+      }
+      let polls = 0
+      fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+        ? Promise.resolve(mockCommandResponse())
+        : Promise.resolve(mockResponse([
+          firstWire,
+          oneReaderWire,
+          sevenReaderWire,
+        ][Math.min(polls++, 2)]!)))
+      const adapter = new HttpAdapter()
+      await flushPoll()
+
+      for (const value of [1, 7]) {
+        await expect(adapter.dispatch({
+          type: 'set-worker-count',
+          actor: 'reader',
+          value,
+        })).resolves.toMatchObject({
+          accepted: true,
+          applyMode: 'immediate',
+        })
+        await vi.advanceTimersByTimeAsync(1_000)
+        await flushPoll()
+        expect(adapter.getSnapshot().reader.workers.applied).toBe(value)
+      }
+      expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
+        '{"action":"set-reader-workers","value":1}',
+        '{"action":"set-reader-workers","value":7}',
+      ])
+      adapter.dispose()
+    },
+  )
+
   it.each(['idle', 'running', 'paused'] as const)(
     'sends immediate throttler controls in $state and leaves applied state to snapshots',
     async (runState) => {
       const wire: TestWireSnapshot = {
-        ...VALID_WIRE,
-        run: { ...VALID_WIRE.run, state: runState },
+        ...withRunState(runState),
         throttler: { ...VALID_WIRE.throttler, requestedTps: 0 },
       }
       fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
@@ -1561,7 +1675,7 @@ describe('HttpAdapter', () => {
   ])(
     'rejects readerChannel capacity $value locally in $state',
     async ({ state, value }) => {
-      const wire: TestWireSnapshot = { ...VALID_WIRE, run: { ...VALID_WIRE.run, state } }
+      const wire = withRunState(state)
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
       const adapter = new HttpAdapter()
 
@@ -1611,7 +1725,7 @@ describe('HttpAdapter', () => {
   })
 
   it('does not send a buffered readerChannel capacity after the snapshot enters Run', async () => {
-    const idleWire: TestWireSnapshot = { ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'idle' } }
+    const idleWire = withRunState('idle')
     const runningWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'running' },
@@ -1657,7 +1771,7 @@ describe('HttpAdapter', () => {
   ])(
     'rejects senderChannel capacity $value locally in $state',
     async ({ state, value }) => {
-      const wire: TestWireSnapshot = { ...VALID_WIRE, run: { ...VALID_WIRE.run, state } }
+      const wire = withRunState(state)
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
       const adapter = new HttpAdapter()
 
@@ -1682,7 +1796,7 @@ describe('HttpAdapter', () => {
   )
 
   it('does not send a buffered senderChannel capacity after the snapshot enters Pause', async () => {
-    const idleWire: TestWireSnapshot = { ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'idle' } }
+    const idleWire = withRunState('idle')
     const pausedWire: TestWireSnapshot = { ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'paused' } }
     const pauseResponse = deferred<Response>()
     let snapshotRequests = 0

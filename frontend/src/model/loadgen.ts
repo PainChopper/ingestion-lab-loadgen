@@ -89,6 +89,7 @@ export interface AllowedControlPolicySnapshot {
 
 export interface LoadgenPolicySnapshot {
   readonly readerReadBatchSize: RangeControlPolicySnapshot
+  readonly readerWorkers?: RangeControlPolicySnapshot
   readonly readerChannelCapacity: AllowedControlPolicySnapshot
   readonly senderChannelCapacity: AllowedControlPolicySnapshot
   readonly metricsWindowMs: RangeControlPolicySnapshot
@@ -125,6 +126,9 @@ export interface InstallationModeControlSnapshot {
 export interface ReaderSnapshot {
   readonly id: 'reader'
   readonly workers: NumericControlSnapshot
+  readonly liveWorkers: number
+  readonly drainingWorkers: number
+  readonly workerSlots: readonly ReaderWorkerSlotSnapshot[] | null
   readonly readBatchSize: NumericControlSnapshot
   readonly readTps: number | null
   readonly configuredCapacityTps: number | null
@@ -201,6 +205,14 @@ export interface SenderSnapshot {
   readonly duplicateRiskTransactionsTotal: number
   readonly ambiguousTerminalTransactionsTotal: number
   readonly state: RunState
+}
+
+export interface ReaderWorkerSlotSnapshot {
+  readonly id: string
+  readonly ordinal: number
+  readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'
+  readonly lifecycle: 'active' | 'draining'
+  readonly source: string | null
 }
 
 export interface HttpSnapshot {

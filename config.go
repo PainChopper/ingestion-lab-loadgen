@@ -60,6 +60,7 @@ type sourcePolicy struct {
 
 type readerPolicy struct {
 	ReadBatchSize rangePolicy `mapstructure:"read_batch_size"`
+	Workers       rangePolicy `mapstructure:"workers"`
 }
 
 type readerChannelPolicy struct {
@@ -158,6 +159,9 @@ func (p policy) validate() error {
 	if err := p.Reader.ReadBatchSize.validate(); err != nil {
 		return fmt.Errorf("reader.read_batch_size: %w", err)
 	}
+	if err := p.Reader.Workers.validateWorkers(); err != nil {
+		return fmt.Errorf("reader.workers: %w", err)
+	}
 	if err := p.ReaderChannel.Capacity.validate(); err != nil {
 		return fmt.Errorf("readerChannel.capacity: %w", err)
 	}
@@ -205,6 +209,10 @@ func (p rangePolicy) validateExact(defaultValue, minValue, maxValue, stepValue i
 	return nil
 }
 
+func (p rangePolicy) validateWorkers() error {
+	return p.validateExact(1, 1, 7, 1, workersUnit, immediate)
+}
+
 func (p rangePolicy) validateMetricsWindow() error {
 	if p.Unit != metricsWindowUnit || p.Mutability != startupOnly {
 		return fmt.Errorf("must use unit %q and mutability %q", metricsWindowUnit, startupOnly)
@@ -225,8 +233,23 @@ func (p rangePolicy) validateRequestedTPS() error {
 	if p.Min < 0 || p.Max <= p.Min || p.Step <= 0 {
 		return fmt.Errorf("min, max, and step must form a non-negative range")
 	}
-	if !p.contains(p.Default) {
-		return fmt.Errorf("default must be within the range and aligned to step")
+	if p.Default < p.Min || p.Default > p.Max {
+		return fmt.Errorf(
+			"default=%d is outside range min=%d max=%d (step=%d)",
+			p.Default,
+			p.Min,
+			p.Max,
+			p.Step,
+		)
+	}
+	if (p.Default-p.Min)%p.Step != 0 {
+		return fmt.Errorf(
+			"default=%d is not aligned to step=%d from min=%d (max=%d)",
+			p.Default,
+			p.Step,
+			p.Min,
+			p.Max,
+		)
 	}
 	return nil
 }
@@ -295,6 +318,7 @@ func (p allowedPolicy) validateSenderChannelCapacity() error {
 
 type policySnapshot struct {
 	ReaderReadBatchSize             rangePolicy            `json:"readerReadBatchSize"`
+	ReaderWorkers                   rangePolicy            `json:"readerWorkers"`
 	ReaderChannelCapacity           allowedPolicy          `json:"readerChannelCapacity"`
 	SenderChannelCapacity           allowedPolicy          `json:"senderChannelCapacity"`
 	ThrottlerRequestedTPS           rangePolicy            `json:"throttlerRequestedTps"`
@@ -309,6 +333,7 @@ type policySnapshot struct {
 func (p policy) snapshot() policySnapshot {
 	return policySnapshot{
 		ReaderReadBatchSize:             p.Reader.ReadBatchSize,
+		ReaderWorkers:                   p.Reader.Workers,
 		ReaderChannelCapacity:           p.ReaderChannel.Capacity,
 		SenderChannelCapacity:           p.SenderChannel.Capacity,
 		ThrottlerRequestedTPS:           p.Throttler.RequestedTPS,

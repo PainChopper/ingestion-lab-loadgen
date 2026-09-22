@@ -51,7 +51,7 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(requests, metrics, promMetrics, func(ctx context.Context, batches chan<- []Transaction, _ int) (<-chan struct{}, error) {
+		state.eventLoop(requests, metrics, promMetrics, func(ctx context.Context, batches chan<- []Transaction, _, _ int) (readerRun, error) {
 			output = batches
 			close(started)
 			readerDone := make(chan struct{})
@@ -59,7 +59,7 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 				defer close(readerDone)
 				<-ctx.Done()
 			}()
-			return readerDone, nil
+			return readerRun{done: readerDone, reconcile: func(int) {}}, nil
 		})
 	}()
 	t.Cleanup(func() {
@@ -106,12 +106,12 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 		t.Fatalf("sender channel received TPS = %v, want 10", sender.receivedTransactionsPerSecond)
 	}
 
-	requests <- request{kind: cmdSetRequestedTPS, value: 2_100, commandReply: reply}
+	requests <- request{kind: cmdSetRequestedTPS, value: 2_400_000, commandReply: reply}
 	if result := <-reply; result.status != commandAccepted {
 		t.Fatalf("set requested TPS = %+v", result)
 	}
-	if got := gaugeValue(t, promMetrics.targetTPS); got != 2_100 {
-		t.Fatalf("target TPS = %v, want 2100", got)
+	if got := gaugeValue(t, promMetrics.targetTPS); got != 2_400_000 {
+		t.Fatalf("target TPS = %v, want 2400000", got)
 	}
 }
 
@@ -122,13 +122,13 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(requests, metrics, NewMetrics(), func(ctx context.Context, _ chan<- []Transaction, _ int) (<-chan struct{}, error) {
+		state.eventLoop(requests, metrics, NewMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
 			readerDone := make(chan struct{})
 			go func() {
 				<-ctx.Done()
 				close(readerDone)
 			}()
-			return readerDone, nil
+			return readerRun{done: readerDone, reconcile: func(int) {}}, nil
 		})
 	}()
 	t.Cleanup(func() {
@@ -187,19 +187,19 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 	metrics := make(chan time.Time)
 	readerDone := make(chan struct{})
 	var starts int
-	read := func(ctx context.Context, _ chan<- []Transaction, _ int) (<-chan struct{}, error) {
+	read := func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
 		starts++
 		switch starts {
 		case 1:
-			return nil, errors.New("first failure")
+			return readerRun{}, errors.New("first failure")
 		case 2:
-			return nil, errors.New("second failure")
+			return readerRun{}, errors.New("second failure")
 		}
 		go func() {
 			defer close(readerDone)
 			<-ctx.Done()
 		}()
-		return readerDone, nil
+		return readerRun{done: readerDone, reconcile: func(int) {}}, nil
 	}
 	startCustomEventLoopForTest(t, requests, metrics, read)
 	reply := make(chan commandResult, 1)
@@ -348,7 +348,7 @@ func TestResetFromPausedStopsReaderClearsProgressAndStartsFreshRun(t *testing.T)
 	var starts int
 	var throttlerStarts int
 
-	read := func(ctx context.Context, output chan<- []Transaction, _ int) (<-chan struct{}, error) {
+	read := func(ctx context.Context, output chan<- []Transaction, _, _ int) (readerRun, error) {
 		starts++
 		if starts == 1 {
 			go func() {
@@ -376,7 +376,7 @@ func TestResetFromPausedStopsReaderClearsProgressAndStartsFreshRun(t *testing.T)
 				case <-ctx.Done():
 				}
 			}()
-			return firstReaderDone, nil
+			return readerRun{done: firstReaderDone, reconcile: func(int) {}}, nil
 		}
 
 		freshBatches = output
@@ -384,7 +384,7 @@ func TestResetFromPausedStopsReaderClearsProgressAndStartsFreshRun(t *testing.T)
 			defer close(freshReaderDone)
 			<-ctx.Done()
 		}()
-		return freshReaderDone, nil
+		return readerRun{done: freshReaderDone, reconcile: func(int) {}}, nil
 	}
 
 	start := func(
@@ -591,12 +591,12 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	metrics := make(chan time.Time)
 	readerDone := make(chan struct{})
 	state := newTestControlState(t)
-	read := func(ctx context.Context, _ chan<- []Transaction, _ int) (<-chan struct{}, error) {
+	read := func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
 		go func() {
 			defer close(readerDone)
 			<-ctx.Done()
 		}()
-		return readerDone, nil
+		return readerRun{done: readerDone, reconcile: func(int) {}}, nil
 	}
 	done := make(chan struct{})
 	go func() {
@@ -691,7 +691,7 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 		requests <- request{kind: getSnapshot, snapshotReply: reply}
 		return <-reply
 	}
-	if got := snapshot(); got.Reader.ReadBatchSize != 1_000 || got.Throttler.RequestedTps != 2_000 ||
+	if got := snapshot(); got.Reader.ReadBatchSize != 1_000 || got.Throttler.RequestedTps != 2_000_000 ||
 		got.Throttler.InstallationMode != throttlerInstalled {
 		t.Fatalf("initial throttler snapshot = %+v", got)
 	}
@@ -714,7 +714,7 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	}
 	post(`{"action":"pause"}`, http.StatusOK)
 	waitForState(t, requests, runStatePaused)
-	post(`{"action":"set-requested-tps","value":4000}`, http.StatusOK)
+	post(`{"action":"set-requested-tps","value":4000000}`, http.StatusOK)
 	post(`{"action":"set-throttler-installation-mode","value":"installed"}`, http.StatusOK)
 	select {
 	case batches <- []Transaction{{ClientID: "paused"}}:
@@ -723,21 +723,21 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	}
 	waitForReaderReceives(t, requests, 2)
 	metrics <- time.Now()
-	if got := snapshot(); got.Run.TotalTransactions != 1 || got.Throttler.RequestedTps != 4000 ||
+	if got := snapshot(); got.Run.TotalTransactions != 1 || got.Throttler.RequestedTps != 4_000_000 ||
 		got.Throttler.InstallationMode != throttlerInstalled {
 		t.Fatalf("paused throttler snapshot = %+v", got)
 	}
 	post(`{"action":"run"}`, http.StatusOK)
 	waitForTransactions(t, requests, metrics, 2)
-	post(`{"action":"set-requested-tps","value":100}`, http.StatusOK)
-	if got := snapshot().Throttler.RequestedTps; got != 100 {
+	post(`{"action":"set-requested-tps","value":400000}`, http.StatusOK)
+	if got := snapshot().Throttler.RequestedTps; got != 400_000 {
 		t.Fatalf("running TPS = %d, want 100", got)
 	}
 	post(`{"action":"pause"}`, http.StatusOK)
 	waitForState(t, requests, runStatePaused)
 	post(`{"action":"reset"}`, http.StatusOK)
 	if got := snapshot(); got.Run.State != runStateIdle || got.Run.TotalTransactions != 0 ||
-		got.Throttler.RequestedTps != 100 || got.Throttler.InstallationMode != throttlerInstalled {
+		got.Throttler.RequestedTps != 400_000 || got.Throttler.InstallationMode != throttlerInstalled {
 		t.Fatalf("reset throttler snapshot = %+v", got)
 	}
 }
@@ -884,7 +884,7 @@ func startEventLoopForTest(t *testing.T, onReaderStart func()) (chan<- request, 
 	requests := make(chan request, 3)
 	batches := make(chan []Transaction)
 	metrics := make(chan time.Time)
-	read := func(ctx context.Context, output chan<- []Transaction, _ int) (<-chan struct{}, error) {
+	read := func(ctx context.Context, output chan<- []Transaction, _, _ int) (readerRun, error) {
 		onReaderStart()
 		readerDone := make(chan struct{})
 		go func() {
@@ -902,11 +902,52 @@ func startEventLoopForTest(t *testing.T, onReaderStart func()) (chan<- request, 
 				}
 			}
 		}()
-		return readerDone, nil
+		return readerRun{done: readerDone, reconcile: func(int) {}}, nil
 	}
 	startCustomEventLoopForTest(t, requests, metrics, read)
 
 	return requests, batches, metrics
+}
+
+func TestReaderWorkersIdleUpdateAfterResetDoesNotReconcileStoppedPool(t *testing.T) {
+	requests := make(chan request, 3)
+	metrics := make(chan time.Time)
+	staleUpdates := make(chan int, 1)
+	startedWorkers := make(chan int, 2)
+	read := func(ctx context.Context, _ chan<- []Transaction, _, workers int) (readerRun, error) {
+		startedWorkers <- workers
+		readerDone := make(chan struct{})
+		go func() {
+			defer close(readerDone)
+			<-ctx.Done()
+		}()
+		return readerRun{done: readerDone, reconcile: func(value int) { staleUpdates <- value }}, nil
+	}
+	startCustomEventLoopForTest(t, requests, metrics, read)
+	command := func(kind requestKind, value int) {
+		t.Helper()
+		reply := make(chan commandResult, 1)
+		requests <- request{kind: kind, value: value, commandReply: reply}
+		if result := <-reply; result.status != commandAccepted || result.err != nil {
+			t.Fatalf("command %d = %+v", kind, result)
+		}
+	}
+	command(cmdRun, 0)
+	if got := <-startedWorkers; got != 1 {
+		t.Fatalf("initial workers = %d, want 1", got)
+	}
+	requests <- request{kind: cmdPause}
+	waitForState(t, requests, runStatePaused)
+	command(cmdReset, 0)
+	waitForState(t, requests, runStateIdle)
+	command(cmdSetReaderWorkers, 7)
+	if len(staleUpdates) != 0 {
+		t.Fatalf("stopped Reader pool reconciled %d times", len(staleUpdates))
+	}
+	command(cmdRun, 0)
+	if got := <-startedWorkers; got != 7 {
+		t.Fatalf("fresh run workers = %d, want 7", got)
+	}
 }
 
 func startCustomEventLoopForTest(
@@ -1247,7 +1288,7 @@ func startActualChannelEventLoopForTestWithHeldThrottler(t *testing.T, holdThrot
 		allowThrottlerForward = make(chan struct{})
 		forwardedBatches = make(chan []Transaction, 1)
 	}
-	read := func(ctx context.Context, output chan<- []Transaction, _ int) (<-chan struct{}, error) {
+	read := func(ctx context.Context, output chan<- []Transaction, _, _ int) (readerRun, error) {
 		readerStarts <- struct{}{}
 		done := make(chan struct{})
 		go func() {
@@ -1266,7 +1307,7 @@ func startActualChannelEventLoopForTestWithHeldThrottler(t *testing.T, holdThrot
 				}
 			}
 		}()
-		return done, nil
+		return readerRun{done: done, reconcile: func(int) {}}, nil
 	}
 	start := func(
 		ctx context.Context,

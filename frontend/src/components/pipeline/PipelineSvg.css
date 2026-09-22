@@ -260,6 +260,22 @@
   opacity: 0.34;
 }
 
+.pipeline-worker--reading .pipeline-worker-chip {
+  fill: color-mix(in srgb, var(--cyan) 18%, #0b314a);
+  stroke: var(--cyan);
+}
+.pipeline-worker--reading .pipeline-worker-chip-pin,
+.pipeline-worker--reading .pipeline-worker-wave { stroke: var(--cyan); }
+.pipeline-worker--reading .pipeline-worker-led { fill: var(--cyan); }
+
+.pipeline-worker--blocked .pipeline-worker-chip {
+  fill: color-mix(in srgb, var(--red) 14%, #0b314a);
+  stroke: var(--red);
+}
+.pipeline-worker--blocked .pipeline-worker-chip-pin,
+.pipeline-worker--blocked .pipeline-worker-wave { stroke: var(--red); }
+.pipeline-worker--blocked .pipeline-worker-led { fill: var(--red); }
+
 .pipeline-worker--success .pipeline-worker-chip {
   fill: color-mix(in srgb, var(--green) 18%, #0b314a);
   stroke: var(--green);

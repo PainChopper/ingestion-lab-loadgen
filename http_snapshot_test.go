@@ -13,8 +13,15 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	startError := "failed to start"
 	source := "data/part/input.parquet"
 	expected := statusSnapshot{
-		Run:           runSnapshot{State: runStateRunning, TotalTransactions: 46, ElapsedMs: 1234, StartError: &startError},
-		Reader:        readerSnapshot{Workers: 1, ReadBatchSize: 50000, ReadTps: 123.5, RowsRead: 47, Source: &source},
+		Run: runSnapshot{State: runStateRunning, TotalTransactions: 46, ElapsedMs: 1234, StartError: &startError},
+		Reader: readerSnapshot{
+			Workers: 1, LiveWorkers: 2, DrainingWorkers: 1,
+			WorkerSlots: []readerWorkerSlot{
+				{ID: "reader-worker-0", Ordinal: 0, Activity: "reading", Lifecycle: "active", Source: &source},
+				{ID: "reader-worker-1", Ordinal: 1, Activity: "reading", Lifecycle: "draining", Source: &source},
+			},
+			ReadBatchSize: 50000, ReadTps: 123.5, RowsRead: 47, Source: &source,
+		},
 		Throttler:     throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
 		Sender:        senderSnapshot{Workers: 32, WorkerSlots: []senderWorkerSlot{}, SimulatedDelayMS: 10, SimulatedErrorRatePercent: 2},
 		ReaderChannel: channelSnapshot{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, SentBatchesTotal: 2, SentTransactionsTotal: 4, ReceivedBatchesTotal: 1, ReceivedTransactionsTotal: 2, SentBatchesPerSecond: 1.5, SentTransactionsPerSecond: 3, ReceivedBatchesPerSecond: 0.5, ReceivedTransactionsPerSecond: 1},
@@ -41,7 +48,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	assertExactJSONKeys(t, root, []string{"policy", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"})
 	for name, want := range map[string][]string{
 		"run":           {"elapsedMs", "startError", "state", "totalTransactions"},
-		"reader":        {"readBatchSize", "readTps", "rowsRead", "source", "workers"},
+		"reader":        {"drainingWorkers", "liveWorkers", "readBatchSize", "readTps", "rowsRead", "source", "workerSlots", "workers"},
 		"throttler":     {"admittedTps", "installationMode", "requestedTps"},
 		"sender":        {"drainingWorkers", "liveWorkers", "simulatedDelayMs", "simulatedErrorRatePercent", "workerSlots", "workers"},
 		"readerChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
@@ -60,7 +67,29 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(root["policy"], &policy); err != nil {
 		t.Fatalf("decode policy: %v", err)
 	}
-	assertExactJSONKeys(t, policy, []string{"metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "senderChannelCapacity", "senderWorkers", "senderSimulatedDelayMs", "senderSimulatedErrorRatePercent", "senderRetry", "throttlerInstallationMode", "throttlerRequestedTps"})
+	assertExactJSONKeys(t, policy, []string{"metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "senderSimulatedDelayMs", "senderSimulatedErrorRatePercent", "senderRetry", "throttlerInstallationMode", "throttlerRequestedTps"})
+	var workers rangePolicy
+	if err := json.Unmarshal(policy["readerWorkers"], &workers); err != nil {
+		t.Fatal(err)
+	}
+	if want := (rangePolicy{Default: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}); workers != want {
+		t.Errorf("Reader workers policy = %+v, want %+v", workers, want)
+	}
+	var reader map[string]json.RawMessage
+	if err := json.Unmarshal(root["reader"], &reader); err != nil {
+		t.Fatal(err)
+	}
+	if string(reader["liveWorkers"]) != "2" || string(reader["drainingWorkers"]) != "1" {
+		t.Errorf("Reader worker counts = %s / %s", reader["liveWorkers"], reader["drainingWorkers"])
+	}
+	var slots []map[string]json.RawMessage
+	if err := json.Unmarshal(reader["workerSlots"], &slots); err != nil {
+		t.Fatal(err)
+	}
+	if len(slots) != 2 {
+		t.Fatalf("Reader slot count = %d, want 2", len(slots))
+	}
+	assertExactJSONKeys(t, slots[0], []string{"activity", "id", "lifecycle", "ordinal", "source"})
 }
 
 func assertExactJSONKeys(t *testing.T, object map[string]json.RawMessage, want []string) {

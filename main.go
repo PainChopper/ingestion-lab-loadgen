@@ -24,6 +24,8 @@ type controlRunState struct {
 
 type configuredControls struct {
 	configuredReadBatchSize         int
+	configuredReaderWorkers         int
+	readerWorkersConfigured         bool
 	configuredReaderChannelCapacity int
 	readerChannelCapacityConfigured bool
 	configuredSenderChannelCapacity int
@@ -80,8 +82,12 @@ func main() {
 		requests,
 		metrics,
 		promMetrics,
-		func(ctx context.Context, batches chan<- []Transaction, batchSize int) (<-chan struct{}, error) {
-			return readBatches(ctx, loadedPolicy.Source.Path, batchSize, batches, &state.telemetry.reader, &state.telemetry.readerChannel)
+		func(ctx context.Context, batches chan<- []Transaction, batchSize, workers int) (readerRun, error) {
+			pool, err := startReaderPool(ctx, loadedPolicy.Source.Path, batchSize, workers, batches, &state.telemetry.reader, &state.telemetry.readerChannel)
+			if err != nil {
+				return readerRun{}, err
+			}
+			return readerRun{done: pool.done, reconcile: pool.reconcile}, nil
 		},
 	)
 }

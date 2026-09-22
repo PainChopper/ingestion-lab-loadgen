@@ -85,14 +85,14 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 			metrics := make(chan time.Time)
 			startedCapacities := make(chan int, 2)
 			state := newTestControlState(t)
-			read := func(ctx context.Context, output chan<- []Transaction, _ int) (<-chan struct{}, error) {
+			read := func(ctx context.Context, output chan<- []Transaction, _, _ int) (readerRun, error) {
 				startedCapacities <- cap(output)
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
 					<-ctx.Done()
 				}()
-				return done, nil
+				return readerRun{done: done, reconcile: func(int) {}}, nil
 			}
 			done := make(chan struct{})
 			go func() {

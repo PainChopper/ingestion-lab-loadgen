@@ -32,6 +32,9 @@ export function ReaderActor({
       bounds={geometry.bounds}
       controls={geometry.controls}
       workers={snapshot.workers}
+      liveWorkers={snapshot.liveWorkers}
+      drainingWorkers={snapshot.drainingWorkers}
+      workerSlots={snapshot.workerSlots}
       runState={snapshot.state}
       active={rateDriven
         ? snapshot.readTps !== null && snapshot.readTps > 0

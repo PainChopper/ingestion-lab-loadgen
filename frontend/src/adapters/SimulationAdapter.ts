@@ -138,6 +138,7 @@ function freezeSnapshot(
   simulation: FixedStepSimulation,
 ): LoadgenTelemetrySnapshot {
   const running = state.runState === 'running'
+  const readerPoolLive = state.runState !== 'idle'
   const telemetry: SimulationTelemetry = simulation.telemetry(running)
   const config = simulation.config
   const readerCapacityTps = Math.round(telemetry.readerCapacityTps)
@@ -163,6 +164,20 @@ function freezeSnapshot(
         config.readerWorkers,
         CONTROL_RANGES.readerWorkers,
         'workers',
+      ),
+      liveWorkers: readerPoolLive ? config.readerWorkers : 0,
+      drainingWorkers: 0,
+      workerSlots: Object.freeze(
+        Array.from(
+          { length: readerPoolLive ? config.readerWorkers : 0 },
+          (_, ordinal) => Object.freeze({
+            id: `reader-worker-${ordinal}`,
+            ordinal,
+            activity: readerReadTps > 0 ? 'reading' as const : 'idle' as const,
+            lifecycle: 'active' as const,
+            source: readerReadTps > 0 ? 'events.parquet' : null,
+          }),
+        ),
       ),
       readBatchSize: numericControl(
         config.readBatchSize,

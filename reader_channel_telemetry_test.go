@@ -63,7 +63,7 @@ func TestReaderChannelTelemetrySnapshotAccumulatesSubMillisecondBlockedDurations
 	now := time.Date(2026, time.September, 19, 0, 0, 0, 0, time.UTC)
 	telemetry := channelTelemetry{
 		measurements: channelTelemetryMeasurements{
-			blockedAt: now.Add(-800 * time.Microsecond),
+			blockedAt: map[uint64]time.Time{1: now.Add(-800 * time.Microsecond)},
 			blockedMs: 800 * time.Microsecond,
 		},
 	}
@@ -77,6 +77,77 @@ func TestReaderChannelTelemetrySnapshotAccumulatesSubMillisecondBlockedDurations
 	completed := telemetry.snapshot(now)
 	if completed.blockedSenders != 0 || completed.oldestBlockedSenderMs != 0 || completed.blockedMs != 1 {
 		t.Fatalf("completed readerChannel measurements = %+v", completed)
+	}
+}
+
+func TestReaderChannelTelemetryTracksConcurrentBlockedWritersIndependently(t *testing.T) {
+	now := time.Date(2026, time.September, 19, 0, 0, 0, 0, time.UTC)
+	var telemetry channelTelemetry
+	first := telemetry.startBlocked(now.Add(-3 * time.Millisecond))
+	second := telemetry.startBlocked(now.Add(-2 * time.Millisecond))
+	active := telemetry.snapshot(now)
+	if active.blockedSenders != 2 || active.oldestBlockedSenderMs != 3 || active.blockedMs != 5 {
+		t.Fatalf("two writers = %+v", active)
+	}
+
+	telemetry.finishBlockedWriter(first, now)
+	remaining := telemetry.snapshot(now.Add(time.Millisecond))
+	if remaining.blockedSenders != 1 || remaining.oldestBlockedSenderMs != 3 || remaining.blockedMs != 6 {
+		t.Fatalf("remaining writer = %+v", remaining)
+	}
+	telemetry.finishBlockedWriter(second, now.Add(time.Millisecond))
+	completed := telemetry.snapshot(now.Add(2 * time.Millisecond))
+	if completed.blockedSenders != 0 || completed.oldestBlockedSenderMs != 0 || completed.blockedMs != 6 {
+		t.Fatalf("completed writers = %+v", completed)
+	}
+}
+
+func TestReaderChannelTelemetryConcurrentSendsKeepSecondWriterBlocked(t *testing.T) {
+	batches := make(chan []Transaction, 1)
+	batches <- []Transaction{{}}
+	var telemetry channelTelemetry
+	telemetry.start(batches, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sent := make(chan bool, 2)
+	for range 2 {
+		go func() { sent <- telemetry.send(ctx, batches, []Transaction{{}}) }()
+	}
+	waitForBlockedSenders(t, &telemetry, 2)
+	<-batches
+	if !<-sent {
+		t.Fatal("first writer did not send")
+	}
+	waitForBlockedSenders(t, &telemetry, 1)
+	cancel()
+	if <-sent {
+		t.Fatal("second writer sent after cancellation")
+	}
+	if remaining := telemetry.snapshot(time.Now()); remaining.blockedSenders != 0 || remaining.sentBatchesTotal != 1 {
+		t.Fatalf("after cancellation = %+v", remaining)
+	}
+}
+
+func TestReaderChannelTelemetryAccountsForWriterRacingIntoLastFreeSlot(t *testing.T) {
+	batches := make(chan []Transaction, 1)
+	var telemetry channelTelemetry
+	telemetry.start(batches, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sent := make(chan bool, 2)
+	for range 2 {
+		go func() { sent <- telemetry.send(ctx, batches, []Transaction{{}}) }()
+	}
+	waitForBlockedSender(t, &telemetry)
+	if len(batches) != 1 || !<-sent {
+		t.Fatal("first writer did not fill the last free slot")
+	}
+	cancel()
+	if <-sent {
+		t.Fatal("second writer unexpectedly sent after cancellation")
+	}
+	if snapshot := telemetry.snapshot(time.Now()); snapshot.blockedSenders != 0 || snapshot.sentBatchesTotal != 1 {
+		t.Fatalf("after race = %+v", snapshot)
 	}
 }
 
@@ -215,11 +286,15 @@ func TestReaderChannelTelemetryUnbufferedHandoffCountsOnlyAfterSend(t *testing.T
 }
 
 func waitForBlockedSender(t *testing.T, telemetry *channelTelemetry) {
+	waitForBlockedSenders(t, telemetry, 1)
+}
+
+func waitForBlockedSenders(t *testing.T, telemetry *channelTelemetry, want int) {
 	t.Helper()
 
 	deadline := time.After(time.Second)
 	for {
-		if telemetry.snapshot(time.Now()).blockedSenders == 1 {
+		if telemetry.snapshot(time.Now()).blockedSenders == want {
 			return
 		}
 		select {

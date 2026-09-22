@@ -24,8 +24,9 @@ type channelMeasurements struct {
 }
 
 type channelTelemetryMeasurements struct {
-	blockedAt time.Time
-	blockedMs time.Duration
+	blockedAt     map[uint64]time.Time
+	nextBlockedID uint64
+	blockedMs     time.Duration
 
 	sentBatchesTotal              int64
 	sentTransactionsTotal         int64
@@ -58,24 +59,36 @@ func (q *channelTelemetry) start(batches <-chan []Transaction, batchSize int) {
 }
 
 func (q *channelTelemetry) send(ctx context.Context, batches chan<- []Transaction, batch []Transaction) bool {
-	if len(batches) != cap(batches) {
-		select {
-		case batches <- batch:
-			q.recordSend(len(batch))
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
+	return q.sendWithBlocked(ctx, batches, batch, nil, nil)
+}
 
-	q.startBlocked(time.Now())
+func (q *channelTelemetry) sendWithBlocked(
+	ctx context.Context, batches chan<- []Transaction, batch []Transaction,
+	onBlocked, onSent func(),
+) bool {
 	select {
 	case batches <- batch:
-		q.finishBlocked(time.Now())
 		q.recordSend(len(batch))
 		return true
 	case <-ctx.Done():
-		q.finishBlocked(time.Now())
+		return false
+	default:
+	}
+
+	blockedID := q.startBlocked(time.Now())
+	if onBlocked != nil {
+		onBlocked()
+	}
+	select {
+	case batches <- batch:
+		q.finishBlockedWriter(blockedID, time.Now())
+		if onSent != nil {
+			onSent()
+		}
+		q.recordSend(len(batch))
+		return true
+	case <-ctx.Done():
+		q.finishBlockedWriter(blockedID, time.Now())
 		return false
 	}
 }
@@ -91,11 +104,13 @@ func (q *channelTelemetry) snapshot(now time.Time) channelMeasurements {
 		measurements.depthBatches = len(q.batches)
 		measurements.bufferedTransactions = measurements.depthBatches * q.batchSize
 	}
-	if !q.measurements.blockedAt.IsZero() {
-		measurements.blockedSenders = 1
-		blocked := now.Sub(q.measurements.blockedAt)
+	measurements.blockedSenders = len(q.measurements.blockedAt)
+	for _, since := range q.measurements.blockedAt {
+		blocked := now.Sub(since)
 		if blocked > 0 {
-			measurements.oldestBlockedSenderMs = blocked.Milliseconds()
+			if blocked.Milliseconds() > measurements.oldestBlockedSenderMs {
+				measurements.oldestBlockedSenderMs = blocked.Milliseconds()
+			}
 			totalBlocked += blocked
 		}
 	}
@@ -161,20 +176,41 @@ func (q *channelTelemetry) clearMeasurementsLocked() {
 	q.measurements = channelTelemetryMeasurements{}
 }
 
-func (q *channelTelemetry) startBlocked(now time.Time) {
+func (q *channelTelemetry) startBlocked(now time.Time) uint64 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.measurements.blockedAt = now
+	if q.measurements.blockedAt == nil {
+		q.measurements.blockedAt = make(map[uint64]time.Time)
+	}
+	q.measurements.nextBlockedID++
+	id := q.measurements.nextBlockedID
+	q.measurements.blockedAt[id] = now
+	return id
 }
 
+// finishBlocked keeps the single-writer Sender path unchanged.
 func (q *channelTelemetry) finishBlocked(now time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.measurements.blockedAt.IsZero() {
+	for id := range q.measurements.blockedAt {
+		q.finishBlockedLocked(id, now)
 		return
 	}
-	if blocked := now.Sub(q.measurements.blockedAt); blocked > 0 {
+}
+
+func (q *channelTelemetry) finishBlockedWriter(id uint64, now time.Time) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.finishBlockedLocked(id, now)
+}
+
+func (q *channelTelemetry) finishBlockedLocked(id uint64, now time.Time) {
+	since, ok := q.measurements.blockedAt[id]
+	if !ok {
+		return
+	}
+	if blocked := now.Sub(since); blocked > 0 {
 		q.measurements.blockedMs += blocked
 	}
-	q.measurements.blockedAt = time.Time{}
+	delete(q.measurements.blockedAt, id)
 }
