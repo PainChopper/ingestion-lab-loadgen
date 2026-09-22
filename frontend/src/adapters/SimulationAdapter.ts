@@ -209,12 +209,16 @@ function freezeSnapshot(
     sender: Object.freeze({
       id: 'sender',
       workers: numericControl(
-        telemetry.sender.workers.applied,
+        config.senderWorkers,
         CONTROL_RANGES.senderWorkers,
         'workers',
-        telemetry.sender.workers.preview,
-        telemetry.sender.workers.pending,
       ),
+      liveWorkers: running ? telemetry.sender.workerSlots.length : 0,
+      drainingWorkers: running
+        ? telemetry.sender.workerSlots.filter((slot) => slot.lifecycle === 'draining').length
+        : 0,
+      simulatedDelayMs: numericControl(config.targetDelayMs, CONTROL_RANGES.targetDelayMs, 'milliseconds'),
+      simulatedErrorRatePercent: numericControl(config.targetErrorRatePercent, CONTROL_RANGES.targetErrorRatePercent, 'percent'),
       httpBatchSize: numericControl(
         config.httpBatchSize,
         CONTROL_RANGES.httpBatchSize,
@@ -225,9 +229,14 @@ function freezeSnapshot(
         CONTROL_RANGES.httpTimeoutMs,
         'ms',
       ),
-      workerStates: Object.freeze({ ...telemetry.sender.workerStates }),
       workerSlots: Object.freeze(
-        telemetry.sender.workerSlots.map((slot) => Object.freeze({ ...slot })),
+        (running ? telemetry.sender.workerSlots : []).map((slot) => Object.freeze({
+          id: slot.id,
+          ordinal: slot.ordinal,
+          activity: slot.state,
+          lifecycle: slot.lifecycle,
+          terminalError: slot.terminalError,
+        })),
       ),
       retryPolicy: RETRY_POLICY,
       attemptedTps: Math.round(telemetry.attemptedTransactionsPerSecond),
@@ -275,16 +284,6 @@ function freezeSnapshot(
     target: Object.freeze({
       id: 'target',
       endpoint: TARGET_ENDPOINT,
-      artificialDelayMs: numericControl(
-        config.targetDelayMs,
-        CONTROL_RANGES.targetDelayMs,
-        'ms',
-      ),
-      errorRatePercent: numericControl(
-        config.targetErrorRatePercent,
-        CONTROL_RANGES.targetErrorRatePercent,
-        '%',
-      ),
       acceptedTps: Math.round(telemetry.acceptedTransactionsPerSecond),
       rejectedTps: Math.round(telemetry.rejectedTransactionsPerSecond),
       latencyP95Ms:
@@ -404,13 +403,16 @@ export class SimulationAdapter implements LoadgenAdapter {
         if (!Number.isFinite(command.value)) {
           return this.rejectInvalidNumber(commandId, command, 'worker count')
         }
-        const workerRange = command.actor === 'reader'
-          ? CONTROL_RANGES.readerWorkers
-          : CONTROL_RANGES.senderWorkers
         changed = this.updateConfig(
-          command.actor === 'reader' ? 'readerWorkers' : 'senderWorkers',
-          normalizeNumericValue(command.value, workerRange),
+          'readerWorkers',
+          normalizeNumericValue(command.value, CONTROL_RANGES.readerWorkers),
         )
+        break
+      case 'set-sender-workers':
+        if (!Number.isFinite(command.value)) {
+          return this.rejectInvalidNumber(commandId, command, 'sender workers')
+        }
+        changed = this.updateConfig('senderWorkers', normalizeNumericValue(command.value, CONTROL_RANGES.senderWorkers))
         break
       case 'set-reader-channel-capacity':
       case 'set-sender-channel-capacity': {
@@ -456,23 +458,23 @@ export class SimulationAdapter implements LoadgenAdapter {
           normalizeNumericValue(command.valueMs, CONTROL_RANGES.httpTimeoutMs),
         )
         break
-      case 'set-target-delay':
-        if (!Number.isFinite(command.valueMs)) {
-          return this.rejectInvalidNumber(commandId, command, 'target delay')
+      case 'set-sender-simulated-delay-ms':
+        if (!Number.isFinite(command.value)) {
+          return this.rejectInvalidNumber(commandId, command, 'sender simulated delay')
         }
         changed = this.updateConfig(
           'targetDelayMs',
-          normalizeNumericValue(command.valueMs, CONTROL_RANGES.targetDelayMs),
+          normalizeNumericValue(command.value, CONTROL_RANGES.targetDelayMs),
         )
         break
-      case 'set-target-error-rate':
-        if (!Number.isFinite(command.valuePercent)) {
-          return this.rejectInvalidNumber(commandId, command, 'target error rate')
+      case 'set-sender-simulated-error-rate-percent':
+        if (!Number.isFinite(command.value)) {
+          return this.rejectInvalidNumber(commandId, command, 'sender simulated error rate')
         }
         changed = this.updateConfig(
           'targetErrorRatePercent',
           normalizeNumericValue(
-            command.valuePercent,
+            command.value,
             CONTROL_RANGES.targetErrorRatePercent,
           ),
         )

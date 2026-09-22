@@ -10,7 +10,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-func produceBatches(
+func readBatches(
 	ctx context.Context,
 	dataPath string,
 	batchSize int,

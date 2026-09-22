@@ -31,7 +31,9 @@ export interface SenderWorkerStateCounts {
 export interface SenderWorkerSlotSnapshot {
   readonly id: string
   readonly ordinal: number
-  readonly state: SenderWorkerState
+  readonly activity: SenderWorkerState
+  readonly lifecycle: 'active' | 'draining'
+  readonly terminalError: boolean
 }
 
 export interface RetryPolicySnapshot {
@@ -92,6 +94,18 @@ export interface LoadgenPolicySnapshot {
   readonly metricsWindowMs: RangeControlPolicySnapshot
   readonly throttlerRequestedTps: RangeControlPolicySnapshot
   readonly throttlerInstallationMode: InstallationModePolicySnapshot
+  readonly senderWorkers: RangeControlPolicySnapshot
+  readonly senderSimulatedDelayMs: RangeControlPolicySnapshot
+  readonly senderSimulatedErrorRatePercent: RangeControlPolicySnapshot
+  readonly senderRetry: SenderRetryPolicySnapshot
+}
+
+export interface SenderRetryPolicySnapshot {
+  readonly maxAttempts: number
+  readonly backoffBaseMs: number
+  readonly backoffMultiplier: number
+  readonly jitterPercent: number
+  readonly mutability: 'startup-only'
 }
 
 export interface InstallationModePolicySnapshot {
@@ -163,9 +177,12 @@ export interface ChannelSnapshot extends ChannelTelemetrySnapshot {
 export interface SenderSnapshot {
   readonly id: 'sender'
   readonly workers: NumericControlSnapshot
+  readonly liveWorkers: number
+  readonly drainingWorkers: number
+  readonly simulatedDelayMs: NumericControlSnapshot
+  readonly simulatedErrorRatePercent: NumericControlSnapshot
   readonly httpBatchSize: NumericControlSnapshot
   readonly timeoutMs: NumericControlSnapshot
-  readonly workerStates: SenderWorkerStateCounts
   readonly workerSlots: readonly SenderWorkerSlotSnapshot[] | null
   readonly retryPolicy: RetryPolicySnapshot | null
   readonly attemptedTps: number | null
@@ -205,8 +222,6 @@ export interface HttpSnapshot {
 export interface TargetSnapshot {
   readonly id: 'target'
   readonly endpoint: string | null
-  readonly artificialDelayMs: NumericControlSnapshot
-  readonly errorRatePercent: NumericControlSnapshot
   readonly acceptedTps: number | null
   readonly rejectedTps: number | null
   readonly latencyP95Ms: number | null
@@ -250,14 +265,15 @@ export type LoadgenCommand =
       type: 'set-throttler-installation-mode'
       value: ThrottlerInstallationMode
     }
-  | { type: 'set-worker-count'; actor: 'reader' | 'sender'; value: number }
+  | { type: 'set-worker-count'; actor: 'reader'; value: number }
+  | { type: 'set-sender-workers'; value: number }
+  | { type: 'set-sender-simulated-delay-ms'; value: number }
+  | { type: 'set-sender-simulated-error-rate-percent'; value: number }
   | { type: 'set-reader-channel-capacity'; value: number }
   | { type: 'set-sender-channel-capacity'; value: number }
   | { type: 'set-read-batch-size'; value: number }
   | { type: 'set-http-batch-size'; value: number }
   | { type: 'set-http-timeout'; valueMs: number }
-  | { type: 'set-target-delay'; valueMs: number }
-  | { type: 'set-target-error-rate'; valuePercent: number }
 
 export interface AdapterError {
   readonly code:

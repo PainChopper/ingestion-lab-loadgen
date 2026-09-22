@@ -24,6 +24,8 @@ const (
 	unitBatches       = "batches"
 	requestedTPSUnit  = "transactions/s"
 	metricsWindowUnit = "milliseconds"
+	workersUnit       = "workers"
+	percentUnit       = "percent"
 )
 
 // Mutability values accepted by policy fields.
@@ -46,6 +48,7 @@ type policy struct {
 	ReaderChannel readerChannelPolicy `mapstructure:"readerChannel"`
 	SenderChannel readerChannelPolicy `mapstructure:"senderChannel"`
 	Throttler     throttlerPolicy     `mapstructure:"throttler"`
+	Sender        senderPolicy        `mapstructure:"sender"`
 	Metrics       metricsPolicy       `mapstructure:"metrics"`
 }
 
@@ -70,6 +73,25 @@ type throttlerPolicy struct {
 
 type metricsPolicy struct {
 	WindowMS rangePolicy `mapstructure:"window_ms"`
+}
+
+type senderPolicy struct {
+	Workers   rangePolicy           `mapstructure:"workers"`
+	Simulated senderSimulatedPolicy `mapstructure:"simulated"`
+	Retry     senderRetryPolicy     `mapstructure:"retry"`
+}
+
+type senderSimulatedPolicy struct {
+	DelayMS          rangePolicy `mapstructure:"delay_ms"`
+	ErrorRatePercent rangePolicy `mapstructure:"error_rate_percent"`
+}
+
+type senderRetryPolicy struct {
+	MaxAttempts       int    `mapstructure:"max_attempts" json:"maxAttempts"`
+	BackoffBaseMS     int    `mapstructure:"backoff_base_ms" json:"backoffBaseMs"`
+	BackoffMultiplier int    `mapstructure:"backoff_multiplier" json:"backoffMultiplier"`
+	JitterPercent     int    `mapstructure:"jitter_percent" json:"jitterPercent"`
+	Mutability        string `mapstructure:"mutability" json:"mutability"`
 }
 
 type installationModePolicy struct {
@@ -151,8 +173,34 @@ func (p policy) validate() error {
 	if err := p.Throttler.InstallationMode.validate(); err != nil {
 		return fmt.Errorf("throttler.installation_mode: %w", err)
 	}
+	if err := p.Sender.validate(); err != nil {
+		return fmt.Errorf("sender: %w", err)
+	}
 	if err := p.Metrics.WindowMS.validateMetricsWindow(); err != nil {
 		return fmt.Errorf("metrics.window_ms: %w", err)
+	}
+	return nil
+}
+
+func (p senderPolicy) validate() error {
+	if err := p.Workers.validateExact(32, 1, 32, 1, workersUnit, immediate); err != nil {
+		return fmt.Errorf("workers: %w", err)
+	}
+	if err := p.Simulated.DelayMS.validateExact(10, 0, 2_000, 10, metricsWindowUnit, immediate); err != nil {
+		return fmt.Errorf("simulated.delay_ms: %w", err)
+	}
+	if err := p.Simulated.ErrorRatePercent.validateExact(2, 0, 100, 1, percentUnit, immediate); err != nil {
+		return fmt.Errorf("simulated.error_rate_percent: %w", err)
+	}
+	if p.Retry != (senderRetryPolicy{MaxAttempts: 3, BackoffBaseMS: 250, BackoffMultiplier: 2, JitterPercent: 20, Mutability: startupOnly}) {
+		return fmt.Errorf("retry must match the approved startup-only policy")
+	}
+	return nil
+}
+
+func (p rangePolicy) validateExact(defaultValue, minValue, maxValue, stepValue int, unit, mutability string) error {
+	if p.Default != defaultValue || p.Min != minValue || p.Max != maxValue || p.Step != stepValue || p.Unit != unit || p.Mutability != mutability {
+		return fmt.Errorf("must match approved %s policy", unit)
 	}
 	return nil
 }
@@ -246,21 +294,29 @@ func (p allowedPolicy) validateSenderChannelCapacity() error {
 }
 
 type policySnapshot struct {
-	ReaderReadBatchSize       rangePolicy            `json:"readerReadBatchSize"`
-	ReaderChannelCapacity     allowedPolicy          `json:"readerChannelCapacity"`
-	SenderChannelCapacity     allowedPolicy          `json:"senderChannelCapacity"`
-	ThrottlerRequestedTPS     rangePolicy            `json:"throttlerRequestedTps"`
-	ThrottlerInstallationMode installationModePolicy `json:"throttlerInstallationMode"`
-	MetricsWindowMS           rangePolicy            `json:"metricsWindowMs"`
+	ReaderReadBatchSize             rangePolicy            `json:"readerReadBatchSize"`
+	ReaderChannelCapacity           allowedPolicy          `json:"readerChannelCapacity"`
+	SenderChannelCapacity           allowedPolicy          `json:"senderChannelCapacity"`
+	ThrottlerRequestedTPS           rangePolicy            `json:"throttlerRequestedTps"`
+	ThrottlerInstallationMode       installationModePolicy `json:"throttlerInstallationMode"`
+	MetricsWindowMS                 rangePolicy            `json:"metricsWindowMs"`
+	SenderWorkers                   rangePolicy            `json:"senderWorkers"`
+	SenderSimulatedDelayMS          rangePolicy            `json:"senderSimulatedDelayMs"`
+	SenderSimulatedErrorRatePercent rangePolicy            `json:"senderSimulatedErrorRatePercent"`
+	SenderRetry                     senderRetryPolicy      `json:"senderRetry"`
 }
 
 func (p policy) snapshot() policySnapshot {
 	return policySnapshot{
-		ReaderReadBatchSize:       p.Reader.ReadBatchSize,
-		ReaderChannelCapacity:     p.ReaderChannel.Capacity,
-		SenderChannelCapacity:     p.SenderChannel.Capacity,
-		ThrottlerRequestedTPS:     p.Throttler.RequestedTPS,
-		ThrottlerInstallationMode: p.Throttler.InstallationMode,
-		MetricsWindowMS:           p.Metrics.WindowMS,
+		ReaderReadBatchSize:             p.Reader.ReadBatchSize,
+		ReaderChannelCapacity:           p.ReaderChannel.Capacity,
+		SenderChannelCapacity:           p.SenderChannel.Capacity,
+		ThrottlerRequestedTPS:           p.Throttler.RequestedTPS,
+		ThrottlerInstallationMode:       p.Throttler.InstallationMode,
+		MetricsWindowMS:                 p.Metrics.WindowMS,
+		SenderWorkers:                   p.Sender.Workers,
+		SenderSimulatedDelayMS:          p.Sender.Simulated.DelayMS,
+		SenderSimulatedErrorRatePercent: p.Sender.Simulated.ErrorRatePercent,
+		SenderRetry:                     p.Sender.Retry,
 	}
 }

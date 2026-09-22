@@ -186,3 +186,61 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestSenderCommandValidation(t *testing.T) {
+	tests := []struct {
+		name, body string
+		want       int
+		kind       requestKind
+		value      int
+	}{
+		{"workers minimum", `{"action":"set-sender-workers","value":1}`, http.StatusOK, cmdSetSenderWorkers, 1},
+		{"workers default", `{"action":"set-sender-workers","value":32}`, http.StatusOK, cmdSetSenderWorkers, 32},
+		{"delay zero", `{"action":"set-sender-simulated-delay-ms","value":0}`, http.StatusOK, cmdSetSenderSimulatedDelayMS, 0},
+		{"delay maximum", `{"action":"set-sender-simulated-delay-ms","value":2000}`, http.StatusOK, cmdSetSenderSimulatedDelayMS, 2000},
+		{"error zero", `{"action":"set-sender-simulated-error-rate-percent","value":0}`, http.StatusOK, cmdSetSenderSimulatedErrorRatePercent, 0},
+		{"error maximum", `{"action":"set-sender-simulated-error-rate-percent","value":100}`, http.StatusOK, cmdSetSenderSimulatedErrorRatePercent, 100},
+		{"missing", `{"action":"set-sender-workers"}`, http.StatusBadRequest, 0, 0},
+		{"null", `{"action":"set-sender-workers","value":null}`, http.StatusBadRequest, 0, 0},
+		{"fractional", `{"action":"set-sender-workers","value":1.5}`, http.StatusBadRequest, 0, 0},
+		{"string", `{"action":"set-sender-workers","value":"1"}`, http.StatusBadRequest, 0, 0},
+		{"under minimum", `{"action":"set-sender-workers","value":0}`, http.StatusBadRequest, 0, 0},
+		{"over maximum", `{"action":"set-sender-workers","value":33}`, http.StatusBadRequest, 0, 0},
+		{"delay off step", `{"action":"set-sender-simulated-delay-ms","value":5}`, http.StatusBadRequest, 0, 0},
+		{"delay over maximum", `{"action":"set-sender-simulated-delay-ms","value":2010}`, http.StatusBadRequest, 0, 0},
+		{"error over maximum", `{"action":"set-sender-simulated-error-rate-percent","value":101}`, http.StatusBadRequest, 0, 0},
+		{"extra key", `{"action":"set-sender-workers","value":1,"other":1}`, http.StatusBadRequest, 0, 0},
+		{"trailing JSON", `{"action":"set-sender-workers","value":1}{}`, http.StatusBadRequest, 0, 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			commands := make(chan request, 1)
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				commandsHandler(commands, testPolicy(t)).ServeHTTP(recorder, req)
+			}()
+			if test.want == http.StatusOK {
+				select {
+				case command := <-commands:
+					if command.kind != test.kind || command.value != test.value {
+						t.Errorf("command = %+v, want kind %v value %d", command, test.kind, test.value)
+					}
+					command.commandReply <- commandResult{}
+				case <-time.After(time.Second):
+					t.Fatal("valid command was not dispatched")
+				}
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("command handler did not return")
+			}
+			if recorder.Code != test.want || len(commands) != 0 {
+				t.Fatalf("status = %d, queued commands = %d, want %d and zero", recorder.Code, len(commands), test.want)
+			}
+		})
+	}
+}

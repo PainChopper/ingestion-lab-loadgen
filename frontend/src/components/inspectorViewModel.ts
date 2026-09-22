@@ -139,7 +139,7 @@ export function getInspectorViewModel(
         ],
       }
     case 'sender': {
-      const policy = snapshot.sender.retryPolicy
+      const policy = snapshot.policy?.senderRetry ?? snapshot.sender.retryPolicy
       const policyValue = policy === null
         ? '—'
         : `${formatInteger(policy.maxAttempts)} attempts · ` +
@@ -150,21 +150,20 @@ export function getInspectorViewModel(
       return {
         id: selectedId,
         title: 'SENDER',
-        kind: 'HTTP client',
+        kind: 'Simulated sender',
         rows: [
           {
-            label: 'Workers',
-            value: snapshot.sender.workers.pending === null
-              ? `${formatInteger(snapshot.sender.workers.applied)} applied`
-              : `${formatInteger(snapshot.sender.workers.applied)} applied · ` +
-                `${formatInteger(snapshot.sender.workers.pending)} pending`,
+            label: 'Workers desired / live / draining',
+            value: `${formatInteger(snapshot.sender.workers.applied)} / ` +
+              `${formatInteger(snapshot.sender.liveWorkers)} / ` +
+              `${formatInteger(snapshot.sender.drainingWorkers)}`,
           },
           {
             label: 'Worker states',
             value:
-              `${formatInteger(snapshot.sender.workerStates.idle)} idle · ` +
-              `${formatInteger(snapshot.sender.workerStates.inFlight)} in-flight · ` +
-              `${formatInteger(snapshot.sender.workerStates.backoff)} backoff`,
+              `${formatInteger(snapshot.sender.workerSlots?.filter((slot) => slot.activity === 'idle').length ?? 0)} idle · ` +
+              `${formatInteger(snapshot.sender.workerSlots?.filter((slot) => slot.activity === 'in-flight').length ?? 0)} in-flight · ` +
+              `${formatInteger(snapshot.sender.workerSlots?.filter((slot) => slot.activity === 'backoff').length ?? 0)} backoff`,
           },
           { label: 'Attempted TPS', value: formatRate(snapshot.sender.attemptedTps) },
           { label: 'Retry TPS', value: formatRate(snapshot.sender.retryAttemptedTps) },
@@ -175,7 +174,7 @@ export function getInspectorViewModel(
           { label: 'In-flight', value: formatInteger(snapshot.sender.inFlightRequests) },
           {
             label: 'Backoff',
-            value: formatInteger(snapshot.sender.workerStates.backoff),
+            value: formatInteger(snapshot.sender.workerSlots?.filter((slot) => slot.activity === 'backoff').length ?? 0),
           },
           {
             label: 'Attempts',
@@ -226,20 +225,11 @@ export function getInspectorViewModel(
       }
     }
     case 'target': {
-      const configured503Rate = formatInteger(
-        snapshot.target.errorRatePercent.applied,
-      )
       return {
         id: selectedId,
         title: 'TARGET',
         kind: snapshot.target.endpoint ?? 'HTTP endpoint',
         rows: [
-          {
-            label: '503 rate',
-            value: configured503Rate === '—'
-              ? configured503Rate
-              : `${configured503Rate}%`,
-          },
           { label: 'Accepted TPS', value: formatRate(snapshot.target.acceptedTps) },
           { label: 'Rejected TPS', value: formatRate(snapshot.target.rejectedTps) },
           { label: 'p95 latency', value: formatMilliseconds(snapshot.target.latencyP95Ms) },

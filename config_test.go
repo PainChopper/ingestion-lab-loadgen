@@ -40,6 +40,10 @@ func testConfigContents() string {
 		"", "[senderChannel.capacity]", "default = 0", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
 		"", "[throttler.requested_tps]", "default = 2000", "min = 0", "max = 4000", "step = 100", "unit = \"transactions/s\"", "mutability = \"immediate\"",
 		"", "[throttler.installation_mode]", "default = \"installed\"", "allowed = [\"installed\", \"bypass\"]", "mutability = \"immediate\"",
+		"", "[sender.workers]", "default = 32", "min = 1", "max = 32", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"",
+		"", "[sender.simulated.delay_ms]", "default = 10", "min = 0", "max = 2000", "step = 10", "unit = \"milliseconds\"", "mutability = \"immediate\"",
+		"", "[sender.simulated.error_rate_percent]", "default = 2", "min = 0", "max = 100", "step = 1", "unit = \"percent\"", "mutability = \"immediate\"",
+		"", "[sender.retry]", "max_attempts = 3", "backoff_base_ms = 250", "backoff_multiplier = 2", "jitter_percent = 20", "mutability = \"startup-only\"",
 		"", "[metrics.window_ms]", "default = 1000", "min = 100", "max = 10000", "step = 100", "unit = \"milliseconds\"", "mutability = \"startup-only\"",
 	}, "\n")
 }
@@ -325,6 +329,46 @@ func TestLoadPolicyRejectsInvalidThrottlerPolicy(t *testing.T) {
 			}
 			if _, _, err := loadPolicy(path); err == nil {
 				t.Fatal("loadPolicy accepted invalid throttler policy")
+			}
+		})
+	}
+}
+
+func TestSenderPolicyUsesApprovedProfile(t *testing.T) {
+	sender := testPolicy(t).Sender
+	if sender.Workers != (rangePolicy{Default: 32, Min: 1, Max: 32, Step: 1, Unit: workersUnit, Mutability: immediate}) {
+		t.Fatalf("workers policy = %+v", sender.Workers)
+	}
+	if sender.Simulated.DelayMS != (rangePolicy{Default: 10, Min: 0, Max: 2000, Step: 10, Unit: metricsWindowUnit, Mutability: immediate}) {
+		t.Fatalf("delay policy = %+v", sender.Simulated.DelayMS)
+	}
+	if sender.Simulated.ErrorRatePercent != (rangePolicy{Default: 2, Min: 0, Max: 100, Step: 1, Unit: percentUnit, Mutability: immediate}) {
+		t.Fatalf("error rate policy = %+v", sender.Simulated.ErrorRatePercent)
+	}
+}
+
+func TestLoadPolicyRejectsInvalidSenderPolicy(t *testing.T) {
+	tests := []struct{ name, old, replacement string }{
+		{"missing workers", "[sender.workers]\ndefault = 32", "[sender.workers]"},
+		{"wrong workers max", "max = 32", "max = 33"},
+		{"missing delay", "[sender.simulated.delay_ms]\ndefault = 10", "[sender.simulated.delay_ms]"},
+		{"wrong delay step", "[sender.simulated.delay_ms]\ndefault = 10\nmin = 0\nmax = 2000\nstep = 10", "[sender.simulated.delay_ms]\ndefault = 10\nmin = 0\nmax = 2000\nstep = 5"},
+		{"wrong error default", "[sender.simulated.error_rate_percent]\ndefault = 2", "[sender.simulated.error_rate_percent]\ndefault = 3"},
+		{"wrong retry attempts", "max_attempts = 3", "max_attempts = 4"},
+		{"missing retry mutability", "[sender.retry]\nmax_attempts = 3\nbackoff_base_ms = 250\nbackoff_multiplier = 2\njitter_percent = 20\nmutability = \"startup-only\"", "[sender.retry]\nmax_attempts = 3\nbackoff_base_ms = 250\nbackoff_multiplier = 2\njitter_percent = 20"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			contents := strings.Replace(testConfigContents(), test.old, test.replacement, 1)
+			if contents == testConfigContents() {
+				t.Fatal("test replacement did not apply")
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := loadPolicy(path); err == nil {
+				t.Fatal("loadPolicy accepted invalid Sender policy")
 			}
 		})
 	}

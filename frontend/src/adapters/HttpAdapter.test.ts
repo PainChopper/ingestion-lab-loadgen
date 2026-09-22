@@ -29,7 +29,20 @@ interface TestWireSnapshot {
     readonly admittedTps: number
     readonly installationMode: 'installed' | 'bypass'
   }
-  readonly sender: { readonly workers: number }
+  readonly sender: {
+    readonly workers: number
+    readonly liveWorkers: number
+    readonly drainingWorkers: number
+    readonly workerSlots: readonly {
+      readonly id: string
+      readonly ordinal: number
+      readonly activity: 'idle' | 'in-flight' | 'backoff'
+      readonly lifecycle: 'active' | 'draining'
+      readonly terminalError: boolean
+    }[]
+    readonly simulatedDelayMs: number
+    readonly simulatedErrorRatePercent: number
+  }
   readonly readerChannel: TestWireChannel
   readonly senderChannel: TestWireChannel
   readonly policy: LoadgenPolicySnapshot
@@ -62,7 +75,7 @@ const VALID_WIRE: TestWireSnapshot = {
   run: { state: 'running', elapsedMs: 12_345, startError: null, totalTransactions: 42_000 },
   reader: { workers: 1, readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, source: 'MBD-mini/trx/part/input.parquet' },
   throttler: { requestedTps: 200, admittedTps: 125_000.5, installationMode: 'installed' },
-  sender: { workers: 0 },
+  sender: { workers: 32, liveWorkers: 0, drainingWorkers: 0, workerSlots: [], simulatedDelayMs: 10, simulatedErrorRatePercent: 2 },
   readerChannel: {
     capacity: 8, sentBatchesTotal: 11, sentTransactionsTotal: 550_000, receivedBatchesTotal: 5, receivedTransactionsTotal: 250_000,
     depthBatches: 6, bufferedTransactions: 300_000, blockedSenders: 1, oldestBlockedSenderMs: 450, blockedMs: 1_600,
@@ -115,6 +128,10 @@ const VALID_WIRE: TestWireSnapshot = {
       allowed: ['installed', 'bypass'],
       mutability: 'immediate',
     },
+    senderWorkers: { default: 32, min: 1, max: 32, step: 1, unit: 'workers', mutability: 'immediate' },
+    senderSimulatedDelayMs: { default: 10, min: 0, max: 2000, step: 10, unit: 'milliseconds', mutability: 'immediate' },
+    senderSimulatedErrorRatePercent: { default: 2, min: 0, max: 100, step: 1, unit: 'percent', mutability: 'immediate' },
+    senderRetry: { maxAttempts: 3, backoffBaseMs: 250, backoffMultiplier: 2, jitterPercent: 20, mutability: 'startup-only' },
   },
 }
 
@@ -408,11 +425,14 @@ function expectedSnapshot(
     senderChannel: senderChannel(wire, connectionState),
     sender: {
       id: 'sender',
-      workers: control('workers', wire?.sender.workers ?? null),
+      workers: wire ? { ...control('workers', wire.sender.workers), min: 1, max: 32, step: 1, applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable' } : control('workers'),
+      liveWorkers: wire?.sender.liveWorkers ?? 0,
+      drainingWorkers: wire?.sender.drainingWorkers ?? 0,
+      simulatedDelayMs: wire ? { ...control('milliseconds', wire.sender.simulatedDelayMs), min: 0, max: 2000, step: 10, applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable' } : control('milliseconds'),
+      simulatedErrorRatePercent: wire ? { ...control('percent', wire.sender.simulatedErrorRatePercent), min: 0, max: 100, step: 1, applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable' } : control('percent'),
       httpBatchSize: control('tx'),
       timeoutMs: control('ms'),
-      workerStates: { idle: 0, inFlight: 0, backoff: 0 },
-      workerSlots: null,
+      workerSlots: wire?.sender.workerSlots ?? null,
       retryPolicy: null,
       attemptedTps: null,
       retryAttemptedTps: null,
@@ -449,8 +469,6 @@ function expectedSnapshot(
     target: {
       id: 'target',
       endpoint: null,
-      artificialDelayMs: control('ms'),
-      errorRatePercent: control('%'),
       acceptedTps: null,
       rejectedTps: null,
       latencyP95Ms: null,
@@ -550,6 +568,104 @@ const malformedCases: ReadonlyArray<{
         const { throttlerRequestedTps: _requestedTps, ...policy } = VALID_WIRE.policy
         return policy
       })(),
+    }),
+  },
+  ...(['simulatedDelayMs', 'simulatedErrorRatePercent'] as const).flatMap((field) => [
+    {
+      name: `missing sender ${field}`,
+      result: async () => {
+        const sender = { ...VALID_WIRE.sender } as Record<string, unknown>
+        delete sender[field]
+        return mockResponse({ ...VALID_WIRE, sender })
+      },
+    },
+    {
+      name: `wrong-type sender ${field}`,
+      result: async () => mockResponse({
+        ...VALID_WIRE,
+        sender: { ...VALID_WIRE.sender, [field]: '10' },
+      }),
+    },
+    {
+      name: `off-step sender ${field}`,
+      result: async () => mockResponse({
+        ...VALID_WIRE,
+        sender: { ...VALID_WIRE.sender, [field]: field === 'simulatedDelayMs' ? 11 : 101 },
+      }),
+    },
+  ]),
+  {
+    name: 'extra sender field',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      sender: { ...VALID_WIRE.sender, extra: true },
+    }),
+  },
+  ...(['senderWorkers', 'senderSimulatedDelayMs', 'senderSimulatedErrorRatePercent', 'senderRetry'] as const).flatMap((field) => [
+    {
+      name: `missing policy ${field}`,
+      result: async () => {
+        const policy = { ...VALID_WIRE.policy } as Record<string, unknown>
+        delete policy[field]
+        return mockResponse({ ...VALID_WIRE, policy })
+      },
+    },
+    {
+      name: `extra policy ${field}`,
+      result: async () => mockResponse({
+        ...VALID_WIRE,
+        policy: { ...VALID_WIRE.policy, [field]: { ...VALID_WIRE.policy[field], extra: true } },
+      }),
+    },
+    {
+      name: `wrong-type policy ${field}`,
+      result: async () => mockResponse({
+        ...VALID_WIRE,
+        policy: { ...VALID_WIRE.policy, [field]: null },
+      }),
+    },
+  ]),
+  ...(['activity', 'lifecycle', 'terminalError'] as const).flatMap((field) => [
+    {
+      name: `missing sender slot ${field}`,
+      result: async () => {
+        const slot: Record<string, unknown> = {
+          id: 'sender-worker-0', ordinal: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
+        }
+        delete slot[field]
+        return mockResponse({
+          ...VALID_WIRE,
+          sender: { ...VALID_WIRE.sender, liveWorkers: 1, workerSlots: [slot] },
+        })
+      },
+    },
+    {
+      name: `wrong-type sender slot ${field}`,
+      result: async () => mockResponse({
+        ...VALID_WIRE,
+        sender: {
+          ...VALID_WIRE.sender,
+          liveWorkers: 1,
+          workerSlots: [{
+            id: 'sender-worker-0', ordinal: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
+            [field]: 7,
+          }],
+        },
+      }),
+    },
+  ]),
+  {
+    name: 'extra sender slot field',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      sender: {
+        ...VALID_WIRE.sender,
+        liveWorkers: 1,
+        workerSlots: [{
+          id: 'sender-worker-0', ordinal: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
+          extra: true,
+        }],
+      },
     }),
   },
   {
@@ -787,10 +903,10 @@ describe('HttpAdapter', () => {
       source: 'MBD-mini/trx/part/input.parquet',
     })
     expect(snapshot.sender.workers).toMatchObject({
-      applied: 0,
-      min: 0,
-      max: 0,
-      applyMode: 'unavailable',
+      applied: 32,
+      min: 1,
+      max: 32,
+      applyMode: 'immediate',
     })
     expect(snapshot.throttler).toMatchObject({
       requestedTps: {
@@ -941,7 +1057,7 @@ describe('HttpAdapter', () => {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'paused', elapsedMs: 67_890, startError: 'previous start failed', totalTransactions: 84_000 },
       reader: { ...VALID_WIRE.reader, workers: 2, readTps: 2_000, readBatchSize: 25_000, rowsRead: 28_000, source: 'MBD-mini/trx/part/recovered.parquet' },
-      sender: { workers: 3 },
+      sender: { ...VALID_WIRE.sender, workers: 3 },
       readerChannel: { ...VALID_WIRE.readerChannel, capacity: 16, depthBatches: 4, bufferedTransactions: 100_000, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 2_000 },
     }
     fetchMock
@@ -1310,6 +1426,55 @@ describe('HttpAdapter', () => {
   })
 
   it.each(['idle', 'running', 'paused'] as const)(
+    'sends exact immediate Sender commands in %s and reads applied values from the next snapshot',
+    async (runState) => {
+      const firstWire: TestWireSnapshot = {
+        ...VALID_WIRE,
+        run: { ...VALID_WIRE.run, state: runState },
+      }
+      const appliedWire: TestWireSnapshot = {
+        ...firstWire,
+        sender: {
+          ...firstWire.sender,
+          workers: 7,
+          simulatedDelayMs: 40,
+          simulatedErrorRatePercent: 9,
+        },
+      }
+      let polls = 0
+      fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+        ? Promise.resolve(mockCommandResponse())
+        : Promise.resolve(mockResponse(++polls === 1 ? firstWire : appliedWire)))
+      const adapter = new HttpAdapter()
+      await flushPoll()
+
+      for (const command of [
+        { type: 'set-sender-workers', value: 7 },
+        { type: 'set-sender-simulated-delay-ms', value: 40 },
+        { type: 'set-sender-simulated-error-rate-percent', value: 9 },
+      ] as const) {
+        await expect(adapter.dispatch(command)).resolves.toMatchObject({
+          accepted: true,
+          applyMode: 'immediate',
+        })
+      }
+      expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
+        '{"action":"set-sender-workers","value":7}',
+        '{"action":"set-sender-simulated-delay-ms","value":40}',
+        '{"action":"set-sender-simulated-error-rate-percent","value":9}',
+      ])
+      expect(adapter.getSnapshot().sender.simulatedDelayMs.applied).toBe(10)
+      expect(adapter.getSnapshot().sender.simulatedErrorRatePercent.applied).toBe(2)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await flushPoll()
+      expect(adapter.getSnapshot().sender.workers.applied).toBe(7)
+      expect(adapter.getSnapshot().sender.simulatedDelayMs.applied).toBe(40)
+      expect(adapter.getSnapshot().sender.simulatedErrorRatePercent.applied).toBe(9)
+      adapter.dispose()
+    },
+  )
+
+  it.each(['idle', 'running', 'paused'] as const)(
     'sends immediate throttler controls in $state and leaves applied state to snapshots',
     async (runState) => {
       const wire: TestWireSnapshot = {
@@ -1599,11 +1764,11 @@ describe('HttpAdapter', () => {
       { type: 'set-requested-tps', value: 10_000 },
       { type: 'set-throttler-installation-mode', value: 'bypass' },
       { type: 'set-worker-count', actor: 'reader', value: 2 },
-      { type: 'set-worker-count', actor: 'sender', value: 3 },
+      { type: 'set-sender-workers', value: 3 },
       { type: 'set-http-batch-size', value: 1_000 },
       { type: 'set-http-timeout', valueMs: 500 },
-      { type: 'set-target-delay', valueMs: 40 },
-      { type: 'set-target-error-rate', valuePercent: 2 },
+      { type: 'set-sender-simulated-delay-ms', value: 40 },
+      { type: 'set-sender-simulated-error-rate-percent', value: 2 },
     ]
     const adapter = new HttpAdapter()
     const initial = adapter.getSnapshot()

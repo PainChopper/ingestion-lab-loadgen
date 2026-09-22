@@ -102,6 +102,8 @@ export interface SenderWorkerSlotTelemetry {
   readonly id: string
   readonly ordinal: number
   readonly state: SenderWorkerState
+  readonly lifecycle: 'active' | 'draining'
+  readonly terminalError: boolean
 }
 
 export interface SimulationTelemetry {
@@ -188,6 +190,7 @@ interface SenderWorker {
   readonly id: string
   readonly ordinal: number
   retiring: boolean
+  terminalError: boolean
   state: SenderWorkerState
   batch: SimulationBatch | null
   attempt: number
@@ -226,6 +229,7 @@ function createWorker(ordinal: number): SenderWorker {
     id: `sender-worker-${ordinal}`,
     ordinal,
     retiring: false,
+    terminalError: false,
     state: 'idle',
     batch: null,
     attempt: 0,
@@ -696,10 +700,12 @@ export class FixedStepSimulation {
   }
 
   private get workerSlots(): readonly SenderWorkerSlotTelemetry[] {
-    return this.workers.map(({ id, ordinal, state }) => ({
+    return this.workers.map(({ id, ordinal, state, retiring, terminalError }) => ({
       id,
       ordinal,
       state,
+      lifecycle: retiring ? 'draining' : 'active',
+      terminalError,
     }))
   }
 
@@ -753,6 +759,7 @@ export class FixedStepSimulation {
         this.requestSucceededTotal += 1
         this.successfulTransactionsTotal += batch.transactions
         activity.httpSucceededTransactions += batch.transactions
+        worker.terminalError = false
         this.releaseWorker(worker)
         return
       }
@@ -814,6 +821,7 @@ export class FixedStepSimulation {
     const batch = worker.batch
     if (batch === null) throw new Error('terminal failure requires owned batch')
     this.terminalFailedBatchesTotal += 1
+    worker.terminalError = true
     this.terminalFailedTransactionsTotal += batch.transactions
     activity.terminalFailedTransactions += batch.transactions
     if (worker.hadAmbiguousOutcome) {

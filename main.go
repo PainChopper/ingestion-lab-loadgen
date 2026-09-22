@@ -4,11 +4,8 @@ import (
 	"context"
 	"log"
 	"os"
-	"runtime"
 	"time"
 )
-
-var blackHole uint64
 
 type controlState struct {
 	metricsWindow time.Duration
@@ -34,6 +31,12 @@ type configuredControls struct {
 	configuredRequestedTPS          int
 	requestedTPSConfigured          bool
 	configuredInstallationMode      string
+	configuredSenderWorkers         int
+	senderWorkersConfigured         bool
+	configuredSenderDelayMS         int
+	senderDelayConfigured           bool
+	configuredSenderErrorRate       int
+	senderErrorRateConfigured       bool
 	policy                          policy
 }
 
@@ -41,6 +44,7 @@ type controlTelemetry struct {
 	reader        readerTelemetry
 	readerChannel channelTelemetry
 	senderChannel channelTelemetry
+	sender        senderTelemetry
 }
 
 func main() {
@@ -77,17 +81,7 @@ func main() {
 		metrics,
 		promMetrics,
 		func(ctx context.Context, batches chan<- []Transaction, batchSize int) (<-chan struct{}, error) {
-			return produceBatches(ctx, loadedPolicy.Source.Path, batchSize, batches, &state.telemetry.reader, &state.telemetry.readerChannel)
+			return readBatches(ctx, loadedPolicy.Source.Path, batchSize, batches, &state.telemetry.reader, &state.telemetry.readerChannel)
 		},
 	)
-}
-
-func consumeTransaction(tran *Transaction) {
-	blackHole = uint64(tran.Fold)
-	blackHole ^= uint64(tran.EventType) * 1099511628211
-	blackHole ^= uint64(tran.EventSubtype) * 1469598103934665603
-	blackHole ^= uint64(tran.Currency) * 7809847782465536322
-	blackHole ^= uint64(len(tran.ClientID)) << 32
-	blackHole ^= uint64(tran.Amount)
-	runtime.KeepAlive(blackHole)
 }

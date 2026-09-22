@@ -14,7 +14,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-func TestProduceBatchesReadsNestedDefaultParquet(t *testing.T) {
+func TestReadBatchesReadsNestedDefaultParquet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "data", "MBD-mini", "trx", "fold=0", "input.parquet")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -32,9 +32,9 @@ func TestProduceBatchesReadsNestedDefaultParquet(t *testing.T) {
 	pattern := filepath.Join(dir, "data", "MBD-mini", "trx", "fold=*", "*.parquet")
 	batches := make(chan []Transaction, policy.ReaderChannel.Capacity.Default)
 	channelTelemetry.start(batches, 1)
-	done, err := produceBatches(ctx, pattern, 1, batches, &telemetry, &channelTelemetry)
+	done, err := readBatches(ctx, pattern, 1, batches, &telemetry, &channelTelemetry)
 	if err != nil {
-		t.Fatalf("start producer with default pattern: %v", err)
+		t.Fatalf("start reader with default pattern: %v", err)
 	}
 
 	select {
@@ -50,7 +50,7 @@ func TestProduceBatchesReadsNestedDefaultParquet(t *testing.T) {
 	drain(batches)
 }
 
-func TestProduceBatchesRejectsEmptyAndInvalidPatterns(t *testing.T) {
+func TestReadBatchesRejectsEmptyAndInvalidPatterns(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		pattern string
@@ -63,9 +63,9 @@ func TestProduceBatchesRejectsEmptyAndInvalidPatterns(t *testing.T) {
 			var telemetry readerTelemetry
 			var channelTelemetry channelTelemetry
 			batches := make(chan []Transaction, 1)
-			done, err := produceBatches(context.Background(), test.pattern, 1, batches, &telemetry, &channelTelemetry)
+			done, err := readBatches(context.Background(), test.pattern, 1, batches, &telemetry, &channelTelemetry)
 			if err == nil || done != nil {
-				t.Fatalf("produceBatches(%q) = (%v, %v), want nil done and error", test.pattern, done, err)
+				t.Fatalf("readBatches(%q) = (%v, %v), want nil done and error", test.pattern, done, err)
 			}
 			if test.badGlob && !errors.Is(err, filepath.ErrBadPattern) {
 				t.Fatalf("error = %v, want bad glob pattern", err)
@@ -74,7 +74,7 @@ func TestProduceBatchesRejectsEmptyAndInvalidPatterns(t *testing.T) {
 	}
 }
 
-func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
+func TestReadBatchesRecordsActualParquetReads(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input.parquet")
 	rows := make([]Transaction, 1000)
@@ -93,9 +93,9 @@ func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 	policy := testPolicy(t)
 	batches := make(chan []Transaction, policy.ReaderChannel.Capacity.Default)
 	channelTelemetry.start(batches, policy.Reader.ReadBatchSize.Default)
-	done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Default, batches, &telemetry, &channelTelemetry)
+	done, err := readBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Default, batches, &telemetry, &channelTelemetry)
 	if err != nil {
-		t.Fatalf("start producer: %v", err)
+		t.Fatalf("start reader: %v", err)
 	}
 
 	deadline := time.After(5 * time.Second)
@@ -119,16 +119,16 @@ func TestProduceBatchesRecordsActualParquetReads(t *testing.T) {
 	drain(batches)
 }
 
-func TestProduceBatchesKeepsSourcePerFileVisitAndPreservesEmittedBatches(t *testing.T) {
+func TestReadBatchesKeepsSourcePerFileVisitAndPreservesEmittedBatches(t *testing.T) {
 	const batchSize = 1_000
 
 	dir := t.TempDir()
 	firstPath := filepath.Join(dir, "part-000.parquet")
 	secondPath := filepath.Join(dir, "part-001.parquet")
-	firstRows := producerFixtureTransactions("first", 2*batchSize)
-	secondRows := producerFixtureTransactions("second", batchSize)
-	writeProducerFixture(t, firstPath, firstRows)
-	writeProducerFixture(t, secondPath, secondRows)
+	firstRows := readerFixtureTransactions("first", 2*batchSize)
+	secondRows := readerFixtureTransactions("second", batchSize)
+	writeReaderFixture(t, firstPath, firstRows)
+	writeReaderFixture(t, secondPath, secondRows)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -136,29 +136,29 @@ func TestProduceBatchesKeepsSourcePerFileVisitAndPreservesEmittedBatches(t *test
 	var channelTelemetry channelTelemetry
 	batches := make(chan []Transaction)
 	channelTelemetry.start(batches, batchSize)
-	done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), batchSize, batches, &telemetry, &channelTelemetry)
+	done, err := readBatches(ctx, filepath.Join(dir, "*.parquet"), batchSize, batches, &telemetry, &channelTelemetry)
 	if err != nil {
-		t.Fatalf("start producer: %v", err)
+		t.Fatalf("start reader: %v", err)
 	}
 
-	first := receiveProducerBatch(t, batches, batchSize)
-	firstIDs := producerFixtureIDs(first)
+	first := receiveReaderBatch(t, batches, batchSize)
+	firstIDs := readerFixtureIDs(first)
 	waitForReaderSource(t, &telemetry, 2*batchSize, filepath.ToSlash(firstPath))
 
-	second := receiveProducerBatch(t, batches, batchSize)
-	assertProducerFixtureIDs(t, second, producerFixtureIDs(firstRows[batchSize:]))
-	assertProducerFixtureIDs(t, first, firstIDs)
+	second := receiveReaderBatch(t, batches, batchSize)
+	assertReaderFixtureIDs(t, second, readerFixtureIDs(firstRows[batchSize:]))
+	assertReaderFixtureIDs(t, first, firstIDs)
 	waitForReaderSource(t, &telemetry, 3*batchSize, filepath.ToSlash(secondPath))
 
-	third := receiveProducerBatch(t, batches, batchSize)
-	assertProducerFixtureIDs(t, third, producerFixtureIDs(secondRows))
-	assertProducerFixtureIDs(t, first, firstIDs)
+	third := receiveReaderBatch(t, batches, batchSize)
+	assertReaderFixtureIDs(t, third, readerFixtureIDs(secondRows))
+	assertReaderFixtureIDs(t, first, firstIDs)
 
 	cancel()
 	<-done
 }
 
-func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
+func TestReadBatchesUsesConfiguredSize(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input.parquet")
 	rows := make([]Transaction, 1500)
@@ -176,9 +176,9 @@ func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
 	policy := testPolicy(t)
 	batches := make(chan []Transaction, policy.ReaderChannel.Capacity.Default)
 	channelTelemetry.start(batches, policy.Reader.ReadBatchSize.Min)
-	done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Min, batches, &telemetry, &channelTelemetry)
+	done, err := readBatches(ctx, filepath.Join(dir, "*.parquet"), policy.Reader.ReadBatchSize.Min, batches, &telemetry, &channelTelemetry)
 	if err != nil {
-		t.Fatalf("start producer: %v", err)
+		t.Fatalf("start reader: %v", err)
 	}
 	for range 3 {
 		select {
@@ -195,16 +195,16 @@ func TestProduceBatchesUsesConfiguredSize(t *testing.T) {
 	drain(batches)
 }
 
-func TestProduceBatchesPreservesBatchOrderAndOwnershipAcrossResiduals(t *testing.T) {
+func TestReadBatchesPreservesBatchOrderAndOwnershipAcrossResiduals(t *testing.T) {
 	const batchSize = 1_000
 
 	for _, residual := range []int{1, 500, 999} {
 		t.Run(fmt.Sprintf("residual-%d", residual), func(t *testing.T) {
 			dir := t.TempDir()
-			firstRows := producerFixtureTransactions("first", residual)
-			secondRows := producerFixtureTransactions("second", batchSize)
-			writeProducerFixture(t, filepath.Join(dir, "part-000.parquet"), firstRows)
-			writeProducerFixture(t, filepath.Join(dir, "part-001.parquet"), secondRows)
+			firstRows := readerFixtureTransactions("first", residual)
+			secondRows := readerFixtureTransactions("second", batchSize)
+			writeReaderFixture(t, filepath.Join(dir, "part-000.parquet"), firstRows)
+			writeReaderFixture(t, filepath.Join(dir, "part-001.parquet"), secondRows)
 
 			want := append([]Transaction{}, firstRows...)
 			want = append(want, secondRows...)
@@ -217,18 +217,18 @@ func TestProduceBatchesPreservesBatchOrderAndOwnershipAcrossResiduals(t *testing
 			var channelTelemetry channelTelemetry
 			batches := make(chan []Transaction, 1)
 			channelTelemetry.start(batches, batchSize)
-			done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), batchSize, batches, &telemetry, &channelTelemetry)
+			done, err := readBatches(ctx, filepath.Join(dir, "*.parquet"), batchSize, batches, &telemetry, &channelTelemetry)
 			if err != nil {
-				t.Fatalf("start producer: %v", err)
+				t.Fatalf("start reader: %v", err)
 			}
 
-			first := receiveProducerBatch(t, batches, batchSize)
-			firstIDs := producerFixtureIDs(first)
-			assertProducerFixtureIDs(t, first, producerFixtureIDs(want[:batchSize]))
+			first := receiveReaderBatch(t, batches, batchSize)
+			firstIDs := readerFixtureIDs(first)
+			assertReaderFixtureIDs(t, first, readerFixtureIDs(want[:batchSize]))
 
-			second := receiveProducerBatch(t, batches, batchSize)
-			assertProducerFixtureIDs(t, second, producerFixtureIDs(want[batchSize:2*batchSize]))
-			assertProducerFixtureIDs(t, first, firstIDs)
+			second := receiveReaderBatch(t, batches, batchSize)
+			assertReaderFixtureIDs(t, second, readerFixtureIDs(want[batchSize:2*batchSize]))
+			assertReaderFixtureIDs(t, first, firstIDs)
 
 			cancel()
 			<-done
@@ -237,14 +237,14 @@ func TestProduceBatchesPreservesBatchOrderAndOwnershipAcrossResiduals(t *testing
 	}
 }
 
-func writeProducerFixture(t *testing.T, path string, rows []Transaction) {
+func writeReaderFixture(t *testing.T, path string, rows []Transaction) {
 	t.Helper()
 	if err := parquet.WriteFile(path, rows); err != nil {
 		t.Fatalf("write parquet fixture %q: %v", path, err)
 	}
 }
 
-func producerFixtureTransactions(prefix string, count int) []Transaction {
+func readerFixtureTransactions(prefix string, count int) []Transaction {
 	rows := make([]Transaction, count)
 	for index := range rows {
 		rows[index].ClientID = fmt.Sprintf("%s-%d", prefix, index)
@@ -252,7 +252,7 @@ func producerFixtureTransactions(prefix string, count int) []Transaction {
 	return rows
 }
 
-func receiveProducerBatch(t *testing.T, batches <-chan []Transaction, wantSize int) []Transaction {
+func receiveReaderBatch(t *testing.T, batches <-chan []Transaction, wantSize int) []Transaction {
 	t.Helper()
 	select {
 	case batch := <-batches:
@@ -261,7 +261,7 @@ func receiveProducerBatch(t *testing.T, batches <-chan []Transaction, wantSize i
 		}
 		return batch
 	case <-time.After(5 * time.Second):
-		t.Fatal("producer did not emit a batch")
+		t.Fatal("reader did not emit a batch")
 		return nil
 	}
 }
@@ -285,7 +285,7 @@ func waitForReaderSource(t *testing.T, telemetry *readerTelemetry, wantRows int,
 	}
 }
 
-func producerFixtureIDs(rows []Transaction) []string {
+func readerFixtureIDs(rows []Transaction) []string {
 	ids := make([]string, len(rows))
 	for index := range rows {
 		ids[index] = rows[index].ClientID
@@ -293,7 +293,7 @@ func producerFixtureIDs(rows []Transaction) []string {
 	return ids
 }
 
-func assertProducerFixtureIDs(t *testing.T, rows []Transaction, want []string) {
+func assertReaderFixtureIDs(t *testing.T, rows []Transaction, want []string) {
 	t.Helper()
 	if len(rows) != len(want) {
 		t.Fatalf("row count = %d, want %d", len(rows), len(want))
@@ -305,7 +305,7 @@ func assertProducerFixtureIDs(t *testing.T, rows []Transaction, want []string) {
 	}
 }
 
-func TestProduceBatchesUsesConfiguredReaderChannelCapacity(t *testing.T) {
+func TestReadBatchesUsesConfiguredReaderChannelCapacity(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "input.parquet")
 	rows := []Transaction{{ClientID: "synthetic"}}
@@ -320,14 +320,14 @@ func TestProduceBatchesUsesConfiguredReaderChannelCapacity(t *testing.T) {
 			var channelTelemetry channelTelemetry
 			batches := make(chan []Transaction, capacity)
 			channelTelemetry.start(batches, 1)
-			done, err := produceBatches(ctx, filepath.Join(dir, "*.parquet"), 1, batches, &telemetry, &channelTelemetry)
+			done, err := readBatches(ctx, filepath.Join(dir, "*.parquet"), 1, batches, &telemetry, &channelTelemetry)
 			if err != nil {
 				cancel()
-				t.Fatalf("start producer: %v", err)
+				t.Fatalf("start reader: %v", err)
 			}
 			if got := cap(batches); got != capacity {
 				cancel()
-				t.Fatalf("producer channel capacity = %d, want %d", got, capacity)
+				t.Fatalf("reader channel capacity = %d, want %d", got, capacity)
 			}
 			if got := channelTelemetry.snapshot(time.Now()).capacity; got != capacity {
 				cancel()

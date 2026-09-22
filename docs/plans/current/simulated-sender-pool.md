@@ -1,71 +1,116 @@
-# Simulated Sender pool — план реализации
+# Reader(s), Sender pool и managed simulated workers
 
-## Назначение и границы
+## Итог
 
-Первый Sender-срез заменяет текущий `blackHole` внутренним simulated transport. Каждый принятый batch завершается ровно через фиксированные 10 ms; внешний HTTP server, HTTP-клиент, сеть и target не создаются. Над существующим Sender channel запускается fixed pool из `N` Sender workers.
+Sender pipeline получает управляемый pool: configuration policy задаёт desired state, а pool постепенно приводит к нему фактическое число workers. Целевая схема: `Reader(s) → Reader channel → Throttler → Sender channel → Sender pool`.
 
-В срез входят private transport, fixed pool, lifecycle Sender, private telemetry, значение существующего `sender.workers` и deterministic Go tests. Reader workers, Producer, Throttler ownership, channel-capacity policy и публичные команды сохраняются.
+В этом срезе не появляется реальный HTTP, endpoint или внешний server. Sender получает deterministic simulated success/error responses, чтобы проверять retry, terminal errors и lifecycle.
 
-Вне среза: внешний или реальный HTTP, endpoint, retries, backoff, target errors, dynamic resize, новые config/policy/command поля, новые public snapshot/Prometheus fields и frontend.
+## Конфигурация и snapshot
 
-## Принятые решения
+Актуальные Go-символы, тесты и current-документация переименовываются из `Producer` в `Reader`; на схеме используется `Reader(s)`. Архивные документы не переписываются.
 
-- Обрабатывается целый `[]Transaction` batch, а не отдельные transaction.
-- `simulatedTransport` ждёт `10 * time.Millisecond` для каждого batch и успешно завершает его; transport не знает о каналах, lifecycle или telemetry.
-- Throttler остаётся единственным writer Sender channel, event loop — владельцем lifecycle, закрытия и очистки каналов.
-- Sender telemetry защищается собственным private `sync.Mutex`; snapshot возвращает value-copy, а lifecycle primitives не помещаются под этот mutex.
-- Pool использует отдельный context для прекращения будущего intake и `sync.WaitGroup`/`done` для подтверждения завершения всех workers.
-- Pause прекращает только будущие receives. Уже принятый batch завершается, после чего подтверждается Pause; очереди Sender channel и batch, удерживаемый Throttler, сохраняются до Resume.
-- Reset из paused после joins Producer/Throttler дренирует queued/held batches и очищает telemetry/progress. Reset из running сохраняет существующий conflict.
+В `config.toml` добавляются strict policy sections:
 
-Единственный незакрытый выбор — положительное фиксированное число workers `N`. В текущих policy, config и control API нет его источника или default, а frontend simulation не является backend-контрактом. После решения владельца `N` вводится как private fixed construction constant. Config key, UI control и resize для него не добавляются.
+```toml
+[sender.workers]
+default = 32
+min = 1
+max = 32
+step = 1
+unit = "workers"
+mutability = "immediate"
 
-## Архитектура и lifecycle
+[sender.simulated.delay_ms]
+default = 10
+min = 0
+max = 2_000
+step = 10
+unit = "milliseconds"
+mutability = "immediate"
 
-```text
-Producer -> Reader channel -> Throttler -> Sender channel -> Sender pool (N workers)
-                                                          -> simulated transport (10 ms/batch)
+[sender.simulated.error_rate_percent]
+default = 2
+min = 0
+max = 100
+step = 1
+unit = "percent"
+mutability = "immediate"
+
+[sender.retry]
+max_attempts = 3
+backoff_base_ms = 250
+backoff_multiplier = 2
+jitter_percent = 20
+mutability = "startup-only"
 ```
 
-`startSenderPool` получает read-only Sender channel, фиксированный `N`, intake context, telemetry и transport; он создаёт ровно `N` workers и возвращает cancel/done boundary. Worker перед receive проверяет intake context, после успешного receive сразу записывает admission через существующий `senderChannel.recordReceive`, затем фиксирует accepted и in-flight, выполняет transport без отмены intake и записывает terminal completion. Перед следующим receive context проверяется снова. Workers не закрывают и не дренируют каналы и не отправляют command acknowledgements.
+Policy snapshot публикует workers, simulated delay/error rate и retry policy. Команды сразу изменяют workers, delay и error rate; retry policy только читается из configuration.
 
-`consumer.go`, `startConsumer`, `consumeBatches*`, `atomic consumedSinceTick`, `consumeTransaction` и глобальный `blackHole` удаляются либо заменяются узкими Sender-pool equivalents; старый consumer и новый pool одновременно не сохраняются.
+Строгие команды используют существующее тело `{ "action": string, "value": number }`:
 
-### Run из idle
+- `set-sender-workers`: целое `1…32` с шагом `1`;
+- `set-sender-simulated-delay-ms`: целое `0…2_000` с шагом `10`;
+- `set-sender-simulated-error-rate-percent`: целое `0…100` с шагом `1`.
 
-Сохраняются текущая подготовка/reuse Reader и Sender channels, Producer и Throttler запускаются как прежде. После перехода в `running` создаётся один pool из `N` workers. Повторный Run в `running` не создаёт второй pool, Producer или Throttler.
+Каждая допускается в `idle`, `running` и `paused`; неизвестный ключ, trailing JSON, `null`, дробное, строковое, вне диапазона или вне шага значение дают `400`.
 
-### Pause и Resume
+В snapshot:
 
-1. Отменить только intake context Sender pool.
-2. Дождаться `done`; уже полученный batch должен закончить 10 ms transport.
-3. Собрать completed delta, зафиксировать elapsed/progress, перевести lifecycle в paused и дождаться существующего Throttler acknowledgement.
-4. При Resume снять Throttler pause и создать fresh pool `N` над тем же открытым Sender channel.
+- `sender.workers` — desired value из configuration policy;
+- `sender.liveWorkers` — фактическое число работающих goroutine;
+- `sender.drainingWorkers` — workers, завершающие выход из pool.
 
-До acknowledgement новый Sender receive невозможен; уже завершённые batch не отправляются повторно.
+В `idle` и `paused` desired value сохраняется, а `liveWorkers` и `drainingWorkers` равны нулю.
 
-### Reset и teardown
+`sender` имеет ровно шесть полей: `workers`, `liveWorkers`, `drainingWorkers`, `workerSlots`, `simulatedDelayMs`, `simulatedErrorRatePercent`. Последние два поля показывают применённые значения команд, в том числе после повторного подключения UI. У каждого slot ровно `id`, `ordinal`, `activity`, `lifecycle`, `terminalError`; slots упорядочены по `ordinal`, а `id` имеет вид `sender-worker-<ordinal>`. `workerSlots.length` равен `liveWorkers`, число draining slots равно `drainingWorkers`.
 
-Reset из paused начинается после join pool, затем отменяет и ждёт Producer/Throttler, дренирует каналы и очищает Reader, channel, Sender telemetry и progress. Deferred shutdown выполняет тот же порядок: cancel/join pool, cancel/join Producer и Throttler, затем close/drain/detach channels и telemetry. Это исключает `send on closed channel` и stale worker mutation после reset/teardown.
+## Приведение Sender pool к заданному размеру и lifecycle
 
-## Telemetry и snapshot
+При изменении Sender workers command обновляет desired state и запускает приведение pool к заданному размеру:
 
-Private `senderTelemetry` под одним mutex хранит live workers, in-flight batches/transactions, accepted batches/transactions, completed batches/transactions и completed transactions since last metrics tick. Mutex не удерживается во время transport, ожидания `done` или command acknowledgement.
+- scale up сразу создаёт недостающие workers;
+- scale down помечает workers с наибольшими ordinal как `draining`;
+- draining worker не принимает новый batch, но завершает уже принятый batch, включая retry, после чего выходит;
+- повторное scale up снимает draining-метку с ещё живых workers прежде, чем создавать новые;
+- accepted batch и очереди не теряются.
 
-`sampleCompletedTransactions()` вызывается event loop на metrics tick и заменяет текущий atomic progress для `Run.TotalTransactions`, `transactionsTotal` и `actualTPS`; progress означает terminally completed transactions, а не admission в channel. Существующее поле `/api/loadgen/snapshot` `sender.workers` сохраняется: оно равно числу живых workers (`N` в running и `0` после joined Pause/Reset/teardown). JSON schema, Prometheus names и frontend не меняются.
+`Pause` прекращает новые receives и ждёт завершения всех accepted batch. `Reset` и teardown сначала join-ят Sender pool, затем останавливают Reader(s) и Throttler, после чего очищают очереди.
 
-## Реализация и проверки
+Simulated error запускает до трёх попыток с backoff 250 и 500 ms и jitter ±20%. После третьей неудачи batch получает terminal failure. Terminal error остаётся на worker до следующего успешного batch.
 
-Изменение выполняется одним связанным срезом: private Sender-pool/transport types, event-loop cancel/done seam, telemetry reset/detach ordering, удаление black-hole path, actual `sender.workers` и тесты меняются вместе.
+## UI и цвета
 
-Для lifecycle-тестов private fake transport использует `entered`, `release`, `completed`; assertions не зависят от `time.Sleep`, timeout применяется только как защита от deadlock. Проверяются:
+Существующие `Target delay` и `Target error rate` переименовываются и становятся Sender controls.
 
-- старт ровно `N` workers и отсутствие второго pool при повторном Run;
-- exactly-once передача каждого целого unique batch без проверки fairness или global completion FIFO;
-- production constant 10 ms, а lifecycle — через fake transport;
-- Pause acknowledgement только после release и terminal completion принятого batch, затем отсутствие нового receive;
-- Resume queued/Throttler-held batches без повторной отправки;
-- Reset/teardown join pool до writer cancel, drain, close/detach и очистки telemetry;
-- раздельность admission/completion, согласованность `liveWorkers`/`inFlight`, `sender.workers == N` в running и `0` после joined stop.
+Каждый worker slot публикует activity (`idle`, `in-flight`, `backoff`), lifecycle (`active`, `draining`) и `terminalError`. Цвет выбирается по приоритету:
 
-После реализации запускаются focused tests и `go test -race ./...` штатным entrypoint проекта.
+| Состояние | Цвет | Значение |
+|---|---|---|
+| terminal error | красный `#ff6748` | Ошибка окончательная; держится до следующего успеха |
+| retry/backoff | оранжевый `#ff9f43` | Ошибка временная, ожидается повтор |
+| draining | фиолетовый `#c49cf5` | Worker плавно выходит из pool |
+| in-flight | зелёный `#79d957` | Обрабатывается batch |
+| idle | приглушённый | Worker ждёт batch |
+
+Добавляется CSS token `--orange`; жёлтый не используется для Sender retry или drain. UI одновременно показывает desired, live и draining count.
+
+## Проверки
+
+- Go: strict config decode, команды и границы; reconciliation up/down/up; draining worker не принимает новые batch; accepted batch/retry не теряются; Pause/Reset/teardown; exactly-once handoff; retry и sticky terminal error; `go test ./...` и `go test -race ./...`.
+- HTTP: strict policy/snapshot, desired/live/draining values, worker slots и команды.
+- Frontend: strict decoder, migrated controls, фиолетовый draining, оранжевый retry, красный terminal error и сброс красного после success.
+- Current docs используют `Reader(s)`; архивные документы остаются без изменений.
+
+## Обязательное итоговое review после реализации
+
+После завершения текущей реализации и исправлений review запускается отдельное жёсткое read-only review всего накопленного diff от последней принятой точки. До завершения кодерского этапа его не запускать.
+
+Review проверяет не только работоспособность, но и отсутствие лишних или мёртвых хвостов:
+
+- старые `Producer` и `consumer` abstractions, aliases, тестовые helpers, labels и current-документация;
+- целостность пути `config → Go → HTTP → frontend`: policy, commands, applied snapshot, strict decoder, controls и presentation;
+- lifecycle, ownership каналов и goroutines, cancellation, reconciliation, Pause/Reset/teardown и race risks;
+- тесты: дубли без новой ценности, бессмысленные fixtures, непокрытые инварианты и недостающие межоперационные сценарии.
+
+Итоговое review не запускает tests, build или стенд и не меняет product. При замечаниях требуется отдельный узкий follow-up и повторная проверка до commit/push.

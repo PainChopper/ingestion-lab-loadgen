@@ -43,19 +43,32 @@ function workerSlotCounts(
   slots: readonly SenderWorkerSlotSnapshot[],
 ): SenderWorkerStateCounts {
   return {
-    idle: slots.filter(({ state }) => state === 'idle').length,
-    inFlight: slots.filter(({ state }) => state === 'in-flight').length,
-    backoff: slots.filter(({ state }) => state === 'backoff').length,
+    idle: slots.filter(({ activity }) => activity === 'idle').length,
+    inFlight: slots.filter(({ activity }) => activity === 'in-flight').length,
+    backoff: slots.filter(({ activity }) => activity === 'backoff').length,
   }
 }
 
 function expectSenderSlotConservation(sender: {
   readonly workerSlots: readonly SenderWorkerSlotSnapshot[] | null
+  readonly liveWorkers: number
+  readonly drainingWorkers: number
+} | {
+  readonly workerSlots: readonly { readonly state: 'idle' | 'in-flight' | 'backoff'; readonly lifecycle: 'active' | 'draining'; readonly id: string; readonly ordinal: number }[]
   readonly workerStates: SenderWorkerStateCounts
 }): void {
   const slots = sender.workerSlots ?? []
   expect(sender.workerSlots).not.toBeNull()
-  expect(workerSlotCounts(slots)).toEqual(sender.workerStates)
+  if ('workerStates' in sender) {
+    expect({
+      idle: slots.filter((slot) => 'state' in slot && slot.state === 'idle').length,
+      inFlight: slots.filter((slot) => 'state' in slot && slot.state === 'in-flight').length,
+      backoff: slots.filter((slot) => 'state' in slot && slot.state === 'backoff').length,
+    }).toEqual(sender.workerStates)
+  } else {
+    expect(slots).toHaveLength(sender.liveWorkers)
+    expect(slots.filter(({ lifecycle }) => lifecycle === 'draining')).toHaveLength(sender.drainingWorkers)
+  }
   expect(slots.map(({ ordinal }) => ordinal))
     .toEqual(slots.map((_, ordinal) => ordinal))
   expect(new Set(slots.map(({ id }) => id)).size).toBe(slots.length)
@@ -82,7 +95,7 @@ describe('SimulationAdapter', () => {
     expect(Object.isFrozen(initial.reader)).toBe(true)
     expect(Object.isFrozen(initial.reader.workers)).toBe(true)
     expect(Object.isFrozen(initial.senderChannel.capacity)).toBe(true)
-    expect(Object.isFrozen(initial.target.errorRatePercent)).toBe(true)
+    expect(Object.isFrozen(initial.sender.simulatedErrorRatePercent)).toBe(true)
     expect(Object.isFrozen(initial.sender.workerSlots)).toBe(true)
     expect(Object.isFrozen(initial.sender.workerSlots?.[0])).toBe(true)
     expect(initial.startError).toBeNull()
@@ -112,7 +125,7 @@ describe('SimulationAdapter', () => {
         expected: 7,
       },
       {
-        command: { type: 'set-worker-count', actor: 'sender', value: 99 },
+        command: { type: 'set-sender-workers', value: 99 },
         select: (snapshot) => snapshot.sender.workers,
         expected: 32,
       },
@@ -147,13 +160,13 @@ describe('SimulationAdapter', () => {
         expected: 500,
       },
       {
-        command: { type: 'set-target-delay', valueMs: 44 },
-        select: (snapshot) => snapshot.target.artificialDelayMs,
+        command: { type: 'set-sender-simulated-delay-ms', value: 44 },
+        select: (snapshot) => snapshot.sender.simulatedDelayMs,
         expected: 40,
       },
       {
-        command: { type: 'set-target-error-rate', valuePercent: 2.6 },
-        select: (snapshot) => snapshot.target.errorRatePercent,
+        command: { type: 'set-sender-simulated-error-rate-percent', value: 2.6 },
+        select: (snapshot) => snapshot.sender.simulatedErrorRatePercent,
         expected: 3,
       },
     ]
@@ -178,8 +191,8 @@ describe('SimulationAdapter', () => {
       { type: 'set-read-batch-size', value: Infinity },
       { type: 'set-http-batch-size', value: Number.NaN },
       { type: 'set-http-timeout', valueMs: Infinity },
-      { type: 'set-target-delay', valueMs: Number.NaN },
-      { type: 'set-target-error-rate', valuePercent: Infinity },
+      { type: 'set-sender-simulated-delay-ms', value: Number.NaN },
+      { type: 'set-sender-simulated-error-rate-percent', value: Infinity },
     ]
     const initial = adapter.getSnapshot()
 
@@ -231,7 +244,7 @@ describe('SimulationAdapter', () => {
   it('runs, pauses, resumes, and resets counters while preserving configuration', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-read-batch-size', value: 30_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 80 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 80 })
 
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(500)
@@ -258,8 +271,8 @@ describe('SimulationAdapter', () => {
       elapsedMs: 0,
       totalTransactions: 0,
       reader: { readBatchSize: { applied: 30_000 } },
-      target: { artificialDelayMs: { applied: 80 } },
       sender: {
+        simulatedDelayMs: { applied: 80 },
         successfulResponses: 0,
         failedResponses: 0,
         retries: 0,
@@ -271,8 +284,8 @@ describe('SimulationAdapter', () => {
   it('keeps readerChannel buffered behind a zero throttle while senderChannel and HTTP drain', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-http-timeout', valueMs: 5_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 400 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 400 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(3_000)
 
@@ -327,8 +340,8 @@ describe('SimulationAdapter', () => {
       type: 'set-reader-channel-capacity',
       value: 12,
     })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 2_000 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(1_000)
 
@@ -354,8 +367,8 @@ describe('SimulationAdapter', () => {
     expect(bypass.readerChannel.receivedBatchesTotal).toBeGreaterThan(0)
     expect(bypass.senderChannel.depthBatches).toBeGreaterThan(0)
     expect(bypass.http.inFlightRequests).toBe(1)
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 0 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await vi.advanceTimersByTimeAsync(1_000)
     expect(adapter.getSnapshot().senderChannel.depthBatches).toBe(0)
     await adapter.dispatch({ type: 'reset' })
@@ -400,18 +413,18 @@ describe('SimulationAdapter', () => {
   it('keeps retry ownership and bounded channel pressure under bypass', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     await adapter.dispatch({
       type: 'set-throttler-installation-mode',
       value: 'bypass',
     })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 100 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 40 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 100 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(2_000)
 
     const snapshot = adapter.getSnapshot()
-    expect(snapshot.sender.workerStates.idle).toBe(0)
+    expect(workerSlotCounts(snapshot.sender.workerSlots ?? []).idle).toBe(0)
     expect(snapshot.sender.retryAttemptsStartedTotal).toBeGreaterThan(0)
     expect(snapshot.senderChannel.depthBatches).toBe(snapshot.senderChannel.capacity.applied)
     expect(snapshot.readerChannel.depthBatches).toBe(snapshot.readerChannel.capacity.applied)
@@ -427,8 +440,8 @@ describe('SimulationAdapter', () => {
       type: 'set-sender-channel-capacity',
       value: 10,
     })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 2_000 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(500)
     await adapter.dispatch({
@@ -447,8 +460,8 @@ describe('SimulationAdapter', () => {
     const readerChannelReceivedAtReinsert = appliedReinsert.readerChannel.receivedBatchesTotal
     const senderChannelSentAtReinsert = appliedReinsert.senderChannel.sentBatchesTotal
 
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 0 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await vi.advanceTimersByTimeAsync(500)
     const afterReinsert = adapter.getSnapshot()
 
@@ -463,17 +476,16 @@ describe('SimulationAdapter', () => {
   it('drains recovered senderChannel and releases backpressure when service exceeds input', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-http-timeout', valueMs: 5_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 2_000 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(3_000)
     const saturated = adapter.getSnapshot()
     expect(saturated.senderChannel.depthBatches).toBeGreaterThan(80)
 
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 40 })
     await adapter.dispatch({
-      type: 'set-worker-count',
-      actor: 'sender',
+      type: 'set-sender-workers',
       value: 7,
     })
     await vi.advanceTimersByTimeAsync(4_000)
@@ -501,9 +513,9 @@ describe('SimulationAdapter', () => {
   it('limits each sender worker to one in-flight HTTP request', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 7 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(2_000)
 
@@ -517,9 +529,9 @@ describe('SimulationAdapter', () => {
 
   it('keeps bottleneck throughput independent of senderChannel capacity', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
     await adapter.dispatch({ type: 'set-http-timeout', valueMs: 5_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 2_000 })
     await adapter.dispatch({
       type: 'set-sender-channel-capacity',
       value: 10,
@@ -547,10 +559,10 @@ describe('SimulationAdapter', () => {
   it('models active rendezvous flow at zero capacity without channel depth', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 5 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 7 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 0 })
     await adapter.dispatch({
       type: 'set-reader-channel-capacity',
       value: 0,
@@ -576,10 +588,10 @@ describe('SimulationAdapter', () => {
   it('reports rendezvous backpressure under excess upstream load', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     await adapter.dispatch({ type: 'set-read-batch-size', value: 5_000 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 40 })
     await adapter.dispatch({
       type: 'set-reader-channel-capacity',
       value: 0,
@@ -612,7 +624,7 @@ describe('SimulationAdapter', () => {
 
   it('does not systematically admit above the requested transaction rate', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 7 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
     await adapter.dispatch({
       type: 'set-reader-channel-capacity',
       value: 12,
@@ -681,7 +693,7 @@ describe('SimulationAdapter', () => {
 
   it('keeps HTTP lifecycle counters internally consistent', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 50 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 50 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(1_000)
 
@@ -707,10 +719,10 @@ describe('SimulationAdapter', () => {
   it('maps actual rolling failed transaction throughput to the target', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 5 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 2 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 2 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(2_000)
 
@@ -724,7 +736,7 @@ describe('SimulationAdapter', () => {
 
   it('counts timeouts as failed HTTP requests without inventing 503 responses', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 2_000 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 2_000 })
     await adapter.dispatch({ type: 'set-http-timeout', valueMs: 100 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(2_000)
@@ -1006,6 +1018,8 @@ describe('SimulationAdapter', () => {
       id: 'sender-worker-0',
       ordinal: 0,
       state: 'in-flight',
+      lifecycle: 'active',
+      terminalError: false,
     }])
 
     simulation.advanceStep()
@@ -1310,22 +1324,22 @@ describe('SimulationAdapter', () => {
 
   it('fills senderChannel and readerChannel under the owner 503 scenario then drains senderChannel on recovery', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 125_000 })
     await adapter.dispatch({
       type: 'set-sender-channel-capacity',
       value: 100,
     })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 100 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 40 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 100 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(4_000)
 
     const saturated = adapter.getSnapshot()
-    expect(saturated.sender.workerStates.idle).toBe(0)
+    expect(workerSlotCounts(saturated.sender.workerSlots ?? []).idle).toBe(0)
     expect(
-      saturated.sender.workerStates.inFlight +
-        saturated.sender.workerStates.backoff,
+      workerSlotCounts(saturated.sender.workerSlots ?? []).inFlight +
+        workerSlotCounts(saturated.sender.workerSlots ?? []).backoff,
     ).toBe(32)
     expect(saturated.senderChannel.depthBatches).toBe(100)
     expect(saturated.readerChannel.depthBatches).toBe(saturated.readerChannel.capacity.applied)
@@ -1341,11 +1355,11 @@ describe('SimulationAdapter', () => {
     expect(saturated.senderChannel.receivedBatchesTotal).toBe(
       saturated.http.requestsSucceededTotal +
         saturated.sender.terminalFailedBatchesTotal +
-        saturated.sender.workerStates.inFlight +
-        saturated.sender.workerStates.backoff,
+        workerSlotCounts(saturated.sender.workerSlots ?? []).inFlight +
+        workerSlotCounts(saturated.sender.workerSlots ?? []).backoff,
     )
 
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
     await vi.advanceTimersByTimeAsync(5_000)
     const recovered = adapter.getSnapshot()
     expect(recovered.target.acceptedTps).toBeGreaterThanOrEqual(125_000)
@@ -1357,10 +1371,10 @@ describe('SimulationAdapter', () => {
   it('drains readerChannel after recovery when source input remains below admission', async () => {
     const adapter = new SimulationAdapter()
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 2 })
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 125_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 100 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 40 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 100 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(4_000)
 
@@ -1369,7 +1383,7 @@ describe('SimulationAdapter', () => {
     expect(saturated.readerChannel.depthBatches).toBe(saturated.readerChannel.capacity.applied)
     expect(saturated.reader.limitationReason).toBe('downstream-backpressure')
 
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
     await vi.advanceTimersByTimeAsync(5_000)
     const recovered = adapter.getSnapshot()
     expect(recovered.senderChannel.depthBatches).toBe(0)
@@ -1380,52 +1394,52 @@ describe('SimulationAdapter', () => {
 
   it('keeps sender scale-down pending until owned retry lifecycles finish', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 125_000 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 100 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 100 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(500)
 
     const beforeScaleDown = adapter.getSnapshot()
     expectSenderSlotConservation(beforeScaleDown.sender)
     expect(
-      beforeScaleDown.sender.workerStates.inFlight +
-        beforeScaleDown.sender.workerStates.backoff,
+      workerSlotCounts(beforeScaleDown.sender.workerSlots ?? []).inFlight +
+        workerSlotCounts(beforeScaleDown.sender.workerSlots ?? []).backoff,
     ).toBeGreaterThan(1)
 
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     const pending = adapter.getSnapshot()
     expectSenderSlotConservation(pending.sender)
-    expect(pending.sender.workers).toMatchObject({ applied: 32, pending: 1 })
+    expect(pending.sender.workers).toMatchObject({ applied: 1, pending: null })
     expect(
-      pending.sender.workerStates.inFlight + pending.sender.workerStates.backoff,
+      workerSlotCounts(pending.sender.workerSlots ?? []).inFlight + workerSlotCounts(pending.sender.workerSlots ?? []).backoff,
     ).toBeGreaterThan(1)
 
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
     await vi.advanceTimersByTimeAsync(2_000)
     const applied = adapter.getSnapshot()
     expectSenderSlotConservation(applied.sender)
     expect(applied.sender.workers).toMatchObject({ applied: 1, pending: null })
     expect(
-      applied.sender.workerStates.idle +
-        applied.sender.workerStates.inFlight +
-        applied.sender.workerStates.backoff,
+      applied.sender.liveWorkers,
     ).toBe(1)
     expect(applied.sender.terminalFailedBatchesTotal).toBe(0)
     expect(applied.sender.workerSlots).toEqual([{
       id: 'sender-worker-0',
       ordinal: 0,
-      state: expect.stringMatching(/^(idle|in-flight|backoff)$/),
+      activity: expect.stringMatching(/^(idle|in-flight|backoff)$/),
+      lifecycle: 'active',
+      terminalError: expect.any(Boolean),
     }])
     adapter.dispose()
   })
 
   it('does not promise senderChannel growth below the slowest 503 service boundary', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 32 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 5_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 100 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 40 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 100 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(20_000)
 
@@ -1438,15 +1452,15 @@ describe('SimulationAdapter', () => {
 
   it('keeps senderChannel saturated when recovered service remains below admission', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 125_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 100 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 40 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 100 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(4_000)
     expect(adapter.getSnapshot().senderChannel.depthBatches).toBe(100)
 
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
     await vi.advanceTimersByTimeAsync(5_000)
     const recovered = adapter.getSnapshot()
     expect(recovered.target.acceptedTps).toBe(20_000)
@@ -1457,14 +1471,14 @@ describe('SimulationAdapter', () => {
 
   it('applies rendezvous pressure while the only worker owns retry work', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 125_000 })
     await adapter.dispatch({
       type: 'set-sender-channel-capacity',
       value: 0,
     })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 40 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 100 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 40 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 100 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(1_000)
 
@@ -1472,7 +1486,7 @@ describe('SimulationAdapter', () => {
     const derived = new ChannelFlowStateDeriver().derive(snapshot, 0)
     expect(snapshot.senderChannel.depthBatches).toBe(0)
     expect(
-      snapshot.sender.workerStates.inFlight + snapshot.sender.workerStates.backoff,
+      workerSlotCounts(snapshot.sender.workerSlots ?? []).inFlight + workerSlotCounts(snapshot.sender.workerSlots ?? []).backoff,
     ).toBe(1)
     expect(snapshot.senderChannel.blockedSenders).toBe(1)
     expect(derived.senderChannel).toMatchObject({
@@ -1484,14 +1498,14 @@ describe('SimulationAdapter', () => {
 
   it('freezes backoff time and counters exactly while paused', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-worker-count', actor: 'sender', value: 1 })
+    await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 50_000 })
-    await adapter.dispatch({ type: 'set-target-delay', valueMs: 0 })
-    await adapter.dispatch({ type: 'set-target-error-rate', valuePercent: 100 })
+    await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 0 })
+    await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 100 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(100)
-    expect(adapter.getSnapshot().sender.workerStates.backoff).toBe(1)
+    expect(workerSlotCounts(adapter.getSnapshot().sender.workerSlots ?? []).backoff).toBe(1)
 
     await adapter.dispatch({ type: 'pause' })
     const paused = adapter.getSnapshot()
