@@ -16,7 +16,10 @@ import type {
   ThrottlerInstallationMode,
 } from '../model/loadgen'
 import { useLoadgenSnapshot } from '../hooks/useLoadgenSnapshot'
-import { getInspectorViewModel } from './inspectorViewModel'
+import {
+  getInspectorViewModel,
+  type InspectorRow,
+} from './inspectorViewModel'
 import { NumericControl } from './NumericControl'
 import { PipelineSvg } from './pipeline/PipelineSvg'
 import type { WorkerActorId } from './pipeline/WorkerActor'
@@ -362,6 +365,30 @@ function InspectorDock({
   onRequestedTpsChange,
 }: InspectorDockProps) {
   const model = getInspectorViewModel(snapshot, selectedId)
+  const controls = model?.id === 'sender'
+    ? (
+      <section className="inspector-section" aria-labelledby="sender-controls-title">
+        <h3 id="sender-controls-title" className="inspector-section__title">Управление</h3>
+        <InspectorControls
+          adapter={adapter}
+          snapshot={snapshot}
+          selectedId={selectedId}
+          requestedTpsPreview={requestedTpsPreview}
+          onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
+          onRequestedTpsChange={onRequestedTpsChange}
+        />
+      </section>
+    )
+    : (
+      <InspectorControls
+        adapter={adapter}
+        snapshot={snapshot}
+        selectedId={selectedId}
+        requestedTpsPreview={requestedTpsPreview}
+        onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
+        onRequestedTpsChange={onRequestedTpsChange}
+      />
+    )
 
   return (
     <aside className="inspector" aria-labelledby="inspector-title">
@@ -392,25 +419,47 @@ function InspectorDock({
         </div>
       ) : (
         <div className="inspector-content">
-          <InspectorControls
-            adapter={adapter}
-            snapshot={snapshot}
-            selectedId={selectedId}
-            requestedTpsPreview={requestedTpsPreview}
-            onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
-            onRequestedTpsChange={onRequestedTpsChange}
-          />
-          <dl className="inspector-data">
-            {model.rows.map((row) => (
-              <div key={row.label}>
-                <dt>{row.label}</dt>
-                <dd>{row.value}</dd>
-              </div>
-            ))}
-          </dl>
+          {controls}
+          {model.sections === undefined ? (
+            <dl className="inspector-data">
+              {model.rows.map((row) => <InspectorDataRow key={row.label} row={row} />)}
+            </dl>
+          ) : model.sections.map((section) => (
+            <section className="inspector-section" key={section.title} aria-labelledby={`sender-${section.title}`}>
+              <h3 id={`sender-${section.title}`} className="inspector-section__title">{section.title}</h3>
+              <dl
+                className="inspector-data inspector-data--sender"
+                data-testid="sender-inspector-section-data"
+              >
+                {section.rows.map((row) => <InspectorDataRow key={row.label} row={row} />)}
+              </dl>
+            </section>
+          ))}
         </div>
       )}
     </aside>
+  )
+}
+
+function InspectorDataRow({ row }: { row: InspectorRow }) {
+  const className = [
+    row.layout === 'full-width' ? 'inspector-data__row--full-width' : null,
+    row.segments === undefined ? null : 'inspector-data__row--worker-states',
+  ].filter(Boolean).join(' ')
+
+  return (
+    <div className={className || undefined}>
+      <dt>{row.label}</dt>
+      <dd>
+        {row.segments === undefined
+          ? row.value
+          : row.segments.map((segment, index) => (
+            <span className={`worker-state worker-state--${segment.tone}`} key={segment.value}>
+              {index > 0 && <span aria-hidden="true">· </span>}{segment.value}
+            </span>
+          ))}
+      </dd>
+    </div>
   )
 }
 

@@ -14,6 +14,18 @@ import { getChannelCapacityPresentation } from './pipeline/channelCableGeometry'
 export interface InspectorRow {
   readonly label: string
   readonly value: string
+  readonly layout?: 'full-width'
+  readonly segments?: ReadonlyArray<InspectorRowSegment>
+}
+
+export interface InspectorRowSegment {
+  readonly value: string
+  readonly tone: 'idle' | 'in-flight' | 'backoff' | 'error'
+}
+
+export interface InspectorSection {
+  readonly title: string
+  readonly rows: ReadonlyArray<InspectorRow>
 }
 
 export interface InspectorViewModel {
@@ -21,6 +33,7 @@ export interface InspectorViewModel {
   readonly title: string
   readonly kind: string
   readonly rows: ReadonlyArray<InspectorRow>
+  readonly sections?: ReadonlyArray<InspectorSection>
 }
 
 function formatControl(
@@ -140,6 +153,11 @@ export function getInspectorViewModel(
       }
     case 'sender': {
       const policy = snapshot.policy?.senderRetry ?? snapshot.sender.retryPolicy
+      const workerSlots = snapshot.sender.workerSlots ?? []
+      const idleWorkers = workerSlots.filter((slot) => slot.activity === 'idle').length
+      const inFlightWorkers = workerSlots.filter((slot) => slot.activity === 'in-flight').length
+      const backoffWorkers = workerSlots.filter((slot) => slot.activity === 'backoff').length
+      const terminalErrorWorkers = workerSlots.filter((slot) => slot.terminalError).length
       const policyValue = policy === null
         ? '—'
         : `${formatInteger(policy.maxAttempts)} attempts · ` +
@@ -147,81 +165,92 @@ export function getInspectorViewModel(
           `${formatInteger(
             policy.backoffBaseMs * policy.backoffMultiplier,
           )} ms · ±${formatInteger(policy.jitterPercent)}% deterministic jitter`
+      const poolRows: ReadonlyArray<InspectorRow> = [
+        {
+          label: 'Workers desired / live / draining',
+          value: `${formatInteger(snapshot.sender.workers.applied)} / ` +
+            `${formatInteger(snapshot.sender.liveWorkers)} / ` +
+            `${formatInteger(snapshot.sender.drainingWorkers)}`,
+        },
+        {
+          label: 'Worker states',
+          value:
+            `${formatInteger(idleWorkers)} idle · ` +
+            `${formatInteger(inFlightWorkers)} in-flight · ` +
+            `${formatInteger(backoffWorkers)} backoff · ` +
+            `${formatInteger(terminalErrorWorkers)} errors`,
+          layout: 'full-width',
+          segments: [
+            { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
+            { value: `${formatInteger(inFlightWorkers)} in-flight`, tone: 'in-flight' },
+            { value: `${formatInteger(backoffWorkers)} backoff`, tone: 'backoff' },
+            { value: `${formatInteger(terminalErrorWorkers)} errors`, tone: 'error' },
+          ],
+        },
+      ]
+      const metricsRows: ReadonlyArray<InspectorRow> = [
+        { label: 'Attempted TPS', value: formatRate(snapshot.sender.attemptedTps) },
+        { label: 'Retry TPS', value: formatRate(snapshot.sender.retryAttemptedTps) },
+        {
+          label: 'Terminal failed TPS',
+          value: formatRate(snapshot.sender.terminalFailedTps),
+        },
+        { label: 'In-flight', value: formatInteger(snapshot.sender.inFlightRequests) },
+        { label: 'Backoff', value: formatInteger(backoffWorkers) },
+        { label: 'Attempts', value: formatInteger(snapshot.sender.attemptsStartedTotal) },
+        {
+          label: 'Retry attempts',
+          value: formatInteger(snapshot.sender.retryAttemptsStartedTotal),
+        },
+        {
+          label: '2xx responses',
+          value: formatInteger(snapshot.sender.successfulResponses),
+        },
+        {
+          label: 'Rejected responses',
+          value: formatInteger(snapshot.sender.failedResponses),
+        },
+        { label: 'Timeouts', value: formatInteger(snapshot.sender.timeoutsTotal) },
+        {
+          label: 'Terminal failed batches',
+          value: formatInteger(snapshot.sender.terminalFailedBatchesTotal),
+        },
+        {
+          label: 'Terminal failed transactions',
+          value: formatInteger(snapshot.sender.terminalFailedTransactionsTotal),
+        },
+        {
+          label: 'Ambiguous timeout transactions',
+          value: formatInteger(snapshot.sender.ambiguousTimeoutTransactionsTotal),
+        },
+        {
+          label: 'Duplicate-risk transactions',
+          value: formatInteger(snapshot.sender.duplicateRiskTransactionsTotal),
+        },
+        {
+          label: 'Ambiguous terminal transactions',
+          value: formatInteger(snapshot.sender.ambiguousTerminalTransactionsTotal),
+        },
+      ]
+      const diagnosticsRows: ReadonlyArray<InspectorRow> = [
+        { label: 'Retry policy', value: policyValue, layout: 'full-width' },
+        {
+          label: 'Diagnostic interpretation',
+          value: 'Retries, timeouts, terminal failures, and ambiguous outcomes are counted separately.',
+          layout: 'full-width',
+        },
+      ]
+      const sections: ReadonlyArray<InspectorSection> = [
+        { title: 'Состояние pool', rows: poolRows },
+        { title: 'Метрики и результаты', rows: metricsRows },
+        { title: 'Диагностика и retry policy', rows: diagnosticsRows },
+      ]
       return {
         id: selectedId,
         title: 'SENDER',
         kind: 'Simulated sender',
-        rows: [
-          {
-            label: 'Workers desired / live / draining',
-            value: `${formatInteger(snapshot.sender.workers.applied)} / ` +
-              `${formatInteger(snapshot.sender.liveWorkers)} / ` +
-              `${formatInteger(snapshot.sender.drainingWorkers)}`,
-          },
-          {
-            label: 'Worker states',
-            value:
-              `${formatInteger(snapshot.sender.workerSlots?.filter((slot) => slot.activity === 'idle').length ?? 0)} idle · ` +
-              `${formatInteger(snapshot.sender.workerSlots?.filter((slot) => slot.activity === 'in-flight').length ?? 0)} in-flight · ` +
-              `${formatInteger(snapshot.sender.workerSlots?.filter((slot) => slot.activity === 'backoff').length ?? 0)} backoff`,
-          },
-          { label: 'Attempted TPS', value: formatRate(snapshot.sender.attemptedTps) },
-          { label: 'Retry TPS', value: formatRate(snapshot.sender.retryAttemptedTps) },
-          {
-            label: 'Terminal failed TPS',
-            value: formatRate(snapshot.sender.terminalFailedTps),
-          },
-          { label: 'In-flight', value: formatInteger(snapshot.sender.inFlightRequests) },
-          {
-            label: 'Backoff',
-            value: formatInteger(snapshot.sender.workerSlots?.filter((slot) => slot.activity === 'backoff').length ?? 0),
-          },
-          {
-            label: 'Attempts',
-            value: formatInteger(snapshot.sender.attemptsStartedTotal),
-          },
-          {
-            label: 'Retry attempts',
-            value: formatInteger(snapshot.sender.retryAttemptsStartedTotal),
-          },
-          {
-            label: '2xx responses',
-            value: formatInteger(snapshot.sender.successfulResponses),
-          },
-          {
-            label: 'Rejected responses',
-            value: formatInteger(snapshot.sender.failedResponses),
-          },
-          {
-            label: 'Timeouts',
-            value: formatInteger(snapshot.sender.timeoutsTotal),
-          },
-          {
-            label: 'Terminal failed batches',
-            value: formatInteger(snapshot.sender.terminalFailedBatchesTotal),
-          },
-          {
-            label: 'Terminal failed transactions',
-            value: formatInteger(snapshot.sender.terminalFailedTransactionsTotal),
-          },
-          {
-            label: 'Ambiguous timeout transactions',
-            value: formatInteger(
-              snapshot.sender.ambiguousTimeoutTransactionsTotal,
-            ),
-          },
-          {
-            label: 'Duplicate-risk transactions',
-            value: formatInteger(snapshot.sender.duplicateRiskTransactionsTotal),
-          },
-          {
-            label: 'Ambiguous terminal transactions',
-            value: formatInteger(
-              snapshot.sender.ambiguousTerminalTransactionsTotal,
-            ),
-          },
-          { label: 'Retry policy', value: policyValue },
-        ],
+        rows: [...poolRows, ...metricsRows, ...diagnosticsRows],
+        sections,
       }
     }
     case 'target': {
