@@ -28,6 +28,7 @@ import {
   VALVE_DETACHED_ASSEMBLY,
   VALVE_FLANGES,
   VALVE_INSTALLATION_CONTROL,
+  VALVE_OPENING_CONTROLS,
   VALVE_PISTON,
   valvePistonCenterY,
   valueToOpeningIndex,
@@ -708,20 +709,20 @@ export function ThrottlerActor({
               'pipeline-valve-wheel',
             )}
             <rect
-              x="382"
-              y="321"
-              width="48"
-              height="46"
+              x={VALVE_OPENING_CONTROLS.decrease.x}
+              y={VALVE_OPENING_CONTROLS.decrease.y}
+              width={VALVE_OPENING_CONTROLS.decrease.width}
+              height={VALVE_OPENING_CONTROLS.decrease.height}
               className="pipeline-valve-hit-area"
               data-direction="decrease"
               onPointerDown={(event) => handlePointerDown(event, -1)}
               onLostPointerCapture={stopHold}
             />
             <rect
-              x="430"
-              y="321"
-              width="48"
-              height="46"
+              x={VALVE_OPENING_CONTROLS.increase.x}
+              y={VALVE_OPENING_CONTROLS.increase.y}
+              width={VALVE_OPENING_CONTROLS.increase.width}
+              height={VALVE_OPENING_CONTROLS.increase.height}
               className="pipeline-valve-hit-area"
               data-direction="increase"
               onPointerDown={(event) => handlePointerDown(event, 1)}
@@ -790,11 +791,11 @@ export function ThrottlerActor({
         >
           {appliedInstallationMode === 'installed' && (
             <rect
-              x="416"
-              y="334"
-              width="28"
-              height="32"
-              rx="12"
+              x={VALVE_INSTALLATION_CONTROL.installedTarget.x}
+              y={VALVE_INSTALLATION_CONTROL.installedTarget.y}
+              width={VALVE_INSTALLATION_CONTROL.installedTarget.width}
+              height={VALVE_INSTALLATION_CONTROL.installedTarget.height}
+              rx="8"
               className="pipeline-valve-installation-hit-area pipeline-valve-installation-hit-area--wheel-grip"
               data-installation-grip="wheel"
             />

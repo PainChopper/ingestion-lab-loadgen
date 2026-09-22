@@ -25,6 +25,10 @@ export const VALVE_PISTON = Object.freeze({
   openCenterY: 393,
 })
 export const VALVE_FLANGES = Object.freeze({ left: 401, right: 459 })
+export const VALVE_OPENING_CONTROLS = Object.freeze({
+  decrease: Object.freeze({ x: 394, y: 398, width: 26, height: 34 }),
+  increase: Object.freeze({ x: 440, y: 398, width: 26, height: 34 }),
+})
 export const VALVE_MARKER_RADIUS = 4
 export const VALVE_DETACHED_ASSEMBLY = Object.freeze({
   translateX: 120,
@@ -36,7 +40,7 @@ export const VALVE_DETACHED_ASSEMBLY = Object.freeze({
   pistonCenterY: 401,
 })
 export const VALVE_INSTALLATION_CONTROL = Object.freeze({
-  installedTarget: Object.freeze({ x: 406, y: 368, width: 48, height: 44 }),
+  installedTarget: Object.freeze({ x: 406, y: 368, width: 48, height: 29 }),
   bypassTarget: Object.freeze({ x: 502, y: 310, width: 96, height: 112 }),
   dragThresholdPx: 44,
 })
