@@ -13,6 +13,7 @@ import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import { createPipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { ThrottlerActor } from './ThrottlerActor'
+import { VALVE_INSTALLATION_CONTROL, VALVE_OPENING_CONTROLS } from './throttlerValve'
 
 function requestedControl(
   overrides: Partial<NumericControlSnapshot> = {},
@@ -113,6 +114,13 @@ describe('ThrottlerActor valve control', () => {
       .toHaveLength(6)
     expect(view.container.querySelectorAll('.pipeline-valve-wheel-spoke'))
       .toHaveLength(5)
+    expect(view.container.querySelector('[data-direction="decrease"]')
+      ?.getAttribute('x')).toBe(String(VALVE_OPENING_CONTROLS.decrease.x))
+    expect(view.container.querySelector('[data-direction="increase"]')
+      ?.getAttribute('x')).toBe(String(VALVE_OPENING_CONTROLS.increase.x))
+    expect(view.container.querySelector('[data-installation-grip="wheel"]')
+      ?.getAttribute('height'))
+      .toBe(String(VALVE_INSTALLATION_CONTROL.installedTarget.height))
     fireEvent.pointerDown(view.container.querySelector('[data-direction="increase"]')!)
     fireEvent.pointerUp(window)
 
@@ -128,6 +136,46 @@ describe('ThrottlerActor valve control', () => {
 
     await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect throttler' }))
     expect(onSelect).toHaveBeenCalledWith('throttler')
+  })
+
+  it('uses visible sides for the current policy without issuing bypass commands', () => {
+    const onCommand = vi.fn()
+    const onModeCommand = vi.fn()
+    const view = render(
+      <Harness
+        control={requestedControl({
+          applied: 1_800_000,
+          max: 4_000_000,
+          step: 200_000,
+        })}
+        onCommand={onCommand}
+        onModeCommand={onModeCommand}
+      />,
+    )
+    const decrease = view.container.querySelector('[data-direction="decrease"]')!
+    const increase = view.container.querySelector('[data-direction="increase"]')!
+
+    expect([decrease, increase].map((element) => [
+      element.getAttribute('x'), element.getAttribute('y'),
+      element.getAttribute('width'), element.getAttribute('height'),
+    ])).toEqual([
+      ['394', '398', '26', '34'],
+      ['440', '398', '26', '34'],
+    ])
+    expect(view.container.querySelector('[data-installation-grip="wheel"]')
+      ?.getAttribute('y')).toBe('368')
+    expect(view.container.querySelector('[data-installation-grip="wheel"]')
+      ?.getAttribute('height')).toBe('29')
+
+    fireEvent.pointerDown(decrease)
+    fireEvent.pointerUp(window)
+    fireEvent.pointerDown(increase)
+    fireEvent.pointerUp(window)
+
+    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([
+      1_400_000, 1_800_000,
+    ])
+    expect(onModeCommand).not.toHaveBeenCalled()
   })
 
   it('implements bounded keyboard steps and six cyclic wheel phases', async () => {
@@ -484,8 +532,8 @@ describe('ThrottlerActor valve control', () => {
       hit.getAttribute('x'), hit.getAttribute('y'),
       hit.getAttribute('width'), hit.getAttribute('height'),
     ])).toEqual([
-      ['382', '321', '48', '46'],
-      ['430', '321', '48', '46'],
+      ['394', '398', '26', '34'],
+      ['440', '398', '26', '34'],
     ])
 
     view.rerender(<Harness control={requestedControl({ applied: 115_000 })} />)

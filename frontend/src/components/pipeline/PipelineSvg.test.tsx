@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { act, render } from '@testing-library/react'
+import { act, fireEvent, render } from '@testing-library/react'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
@@ -18,7 +18,11 @@ import {
 } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { PipelineSvg } from './PipelineSvg'
-import { VALVE_FLANGES } from './throttlerValve'
+import {
+  VALVE_FLANGES,
+  VALVE_INSTALLATION_CONTROL,
+  VALVE_OPENING_CONTROLS,
+} from './throttlerValve'
 import { normalizedWorkerCount } from './workerActorLayout'
 
 const styleElement = document.createElement('style')
@@ -479,13 +483,13 @@ describe('PipelineSvg rendering', () => {
     idle.unmount()
 
     const running = renderPipeline(withReadRate('http', 'running', 1))
-    expect(running.container.querySelectorAll('#reader-actor .pipeline-worker--active'))
-      .toHaveLength(base.reader.workers.applied ?? 0)
+    expect(running.container.querySelectorAll('#reader-actor [data-worker-slot-id]'))
+      .toHaveLength(0)
     running.unmount()
 
     const paused = renderPipeline(withReadRate('http', 'paused', 1))
-    expect(paused.container.querySelectorAll('#reader-actor .pipeline-worker--active'))
-      .toHaveLength(base.reader.workers.applied ?? 0)
+    expect(paused.container.querySelectorAll('#reader-actor [data-worker-slot-id]'))
+      .toHaveLength(0)
     paused.unmount()
   })
 

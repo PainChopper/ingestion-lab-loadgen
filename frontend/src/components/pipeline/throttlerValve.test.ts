@@ -5,6 +5,8 @@ import {
   getValveTargets,
   nextWheelPhase,
   openingPercent,
+  VALVE_INSTALLATION_CONTROL,
+  VALVE_OPENING_CONTROLS,
   valueToOpeningIndex,
   valveIsAdjustable,
 } from './throttlerValve'
@@ -40,6 +42,65 @@ describe('throttler valve mapping', () => {
     expect(valueToOpeningIndex(-1, control(), targets)).toBe(0)
     expect(valueToOpeningIndex(35_000, control(), targets)).toBe(1)
     expect(valueToOpeningIndex(250_001, control(), targets)).toBe(11)
+  })
+
+  it('keeps the 12-stop current TPS policy mapping', () => {
+    const currentPolicy = control({
+      applied: 2_000_000,
+      max: 4_000_000,
+      step: 200_000,
+    })
+    const targets = getValveTargets(currentPolicy)!
+
+    expect(targets).toEqual([
+      0, 400_000, 800_000, 1_000_000, 1_400_000, 1_800_000,
+      2_200_000, 2_600_000, 3_000_000, 3_200_000, 3_600_000, 4_000_000,
+    ])
+    expect(new Set(targets)).toHaveLength(12)
+    expect(targets.every((target) =>
+      target >= currentPolicy.min && target <= currentPolicy.max &&
+      target % currentPolicy.step === 0
+    )).toBe(true)
+    expect(valueToOpeningIndex(2_000_000, currentPolicy, targets)).toBe(5)
+  })
+
+  it('keeps visible side targets separate from the installed bypass grip', () => {
+    const intersects = (
+      left: { x: number, y: number, width: number, height: number },
+      right: { x: number, y: number, width: number, height: number },
+    ) => left.x < right.x + right.width && right.x < left.x + left.width &&
+      left.y < right.y + right.height && right.y < left.y + left.height
+
+    expect(VALVE_OPENING_CONTROLS.decrease).toEqual({
+      x: 394, y: 398, width: 26, height: 34,
+    })
+    expect(VALVE_OPENING_CONTROLS.increase).toEqual({
+      x: 440, y: 398, width: 26, height: 34,
+    })
+    expect(VALVE_INSTALLATION_CONTROL.installedTarget).toEqual({
+      x: 406, y: 368, width: 48, height: 29,
+    })
+    expect(intersects(
+      VALVE_OPENING_CONTROLS.decrease,
+      VALVE_OPENING_CONTROLS.increase,
+    )).toBe(false)
+    expect(intersects(
+      VALVE_OPENING_CONTROLS.decrease,
+      VALVE_INSTALLATION_CONTROL.installedTarget,
+    )).toBe(false)
+    expect(intersects(
+      VALVE_OPENING_CONTROLS.increase,
+      VALVE_INSTALLATION_CONTROL.installedTarget,
+    )).toBe(false)
+    const contains = (
+      target: { x: number, y: number, width: number, height: number },
+      x: number,
+      y: number,
+    ) => x >= target.x && x < target.x + target.width &&
+      y >= target.y && y < target.y + target.height
+
+    expect(contains(VALVE_OPENING_CONTROLS.decrease, 404, 415)).toBe(true)
+    expect(contains(VALVE_OPENING_CONTROLS.increase, 456, 415)).toBe(true)
   })
 
   it('disables adjustment unless all 12 snapped targets are distinct', () => {
