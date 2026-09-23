@@ -134,6 +134,66 @@ func TestReaderPoolOwnsFilesAcrossConcurrentCycles(t *testing.T) {
 	}
 }
 
+func TestReaderPoolPrioritizesReplayWithoutDoubleClaim(t *testing.T) {
+	pool := &readerPool{
+		files:       []string{"replay", "normal"},
+		active:      map[string]bool{},
+		replayFiles: []string{"replay"},
+	}
+	pool.ctx, pool.cancel = context.WithCancel(context.Background())
+	pool.available = sync.NewCond(&pool.mu)
+	t.Cleanup(func() {
+		pool.cancel()
+		pool.mu.Lock()
+		pool.available.Broadcast()
+		pool.mu.Unlock()
+	})
+
+	type result struct {
+		filePath string
+		ok       bool
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			<-start
+			filePath, ok := pool.nextJob(&readerWorker{})
+			results <- result{filePath: filePath, ok: ok}
+		}()
+	}
+	close(start)
+
+	claimed := make(map[string]int, 2)
+	for range 2 {
+		select {
+		case got := <-results:
+			if !got.ok {
+				t.Fatal("job unavailable")
+			}
+			claimed[got.filePath]++
+		case <-time.After(time.Second):
+			t.Fatal("concurrent admission did not complete")
+		}
+	}
+	if claimed["replay"] != 1 || claimed["normal"] != 1 {
+		t.Fatalf("claimed files = %v, want one replay and one normal", claimed)
+	}
+	pool.mu.Lock()
+	replayCount := len(pool.replayFiles)
+	replayActive := pool.active["replay"]
+	normalActive := pool.active["normal"]
+	pool.mu.Unlock()
+	if replayCount != 0 || !replayActive || !normalActive {
+		t.Fatalf(
+			"admission state: replay=%d active replay=%t normal=%t",
+			replayCount,
+			replayActive,
+			normalActive,
+		)
+	}
+}
+
 func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 	pool := &readerPool{
 		files: []string{"a"}, active: map[string]bool{},
@@ -265,13 +325,13 @@ func TestReaderPoolBlockedDownscaleFlushesEntireFile(t *testing.T) {
 }
 
 type readerForceEvent struct {
-	due time.Duration
+	due      time.Duration
 	callback func()
 }
 
 type readerForceClock struct {
-	mu sync.Mutex
-	now time.Duration
+	mu     sync.Mutex
+	now    time.Duration
 	events []readerForceEvent
 }
 
@@ -353,15 +413,129 @@ func TestReaderPoolBlockedDownscaleUnblocksDuringGraceWithoutLoss(t *testing.T) 
 	}
 	waitForReaderLive(t, &telemetry, 0)
 	clock.advance(time.Millisecond)
+	pool.mu.Lock()
+	replayCount := len(pool.replayFiles)
+	pool.mu.Unlock()
+	if replayCount != 0 {
+		t.Fatalf("natural completion queued %d replay files, want 0", replayCount)
+	}
 	if got := channel.snapshot(time.Now()); got.sentBatchesTotal != 2 || got.blockedSenders != 0 {
 		t.Fatalf("channel after grace = %+v", got)
+	}
+}
+
+func TestReaderPoolForcedDownscaleReplaysWholeFileBeforeNormalWork(t *testing.T) {
+	dir := t.TempDir()
+	replayPath := filepath.Join(dir, "a-replay.parquet")
+	normalPath := filepath.Join(dir, "b-normal.parquet")
+	if err := parquet.WriteFile(replayPath, []Transaction{
+		{ClientID: "one"},
+		{ClientID: "two"},
+		{ClientID: "three"},
+		{ClientID: "four"},
+		{ClientID: "five"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := parquet.WriteFile(normalPath, []Transaction{{ClientID: "normal"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	batches := make(chan []Transaction, 1)
+	var telemetry readerTelemetry
+	var channel channelTelemetry
+	channel.start(batches, 2)
+	pool, err := startReaderPool(
+		ctx,
+		filepath.Join(dir, "*.parquet"),
+		2,
+		1,
+		batches,
+		&telemetry,
+		&channel,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { <-pool.stop() }()
+	clock := &readerForceClock{}
+	pool.mu.Lock()
+	pool.afterForce = clock.after
+	pool.mu.Unlock()
+
+	waitForBlockedSender(t, &channel)
+	if got := channel.snapshot(time.Now()); got.sentBatchesTotal != 1 || got.depthBatches != 1 {
+		t.Fatalf("prefix state = %+v, want one buffered batch", got)
+	}
+	pool.reconcile(0)
+	clock.advance(time.Second)
+	waitForReaderLive(t, &telemetry, 0)
+
+	pool.mu.Lock()
+	replayFiles := slices.Clone(pool.replayFiles)
+	activeCount := len(pool.active)
+	pool.mu.Unlock()
+	if !slices.Equal(replayFiles, []string{replayPath}) || activeCount != 0 {
+		t.Fatalf("forced release: replay=%v active=%d", replayFiles, activeCount)
+	}
+	if got := channel.snapshot(time.Now()); got.sentBatchesTotal != 1 || got.depthBatches != 1 {
+		t.Fatalf("forced cancellation changed prefix: %+v", got)
+	}
+
+	prefix := <-batches
+	if got := transactionClientIDs(prefix); !slices.Equal(got, []string{"one", "two"}) {
+		t.Fatalf("original prefix = %v, want [one two]", got)
+	}
+	pool.mu.Lock()
+	retainedAtZero := slices.Clone(pool.replayFiles)
+	pool.mu.Unlock()
+	if !slices.Equal(retainedAtZero, []string{replayPath}) {
+		t.Fatalf("desired zero replay = %v, want %s", retainedAtZero, replayPath)
+	}
+
+	pool.reconcile(1)
+	waitForBlockedSender(t, &channel)
+	pool.mu.Lock()
+	replayCount := len(pool.replayFiles)
+	replayActive := pool.active[replayPath]
+	normalActive := pool.active[normalPath]
+	pool.mu.Unlock()
+	if replayCount != 0 || !replayActive || normalActive {
+		t.Fatalf(
+			"replacement admission: replay=%d replay active=%t normal active=%t",
+			replayCount,
+			replayActive,
+			normalActive,
+		)
+	}
+
+	wantReplay := [][]string{
+		{"one", "two"},
+		{"three", "four"},
+		{"five"},
+	}
+	for index, want := range wantReplay {
+		select {
+		case batch := <-batches:
+			if got := transactionClientIDs(batch); !slices.Equal(got, want) {
+				t.Fatalf("replay batch %d = %v, want %v", index, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("replay batch %d was not emitted", index)
+		}
 	}
 }
 
 func TestReaderPoolBlockedDownscaleForcesOnePerSecond(t *testing.T) {
 	dir := t.TempDir()
 	for _, id := range []string{"a", "b", "c"} {
-		if err := parquet.WriteFile(filepath.Join(dir, id+".parquet"), []Transaction{{ClientID: id}}); err != nil {
+		if err := parquet.WriteFile(filepath.Join(dir, id+".parquet"), []Transaction{
+			{ClientID: id + "-one"},
+			{ClientID: id + "-two"},
+			{ClientID: id + "-three"},
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -371,8 +545,8 @@ func TestReaderPoolBlockedDownscaleForcesOnePerSecond(t *testing.T) {
 	batches <- []Transaction{{ClientID: "preexisting"}}
 	var telemetry readerTelemetry
 	var channel channelTelemetry
-	channel.start(batches, 1)
-	pool, err := startReaderPool(ctx, filepath.Join(dir, "*.parquet"), 1, 3, batches, &telemetry, &channel)
+	channel.start(batches, 2)
+	pool, err := startReaderPool(ctx, filepath.Join(dir, "*.parquet"), 2, 3, batches, &telemetry, &channel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,16 +556,32 @@ func TestReaderPoolBlockedDownscaleForcesOnePerSecond(t *testing.T) {
 	pool.afterForce = clock.after
 	pool.mu.Unlock()
 	waitForBlockedSenders(t, &channel, 3)
+	sourcesByOrdinal := make(map[int]string, 3)
+	for _, slot := range telemetry.snapshot().workerSlots {
+		if slot.Source == nil {
+			t.Fatalf("blocked worker source missing: %+v", slot)
+		}
+		sourcesByOrdinal[slot.Ordinal] = *slot.Source
+	}
 	pool.reconcile(0)
 	clock.advance(999 * time.Millisecond)
 	if got := telemetry.snapshot().liveWorkers; got != 3 {
 		t.Fatalf("before grace deadline live=%d, want 3", got)
 	}
-	for want := 2; want >= 0; want-- {
+	for forcedOrdinal, want := 0, 2; want >= 0; forcedOrdinal, want = forcedOrdinal+1, want-1 {
 		clock.advance(time.Millisecond)
 		waitForReaderLive(t, &telemetry, want)
 		if got := channel.snapshot(time.Now()).blockedSenders; got != want {
 			t.Fatalf("after forced exit blocked=%d, want %d", got, want)
+		}
+		pool.mu.Lock()
+		replayFiles := slices.Clone(pool.replayFiles)
+		pool.mu.Unlock()
+		if len(replayFiles) != forcedOrdinal+1 {
+			t.Fatalf("after forced exit replay=%v, want %d files", replayFiles, forcedOrdinal+1)
+		}
+		if got := filepath.ToSlash(replayFiles[forcedOrdinal]); got != sourcesByOrdinal[forcedOrdinal] {
+			t.Fatalf("forced ordinal %d replay = %q, want %q", forcedOrdinal, got, sourcesByOrdinal[forcedOrdinal])
 		}
 		if want > 0 {
 			clock.advance(999 * time.Millisecond)
@@ -403,9 +593,17 @@ func TestReaderPoolBlockedDownscaleForcesOnePerSecond(t *testing.T) {
 	if got := channel.snapshot(time.Now()); got.sentBatchesTotal != 0 || got.depthBatches != 1 {
 		t.Fatalf("forced exits changed full channel: %+v", got)
 	}
-	if got := telemetry.snapshot().rowsRead; got != 3 {
-		t.Fatalf("rows read = %d, want one current batch per worker", got)
+	if got := telemetry.snapshot().rowsRead; got != 6 {
+		t.Fatalf("rows read = %d, want one two-row batch per worker", got)
 	}
+}
+
+func transactionClientIDs(batch []Transaction) []string {
+	ids := make([]string, 0, len(batch))
+	for _, transaction := range batch {
+		ids = append(ids, transaction.ClientID)
+	}
+	return ids
 }
 
 func waitForReaderLive(t *testing.T, telemetry *readerTelemetry, want int) {
@@ -436,12 +634,24 @@ func TestReaderPoolReactivatesBlockedWorkerWithoutDuplicateSlot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	clock := &readerForceClock{}
+	pool.mu.Lock()
+	pool.afterForce = clock.after
+	pool.mu.Unlock()
 	waitForBlockedSender(t, &channel)
 	pool.reconcile(0)
 	if slot := telemetry.snapshot().workerSlots[0]; slot.Lifecycle != "draining" || slot.Activity != "blocked" {
 		t.Fatalf("before reactivation = %+v", slot)
 	}
 	pool.reconcile(1)
+	clock.advance(time.Second)
+	pool.mu.Lock()
+	forced := pool.workers[0].forced
+	replayCount := len(pool.replayFiles)
+	pool.mu.Unlock()
+	if forced || replayCount != 0 {
+		t.Fatalf("stale timer: forced=%t replay=%d, want false and 0", forced, replayCount)
+	}
 	if slots := telemetry.snapshot().workerSlots; len(slots) != 1 || slots[0].Lifecycle != "active" || slots[0].Activity != "blocked" {
 		t.Fatalf("reactivated slots = %+v", slots)
 	}
@@ -485,5 +695,11 @@ func TestReaderPoolCancellationUnblocksDrainingWorkers(t *testing.T) {
 	pool.reconcile(2)
 	if slots := telemetry.snapshot().workerSlots; len(slots) != 0 {
 		t.Fatalf("cancelled pool recreated workers: %+v", slots)
+	}
+	pool.mu.Lock()
+	replayCount := len(pool.replayFiles)
+	pool.mu.Unlock()
+	if replayCount != 0 {
+		t.Fatalf("global cancellation queued %d replay files, want 0", replayCount)
 	}
 }
