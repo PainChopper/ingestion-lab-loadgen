@@ -20,7 +20,7 @@ Reader → Reader Channel → Throttler → Sender Channel → Sender
 
 ## Быстрый запуск
 
-Нужен Go 1.26 и Node.js для frontend.
+Нужен Go 1.27 и Node.js для frontend.
 
 ```powershell
 # из корня репозитория
