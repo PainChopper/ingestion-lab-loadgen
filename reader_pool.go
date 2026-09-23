@@ -26,25 +26,26 @@ type readerWorker struct {
 // readerPool owns file admission. A file is assigned once to exactly one worker;
 // workers emit their locally completed batches directly to the reader channel.
 type readerPool struct {
-	mu        sync.Mutex
-	available *sync.Cond
-	ctx       context.Context
-	cancel    context.CancelFunc
-	files     []string
-	active    map[string]bool
-	nextFile  int
-	batchSize int
-	batches   chan<- []Transaction
-	telemetry *readerTelemetry
-	channel   *channelTelemetry
-	workers   map[int]*readerWorker
-	desired   int
-	stopping  bool
-	forcePending bool
+	mu            sync.Mutex
+	available     *sync.Cond
+	ctx           context.Context
+	cancel        context.CancelFunc
+	files         []string
+	active        map[string]bool
+	replayFiles   []string
+	nextFile      int
+	batchSize     int
+	batches       chan<- []Transaction
+	telemetry     *readerTelemetry
+	channel       *channelTelemetry
+	workers       map[int]*readerWorker
+	desired       int
+	stopping      bool
+	forcePending  bool
 	forceSequence uint64
-	afterForce func(time.Duration, func())
-	wg        sync.WaitGroup
-	done      chan struct{}
+	afterForce    func(time.Duration, func())
+	wg            sync.WaitGroup
+	done          chan struct{}
 }
 
 func startReaderPool(
@@ -66,7 +67,8 @@ func startReaderPool(
 	poolCtx, cancel := context.WithCancel(ctx)
 	pool := &readerPool{
 		ctx: poolCtx, cancel: cancel, files: files, active: make(map[string]bool),
-		batchSize: batchSize, batches: batches, telemetry: telemetry, channel: channel,
+		replayFiles: make([]string, 0),
+		batchSize:   batchSize, batches: batches, telemetry: telemetry, channel: channel,
 		workers: make(map[int]*readerWorker), done: make(chan struct{}),
 	}
 	pool.available = sync.NewCond(&pool.mu)
@@ -199,14 +201,21 @@ func (p *readerPool) runWorker(worker *readerWorker) {
 		}
 		p.readFile(worker, filePath)
 		p.mu.Lock()
-		delete(p.active, filePath)
-		worker.busy = false
-		if !worker.forced {
-			p.telemetry.setWorkerIdle(worker.ordinal)
-		}
-		p.available.Broadcast()
+		p.releaseFileLocked(worker, filePath)
 		p.mu.Unlock()
 	}
+}
+
+func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
+	if worker.forced && !p.stopping && p.ctx.Err() == nil {
+		p.replayFiles = append(p.replayFiles, filePath)
+	}
+	delete(p.active, filePath)
+	worker.busy = false
+	if !worker.forced {
+		p.telemetry.setWorkerIdle(worker.ordinal)
+	}
+	p.available.Broadcast()
 }
 
 func (p *readerPool) startReplacementLocked() {
@@ -228,6 +237,14 @@ func (p *readerPool) nextJob(worker *readerWorker) (string, bool) {
 	for !p.stopping && p.ctx.Err() == nil {
 		if worker.draining {
 			return "", false
+		}
+		if len(p.replayFiles) > 0 {
+			filePath := p.replayFiles[0]
+			p.replayFiles[0] = ""
+			p.replayFiles = p.replayFiles[1:]
+			p.active[filePath] = true
+			worker.busy = true
+			return filePath, true
 		}
 		for offset := range p.files {
 			index := (p.nextFile + offset) % len(p.files)
