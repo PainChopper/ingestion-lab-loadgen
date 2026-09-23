@@ -21,6 +21,8 @@ import {
   capacityFromKeyboard,
   capacityFromVerticalDrag,
   capacityToCableY,
+  CHANNEL_CAPACITY_SCALE_OFFSET,
+  type Box,
   type CapacityValues,
   getCapacityTicks,
   getChannelCableGeometryPresentation,
@@ -30,6 +32,7 @@ import {
 
 interface ChannelCableProps {
   snapshot: ChannelSnapshot
+  batchSize: ChannelSnapshot['capacity']
   geometry?: PipelineChannelGeometry
   start?: Point
   end?: Point
@@ -38,6 +41,7 @@ interface ChannelCableProps {
   onCapacityChange: (channel: ChannelId, value: number) => void
   orientation?: PipelineOrientation
   capacityValues?: CapacityValues
+  hoseForbiddenBoxes?: readonly Box[]
 }
 
 interface DragSession {
@@ -67,6 +71,7 @@ export function getChannelCablePresentation(
   dragPreview: number | null = null,
   orientation: PipelineOrientation = 'landscape',
   capacityValues?: CapacityValues,
+  hoseForbiddenBoxes?: readonly Box[],
 ) {
   const maxLift = orientation === 'portrait'
     ? PORTRAIT_CHANNEL_CABLE_MAX_LIFT
@@ -79,6 +84,7 @@ export function getChannelCablePresentation(
     orientation,
     maxLift,
     capacityValues,
+    hoseForbiddenBoxes,
   )
   const { capacity } = geometry
   const waitingUpstream =
@@ -99,7 +105,7 @@ export function getChannelCablePresentation(
             y: capacityToCableY(
               capacity.applied,
               snapshot.capacity,
-              start.y,
+              start.y - CHANNEL_CAPACITY_SCALE_OFFSET,
               maxLift,
               capacityValues,
             ),
@@ -149,6 +155,7 @@ function removeDragListeners(listeners: DragListeners) {
 
 export function ChannelCable({
   snapshot,
+  batchSize,
   geometry,
   start: startProp,
   end: endProp,
@@ -157,6 +164,7 @@ export function ChannelCable({
   onCapacityChange,
   orientation = 'landscape',
   capacityValues,
+  hoseForbiddenBoxes,
 }: ChannelCableProps) {
   const start = geometry?.start ?? startProp ?? { x: 0, y: 0 }
   const end = geometry?.end ?? endProp ?? start
@@ -186,6 +194,7 @@ export function ChannelCable({
     dragPreview,
     orientation,
     capacityValues,
+    hoseForbiddenBoxes,
   )
   const { capacity } = presentation
   const centerX = (start.x + end.x) / 2
@@ -195,13 +204,21 @@ export function ChannelCable({
     : CHANNEL_CABLE_MAX_LIFT
   const ticks = getCapacityTicks(
     control,
-    portrait ? start.x : start.y,
+    portrait ? start.x : start.y - CHANNEL_CAPACITY_SCALE_OFFSET,
     maxLift,
     capacityValues,
   )
   const centerY = (start.y + end.y) / 2
+  const scaleCenterY = centerY - CHANNEL_CAPACITY_SCALE_OFFSET
   const disabled = control.applyMode === 'unavailable'
   const flowActive = (
+    (snapshot.flowState === 'normal' ||
+      snapshot.flowState === 'near-limit' ||
+      snapshot.flowState === 'backpressure') &&
+    (snapshot.inputTransactionsPerSecond > 0 ||
+      snapshot.outputTransactionsPerSecond > 0)
+  )
+  const markersVisible = (
     snapshot.inputTransactionsPerSecond > 0 ||
     snapshot.outputTransactionsPerSecond > 0
   )
@@ -210,6 +227,14 @@ export function ChannelCable({
       snapshot.displayedPressure,
     ),
   } as CSSProperties
+  const batchStrokeWidth = 2.5 + 7.5 * (
+    batchSize.applied === null || batchSize.max <= batchSize.min
+      ? 0
+      : Math.min(1, Math.max(0,
+          (batchSize.applied - batchSize.min) /
+          (batchSize.max - batchSize.min),
+        ))
+  )
 
   const capacityFromDrag = (
     clientX: number,
@@ -351,7 +376,7 @@ export function ChannelCable({
   return (
     <g
       id={`channel-${snapshot.id}`}
-      className={`pipeline-channel pipeline-selectable pipeline-channel--${snapshot.flowState}${flowActive ? ' pipeline-channel--flow-active' : ''}${selected ? ' pipeline-selectable--selected' : ''}`}
+      className={`pipeline-channel pipeline-selectable pipeline-channel--${snapshot.flowState}${markersVisible ? ' pipeline-channel--markers-visible' : ''}${flowActive ? ' pipeline-channel--flow-active' : ''}${selected ? ' pipeline-selectable--selected' : ''}`}
       role="button"
       tabIndex={0}
       aria-label={`Inspect ${snapshot.from} to ${snapshot.to} channel`}
@@ -359,6 +384,7 @@ export function ChannelCable({
       data-pressure={snapshot.displayedPressure.toFixed(2)}
       data-input-active={snapshot.inputTransactionsPerSecond > 0}
       data-output-active={snapshot.outputTransactionsPerSecond > 0}
+      data-leg-count={presentation.legCount}
       style={channelStyle}
       onClick={() => onSelect(snapshot.id)}
       onKeyDown={handleSelectionKeyDown}
@@ -366,24 +392,24 @@ export function ChannelCable({
       <g className="pipeline-channel-scale" aria-hidden="true">
         <line
           x1={portrait ? start.x - maxLift : centerX}
-          y1={portrait ? centerY : start.y - maxLift}
+          y1={portrait ? scaleCenterY : start.y - CHANNEL_CAPACITY_SCALE_OFFSET - maxLift}
           x2={portrait ? start.x : centerX}
-          y2={portrait ? centerY : start.y}
+          y2={portrait ? scaleCenterY : start.y - CHANNEL_CAPACITY_SCALE_OFFSET}
           className="pipeline-channel-scale__line"
         />
         {ticks.map((tick) => (
           <g key={tick.value}>
             <line
               x1={portrait ? tick.y : centerX - (tick.major ? 5 : 3)}
-              y1={portrait ? centerY - (tick.major ? 5 : 3) : tick.y}
+              y1={portrait ? scaleCenterY - (tick.major ? 5 : 3) : tick.y}
               x2={portrait ? tick.y : centerX + (tick.major ? 5 : 3)}
-              y2={portrait ? centerY + (tick.major ? 5 : 3) : tick.y}
+              y2={portrait ? scaleCenterY + (tick.major ? 5 : 3) : tick.y}
               className="pipeline-channel-scale__tick"
             />
             {tick.major && (
               <text
                 x={portrait ? tick.y : centerX + 10}
-                y={portrait ? centerY + 18 : tick.y + 4}
+                y={portrait ? scaleCenterY + 18 : tick.y + 4}
                 textAnchor={portrait ? 'middle' : undefined}
                 className="pipeline-channel-scale__label"
               >
@@ -399,14 +425,17 @@ export function ChannelCable({
         className="pipeline-link-hit-area"
         aria-hidden="true"
       />
+
       <path
         d={presentation.cablePath}
         className="pipeline-channel-cable"
+        style={{ strokeWidth: batchStrokeWidth }}
       />
       {presentation.requestedPath !== null && (
         <path
           d={presentation.requestedPath}
           className={`pipeline-channel-requested-cable pipeline-channel-requested-cable--${capacity.requestState}`}
+          style={{ strokeWidth: batchStrokeWidth }}
           aria-hidden="true"
         />
       )}
@@ -415,7 +444,7 @@ export function ChannelCable({
         <g
           className={`pipeline-channel-capacity-applied pipeline-channel-capacity-applied--${snapshot.flowState}`}
           transform={portrait
-            ? `translate(${presentation.appliedMarker.x} ${centerY - 28})`
+            ? `translate(${presentation.appliedMarker.x} ${scaleCenterY - 28})`
             : `translate(${centerX - 50} ${presentation.appliedMarker.y})`}
           role="status"
           aria-label={`${snapshot.from} to ${snapshot.to} channel applied capacity ${formatInteger(presentation.appliedMarker.capacity)} batches`}

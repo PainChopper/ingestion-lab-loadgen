@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import type { NumericControlSnapshot } from '../model/loadgen'
+import type { DesiredControl } from '../hooks/useDesiredControl'
 
 interface NumericControlProps {
   readonly label: string
   readonly control: NumericControlSnapshot
-  readonly onValueChange: (value: number) => void
+  readonly onValueChange?: (value: number) => void
   readonly onPreviewChange?: (value: number | null) => void
+  readonly desiredControl?: DesiredControl<number>
   readonly className?: string
 }
 
@@ -15,17 +17,19 @@ export function NumericControl({
   control,
   onValueChange,
   onPreviewChange,
+  desiredControl,
   className,
 }: NumericControlProps) {
   const inputId = useId()
   const unitId = `${inputId}-unit`
   const [editing, setEditing] = useState(false)
   const suppressBlurCommit = useRef(false)
-  const [draft, setDraft] = useState(
-    control.applied === null ? '' : String(control.applied),
-  )
-  const appliedDraft = control.applied === null ? '' : String(control.applied)
-  const unavailable = control.applyMode === 'unavailable'
+  const displayed = desiredControl?.desired ?? control.applied
+  const [draft, setDraft] = useState(displayed === null ? '' : String(displayed))
+  const appliedDraft = displayed === null ? '' : String(displayed)
+  const unavailable = control.applyMode === 'unavailable' ||
+    desiredControl?.available === false
+  const pending = desiredControl?.phase === 'pending'
   const wasUnavailable = useRef(unavailable)
 
   useEffect(() => {
@@ -52,6 +56,9 @@ export function NumericControl({
         ? value
         : null,
     )
+    if (event.currentTarget.checkValidity() && Number.isFinite(value)) {
+      desiredControl?.preview(value)
+    }
   }
 
   const commitDraft = (input: HTMLInputElement) => {
@@ -62,10 +69,12 @@ export function NumericControl({
 
     const value = input.valueAsNumber
     if (input.checkValidity() && Number.isFinite(value)) {
-      onValueChange(value)
+      if (desiredControl === undefined) onValueChange?.(value)
+      else void desiredControl.commit(value)
     } else {
       setDraft(appliedDraft)
       onPreviewChange?.(null)
+      desiredControl?.cancel()
     }
   }
 
@@ -81,6 +90,7 @@ export function NumericControl({
       suppressBlurCommit.current = true
       setDraft(appliedDraft)
       onPreviewChange?.(null)
+      desiredControl?.cancel()
       event.currentTarget.blur()
     }
   }
@@ -107,7 +117,7 @@ export function NumericControl({
         max={control.max}
         step={control.step}
         value={draft}
-        disabled={unavailable}
+        disabled={unavailable || pending}
         inputMode="numeric"
         aria-describedby={unitId}
         onFocus={() => setEditing(true)}

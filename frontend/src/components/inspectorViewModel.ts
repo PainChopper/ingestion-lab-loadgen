@@ -16,6 +16,8 @@ export interface InspectorRow {
   readonly value: string
   readonly layout?: 'full-width'
   readonly segments?: ReadonlyArray<InspectorRowSegment>
+  readonly disclosureLabel?: string
+  readonly disclosureValue?: string
 }
 
 export interface InspectorRowSegment {
@@ -42,6 +44,16 @@ function formatControl(
 ): string {
   const value = formatInteger(control.applied)
   return value === '—' ? value : `${value} ${unit}`
+}
+
+function formatSourceLabel(source: string | null): string {
+  if (source === null) return '—'
+  const parts = source.split(/[\\/]/)
+  return parts[parts.length - 1] || source
+}
+
+function notReportedRow(label = 'Telemetry'): InspectorRow {
+  return { label, value: 'Not reported by HTTP adapter' }
 }
 
 export function formatStateLabel(value: string): string {
@@ -108,6 +120,7 @@ function channelViewModel(channel: ChannelSnapshot): InspectorViewModel {
 export function getInspectorViewModel(
   snapshot: LoadgenSnapshot,
   selectedId: SelectableId | null,
+  frozenObserved = false,
 ): InspectorViewModel | null {
   switch (selectedId) {
     case 'reader':
@@ -117,27 +130,38 @@ export function getInspectorViewModel(
         kind: 'Parquet source',
         rows: [
 		  {
-			label: 'Workers desired / live / draining',
+			label: `Workers desired / ${frozenObserved ? 'frozen live' : 'live'} / draining`,
 			value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
 		  },
-		  {
-			label: 'Reader slots',
-			value: (snapshot.reader.workerSlots ?? []).map((slot) => `${slot.id}: ${slot.lifecycle} ${slot.activity}${slot.source === null ? '' : ` (${slot.source})`}`).join(' · ') || '—',
-			layout: 'full-width',
-		  },
+          {
+            label: 'Reader slots',
+            value: (snapshot.reader.workerSlots ?? []).map((slot) => `${slot.id}: ${slot.lifecycle} ${slot.activity}`).join(' · ') || '—',
+            layout: 'full-width',
+          },
           { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
-          {
-            label: 'Configured capacity',
-            value: formatRate(snapshot.reader.configuredCapacityTps),
-          },
-          {
-            label: 'Capacity state',
-            value: snapshot.reader.limitationReason === 'downstream-backpressure'
-              ? 'Downstream limited'
-              : 'Available',
-          },
+          ...(snapshot.adapterKind === 'http'
+            ? [notReportedRow('Capacity telemetry')]
+            : [
+                {
+                  label: 'Configured capacity',
+                  value: formatRate(snapshot.reader.configuredCapacityTps),
+                },
+                {
+                  label: 'Capacity state',
+                  value: snapshot.reader.limitationReason === 'downstream-backpressure'
+                    ? 'Downstream limited'
+                    : 'Available',
+                },
+              ]),
           { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
-          { label: 'Source', value: snapshot.reader.source ?? '—' },
+          {
+            label: 'Source',
+            value: formatSourceLabel(snapshot.reader.source),
+            disclosureLabel: snapshot.reader.source === null
+              ? undefined
+              : 'Show full source path',
+            disclosureValue: snapshot.reader.source ?? undefined,
+          },
           { label: 'State', value: formatStateLabel(snapshot.reader.state) },
         ],
       }
@@ -157,12 +181,16 @@ export function getInspectorViewModel(
           },
           { label: 'Admitted TPS', value: formatRate(snapshot.throttler.admittedTps) },
           { label: 'State', value: formatStateLabel(snapshot.throttler.state) },
-          { label: 'Limited time', value: formatMilliseconds(snapshot.throttler.limitedMs) },
+          ...(snapshot.adapterKind === 'http'
+            ? [notReportedRow('Limited time')]
+            : [{ label: 'Limited time', value: formatMilliseconds(snapshot.throttler.limitedMs) }]),
         ],
       }
     case 'sender': {
       const policy = snapshot.policy?.senderRetry ?? snapshot.sender.retryPolicy
       const workerSlots = snapshot.sender.workerSlots ?? []
+      const hasWorkerStateTelemetry = snapshot.sender.workerSlots !== null
+      const hasSenderTelemetry = snapshot.adapterKind !== 'http'
       const idleWorkers = workerSlots.filter((slot) => slot.activity === 'idle').length
       const inFlightWorkers = workerSlots.filter((slot) => slot.activity === 'in-flight').length
       const backoffWorkers = workerSlots.filter((slot) => slot.activity === 'backoff').length
@@ -176,28 +204,30 @@ export function getInspectorViewModel(
           )} ms · ±${formatInteger(policy.jitterPercent)}% deterministic jitter`
       const poolRows: ReadonlyArray<InspectorRow> = [
         {
-          label: 'Workers desired / live / draining',
+          label: `Workers desired / ${frozenObserved ? 'frozen live' : 'live'} / draining`,
           value: `${formatInteger(snapshot.sender.workers.applied)} / ` +
             `${formatInteger(snapshot.sender.liveWorkers)} / ` +
             `${formatInteger(snapshot.sender.drainingWorkers)}`,
         },
-        {
-          label: 'Worker states',
-          value:
-            `${formatInteger(idleWorkers)} idle · ` +
-            `${formatInteger(inFlightWorkers)} in-flight · ` +
-            `${formatInteger(backoffWorkers)} backoff · ` +
-            `${formatInteger(terminalErrorWorkers)} errors`,
-          layout: 'full-width',
-          segments: [
-            { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
-            { value: `${formatInteger(inFlightWorkers)} in-flight`, tone: 'in-flight' },
-            { value: `${formatInteger(backoffWorkers)} backoff`, tone: 'backoff' },
-            { value: `${formatInteger(terminalErrorWorkers)} errors`, tone: 'error' },
-          ],
-        },
+        hasWorkerStateTelemetry
+          ? {
+              label: 'Worker states',
+              value:
+                `${formatInteger(idleWorkers)} idle · ` +
+                `${formatInteger(inFlightWorkers)} in-flight · ` +
+                `${formatInteger(backoffWorkers)} backoff · ` +
+                `${formatInteger(terminalErrorWorkers)} errors`,
+              layout: 'full-width',
+              segments: [
+                { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
+                { value: `${formatInteger(inFlightWorkers)} in-flight`, tone: 'in-flight' },
+                { value: `${formatInteger(backoffWorkers)} backoff`, tone: 'backoff' },
+                { value: `${formatInteger(terminalErrorWorkers)} errors`, tone: 'error' },
+              ],
+            }
+          : notReportedRow('Worker states'),
       ]
-      const metricsRows: ReadonlyArray<InspectorRow> = [
+      const deliveryRows: ReadonlyArray<InspectorRow> = hasSenderTelemetry ? [
         { label: 'Attempted TPS', value: formatRate(snapshot.sender.attemptedTps) },
         { label: 'Retry TPS', value: formatRate(snapshot.sender.retryAttemptedTps) },
         {
@@ -206,11 +236,6 @@ export function getInspectorViewModel(
         },
         { label: 'In-flight', value: formatInteger(snapshot.sender.inFlightRequests) },
         { label: 'Backoff', value: formatInteger(backoffWorkers) },
-        { label: 'Attempts', value: formatInteger(snapshot.sender.attemptsStartedTotal) },
-        {
-          label: 'Retry attempts',
-          value: formatInteger(snapshot.sender.retryAttemptsStartedTotal),
-        },
         {
           label: '2xx responses',
           value: formatInteger(snapshot.sender.successfulResponses),
@@ -220,6 +245,13 @@ export function getInspectorViewModel(
           value: formatInteger(snapshot.sender.failedResponses),
         },
         { label: 'Timeouts', value: formatInteger(snapshot.sender.timeoutsTotal) },
+      ] : [notReportedRow('Delivery telemetry')]
+      const diagnosticsRows: ReadonlyArray<InspectorRow> = hasSenderTelemetry ? [
+        { label: 'Attempts', value: formatInteger(snapshot.sender.attemptsStartedTotal) },
+        {
+          label: 'Retry attempts',
+          value: formatInteger(snapshot.sender.retryAttemptsStartedTotal),
+        },
         {
           label: 'Terminal failed batches',
           value: formatInteger(snapshot.sender.terminalFailedBatchesTotal),
@@ -240,29 +272,39 @@ export function getInspectorViewModel(
           label: 'Ambiguous terminal transactions',
           value: formatInteger(snapshot.sender.ambiguousTerminalTransactionsTotal),
         },
-      ]
-      const diagnosticsRows: ReadonlyArray<InspectorRow> = [
-        { label: 'Retry policy', value: policyValue, layout: 'full-width' },
+        {
+          label: 'Retry policy',
+          value: policyValue,
+          layout: 'full-width',
+        },
         {
           label: 'Diagnostic interpretation',
           value: 'Retries, timeouts, terminal failures, and ambiguous outcomes are counted separately.',
           layout: 'full-width',
         },
-      ]
+      ] : [notReportedRow('Diagnostics telemetry')]
       const sections: ReadonlyArray<InspectorSection> = [
-        { title: 'Состояние pool', rows: poolRows },
-        { title: 'Метрики и результаты', rows: metricsRows },
-        { title: 'Диагностика и retry policy', rows: diagnosticsRows },
+        { title: 'Pool', rows: poolRows },
+        { title: 'Delivery', rows: deliveryRows },
+        { title: 'Diagnostics', rows: diagnosticsRows },
       ]
       return {
         id: selectedId,
         title: 'SENDER',
         kind: 'Simulated sender',
-        rows: [...poolRows, ...metricsRows, ...diagnosticsRows],
+        rows: [...poolRows, ...deliveryRows, ...diagnosticsRows],
         sections,
       }
     }
     case 'target': {
+      if (snapshot.adapterKind === 'http') {
+        return {
+          id: selectedId,
+          title: 'TARGET',
+          kind: 'HTTP endpoint',
+          rows: [notReportedRow()],
+        }
+      }
       return {
         id: selectedId,
         title: 'TARGET',
@@ -282,6 +324,14 @@ export function getInspectorViewModel(
     case 'throttler-to-sender':
       return channelViewModel(snapshot.senderChannel)
     case 'http':
+      if (snapshot.adapterKind === 'http') {
+        return {
+          id: selectedId,
+          title: 'HTTP',
+          kind: 'Sender to target',
+          rows: [notReportedRow()],
+        }
+      }
       return {
         id: selectedId,
         title: 'HTTP',

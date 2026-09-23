@@ -185,7 +185,6 @@ export interface SenderSnapshot {
   readonly drainingWorkers: number
   readonly simulatedDelayMs: NumericControlSnapshot
   readonly simulatedErrorRatePercent: NumericControlSnapshot
-  readonly httpBatchSize: NumericControlSnapshot
   readonly timeoutMs: NumericControlSnapshot
   readonly workerSlots: readonly SenderWorkerSlotSnapshot[] | null
   readonly retryPolicy: RetryPolicySnapshot | null
@@ -284,7 +283,6 @@ export type LoadgenCommand =
   | { type: 'set-reader-channel-capacity'; value: number }
   | { type: 'set-sender-channel-capacity'; value: number }
   | { type: 'set-read-batch-size'; value: number }
-  | { type: 'set-http-batch-size'; value: number }
   | { type: 'set-http-timeout'; valueMs: number }
 
 export interface AdapterError {

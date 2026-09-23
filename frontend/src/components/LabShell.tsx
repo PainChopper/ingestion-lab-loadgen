@@ -17,18 +17,20 @@ import type {
 } from '../model/loadgen'
 import { useLoadgenSnapshot } from '../hooks/useLoadgenSnapshot'
 import {
+  useDesiredControl,
+  type LiveControls,
+} from '../hooks/useDesiredControl'
+import {
   getInspectorViewModel,
   type InspectorRow,
 } from './inspectorViewModel'
 import { NumericControl } from './NumericControl'
 import { PipelineSvg } from './pipeline/PipelineSvg'
-import type { WorkerActorId } from './pipeline/WorkerActor'
 import { createPipelineGeometry } from './pipeline/geometry'
 import {
   usePipelineOrientation,
   type PipelineOrientation,
 } from './pipeline/pipelineLayout'
-import { normalizedWorkerCount } from './pipeline/workerActorLayout'
 
 interface AdapterProps {
   adapter: LoadgenAdapter
@@ -36,12 +38,6 @@ interface AdapterProps {
 
 interface SnapshotProps extends AdapterProps {
   snapshot: LoadgenSnapshot
-}
-
-interface RequestedTpsControlProps {
-  requestedTpsPreview: number | null
-  onRequestedTpsPreviewChange: (value: number | null) => void
-  onRequestedTpsChange: (value: number) => Promise<boolean>
 }
 
 const CHANNEL_STATES: ReadonlyArray<{
@@ -72,10 +68,10 @@ function formatCount(value: number): string {
 function TopBar({
   adapter,
   snapshot,
-  onRequestedTpsPreviewChange,
-  onRequestedTpsChange,
-}: SnapshotProps & RequestedTpsControlProps) {
+  frozenObserved,
+}: SnapshotProps & { frozenObserved: boolean }) {
   const running = snapshot.runState === 'running'
+  const paused = snapshot.runState === 'paused'
   const runUnavailable = snapshot.adapterKind === 'http' &&
     (snapshot.connectionState !== 'connected' || snapshot.policy === null)
 
@@ -104,11 +100,11 @@ function TopBar({
             void adapter.dispatch({ type: running ? 'pause' : 'run' })
           }
           disabled={runUnavailable}
-          title={running ? 'Pause run' : 'Start run'}
-          aria-label={running ? 'Pause run' : 'Start run'}
+          title={running ? 'Pause run' : paused ? 'Resume run' : 'Start run'}
+          aria-label={running ? 'Pause run' : paused ? 'Resume run' : 'Start run'}
         >
           {running ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
-          <span>{running ? 'Pause' : 'Run'}</span>
+          <span>{running ? 'Pause' : paused ? 'Resume' : 'Run'}</span>
         </button>
         <button
           id="reset-run"
@@ -121,6 +117,12 @@ function TopBar({
           <RotateCcw aria-hidden="true" />
         </button>
       </div>
+
+      {frozenObserved && (
+        <p className="run-state-qualifier" role="status">
+          Paused — last observed telemetry frozen; controls remain desired
+        </p>
+      )}
 
       {snapshot.startError !== null && (
         <p className="run-start-error" role="alert">
@@ -139,13 +141,6 @@ function TopBar({
         </div>
       </dl>
 
-      <NumericControl
-        className="numeric-control--topbar"
-        label="Requested TPS"
-        control={snapshot.throttler.requestedTps}
-        onPreviewChange={onRequestedTpsPreviewChange}
-        onValueChange={(value) => void onRequestedTpsChange(value)}
-      />
     </header>
   )
 }
@@ -154,14 +149,9 @@ interface PipelineViewportProps {
   snapshot: LoadgenSnapshot
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
-  onWorkerCountChange: (actor: WorkerActorId, value: number) => void
   onChannelCapacityChange: (channel: ChannelId, value: number) => void
-  requestedTpsPreview: number | null
-  onRequestedTpsPreviewChange: (value: number | null) => void
-  onRequestedTpsChange: (value: number) => Promise<boolean>
-  onInstallationModeChange: (
-    value: ThrottlerInstallationMode,
-  ) => Promise<boolean>
+  liveControls: LiveControls
+  frozenObserved: boolean
   orientation: PipelineOrientation
 }
 
@@ -169,12 +159,9 @@ function PipelineViewport({
   snapshot,
   selectedId,
   onSelect,
-  onWorkerCountChange,
   onChannelCapacityChange,
-  requestedTpsPreview,
-  onRequestedTpsPreviewChange,
-  onRequestedTpsChange,
-  onInstallationModeChange,
+  liveControls,
+  frozenObserved,
   orientation,
 }: PipelineViewportProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -204,13 +191,13 @@ function PipelineViewport({
   const geometry = useMemo(() => createPipelineGeometry({
     orientation,
     landscapeContentWidth,
-    readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
-    senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+    readerWorkers: liveControls.readerWorkers.desired,
+    senderWorkers: liveControls.senderWorkers.desired,
   }), [
     landscapeContentWidth,
     orientation,
-    snapshot.reader.workers,
-    snapshot.sender.workers,
+    liveControls.readerWorkers.desired,
+    liveControls.senderWorkers.desired,
   ])
 
   return (
@@ -229,12 +216,9 @@ function PipelineViewport({
           snapshot={snapshot}
           selectedId={selectedId}
           onSelect={onSelect}
-          onWorkerCountChange={onWorkerCountChange}
           onChannelCapacityChange={onChannelCapacityChange}
-          requestedTpsPreview={requestedTpsPreview}
-          onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
-          onRequestedTpsChange={onRequestedTpsChange}
-          onInstallationModeChange={onInstallationModeChange}
+          liveControls={liveControls}
+          frozenObserved={frozenObserved}
           orientation={orientation}
           geometry={geometry}
         />
@@ -243,18 +227,19 @@ function PipelineViewport({
   )
 }
 
-interface InspectorDockProps extends SnapshotProps, RequestedTpsControlProps {
+interface InspectorDockProps {
+  snapshot: LoadgenSnapshot
   selectedId: SelectableId | null
   onClearSelection: () => void
+  liveControls: LiveControls
+  frozenObserved: boolean
 }
 
 function InspectorControls({
-  adapter,
   snapshot,
   selectedId,
-  onRequestedTpsPreviewChange,
-  onRequestedTpsChange,
-}: Omit<InspectorDockProps, 'onClearSelection'>) {
+  liveControls,
+}: Omit<InspectorDockProps, 'onClearSelection' | 'frozenObserved'>) {
   switch (selectedId) {
     case 'reader':
       return (
@@ -262,46 +247,23 @@ function InspectorControls({
           <NumericControl
             label="Workers"
             control={snapshot.reader.workers}
-            onValueChange={(value) =>
-              void adapter.dispatch({
-                type: 'set-worker-count',
-                actor: 'reader',
-                value,
-              })
-            }
+            desiredControl={liveControls.readerWorkers}
           />
           <NumericControl
             label="Read batch size"
             control={snapshot.reader.readBatchSize}
-            onValueChange={(value) =>
-              void adapter.dispatch({ type: 'set-read-batch-size', value })
-            }
+            desiredControl={liveControls.readBatchSize}
           />
         </div>
       )
     case 'throttler': {
-      const running = snapshot.throttler.state === 'running'
-      const runUnavailable = snapshot.adapterKind === 'http' &&
-        (snapshot.connectionState !== 'connected' || snapshot.policy === null)
       return (
         <div className="inspector-controls" aria-label="Throttler configuration">
           <NumericControl
             label="Requested TPS"
             control={snapshot.throttler.requestedTps}
-            onPreviewChange={onRequestedTpsPreviewChange}
-            onValueChange={(value) => void onRequestedTpsChange(value)}
+            desiredControl={liveControls.requestedTps}
           />
-          <button
-            className="button inspector-command"
-            type="button"
-            onClick={() =>
-              void adapter.dispatch({ type: running ? 'pause' : 'run' })
-            }
-            disabled={runUnavailable}
-          >
-            {running ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
-            <span>{running ? 'Pause' : 'Resume'}</span>
-          </button>
         </div>
       )
     }
@@ -311,40 +273,22 @@ function InspectorControls({
           <NumericControl
             label="Workers"
             control={snapshot.sender.workers}
-            onValueChange={(value) =>
-              void adapter.dispatch({
-                type: 'set-sender-workers',
-                value,
-              })
-            }
+            desiredControl={liveControls.senderWorkers}
           />
           <NumericControl
             label="Simulated delay"
             control={snapshot.sender.simulatedDelayMs}
-            onValueChange={(value) =>
-              void adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value })
-            }
+            desiredControl={liveControls.simulatedDelayMs}
           />
           <NumericControl
             label="Simulated error rate"
             control={snapshot.sender.simulatedErrorRatePercent}
-            onValueChange={(value) =>
-              void adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value })
-            }
-          />
-          <NumericControl
-            label="HTTP batch size"
-            control={snapshot.sender.httpBatchSize}
-            onValueChange={(value) =>
-              void adapter.dispatch({ type: 'set-http-batch-size', value })
-            }
+            desiredControl={liveControls.simulatedErrorRatePercent}
           />
           <NumericControl
             label="HTTP timeout"
             control={snapshot.sender.timeoutMs}
-            onValueChange={(valueMs) =>
-              void adapter.dispatch({ type: 'set-http-timeout', valueMs })
-            }
+            desiredControl={liveControls.timeoutMs}
           />
         </div>
       )
@@ -356,37 +300,29 @@ function InspectorControls({
 }
 
 function InspectorDock({
-  adapter,
   snapshot,
   selectedId,
   onClearSelection,
-  requestedTpsPreview,
-  onRequestedTpsPreviewChange,
-  onRequestedTpsChange,
+  liveControls,
+  frozenObserved,
 }: InspectorDockProps) {
-  const model = getInspectorViewModel(snapshot, selectedId)
+  const model = getInspectorViewModel(snapshot, selectedId, frozenObserved)
   const controls = model?.id === 'sender'
     ? (
       <section className="inspector-section" aria-labelledby="sender-controls-title">
         <h3 id="sender-controls-title" className="inspector-section__title">Управление</h3>
         <InspectorControls
-          adapter={adapter}
           snapshot={snapshot}
           selectedId={selectedId}
-          requestedTpsPreview={requestedTpsPreview}
-          onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
-          onRequestedTpsChange={onRequestedTpsChange}
+          liveControls={liveControls}
         />
       </section>
     )
     : (
-      <InspectorControls
-        adapter={adapter}
-        snapshot={snapshot}
+        <InspectorControls
+          snapshot={snapshot}
         selectedId={selectedId}
-        requestedTpsPreview={requestedTpsPreview}
-        onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
-        onRequestedTpsChange={onRequestedTpsChange}
+        liveControls={liveControls}
       />
     )
 
@@ -452,7 +388,13 @@ function InspectorDataRow({ row }: { row: InspectorRow }) {
       <dt>{row.label}</dt>
       <dd>
         {row.segments === undefined
-          ? row.value
+          ? row.disclosureValue === undefined
+            ? row.value
+            : <details className="inspector-disclosure">
+                <summary>{row.value}</summary>
+                <span>{row.disclosureLabel}</span>
+                <code>{row.disclosureValue}</code>
+              </details>
           : row.segments.map((segment, index) => (
             <span className={`worker-state worker-state--${segment.tone}`} key={segment.value}>
               {index > 0 && <span aria-hidden="true">· </span>}{segment.value}
@@ -463,30 +405,25 @@ function InspectorDataRow({ row }: { row: InspectorRow }) {
   )
 }
 
-interface WorkspaceProps extends SnapshotProps, RequestedTpsControlProps {
+interface WorkspaceProps {
+  snapshot: LoadgenSnapshot
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
   onClearSelection: () => void
-  onWorkerCountChange: (actor: WorkerActorId, value: number) => void
   onChannelCapacityChange: (channel: ChannelId, value: number) => void
-  onInstallationModeChange: (
-    value: ThrottlerInstallationMode,
-  ) => Promise<boolean>
+  liveControls: LiveControls
+  frozenObserved: boolean
   orientation: PipelineOrientation
 }
 
 function Workspace({
-  adapter,
   snapshot,
   selectedId,
   onSelect,
   onClearSelection,
-  onWorkerCountChange,
   onChannelCapacityChange,
-  requestedTpsPreview,
-  onRequestedTpsPreviewChange,
-  onRequestedTpsChange,
-  onInstallationModeChange,
+  liveControls,
+  frozenObserved,
   orientation,
 }: WorkspaceProps) {
   return (
@@ -495,22 +432,17 @@ function Workspace({
         snapshot={snapshot}
         selectedId={selectedId}
         onSelect={onSelect}
-        onWorkerCountChange={onWorkerCountChange}
         onChannelCapacityChange={onChannelCapacityChange}
-        requestedTpsPreview={requestedTpsPreview}
-        onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
-        onRequestedTpsChange={onRequestedTpsChange}
-        onInstallationModeChange={onInstallationModeChange}
+        liveControls={liveControls}
+        frozenObserved={frozenObserved}
         orientation={orientation}
       />
       <InspectorDock
-        adapter={adapter}
         snapshot={snapshot}
         selectedId={selectedId}
         onClearSelection={onClearSelection}
-        requestedTpsPreview={requestedTpsPreview}
-        onRequestedTpsPreviewChange={onRequestedTpsPreviewChange}
-        onRequestedTpsChange={onRequestedTpsChange}
+        liveControls={liveControls}
+        frozenObserved={frozenObserved}
       />
     </div>
   )
@@ -533,68 +465,76 @@ function ChannelStateLegend() {
 }
 
 export function LabShell({ adapter }: AdapterProps) {
-  const snapshot = useLoadgenSnapshot(adapter)
+  const { snapshot, liveSnapshot, frozenObserved } = useLoadgenSnapshot(adapter)
   const orientation = usePipelineOrientation()
   const [selectedId, setSelectedId] = useState<SelectableId | null>(null)
-  const [requestedTpsDraft, setRequestedTpsDraft] = useState<{
-    value: number | null
-    resolutionRevision: number | null
-  }>({ value: null, resolutionRevision: null })
-  const requestedTpsPreview = requestedTpsDraft.value
-
-  const handleRequestedTpsPreviewChange = (value: number | null) => {
-    setRequestedTpsDraft({ value, resolutionRevision: null })
-  }
-
-  useEffect(() => {
-    if (requestedTpsPreview === null) return
-    const control = snapshot.throttler.requestedTps
-    if (
-      control.applied === requestedTpsPreview ||
-      control.pending === requestedTpsPreview ||
-      control.preview === requestedTpsPreview ||
-      (
-        requestedTpsDraft.resolutionRevision !== null &&
-        snapshot.revision >= requestedTpsDraft.resolutionRevision
-      )
-    ) {
-      setRequestedTpsDraft({ value: null, resolutionRevision: null })
-    }
-  }, [requestedTpsDraft, requestedTpsPreview, snapshot.revision, snapshot.throttler.requestedTps])
-
-  const handleRequestedTpsChange = async (value: number): Promise<boolean> => {
-    setRequestedTpsDraft({ value, resolutionRevision: null })
-    try {
-      const receipt = await adapter.dispatch({ type: 'set-requested-tps', value })
-      setRequestedTpsDraft((current) => {
-        if (current.value !== value) return current
-        return receipt.accepted
-          ? { value, resolutionRevision: receipt.snapshotRevision }
-          : { value: null, resolutionRevision: null }
-      })
-      return receipt.accepted
-    } catch {
-      setRequestedTpsDraft({ value: null, resolutionRevision: null })
-      return false
-    }
-  }
-  const handleInstallationModeChange = async (
-    value: ThrottlerInstallationMode,
-  ): Promise<boolean> => {
-    try {
-      const receipt = await adapter.dispatch({
-        type: 'set-throttler-installation-mode',
-        value,
-      })
-      return receipt.accepted
-    } catch {
-      return false
-    }
-  }
-  const handleWorkerCountChange = (actor: WorkerActorId, value: number) => {
-    void adapter.dispatch(actor === 'sender'
-      ? { type: 'set-sender-workers', value }
-      : { type: 'set-worker-count', actor: 'reader', value })
+  const immediate = (control: { applied: number | null; applyMode: string }) =>
+    control.applied !== null && control.applyMode === 'immediate'
+  const readerWorkers = useDesiredControl({
+    applied: liveSnapshot.reader.workers.applied ?? liveSnapshot.reader.workers.min,
+    revision: liveSnapshot.revision,
+    available: immediate(liveSnapshot.reader.workers),
+    dispatch: (value) => adapter.dispatch({
+      type: 'set-worker-count', actor: 'reader', value,
+    }),
+  })
+  const readBatchSize = useDesiredControl({
+    applied: liveSnapshot.reader.readBatchSize.applied ?? liveSnapshot.reader.readBatchSize.min,
+    revision: liveSnapshot.revision,
+    available: immediate(liveSnapshot.reader.readBatchSize),
+    dispatch: (value) => adapter.dispatch({ type: 'set-read-batch-size', value }),
+  })
+  const requestedTps = useDesiredControl({
+    applied: liveSnapshot.throttler.requestedTps.applied ?? liveSnapshot.throttler.requestedTps.min,
+    revision: liveSnapshot.revision,
+    available: immediate(liveSnapshot.throttler.requestedTps),
+    dispatch: (value) => adapter.dispatch({ type: 'set-requested-tps', value }),
+  })
+  const installationMode = useDesiredControl<ThrottlerInstallationMode>({
+    applied: liveSnapshot.throttler.installationMode.applied ?? 'installed',
+    revision: liveSnapshot.revision,
+    available: liveSnapshot.throttler.installationMode.applied !== null &&
+      liveSnapshot.throttler.installationMode.writable &&
+      liveSnapshot.throttler.installationMode.applyMode === 'immediate',
+    dispatch: (value) => adapter.dispatch({
+      type: 'set-throttler-installation-mode', value,
+    }),
+    rejectionMessage: 'Valve mode change rejected',
+    unavailableMessage: 'Valve mode change unavailable',
+  })
+  const senderWorkers = useDesiredControl({
+    applied: liveSnapshot.sender.workers.applied ?? liveSnapshot.sender.workers.min,
+    revision: liveSnapshot.revision,
+    available: immediate(liveSnapshot.sender.workers),
+    dispatch: (value) => adapter.dispatch({ type: 'set-sender-workers', value }),
+  })
+  const simulatedDelayMs = useDesiredControl({
+    applied: liveSnapshot.sender.simulatedDelayMs.applied ?? liveSnapshot.sender.simulatedDelayMs.min,
+    revision: liveSnapshot.revision,
+    available: immediate(liveSnapshot.sender.simulatedDelayMs),
+    dispatch: (value) => adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value }),
+  })
+  const simulatedErrorRatePercent = useDesiredControl({
+    applied: liveSnapshot.sender.simulatedErrorRatePercent.applied ?? liveSnapshot.sender.simulatedErrorRatePercent.min,
+    revision: liveSnapshot.revision,
+    available: immediate(liveSnapshot.sender.simulatedErrorRatePercent),
+    dispatch: (value) => adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value }),
+  })
+  const timeoutMs = useDesiredControl({
+    applied: liveSnapshot.sender.timeoutMs.applied ?? liveSnapshot.sender.timeoutMs.min,
+    revision: liveSnapshot.revision,
+    available: immediate(liveSnapshot.sender.timeoutMs),
+    dispatch: (valueMs) => adapter.dispatch({ type: 'set-http-timeout', valueMs }),
+  })
+  const liveControls: LiveControls = {
+    readerWorkers,
+    readBatchSize,
+    requestedTps,
+    installationMode,
+    senderWorkers,
+    simulatedDelayMs,
+    simulatedErrorRatePercent,
+    timeoutMs,
   }
   const handleChannelCapacityChange = (channel: ChannelId, value: number) => {
     void adapter.dispatch(
@@ -613,22 +553,16 @@ export function LabShell({ adapter }: AdapterProps) {
       <TopBar
         adapter={adapter}
         snapshot={snapshot}
-        requestedTpsPreview={requestedTpsPreview}
-        onRequestedTpsPreviewChange={handleRequestedTpsPreviewChange}
-        onRequestedTpsChange={handleRequestedTpsChange}
+        frozenObserved={frozenObserved}
       />
       <Workspace
-        adapter={adapter}
         snapshot={snapshot}
         selectedId={selectedId}
         onSelect={setSelectedId}
         onClearSelection={() => setSelectedId(null)}
-        onWorkerCountChange={handleWorkerCountChange}
         onChannelCapacityChange={handleChannelCapacityChange}
-        requestedTpsPreview={requestedTpsPreview}
-        onRequestedTpsPreviewChange={handleRequestedTpsPreviewChange}
-        onRequestedTpsChange={handleRequestedTpsChange}
-        onInstallationModeChange={handleInstallationModeChange}
+        liveControls={liveControls}
+        frozenObserved={frozenObserved}
         orientation={orientation}
       />
       <ChannelStateLegend />

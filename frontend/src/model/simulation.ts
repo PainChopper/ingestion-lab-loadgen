@@ -31,7 +31,6 @@ export interface SimulationConfig {
   requestedTps: number
   throttlerInstallationMode: ThrottlerInstallationMode
   readBatchSize: number
-  httpBatchSize: number
   httpTimeoutMs: number
   targetDelayMs: number
   targetErrorRatePercent: number
@@ -455,7 +454,7 @@ class StatefulChannel<TItem> {
 export class FixedStepSimulation {
   readonly config: SimulationConfig
 
-  private readonly readerChannel: StatefulChannel<number>
+  private readonly readerChannel: StatefulChannel<SimulationBatch>
   private readonly senderChannel: StatefulChannel<SimulationBatch>
   private readonly activities: StepActivity[] = []
   private readonly attemptOutcomeSource:
@@ -465,8 +464,7 @@ export class FixedStepSimulation {
   private nextWorkerIndex = 0
   private readerTransactionCredit = 0
   private throttlerTokens = 0
-  private throttlerBufferedTransactions = 0
-  private pendingHttpBatch: SimulationBatch | null = null
+  private pendingThrottledBatch: SimulationBatch | null = null
   private nextBatchSequence = 0
   private failureCredit = 0
   private latestStatusCode: number | null = null
@@ -499,7 +497,10 @@ export class FixedStepSimulation {
     attemptOutcomeSource?: SimulationAttemptOutcomeSource,
   ) {
     this.config = { ...config }
-    this.readerChannel = new StatefulChannel(readerChannelCapacity, (transactions) => transactions)
+    this.readerChannel = new StatefulChannel(
+      readerChannelCapacity,
+      (batch) => batch.transactions,
+    )
     this.senderChannel = new StatefulChannel(
       senderChannelCapacity,
       (batch) => batch.transactions,
@@ -521,7 +522,7 @@ export class FixedStepSimulation {
     this.finalizeSenderScaleDown()
     this.refillThrottlerTokens()
     this.drainSenderChannel(activity)
-    let senderChannelBlocked = this.flushThrottlerBuffer(activity)
+    let senderChannelBlocked = this.flushThrottledBatch(activity)
     const admission = this.receiveReaderChannel(activity)
     senderChannelBlocked ||= admission.senderChannelBlocked
     const production = this.produceReaderBatches(activity)
@@ -580,8 +581,7 @@ export class FixedStepSimulation {
     this.nextWorkerIndex = 0
     this.readerTransactionCredit = 0
     this.throttlerTokens = 0
-    this.throttlerBufferedTransactions = 0
-    this.pendingHttpBatch = null
+    this.pendingThrottledBatch = null
     this.nextBatchSequence = 0
     this.failureCredit = 0
     this.latestStatusCode = null
@@ -859,7 +859,8 @@ export class FixedStepSimulation {
       return
     }
     const refill = this.config.requestedTps * FIXED_STEP_MS / 1_000
-    const headTransactions = this.readerChannel.peek() ?? this.config.readBatchSize
+    const headTransactions = this.readerChannel.peek()?.transactions ??
+      this.config.readBatchSize
     const tokenCapacity = Math.max(headTransactions, this.config.readBatchSize) +
       refill
     this.throttlerTokens = Math.min(
@@ -880,44 +881,32 @@ export class FixedStepSimulation {
     }
   }
 
-  private flushThrottlerBuffer(activity: StepActivity): boolean {
-    let blocked = false
-    while (
-      this.pendingHttpBatch !== null ||
-      this.throttlerBufferedTransactions >= this.config.httpBatchSize
-    ) {
-      const batch = this.pendingHttpBatch ?? this.createHttpBatch()
-      this.pendingHttpBatch = batch
-      if (this.senderChannel.capacity.applied === 0) {
-        const worker = this.nextIdleWorker()
-        if (worker === null) {
-          blocked = true
-          break
-        }
-        this.senderChannel.handoff(batch, activity.senderChannel)
-        worker.batch = batch
-        worker.hadAmbiguousOutcome = false
-        this.startAttempt(worker, 1, activity)
-      } else {
-        if (!this.senderChannel.send(batch, activity.senderChannel)) {
-          blocked = true
-          break
-        }
-        this.drainSenderChannel(activity)
-      }
-      this.throttlerBufferedTransactions -= batch.transactions
-      this.pendingHttpBatch = null
+  private flushThrottledBatch(activity: StepActivity): boolean {
+    const batch = this.pendingThrottledBatch
+    if (batch === null) return false
+
+    if (this.senderChannel.capacity.applied === 0) {
+      const worker = this.nextIdleWorker()
+      if (worker === null) return true
+      this.senderChannel.handoff(batch, activity.senderChannel)
+      worker.batch = batch
+      worker.hadAmbiguousOutcome = false
+      this.startAttempt(worker, 1, activity)
+    } else {
+      if (!this.senderChannel.send(batch, activity.senderChannel)) return true
+      this.drainSenderChannel(activity)
     }
-    return blocked
+    this.pendingThrottledBatch = null
+    return false
   }
 
-  private createHttpBatch(): SimulationBatch {
+  private createPipelineBatch(transactions: number): SimulationBatch {
     const sequence = this.nextBatchSequence
     this.nextBatchSequence += 1
     return {
       sequence,
-      identity: 'http-batch-' + sequence,
-      transactions: this.config.httpBatchSize,
+      identity: 'pipeline-batch-' + sequence,
+      transactions,
     }
   }
 
@@ -925,27 +914,23 @@ export class FixedStepSimulation {
     const availableBatches = this.readerChannel.depthBatches
     const installed = this.config.throttlerInstallationMode === 'installed'
     for (let batchIndex = 0; batchIndex < availableBatches; batchIndex += 1) {
-      if (this.pendingHttpBatch !== null) break
-      if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
-        const senderChannelBlocked = this.flushThrottlerBuffer(activity)
+      if (this.pendingThrottledBatch !== null) {
+        const senderChannelBlocked = this.flushThrottledBatch(activity)
         if (senderChannelBlocked) return { senderChannelBlocked: true, tokenLimited: false }
       }
 
-      const transactions = this.readerChannel.peek()
-      if (transactions === null) break
-      if (installed && this.throttlerTokens < transactions) {
+      const batch = this.readerChannel.peek()
+      if (batch === null) break
+      if (installed && this.throttlerTokens < batch.transactions) {
         return { senderChannelBlocked: false, tokenLimited: true }
       }
 
       const received = this.readerChannel.receive(activity.readerChannel)
       if (received === null) break
-      if (installed) this.throttlerTokens -= received
-      this.throttlerBufferedTransactions += received
-
-      if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
-        const senderChannelBlocked = this.flushThrottlerBuffer(activity)
-        if (senderChannelBlocked) return { senderChannelBlocked: true, tokenLimited: false }
-      }
+      if (installed) this.throttlerTokens -= received.transactions
+      this.pendingThrottledBatch = received
+      const senderChannelBlocked = this.flushThrottledBatch(activity)
+      if (senderChannelBlocked) return { senderChannelBlocked: true, tokenLimited: false }
     }
     return { senderChannelBlocked: false, tokenLimited: false }
   }
@@ -967,21 +952,11 @@ export class FixedStepSimulation {
 
     while (this.readerTransactionCredit >= transactions) {
       if (this.readerChannel.capacity.applied === 0) {
-        if (this.pendingHttpBatch !== null) {
+        if (this.pendingThrottledBatch !== null) {
           return {
             readerChannelBlocked: true,
             senderChannelBlocked: true,
             tokenLimited: false,
-          }
-        }
-        if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
-          const senderChannelBlocked = this.flushThrottlerBuffer(activity)
-          if (senderChannelBlocked) {
-            return {
-              readerChannelBlocked: true,
-              senderChannelBlocked: true,
-              tokenLimited: false,
-            }
           }
         }
         if (
@@ -994,30 +969,38 @@ export class FixedStepSimulation {
             tokenLimited: true,
           }
         }
-        this.readerChannel.handoff(transactions, activity.readerChannel)
+        const batch = this.createPipelineBatch(transactions)
+        this.readerChannel.handoff(batch, activity.readerChannel)
         if (this.config.throttlerInstallationMode === 'installed') {
           this.throttlerTokens -= transactions
         }
-        this.throttlerBufferedTransactions += transactions
-        if (this.throttlerBufferedTransactions >= this.config.httpBatchSize) {
-          const senderChannelBlocked = this.flushThrottlerBuffer(activity)
-          if (senderChannelBlocked) {
-            return {
-              readerChannelBlocked: true,
-              senderChannelBlocked: true,
-              tokenLimited: false,
-            }
+        this.readerTransactionCredit -= transactions
+        this.pendingThrottledBatch = batch
+        const senderChannelBlocked = this.flushThrottledBatch(activity)
+        if (senderChannelBlocked) {
+          return {
+            readerChannelBlocked: true,
+            senderChannelBlocked: true,
+            tokenLimited: false,
           }
         }
-      } else if (!this.readerChannel.send(transactions, activity.readerChannel)) {
-        return {
-          readerChannelBlocked: true,
-          senderChannelBlocked: false,
-          tokenLimited: false,
+      } else {
+        if (
+          this.readerChannel.depthBatches >=
+          this.readerChannel.capacity.applied
+        ) {
+          return {
+            readerChannelBlocked: true,
+            senderChannelBlocked: false,
+            tokenLimited: false,
+          }
         }
+        const batch = this.createPipelineBatch(transactions)
+        if (!this.readerChannel.send(batch, activity.readerChannel)) {
+          throw new Error('reader channel capacity changed during send')
+        }
+        this.readerTransactionCredit -= transactions
       }
-
-      this.readerTransactionCredit -= transactions
     }
 
     return {

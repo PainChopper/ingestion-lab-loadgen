@@ -5,6 +5,7 @@ import type { PipelineGeometry } from './geometry'
 
 interface HttpLinkProps {
   snapshot: HttpSnapshot
+  telemetryAvailable: boolean
   selected: boolean
   onSelect: (id: SelectableId) => void
   geometry: PipelineGeometry
@@ -37,6 +38,7 @@ function linkStateClass(
 
 export function HttpLink({
   snapshot,
+  telemetryAvailable,
   selected,
   onSelect,
   geometry,
@@ -49,9 +51,11 @@ export function HttpLink({
   const isIdle =
     snapshot.throughputTps === 0 &&
     snapshot.inFlightRequests === 0
-  const presentedStatusCode = isIdle ? null : snapshot.statusCode
-  const presentedOutcome = isIdle ? null : snapshot.lastOutcome
-  const status = presentedOutcome === 'timeout'
+  const presentedStatusCode = telemetryAvailable && !isIdle ? snapshot.statusCode : null
+  const presentedOutcome = telemetryAvailable && !isIdle ? snapshot.lastOutcome : null
+  const status = !telemetryAvailable
+    ? 'TELEMETRY UNAVAILABLE'
+    : presentedOutcome === 'timeout'
     ? 'TIMEOUT'
     : presentedOutcome === 'network-error'
       ? 'NETWORK ERROR'
@@ -99,13 +103,17 @@ export function HttpLink({
       >
         {status}
       </text>
-      <text x={metrics.x} y={metrics.throughputY} textAnchor="middle" className="pipeline-small pipeline-http-throughput">
-        {formatRate(snapshot.throughputTps)}
-      </text>
-      <text x={metrics.x} y={metrics.detailY} textAnchor="middle" className="pipeline-small pipeline-http-detail">
-        {inFlight === '—' ? '—' : `${inFlight} in-flight`} · p95{' '}
-        {formatMilliseconds(snapshot.latencyP95Ms)}
-      </text>
+      {telemetryAvailable && (
+        <>
+          <text x={metrics.x} y={metrics.throughputY} textAnchor="middle" className="pipeline-small pipeline-http-throughput">
+            {formatRate(snapshot.throughputTps)}
+          </text>
+          <text x={metrics.x} y={metrics.detailY} textAnchor="middle" className="pipeline-small pipeline-http-detail">
+            {inFlight === '—' ? '—' : `${inFlight} in-flight`} · p95{' '}
+            {formatMilliseconds(snapshot.latencyP95Ms)}
+          </text>
+        </>
+      )}
     </g>
   )
 }

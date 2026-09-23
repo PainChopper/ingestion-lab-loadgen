@@ -2,8 +2,8 @@ import type {
   LoadgenSnapshot,
   ChannelId,
   SelectableId,
-  ThrottlerInstallationMode,
 } from '../../model/loadgen'
+import type { LiveControls } from '../../hooks/useDesiredControl'
 import { useMemo } from 'react'
 import { HttpLink } from './HttpLink'
 import {
@@ -11,28 +11,22 @@ import {
   type PipelineGeometry,
 } from './geometry'
 import { ChannelCable } from './ChannelCable'
+import { PipelineBatchControl } from './PipelineBatchControl'
 import { ReaderActor } from './ReaderActor'
 import { SenderActor } from './SenderActor'
 import { TargetActor } from './TargetActor'
 import { ThrottlerActor } from './ThrottlerActor'
 import { VALVE_APERTURE } from './throttlerValve'
-import type { WorkerActorId } from './WorkerActor'
 import type { PipelineOrientation } from './pipelineLayout'
-import { normalizedWorkerCount } from './workerActorLayout'
 import './PipelineSvg.css'
 
 interface PipelineSvgProps {
   snapshot: LoadgenSnapshot
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
-  onWorkerCountChange: (actor: WorkerActorId, value: number) => void
   onChannelCapacityChange: (channel: ChannelId, value: number) => void
-  requestedTpsPreview: number | null
-  onRequestedTpsPreviewChange: (value: number | null) => void
-  onRequestedTpsChange: (value: number) => Promise<boolean>
-  onInstallationModeChange: (
-    value: ThrottlerInstallationMode,
-  ) => Promise<boolean>
+  liveControls: LiveControls
+  frozenObserved?: boolean
   orientation?: PipelineOrientation
   geometry?: PipelineGeometry
 }
@@ -41,22 +35,19 @@ export function PipelineSvg({
   snapshot,
   selectedId,
   onSelect,
-  onWorkerCountChange,
   onChannelCapacityChange,
-  requestedTpsPreview,
-  onRequestedTpsPreviewChange,
-  onRequestedTpsChange,
-  onInstallationModeChange,
+  liveControls,
+  frozenObserved = false,
   orientation = 'landscape',
   geometry,
 }: PipelineSvgProps) {
   const resolvedGeometry = useMemo(
     () => geometry ?? createPipelineGeometry({
       orientation,
-      readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
-      senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+      readerWorkers: liveControls.readerWorkers.desired,
+      senderWorkers: liveControls.senderWorkers.desired,
     }),
-    [geometry, orientation, snapshot.reader.workers, snapshot.sender.workers],
+    [geometry, liveControls.readerWorkers.desired, liveControls.senderWorkers.desired, orientation],
   )
   const readerChannelGeometry = resolvedGeometry.channels[snapshot.readerChannel.id]
   const senderChannelGeometry = resolvedGeometry.channels[snapshot.senderChannel.id]
@@ -73,12 +64,14 @@ export function PipelineSvg({
     >
       <HttpLink
         snapshot={snapshot.http}
+        telemetryAvailable={snapshot.adapterKind !== 'http'}
         selected={selectedId === snapshot.http.id}
         onSelect={onSelect}
         geometry={resolvedGeometry}
       />
       <ChannelCable
         snapshot={snapshot.readerChannel}
+        batchSize={snapshot.reader.readBatchSize}
         geometry={readerChannelGeometry}
         selected={selectedId === snapshot.readerChannel.id}
         onSelect={onSelect}
@@ -87,9 +80,13 @@ export function PipelineSvg({
         capacityValues={snapshot.adapterKind === 'http'
           ? snapshot.policy?.readerChannelCapacity.allowed
           : undefined}
+        hoseForbiddenBoxes={orientation === 'portrait'
+          ? [resolvedGeometry.batchControl.guard]
+          : undefined}
       />
       <ChannelCable
         snapshot={snapshot.senderChannel}
+        batchSize={snapshot.reader.readBatchSize}
         geometry={senderChannelGeometry}
         selected={selectedId === snapshot.senderChannel.id}
         onSelect={onSelect}
@@ -116,32 +113,38 @@ export function PipelineSvg({
         rateDriven={snapshot.adapterKind === 'http'}
         selected={selectedId === snapshot.reader.id}
         onSelect={onSelect}
-        onWorkerCountChange={onWorkerCountChange}
+        desiredControl={liveControls.readerWorkers}
+        frozenObserved={frozenObserved}
         geometry={resolvedGeometry.actors.reader}
         orientation={resolvedGeometry.orientation}
       />
       <ThrottlerActor
         snapshot={snapshot.throttler}
         upstreamChannel={snapshot.readerChannel}
-        previewTps={requestedTpsPreview}
+        requestedTpsControl={liveControls.requestedTps}
+        installationModeControl={liveControls.installationMode}
         selected={selectedId === snapshot.throttler.id}
         onSelect={onSelect}
-        onPreviewTpsChange={onRequestedTpsPreviewChange}
-        onRequestedTpsChange={onRequestedTpsChange}
-        onInstallationModeChange={onInstallationModeChange}
         geometry={resolvedGeometry.actors.throttler}
         orientation={resolvedGeometry.orientation}
+      />
+      <PipelineBatchControl
+        control={snapshot.reader.readBatchSize}
+        desiredControl={liveControls.readBatchSize}
+        anchor={resolvedGeometry.batchControl.anchor}
       />
       <SenderActor
         snapshot={snapshot.sender}
         selected={selectedId === snapshot.sender.id}
         onSelect={onSelect}
-        onWorkerCountChange={onWorkerCountChange}
+        desiredControl={liveControls.senderWorkers}
+        frozenObserved={frozenObserved}
         geometry={resolvedGeometry.actors.sender}
         orientation={resolvedGeometry.orientation}
       />
       <TargetActor
         snapshot={snapshot.target}
+        telemetryAvailable={snapshot.adapterKind !== 'http'}
         selected={selectedId === snapshot.target.id}
         onSelect={onSelect}
         geometry={resolvedGeometry.actors.target}

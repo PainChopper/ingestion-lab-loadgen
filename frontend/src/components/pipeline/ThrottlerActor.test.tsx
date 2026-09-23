@@ -1,7 +1,11 @@
+/// <reference types="node" />
+
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useState } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { useEffect, useState } from 'react'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
   NumericControlSnapshot,
@@ -13,7 +17,19 @@ import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import { createPipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { ThrottlerActor } from './ThrottlerActor'
+import { useDesiredControl } from '../../hooks/useDesiredControl'
 import { VALVE_INSTALLATION_CONTROL, VALVE_OPENING_CONTROLS } from './throttlerValve'
+
+const styleElement = document.createElement('style')
+const pipelineStyles = readFileSync(
+  resolve(process.cwd(), 'src/components/pipeline/PipelineSvg.css'),
+  'utf8',
+)
+
+beforeAll(() => {
+  styleElement.textContent = pipelineStyles
+  document.head.append(styleElement)
+})
 
 function requestedControl(
   overrides: Partial<NumericControlSnapshot> = {},
@@ -57,7 +73,49 @@ function Harness({
   const adapter = new SimulationAdapter()
   const snapshot = new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0)
   adapter.dispose()
-  const [preview, setPreview] = useState<number | null>(null)
+  const [revision, setRevision] = useState(snapshot.revision)
+  const [requestedApplied, setRequestedApplied] = useState(
+    control.applied ?? control.min,
+  )
+  const [modeApplied, setModeApplied] = useState(installationMode)
+  useEffect(() => setRequestedApplied(control.applied ?? control.min), [control.applied, control.min])
+  useEffect(() => setModeApplied(installationMode), [installationMode])
+  const requestedController = useDesiredControl({
+    applied: requestedApplied,
+    revision,
+    available: control.applied !== null && control.applyMode !== 'unavailable',
+    dispatch: async (value) => {
+      onCommand(value)
+      if (accepted) {
+        setRequestedApplied(value)
+        setRevision((current) => current + 1)
+      }
+      return { accepted }
+    },
+  })
+  const modeController = useDesiredControl({
+    applied: modeApplied,
+    revision,
+    available: true,
+    dispatch: async (value) => {
+      onModeCommand(value)
+      if (modeAccepted) {
+        setModeApplied(value)
+        setRevision((current) => current + 1)
+      }
+      return { accepted: modeAccepted }
+    },
+    rejectionMessage: 'Valve mode change rejected',
+    unavailableMessage: 'Valve mode change unavailable',
+  })
+  const requestedTpsControl = control.preview !== null
+    ? { ...requestedController, desired: control.preview, phase: 'preview' as const }
+    : control.pending === null
+      ? requestedController
+      : { ...requestedController, desired: control.pending, phase: 'pending' as const }
+  const installationModeControl = pendingInstallationMode === null
+    ? modeController
+    : { ...modeController, desired: pendingInstallationMode, phase: 'pending' as const }
   const geometry = createPipelineGeometry({
     orientation,
     readerWorkers: 7,
@@ -69,26 +127,18 @@ function Harness({
       <ThrottlerActor
         snapshot={{
           ...snapshot.throttler,
-          requestedTps: control,
+          requestedTps: { ...control, applied: requestedApplied },
           installationMode: {
             ...snapshot.throttler.installationMode,
-            applied: installationMode,
+            applied: modeApplied,
             pending: pendingInstallationMode,
           },
         }}
         upstreamChannel={{ ...snapshot.readerChannel, ...channelOverrides }}
-        previewTps={preview}
+        requestedTpsControl={requestedTpsControl}
+        installationModeControl={installationModeControl}
         selected={false}
         onSelect={onSelect}
-        onPreviewTpsChange={setPreview}
-        onRequestedTpsChange={async (value) => {
-          onCommand(value)
-          return accepted
-        }}
-        onInstallationModeChange={async (value) => {
-          onModeCommand(value)
-          return modeAccepted
-        }}
         geometry={geometry.actors.throttler}
         orientation={orientation}
       />
@@ -125,9 +175,7 @@ describe('ThrottlerActor valve control', () => {
     fireEvent.pointerUp(window)
 
     expect(onCommand).toHaveBeenCalledWith(135_000)
-    expect(slider.getAttribute('aria-valuenow')).toBe('6')
-    expect(slider.getAttribute('data-wheel-phase')).toBe('1')
-    expect(view.container.querySelector('.pipeline-valve-ghost--preview')).not.toBeNull()
+    await waitFor(() => expect(slider.getAttribute('aria-valuenow')).toBe('6'))
     expect(onSelect).not.toHaveBeenCalled()
 
     fireEvent.pointerDown(view.container.querySelector('[data-direction="decrease"]')!)
@@ -138,7 +186,7 @@ describe('ThrottlerActor valve control', () => {
     expect(onSelect).toHaveBeenCalledWith('throttler')
   })
 
-  it('uses visible sides for the current policy without issuing bypass commands', () => {
+  it('uses visible sides for the current policy without issuing bypass commands', async () => {
     const onCommand = vi.fn()
     const onModeCommand = vi.fn()
     const view = render(
@@ -169,11 +217,42 @@ describe('ThrottlerActor valve control', () => {
 
     fireEvent.pointerDown(decrease)
     fireEvent.pointerUp(window)
+    await waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1))
     fireEvent.pointerDown(increase)
     fireEvent.pointerUp(window)
 
     expect(onCommand.mock.calls.map(([value]) => value)).toEqual([
       1_400_000, 1_800_000,
+    ])
+    expect(onModeCommand).not.toHaveBeenCalled()
+  })
+
+  it('routes wheel halves through TPS controls without issuing bypass commands', async () => {
+    const onCommand = vi.fn()
+    const onModeCommand = vi.fn()
+    const view = render(
+      <Harness onCommand={onCommand} onModeCommand={onModeCommand} />,
+    )
+    const decrease = view.container.querySelector(
+      '[data-wheel-direction="decrease"]',
+    )!
+    const increase = view.container.querySelector(
+      '[data-wheel-direction="increase"]',
+    )!
+
+    expect(decrease.getAttribute('aria-label')).toBe('Decrease throttle opening')
+    expect(increase.getAttribute('aria-label')).toBe('Increase throttle opening')
+    expect(getComputedStyle(decrease).fill).toBe('rgba(0, 0, 0, 0)')
+    expect(getComputedStyle(increase).fill).toBe('rgba(0, 0, 0, 0)')
+    fireEvent.pointerDown(decrease)
+    fireEvent.pointerUp(window)
+    await waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1))
+    fireEvent.pointerDown(increase)
+    fireEvent.pointerUp(window)
+    fireEvent.keyDown(increase, { key: 'Enter' })
+
+    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([
+      90_000, 115_000, 135_000,
     ])
     expect(onModeCommand).not.toHaveBeenCalled()
   })
@@ -197,10 +276,11 @@ describe('ThrottlerActor valve control', () => {
     await user.keyboard('{End}{End}')
     expect(onCommand).toHaveBeenCalledTimes(1)
     expect(onCommand).toHaveBeenLastCalledWith(250_000)
-    expect(slider.getAttribute('aria-valuenow')).toBe('11')
+    await waitFor(() => expect(slider.getAttribute('aria-valuenow')).toBe('11'))
     expect(slider.getAttribute('data-wheel-phase')).toBe('5')
 
     await user.keyboard('{Home}')
+    await waitFor(() => expect(onCommand).toHaveBeenCalledTimes(2))
     expect(onCommand).toHaveBeenLastCalledWith(0)
     expect(slider.getAttribute('aria-valuenow')).toBe('0')
     expect(slider.getAttribute('data-wheel-phase')).toBe('0')
@@ -438,8 +518,7 @@ describe('ThrottlerActor valve control', () => {
     fireEvent.pointerUp(window)
     const callsAtRelease = onCommand.mock.calls.length
 
-    expect(onCommand.mock.calls.map(([value]) => value))
-      .toEqual([25_000, 45_000, 70_000])
+    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([70_000])
     act(() => vi.advanceTimersByTime(1_000))
     expect(onCommand).toHaveBeenCalledTimes(callsAtRelease)
   })
@@ -480,6 +559,10 @@ describe('ThrottlerActor valve control', () => {
           y - radius >= 336.75 && y + radius <= 363.25
       })).toBe(true)
       await user.keyboard('{ArrowRight}')
+      if (phase < 5) {
+        await waitFor(() => expect(slider.getAttribute('aria-valuenow'))
+          .toBe(String(phase + 1)))
+      }
     }
 
     expect(new Set(rimGeometry)).toHaveLength(1)

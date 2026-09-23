@@ -16,6 +16,33 @@ afterEach(() => {
 })
 
 describe('LabShell', () => {
+  it('dispatches the one on-canvas Batch command exactly once per click', async () => {
+    const user = userEvent.setup()
+    adapter = new SimulationAdapter()
+    const initial = adapter.getSnapshot()
+    const dispatch = vi.spyOn(adapter, 'dispatch')
+    const view = render(<LabShell adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: 'Increase Batch' }))
+    await waitFor(() => expect(dispatch.mock.calls.filter(
+      ([command]) => command.type === 'set-read-batch-size',
+    )).toHaveLength(1))
+    expect(dispatch.mock.calls.find(
+      ([command]) => command.type === 'set-read-batch-size',
+    )?.[0]).toEqual({
+      type: 'set-read-batch-size',
+      value: (initial.reader.readBatchSize.applied ??
+        initial.reader.readBatchSize.min) + initial.reader.readBatchSize.step,
+    })
+    expect(view.container.querySelectorAll('.pipeline-batch-stepper'))
+      .toHaveLength(1)
+    expect(dispatch).toHaveBeenCalledTimes(1)
+
+    await user.click(view.container.querySelector('#sender-actor')!)
+    expect(screen.getByLabelText('Sender configuration').children)
+      .toHaveLength(4)
+  })
+
   it('renders a snapshot start error and clears its alert on the next snapshot', () => {
     const simulation = new SimulationAdapter()
     let snapshot: LoadgenTelemetrySnapshot = {
@@ -47,6 +74,114 @@ describe('LabShell', () => {
     errorAdapter.dispose()
   })
 
+  it('keeps desired controls live while paused telemetry remains frozen', async () => {
+    const simulation = new SimulationAdapter()
+    const running: LoadgenTelemetrySnapshot = {
+      ...simulation.getSnapshot(),
+      revision: 1,
+      runState: 'running',
+      reader: { ...simulation.getSnapshot().reader, state: 'running' },
+      throttler: { ...simulation.getSnapshot().throttler, state: 'running' },
+      sender: {
+        ...simulation.getSnapshot().sender,
+        state: 'running',
+        liveWorkers: 2,
+        workerSlots: [
+          { id: 'sender-1', ordinal: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+        ],
+      },
+    }
+    let snapshot = running
+    const listeners = new Set<(next: LoadgenTelemetrySnapshot) => void>()
+    const controlledAdapter: LoadgenAdapter = {
+      kind: 'simulation',
+      getSnapshot: () => snapshot,
+      subscribe: (listener) => {
+        listeners.add(listener)
+        listener(snapshot)
+        return () => listeners.delete(listener)
+      },
+      dispatch: vi.fn(),
+      dispose: simulation.dispose,
+    }
+    render(<LabShell adapter={controlledAdapter} />)
+
+    act(() => {
+      snapshot = {
+        ...running,
+        revision: 2,
+        runState: 'paused',
+        reader: { ...running.reader, state: 'paused' },
+        throttler: { ...running.throttler, state: 'paused' },
+        sender: {
+          ...running.sender,
+          state: 'paused',
+          workers: { ...running.sender.workers, applied: 7 },
+          liveWorkers: 0,
+          workerSlots: [],
+        },
+      }
+      listeners.forEach((listener) => listener(snapshot))
+    })
+
+    expect(screen.getByText('Paused — last observed telemetry frozen; controls remain desired').textContent)
+      .toBe('Paused — last observed telemetry frozen; controls remain desired')
+    const qualifier = screen.getByText(
+      'Paused — last observed telemetry frozen; controls remain desired',
+    )
+    expect(document.querySelector('.topbar')).not.toBeNull()
+    expect(qualifier.getAttribute('role')).toBe('status')
+    await waitFor(() => expect(document.querySelector('#sender-count')?.textContent).toBe('7'))
+    expect(document.querySelector('#sender-actor')?.textContent)
+      .toContain('7 desired · 2 frozen live')
+    expect(document.querySelector('#sender-actor')?.textContent)
+      .toContain('0 idle · 1 in-flight · 0 backoff · 0 errors')
+    expect(screen.getByRole('button', { name: 'Resume run' })).not.toBeNull()
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect reader' }))
+    expect(screen.getByText('Workers desired / frozen live / draining')).not.toBeNull()
+    await userEvent.setup().click(screen.getByRole('button', { name: /Inspect sender/ }))
+    expect(screen.getByText('Workers desired / frozen live / draining')).not.toBeNull()
+    controlledAdapter.dispose()
+  })
+
+  it('disables unavailable canvas worker controls without dispatching', async () => {
+    const simulation = new SimulationAdapter()
+    const initial = simulation.getSnapshot()
+    const snapshot: LoadgenTelemetrySnapshot = {
+      ...initial,
+      reader: {
+        ...initial.reader,
+        workers: { ...initial.reader.workers, applied: null },
+      },
+      sender: {
+        ...initial.sender,
+        workers: { ...initial.sender.workers, applied: null },
+      },
+    }
+    const dispatch = vi.fn()
+    const unavailableAdapter: LoadgenAdapter = {
+      kind: 'simulation',
+      getSnapshot: () => snapshot,
+      subscribe: (listener) => {
+        listener(snapshot)
+        return () => undefined
+      },
+      dispatch,
+      dispose: simulation.dispose,
+    }
+    const user = userEvent.setup()
+    render(<LabShell adapter={unavailableAdapter} />)
+
+    const addReader = screen.getByRole('button', { name: 'Add reader worker' })
+    const addSender = screen.getByRole('button', { name: 'Add sender worker' })
+    expect((addReader as HTMLButtonElement).disabled).toBe(true)
+    expect((addSender as HTMLButtonElement).disabled).toBe(true)
+    await user.click(addReader)
+    await user.click(addSender)
+    expect(dispatch).not.toHaveBeenCalled()
+    unavailableAdapter.dispose()
+  })
+
   it('runs, pauses, and resets through the mounted toolbar', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()
@@ -61,6 +196,8 @@ describe('LabShell', () => {
     await waitFor(() => {
       expect(screen.getByText('paused')).not.toBeNull()
     })
+    expect(screen.getByRole('button', { name: 'Resume run' })).not.toBeNull()
+    expect(screen.queryAllByRole('button', { name: /^(Pause|Resume) run$/ })).toHaveLength(1)
 
     await user.click(screen.getByRole('button', { name: 'Reset run' }))
     await waitFor(() => {
@@ -147,9 +284,9 @@ describe('LabShell', () => {
       .map((heading) => heading.textContent)
     expect(sectionTitles).toEqual([
       'Управление',
-      'Состояние pool',
-      'Метрики и результаты',
-      'Диагностика и retry policy',
+      'Pool',
+      'Delivery',
+      'Diagnostics',
     ])
     for (const label of [
       'Workers desired / live / draining',
@@ -190,6 +327,7 @@ describe('LabShell', () => {
     adapter = new SimulationAdapter()
     const dispatch = vi.spyOn(adapter, 'dispatch')
     render(<LabShell adapter={adapter} />)
+    await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
     const input = screen.getByRole('spinbutton', { name: /^Requested TPS/ })
     const valve = screen.getByRole('slider', { name: 'Throttle opening' })
 
@@ -296,7 +434,7 @@ describe('LabShell', () => {
     adapter = new SimulationAdapter()
     render(<LabShell adapter={adapter} />)
 
-    await user.click(screen.getByRole('button', { name: 'Inspect reader' }))
+    await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
     await user.click(screen.getByRole('button', { name: 'Start run' }))
     const requested = screen.getByRole('spinbutton', { name: /^Requested TPS/ })
     await user.clear(requested)
@@ -325,8 +463,8 @@ describe('LabShell', () => {
       .toBe('portrait')
     expect(screen.getByLabelText('Load generator laboratory')
       .getAttribute('data-layout')).toBe('portrait')
-    expect(screen.getByRole('heading', { name: 'READER' })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Inspect reader' })
+    expect(screen.getByRole('heading', { name: 'THROTTLER' })).not.toBeNull()
+    expect(screen.getByRole('button', { name: 'Inspect throttler' })
       .getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByText('running')).not.toBeNull()
     expect((requested as HTMLInputElement).value).toBe('135000')

@@ -110,7 +110,10 @@
 }
 
 .pipeline-channel.pipeline-selectable--selected .pipeline-channel-cable,
-.pipeline-channel.pipeline-selectable:focus-visible .pipeline-channel-cable,
+.pipeline-channel.pipeline-selectable:focus-visible .pipeline-channel-cable {
+  filter: drop-shadow(0 0 3px rgba(39, 199, 234, 0.58));
+}
+
 .pipeline-http.pipeline-selectable--selected .pipeline-http-line,
 .pipeline-http.pipeline-selectable:focus-visible .pipeline-http-line {
   stroke-width: 3.8;
@@ -576,6 +579,10 @@
   fill: transparent;
 }
 
+.pipeline-valve-wheel-hit-area {
+  fill: transparent;
+}
+
 .pipeline-valve-focus-ring {
   fill: none;
   opacity: 0;
@@ -672,7 +679,7 @@
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 3;
+  stroke-width: var(--pipeline-channel-capacity-width, 3px);
   vector-effect: non-scaling-stroke;
 }
 
@@ -686,7 +693,7 @@
   pointer-events: none;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2px;
+  stroke-width: var(--pipeline-channel-requested-capacity-width, 2px);
   stroke-dasharray: none;
   vector-effect: non-scaling-stroke;
 }
@@ -789,9 +796,74 @@
   opacity: 1;
 }
 
+.pipeline-batch-stepper {
+  color: var(--cyan);
+  cursor: default;
+}
+
+.pipeline-batch-stepper__body {
+  fill: rgba(6, 21, 34, 0.94);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.pipeline-batch-stepper__button {
+  cursor: pointer;
+  outline: none;
+}
+
+.pipeline-batch-stepper__button rect {
+  fill: transparent;
+  stroke: transparent;
+}
+
+.pipeline-batch-stepper__button text {
+  fill: currentColor;
+  font-size: 17px;
+  font-weight: 750;
+  pointer-events: none;
+}
+
+.pipeline-batch-stepper__button:hover:not([aria-disabled='true']) rect {
+  fill: rgba(39, 199, 234, 0.1);
+}
+
+.pipeline-batch-stepper__button:focus-visible rect {
+  stroke: var(--cyan);
+  stroke-width: 2;
+}
+
+.pipeline-batch-stepper__button[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.3;
+}
+
+.pipeline-batch-stepper__value {
+  fill: var(--text);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.pipeline-batch-stepper__value {
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.pipeline-batch-stepper--busy {
+  color: var(--yellow);
+}
+
+.pipeline-batch-stepper--unavailable {
+  color: var(--muted);
+}
+
+.pipeline-channel--markers-visible .pipeline-channel-cable {
+  stroke-dasharray: 8 6;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .pipeline-channel--flow-active .pipeline-channel-cable {
-    stroke-dasharray: 8 6;
     animation: pipeline-channel-flow 700ms linear infinite;
   }
 }

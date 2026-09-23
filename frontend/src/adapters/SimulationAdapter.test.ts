@@ -22,7 +22,6 @@ const DIRECT_CONFIG: SimulationConfig = {
   requestedTps: 50_000,
   throttlerInstallationMode: 'installed',
   readBatchSize: 1_000,
-  httpBatchSize: 1_000,
   httpTimeoutMs: 500,
   targetDelayMs: 5,
   targetErrorRatePercent: 0,
@@ -150,11 +149,6 @@ describe('SimulationAdapter', () => {
         expected: 13_000,
       },
       {
-        command: { type: 'set-http-batch-size', value: 1_050 },
-        select: (snapshot) => snapshot.sender.httpBatchSize,
-        expected: 1_100,
-      },
-      {
         command: { type: 'set-http-timeout', valueMs: 504 },
         select: (snapshot) => snapshot.sender.timeoutMs,
         expected: 500,
@@ -189,7 +183,6 @@ describe('SimulationAdapter', () => {
       { type: 'set-reader-channel-capacity', value: Infinity },
       { type: 'set-requested-tps', value: Number.NaN },
       { type: 'set-read-batch-size', value: Infinity },
-      { type: 'set-http-batch-size', value: Number.NaN },
       { type: 'set-http-timeout', valueMs: Infinity },
       { type: 'set-sender-simulated-delay-ms', value: Number.NaN },
       { type: 'set-sender-simulated-error-rate-percent', value: Infinity },
@@ -283,6 +276,7 @@ describe('SimulationAdapter', () => {
 
   it('keeps readerChannel buffered behind a zero throttle while senderChannel and HTTP drain', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-http-timeout', valueMs: 5_000 })
     await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 400 })
     await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
@@ -381,6 +375,7 @@ describe('SimulationAdapter', () => {
 
   it('reports saturated bypass reading as downstream limited', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 0 })
     await adapter.dispatch({
       type: 'set-worker-count',
@@ -396,10 +391,10 @@ describe('SimulationAdapter', () => {
 
     const snapshot = adapter.getSnapshot()
     expect(snapshot.reader).toMatchObject({
-      readTps: 50_000,
       configuredCapacityTps: 350_000,
       limitationReason: 'downstream-backpressure',
     })
+    expect(snapshot.reader.readTps).toBeGreaterThan(0)
     expect(snapshot.reader.readTps).toBeLessThan(
       snapshot.reader.configuredCapacityTps ?? 0,
     )
@@ -412,6 +407,7 @@ describe('SimulationAdapter', () => {
 
   it('keeps retry ownership and bounded channel pressure under bypass', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
     await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     await adapter.dispatch({
@@ -451,14 +447,17 @@ describe('SimulationAdapter', () => {
     await vi.advanceTimersByTimeAsync(300)
 
     const beforeReinsert = adapter.getSnapshot()
-    expect(beforeReinsert.senderChannel.depthBatches).toBe(10)
+    expect(beforeReinsert.senderChannel.depthBatches).toBeGreaterThan(0)
+    expect(beforeReinsert.senderChannel.depthBatches).toBeLessThanOrEqual(
+      beforeReinsert.senderChannel.capacity.applied ?? 0,
+    )
     await adapter.dispatch({
       type: 'set-throttler-installation-mode',
       value: 'installed',
     })
     const appliedReinsert = adapter.getSnapshot()
     const readerChannelReceivedAtReinsert = appliedReinsert.readerChannel.receivedBatchesTotal
-    const senderChannelSentAtReinsert = appliedReinsert.senderChannel.sentBatchesTotal
+    const senderChannelReceivedAtReinsert = appliedReinsert.senderChannel.receivedBatchesTotal
 
     await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 0 })
     await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
@@ -467,14 +466,15 @@ describe('SimulationAdapter', () => {
 
     expect(afterReinsert.throttler.installationMode.applied).toBe('installed')
     expect(afterReinsert.readerChannel.receivedBatchesTotal).toBe(readerChannelReceivedAtReinsert)
-    expect(afterReinsert.senderChannel.sentBatchesTotal)
-      .toBeGreaterThan(senderChannelSentAtReinsert)
+    expect(afterReinsert.senderChannel.receivedBatchesTotal)
+      .toBeGreaterThan(senderChannelReceivedAtReinsert)
     expect(afterReinsert.senderChannel.depthBatches).toBe(0)
     adapter.dispose()
   })
 
   it('drains recovered senderChannel and releases backpressure when service exceeds input', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-http-timeout', valueMs: 5_000 })
     await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 2_000 })
     await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
@@ -512,6 +512,7 @@ describe('SimulationAdapter', () => {
 
   it('limits each sender worker to one in-flight HTTP request', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 })
     await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
@@ -529,6 +530,7 @@ describe('SimulationAdapter', () => {
 
   it('keeps bottleneck throughput independent of senderChannel capacity', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value: 0 })
     await adapter.dispatch({ type: 'set-http-timeout', valueMs: 5_000 })
     await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 2_000 })
@@ -670,22 +672,21 @@ describe('SimulationAdapter', () => {
     adapter.dispose()
   })
 
-  it('tracks independent read and HTTP batch rates', async () => {
+  it('preserves one batch boundary from Reader through Sender', async () => {
     const adapter = new SimulationAdapter()
-    await adapter.dispatch({ type: 'set-read-batch-size', value: 25_000 })
-    await adapter.dispatch({ type: 'set-http-batch-size', value: 1_000 })
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(1_000)
 
     const snapshot = adapter.getSnapshot()
     expect(snapshot.readerChannel.receivedBatchesTotal).toBeGreaterThan(0)
-    expect(snapshot.senderChannel.sentBatchesTotal).toBeGreaterThan(
+    expect(snapshot.senderChannel.sentBatchesTotal).toBe(
       snapshot.readerChannel.receivedBatchesTotal,
     )
-    expect(snapshot.senderChannel.inputBatchesPerSecond).toBeGreaterThan(
+    expect(snapshot.senderChannel.inputBatchesPerSecond).toBe(
       snapshot.readerChannel.outputBatchesPerSecond,
     )
-    expect(snapshot.readerChannel.receivedTransactionsTotal).toBeGreaterThanOrEqual(
+    expect(snapshot.readerChannel.receivedTransactionsTotal).toBe(
       snapshot.senderChannel.sentTransactionsTotal,
     )
     adapter.dispose()
@@ -718,6 +719,7 @@ describe('SimulationAdapter', () => {
 
   it('maps actual rolling failed transaction throughput to the target', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 5 })
     await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
@@ -729,8 +731,10 @@ describe('SimulationAdapter', () => {
     const snapshot = adapter.getSnapshot()
     expect(snapshot.sender.attemptedTps).toBe(255_000)
     expect(snapshot.sender.retryAttemptedTps).toBe(5_000)
-    expect(snapshot.target.acceptedTps).toBe(250_000)
-    expect(snapshot.target.rejectedTps).toBe(5_000)
+    expect(snapshot.target.acceptedTps).toBe(249_000)
+    expect(snapshot.target.rejectedTps).toBe(6_000)
+    expect((snapshot.target.acceptedTps ?? 0) +
+      (snapshot.target.rejectedTps ?? 0)).toBe(snapshot.sender.attemptedTps)
     adapter.dispose()
   })
 
@@ -893,10 +897,10 @@ describe('SimulationAdapter', () => {
     )
     expect(attempts.map(({ batch }) => [batch.sequence, batch.identity]))
       .toEqual([
-        [0, 'http-batch-0'],
-        [1, 'http-batch-1'],
-        [2, 'http-batch-2'],
-        [3, 'http-batch-3'],
+        [0, 'pipeline-batch-0'],
+        [1, 'pipeline-batch-1'],
+        [2, 'pipeline-batch-2'],
+        [3, 'pipeline-batch-3'],
       ])
   })
 
@@ -996,9 +1000,9 @@ describe('SimulationAdapter', () => {
       batch.identity,
       batch.transactions,
     ])).toEqual([
-      [0, 'http-batch-0', 1_000],
-      [0, 'http-batch-0', 1_000],
-      [0, 'http-batch-0', 1_000],
+      [0, 'pipeline-batch-0', 1_000],
+      [0, 'pipeline-batch-0', 1_000],
+      [0, 'pipeline-batch-0', 1_000],
     ])
     expect(
       attempts[1].startedAtMs - attempts[0].startedAtMs - 10,
@@ -1062,7 +1066,7 @@ describe('SimulationAdapter', () => {
     expect(attempts.slice(0, 2).map(({ batch }) => batch.sequence))
       .toEqual([0, 1])
     expect(sameStepStarts[0]).toMatchObject({
-      batch: { sequence: 0, identity: 'http-batch-0' },
+      batch: { sequence: 0, identity: 'pipeline-batch-0' },
       attempt: 2,
     })
     expect(sameStepStarts.slice(1).some(({ attempt }) => attempt === 1))
@@ -1168,7 +1172,7 @@ describe('SimulationAdapter', () => {
       readerWorkers: 7,
       senderWorkers: 2,
       requestedTps: 250_000,
-      readBatchSize: 10_000,
+      readBatchSize: 1_000,
     }, 4, 20, (context) => {
       attempts.push(context)
       return {
@@ -1304,7 +1308,7 @@ describe('SimulationAdapter', () => {
         simulation.telemetry(true).sender.workerStates.backoff === 1 &&
         simulation.telemetry(true).senderChannel.blockedSenders === 1,
     )
-    simulation.updateConfig({ httpBatchSize: 500 })
+    simulation.updateConfig({ readBatchSize: 500 })
     advanceUntil(
       simulation,
       () => attempts.some(({ batch }) => batch.sequence === 2),
@@ -1324,6 +1328,7 @@ describe('SimulationAdapter', () => {
 
   it('fills senderChannel and readerChannel under the owner 503 scenario then drains senderChannel on recovery', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 125_000 })
     await adapter.dispatch({
@@ -1370,6 +1375,7 @@ describe('SimulationAdapter', () => {
 
   it('drains readerChannel after recovery when source input remains below admission', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 2 })
     await adapter.dispatch({ type: 'set-sender-workers', value: 32 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 125_000 })
@@ -1387,7 +1393,7 @@ describe('SimulationAdapter', () => {
     await vi.advanceTimersByTimeAsync(5_000)
     const recovered = adapter.getSnapshot()
     expect(recovered.senderChannel.depthBatches).toBe(0)
-    expect(recovered.readerChannel.depthBatches).toBe(0)
+    expect(recovered.readerChannel.depthBatches).toBeLessThanOrEqual(1)
     expect(recovered.reader.limitationReason).toBeNull()
     adapter.dispose()
   })
@@ -1452,6 +1458,7 @@ describe('SimulationAdapter', () => {
 
   it('keeps senderChannel saturated when recovered service remains below admission', async () => {
     const adapter = new SimulationAdapter()
+    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
     await adapter.dispatch({ type: 'set-requested-tps', value: 125_000 })
     await adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value: 40 })

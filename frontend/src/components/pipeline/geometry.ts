@@ -167,6 +167,31 @@ export interface PipelineChannelGeometry extends ChannelCableEndpoints {
   }
 }
 
+export interface PipelineBatchControlGeometry {
+  readonly anchor: Point
+  readonly guard: FixedActorBounds
+}
+
+export const PIPELINE_BATCH_CONTROL = Object.freeze({
+  landscapeY: 112,
+  portraitInputOffset: 72,
+  portraitReserve: 65,
+  guardHalfWidth: 96,
+  guardHalfHeight: 28,
+})
+
+function batchControlGeometry(anchor: Point): PipelineBatchControlGeometry {
+  return {
+    anchor,
+    guard: {
+      x: anchor.x - PIPELINE_BATCH_CONTROL.guardHalfWidth,
+      y: anchor.y - PIPELINE_BATCH_CONTROL.guardHalfHeight,
+      width: PIPELINE_BATCH_CONTROL.guardHalfWidth * 2,
+      height: PIPELINE_BATCH_CONTROL.guardHalfHeight * 2,
+    },
+  }
+}
+
 export const CHANNEL_CABLE_ENDPOINTS: Readonly<
   Record<ChannelId, ChannelCableEndpoints>
 > = Object.freeze({
@@ -350,6 +375,10 @@ function landscapeGeometry(contentWidth: number) {
       value: `0 0 ${width} ${PIPELINE_VIEW_BOX.height}`,
     },
     stationDelta: delta,
+    batchControl: batchControlGeometry({
+      x: throttler.title.x,
+      y: PIPELINE_BATCH_CONTROL.landscapeY,
+    }),
     actors: {
       reader: { ...reader, markerPoint: { x: 96, y: 392 } },
       throttler,
@@ -375,14 +404,16 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
   const senderGrid = getPortraitWorkerGridMetrics('sender', senderWorkers)
   const readerTop = 88
   const readerBottom = readerTop + readerGrid.height
-  const throttlerSlotInput = readerBottom + 247
+  const throttlerSlotInput = readerBottom + 247 +
+    PIPELINE_BATCH_CONTROL.portraitReserve
   const throttlerInput = throttlerSlotInput - PORTRAIT_THROTTLER_LIFT
   const throttlerOutput = throttlerInput + 193
   const throttlerSlotOutput = throttlerSlotInput + 193
   const senderTop = throttlerSlotOutput + 222
   const senderBottom = senderTop + senderGrid.height
   const targetTop = senderBottom + 170
-  const viewBoxHeight = 1160 + readerGrid.height + senderGrid.height
+  const viewBoxHeight = 1160 + readerGrid.height + senderGrid.height +
+    PIPELINE_BATCH_CONTROL.portraitReserve
   const reader = {
     bounds: {
       x: 40,
@@ -607,6 +638,10 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       value: `0 0 480 ${viewBoxHeight}`,
     },
     stationDelta: 0,
+    batchControl: batchControlGeometry({
+      x: throttler.ports.input.x,
+      y: throttler.ports.input.y - PIPELINE_BATCH_CONTROL.portraitInputOffset,
+    }),
     actors: { reader, throttler, sender, target },
     channels,
     http: {

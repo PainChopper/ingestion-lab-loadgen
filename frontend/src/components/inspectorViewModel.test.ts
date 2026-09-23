@@ -143,14 +143,33 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
+  it('uses capability rows instead of HTTP adapter placeholder telemetry', () => {
+    const adapter = new SimulationAdapter()
+    const snapshot = {
+      ...derivedSnapshot(adapter),
+      adapterKind: 'http' as const,
+    }
+
+    expect(getInspectorViewModel(snapshot, 'http')?.rows).toEqual([
+      { label: 'Telemetry', value: 'Not reported by HTTP adapter' },
+    ])
+    expect(getInspectorViewModel(snapshot, 'target')?.rows).toEqual([
+      { label: 'Telemetry', value: 'Not reported by HTTP adapter' },
+    ])
+    expect(getInspectorViewModel(snapshot, 'sender')?.sections?.[1].rows).toEqual([
+      { label: 'Delivery telemetry', value: 'Not reported by HTTP adapter' },
+    ])
+    adapter.dispose()
+  })
+
   it('groups all Sender rows in a stable semantic order', () => {
     const adapter = new SimulationAdapter()
     const model = getInspectorViewModel(derivedSnapshot(adapter), 'sender')
 
     expect(model?.sections?.map((section) => section.title)).toEqual([
-      'Состояние pool',
-      'Метрики и результаты',
-      'Диагностика и retry policy',
+      'Pool',
+      'Delivery',
+      'Diagnostics',
     ])
     expect(model?.sections?.flatMap((section) => section.rows.map((row) => row.label)))
       .toEqual(model?.rows.map((row) => row.label))
@@ -213,7 +232,11 @@ describe('inspector view model', () => {
       { label: 'Configured capacity', value: '350,000 tx/s' },
       { label: 'Capacity state', value: 'Downstream limited' },
       { label: 'Rows read', value: '14,000' },
-      { label: 'Source', value: 'MBD-mini/trx/part/input.parquet' },
+      expect.objectContaining({
+        label: 'Source',
+        value: 'input.parquet',
+        disclosureValue: 'MBD-mini/trx/part/input.parquet',
+      }),
     ]))
     adapter.dispose()
   })
