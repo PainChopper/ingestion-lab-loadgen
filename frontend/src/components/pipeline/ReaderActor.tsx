@@ -1,15 +1,17 @@
 import type { ReaderSnapshot, SelectableId } from '../../model/loadgen'
-import { formatRate } from './formatters'
+import { formatInteger, formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
-import { WorkerActor, type WorkerActorId } from './WorkerActor'
+import { WorkerActor } from './WorkerActor'
+import type { DesiredControl } from '../../hooks/useDesiredControl'
 
 interface ReaderActorProps {
   snapshot: ReaderSnapshot
   rateDriven: boolean
   selected: boolean
   onSelect: (id: SelectableId) => void
-  onWorkerCountChange: (actor: WorkerActorId, value: number) => void
+  desiredControl: DesiredControl<number>
+  frozenObserved: boolean
   geometry: PipelineGeometry['actors']['reader']
   orientation: PipelineOrientation
 }
@@ -19,7 +21,8 @@ export function ReaderActor({
   rateDriven,
   selected,
   onSelect,
-  onWorkerCountChange,
+  desiredControl,
+  frozenObserved,
   geometry,
   orientation,
 }: ReaderActorProps) {
@@ -41,15 +44,16 @@ export function ReaderActor({
         : undefined}
       outputPort={geometry.ports.output}
       primaryMetric={`Read ${formatRate(snapshot.readTps)}`}
-      secondaryMetric={`Capacity ${formatRate(snapshot.configuredCapacityTps)}`}
-      statusMetric={snapshot.limitationReason === 'downstream-backpressure'
-        ? 'Downstream limited'
-        : undefined}
+      secondaryMetric={
+        `${formatInteger(desiredControl.desired)} desired · ` +
+        `${formatInteger(snapshot.liveWorkers)} ${frozenObserved ? 'frozen live' : 'live'} · ` +
+        `${formatInteger(snapshot.drainingWorkers)} draining`
+      }
       metricPoints={geometry.metrics}
       orientation={orientation}
       selected={selected}
       onSelect={onSelect}
-      onWorkerCountChange={onWorkerCountChange}
+      desiredControl={desiredControl}
     />
   )
 }

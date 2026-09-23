@@ -1,5 +1,6 @@
 import { Minus, Plus } from 'lucide-react'
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import type { DesiredControl } from '../../hooks/useDesiredControl'
 import type {
   NumericControlSnapshot,
   ReaderWorkerSlotSnapshot,
@@ -12,7 +13,6 @@ import type { Point, TextPlacement, WorkerActorBounds } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
   getWorkerActorLayout,
-  normalizedWorkerCount,
   type WorkerChipLayout,
 } from './workerActorLayout'
 
@@ -51,7 +51,7 @@ interface WorkerActorProps {
   orientation?: PipelineOrientation
   selected: boolean
   onSelect: (id: SelectableId) => void
-  onWorkerCountChange: (actor: WorkerActorId, value: number) => void
+  desiredControl: DesiredControl<number>
 }
 
 function WorkerChip({
@@ -150,7 +150,7 @@ export function WorkerActor({
   orientation = 'landscape',
   selected,
   onSelect,
-  onWorkerCountChange,
+  desiredControl,
 }: WorkerActorProps) {
   const [recentlySuccessfulWorkerIds, setRecentlySuccessfulWorkerIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -160,6 +160,15 @@ export function WorkerActor({
   const [completedReaderIds, setCompletedReaderIds] = useState<ReadonlySet<string>>(() => new Set())
   const previousReaderActivity = useRef<ReadonlyMap<string, ReaderWorkerSlotSnapshot['activity']>>(new Map())
   const readerTimeouts = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const holdTimer = useRef<number | null>(null)
+  const repeatTimer = useRef<number | null>(null)
+  const releaseListeners = useRef<(() => void) | null>(null)
+  const holdActive = useRef(false)
+  const suppressClick = useRef(false)
+  const desiredRef = useRef(desiredControl.desired)
+  const commitDesired = desiredControl.commit
+  const cancelDesired = desiredControl.cancel
+  const previewDesired = desiredControl.preview
 
   useEffect(() => {
     if (actor !== 'reader' || workerSlots === null || workerSlots === undefined) {
@@ -269,6 +278,21 @@ export function WorkerActor({
     ]))
   }, [actor, workerSlots])
 
+  const stopHold = useCallback((commit: boolean) => {
+    if (holdTimer.current !== null) window.clearTimeout(holdTimer.current)
+    if (repeatTimer.current !== null) window.clearInterval(repeatTimer.current)
+    holdTimer.current = null
+    repeatTimer.current = null
+    releaseListeners.current?.()
+    releaseListeners.current = null
+    if (!holdActive.current) return
+    holdActive.current = false
+    if (commit) void commitDesired()
+    else cancelDesired()
+  }, [cancelDesired, commitDesired])
+
+  useEffect(() => () => stopHold(false), [stopHold])
+
   useEffect(() => () => {
     for (const timeout of successTimeouts.current.values()) clearTimeout(timeout)
     successTimeouts.current.clear()
@@ -276,12 +300,24 @@ export function WorkerActor({
     readerTimeouts.current.clear()
   }, [])
 
-  const desiredWorkers = normalizedWorkerCount(workers)
+  const desiredWorkers = Math.min(
+    Math.round(workers.max),
+    Math.max(Math.round(workers.min), Math.round(desiredControl.desired)),
+  )
+  desiredRef.current = desiredWorkers
   const visibleWorkers = workerSlots === undefined ? desiredWorkers : workerSlots?.length ?? 0
-  const layout = getWorkerActorLayout(actor, bounds, workers, orientation, visibleWorkers)
+  const layout = getWorkerActorLayout(
+    actor,
+    bounds,
+    workers,
+    orientation,
+    visibleWorkers,
+    desiredWorkers,
+  )
   const workerMin = Math.round(workers.min)
   const workerMax = Math.round(workers.max)
   const workerStep = Math.max(1, Math.round(workers.step))
+  const workerControlDisabled = !desiredControl.available || desiredControl.phase === 'pending'
   const chipState = (index: number): SenderWorkerState | ReaderWorkerSlotSnapshot['activity'] | 'active' | 'inactive' | 'success' | 'draining' | 'terminal-error' => {
     if (workerSlots === undefined || workerSlots === null) {
       return (active ?? (runState === 'running')) ? 'active' : 'inactive'
@@ -299,11 +335,62 @@ export function WorkerActor({
   }
   const actorAriaLabel = actor === 'reader' || liveWorkers === undefined
     ? `Inspect ${actor}`
-    : `Inspect ${actor}, ${workers.applied ?? 0} desired, ${liveWorkers} live, ${drainingWorkers ?? 0} draining`
+    : `Inspect ${actor}, ${desiredWorkers} desired, ${liveWorkers} live, ${drainingWorkers ?? 0} draining`
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
     onSelect(actor)
+  }
+  const stepWorkers = useCallback((delta: number) => {
+    const next = Math.min(
+      Math.round(workers.max),
+      Math.max(Math.round(workers.min), desiredRef.current + delta),
+    )
+    if (next === desiredRef.current) return false
+    desiredRef.current = next
+    previewDesired(next)
+    return true
+  }, [previewDesired, workers.max, workers.min])
+  const handleWorkerPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    delta: number,
+  ) => {
+    event.preventDefault()
+    if (!desiredControl.available) return
+    stopHold(false)
+    if (desiredControl.phase === 'pending' || !stepWorkers(delta)) return
+    holdActive.current = true
+    suppressClick.current = true
+    const release = () => stopHold(true)
+    const cancel = () => stopHold(false)
+    const cancelKey = (keyboardEvent: globalThis.KeyboardEvent) => {
+      if (keyboardEvent.key === 'Escape') cancel()
+    }
+    releaseListeners.current = () => {
+      window.removeEventListener('pointerup', release)
+      window.removeEventListener('pointercancel', cancel)
+      window.removeEventListener('blur', cancel)
+      window.removeEventListener('keydown', cancelKey)
+    }
+    window.addEventListener('pointerup', release)
+    window.addEventListener('pointercancel', cancel)
+    window.addEventListener('blur', cancel)
+    window.addEventListener('keydown', cancelKey)
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    holdTimer.current = window.setTimeout(() => {
+      repeatTimer.current = window.setInterval(() => {
+        if (!stepWorkers(delta)) stopHold(true)
+      }, 120)
+    }, 420)
+  }
+  const handleWorkerClick = (delta: number) => {
+    if (!desiredControl.available) return
+    if (suppressClick.current) {
+      suppressClick.current = false
+      return
+    }
+    if (desiredControl.phase === 'pending' || !stepWorkers(delta)) return
+    void desiredControl.commit()
   }
 
   return (
@@ -330,13 +417,10 @@ export function WorkerActor({
           <button
             id={`${actor}-minus`}
             type="button"
-            onClick={() =>
-              onWorkerCountChange(
-                actor,
-                Math.max(workerMin, desiredWorkers - workerStep),
-              )
-            }
-            disabled={desiredWorkers <= workerMin}
+            onPointerDown={(event) => handleWorkerPointerDown(event, -workerStep)}
+            onLostPointerCapture={() => stopHold(false)}
+            onClick={() => handleWorkerClick(-workerStep)}
+            disabled={workerControlDisabled || desiredWorkers <= workerMin}
             title={`Remove ${actor} worker`}
             aria-label={`Remove ${actor} worker`}
           >
@@ -345,9 +429,9 @@ export function WorkerActor({
           <output
             id={`${actor}-count`}
             aria-label={
-              workers.pending === null
+              desiredControl.phase === 'idle'
                 ? `${title} worker count, ${desiredWorkers} applied`
-                : `${title} worker count, ${desiredWorkers} applied, ${workers.pending} pending`
+                : `${title} worker count, ${workers.applied ?? 0} applied, ${desiredWorkers} ${desiredControl.phase}`
             }
           >
             {desiredWorkers}
@@ -355,13 +439,10 @@ export function WorkerActor({
           <button
             id={`${actor}-plus`}
             type="button"
-            onClick={() =>
-              onWorkerCountChange(
-                actor,
-                Math.min(workerMax, desiredWorkers + workerStep),
-              )
-            }
-            disabled={desiredWorkers >= workerMax}
+            onPointerDown={(event) => handleWorkerPointerDown(event, workerStep)}
+            onLostPointerCapture={() => stopHold(false)}
+            onClick={() => handleWorkerClick(workerStep)}
+            disabled={workerControlDisabled || desiredWorkers >= workerMax}
             title={`Add ${actor} worker`}
             aria-label={`Add ${actor} worker`}
           >
@@ -391,7 +472,7 @@ export function WorkerActor({
           rx="5"
           className="pipeline-actor-box"
         />
-        {layout.chips.filter((_, index) => workerSlots === undefined || (workerSlots !== null && index < workerSlots.length)).map((chip, index) => (
+        {layout.chips.filter((_, index) => workerSlots === undefined || workerSlots?.length === 0 || (workerSlots !== null && index < workerSlots.length)).map((chip, index) => (
           <WorkerChip
             key={workerSlots?.[index]?.id ?? index}
             {...chip}

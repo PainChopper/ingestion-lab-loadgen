@@ -41,7 +41,6 @@ const CONTROL_RANGES = Object.freeze({
   readerChannelCapacity: Object.freeze({ min: 0, max: 12, step: 1 }),
   senderChannelCapacity: Object.freeze({ min: 0, max: 160, step: 10 }),
   readBatchSize: Object.freeze({ min: 1_000, max: 100_000, step: 1_000 }),
-  httpBatchSize: Object.freeze({ min: 100, max: 10_000, step: 100 }),
   httpTimeoutMs: Object.freeze({ min: 10, max: 5_000, step: 10 }),
   targetDelayMs: Object.freeze({ min: 0, max: 2_000, step: 10 }),
   targetErrorRatePercent: Object.freeze({ min: 0, max: 100, step: 1 }),
@@ -234,11 +233,6 @@ function freezeSnapshot(
         : 0,
       simulatedDelayMs: numericControl(config.targetDelayMs, CONTROL_RANGES.targetDelayMs, 'milliseconds'),
       simulatedErrorRatePercent: numericControl(config.targetErrorRatePercent, CONTROL_RANGES.targetErrorRatePercent, 'percent'),
-      httpBatchSize: numericControl(
-        config.httpBatchSize,
-        CONTROL_RANGES.httpBatchSize,
-        'tx',
-      ),
       timeoutMs: numericControl(
         config.httpTimeoutMs,
         CONTROL_RANGES.httpTimeoutMs,
@@ -322,7 +316,6 @@ export class SimulationAdapter implements LoadgenAdapter {
       requestedTps: 120_000,
       throttlerInstallationMode: 'installed',
       readBatchSize: 25_000,
-      httpBatchSize: 1_000,
       httpTimeoutMs: 500,
       targetDelayMs: 40,
       targetErrorRatePercent: 2,
@@ -453,15 +446,6 @@ export class SimulationAdapter implements LoadgenAdapter {
         changed = this.updateConfig(
           'readBatchSize',
           normalizeNumericValue(command.value, CONTROL_RANGES.readBatchSize),
-        )
-        break
-      case 'set-http-batch-size':
-        if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber(commandId, command, 'http batch size')
-        }
-        changed = this.updateConfig(
-          'httpBatchSize',
-          normalizeNumericValue(command.value, CONTROL_RANGES.httpBatchSize),
         )
         break
       case 'set-http-timeout':

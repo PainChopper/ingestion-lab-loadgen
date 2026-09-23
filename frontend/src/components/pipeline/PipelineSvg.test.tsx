@@ -13,9 +13,15 @@ import type {
 import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import {
   createPipelineGeometry,
+  FLOW_BASELINE,
+  PIPELINE_BATCH_CONTROL,
   PORTRAIT_THROTTLER_LIFT,
   type TextPlacement,
 } from './geometry'
+import {
+  CHANNEL_CAPACITY_SCALE_OFFSET,
+  CHANNEL_CABLE_MAX_LIFT,
+} from './channelCableGeometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { PipelineSvg } from './PipelineSvg'
 import {
@@ -24,6 +30,7 @@ import {
   VALVE_OPENING_CONTROLS,
 } from './throttlerValve'
 import { normalizedWorkerCount } from './workerActorLayout'
+import type { DesiredControl, LiveControls } from '../../hooks/useDesiredControl'
 
 const styleElement = document.createElement('style')
 const pipelineStyles = readFileSync(
@@ -57,6 +64,24 @@ describe('responsive pipeline geometry', () => {
       value: `0 0 ${width} 650`,
     })
     expect(geometry.stationDelta).toBe(delta)
+    expect(geometry.batchControl.anchor.x).toBeCloseTo(430 + delta, 10)
+    expect(geometry.batchControl.anchor.y).toBe(112)
+    expect(geometry.batchControl.guard.x).toBeCloseTo(334 + delta, 10)
+    expect(geometry.batchControl.guard).toMatchObject({
+      y: 84,
+      width: 192,
+      height: 56,
+    })
+    const guardRight = geometry.batchControl.guard.x +
+      geometry.batchControl.guard.width
+    const scaleCenters = Object.values(geometry.channels).map((channel) =>
+      (channel.start.x + channel.end.x) / 2)
+    expect(scaleCenters.every((x) =>
+      x < geometry.batchControl.guard.x || x > guardRight,
+    )).toBe(true)
+    expect(geometry.batchControl.guard.y + geometry.batchControl.guard.height)
+      .toBeLessThan(FLOW_BASELINE - CHANNEL_CAPACITY_SCALE_OFFSET -
+        CHANNEL_CABLE_MAX_LIFT)
     expect(geometry.actors.reader.bounds.width).toBe(120)
     expect(geometry.actors.throttler.bounds.width).toBe(150)
     expect(geometry.actors.sender.bounds.width).toBe(120)
@@ -92,7 +117,8 @@ describe('responsive pipeline geometry', () => {
         senderWorkers: sender,
       })
       const readerBottom = 88 + readerHeight
-      const throttlerSlotInput = readerBottom + 247
+      const throttlerSlotInput = readerBottom + 247 +
+        PIPELINE_BATCH_CONTROL.portraitReserve
       const throttlerInput = throttlerSlotInput - PORTRAIT_THROTTLER_LIFT
       const throttlerOutput = throttlerInput + 193
       const throttlerSlotOutput = throttlerSlotInput + 193
@@ -107,7 +133,12 @@ describe('responsive pipeline geometry', () => {
       expect(geometry.actors.sender.ports.output.y).toBe(senderBottom)
       expect(geometry.actors.target.ports.input.y).toBe(targetTop)
       expect(geometry.viewBox.height)
-        .toBe(1160 + readerHeight + senderHeight)
+        .toBe(1160 + readerHeight + senderHeight +
+          PIPELINE_BATCH_CONTROL.portraitReserve)
+      expect(geometry.batchControl.anchor).toEqual({
+        x: 240,
+        y: throttlerInput - PIPELINE_BATCH_CONTROL.portraitInputOffset,
+      })
       expect(geometry.channels['reader-to-throttler'].metrics.throughputY)
         .toBe(readerBottom + 60)
       expect(geometry.channels['throttler-to-sender'].metrics.throughputY)
@@ -223,16 +254,16 @@ describe('responsive pipeline geometry', () => {
       }))
       if (installationMode === 'installed') {
         expect(globalPlacements).toEqual([
-          { x: 330, y: 500 },
-          { x: 330, y: 521 },
-          { x: 330, y: 560 },
-          { x: 330, y: 581 },
+          { x: 330, y: 500 + PIPELINE_BATCH_CONTROL.portraitReserve },
+          { x: 330, y: 521 + PIPELINE_BATCH_CONTROL.portraitReserve },
+          { x: 330, y: 560 + PIPELINE_BATCH_CONTROL.portraitReserve },
+          { x: 330, y: 581 + PIPELINE_BATCH_CONTROL.portraitReserve },
         ])
         expect(globalPlacements[1].y).toBeLessThan(globalPlacements[2].y)
       } else {
         expect(globalPlacements).toEqual([
-          { x: 330, y: 560 },
-          { x: 330, y: 581 },
+          { x: 330, y: 560 + PIPELINE_BATCH_CONTROL.portraitReserve },
+          { x: 330, y: 581 + PIPELINE_BATCH_CONTROL.portraitReserve },
         ])
         expect(throttler.metrics.bypass.admitted)
           .toEqual(throttler.metrics.installed.admitted)
@@ -367,6 +398,43 @@ function activeSnapshot(): LoadgenSnapshot {
   return new ChannelFlowStateDeriver().derive(telemetry, 0)
 }
 
+function desiredControl<T>(
+  applied: T,
+  dispatch?: (value: T) => Promise<boolean>,
+): DesiredControl<T> {
+  let desired = applied
+  return {
+    applied,
+    get desired() { return desired },
+    phase: 'idle',
+    error: null,
+    available: true,
+    preview: (value) => { desired = value },
+    cancel: () => { desired = applied },
+    commit: async (value) => {
+      desired = value ?? desired
+      return dispatch?.(desired) ?? true
+    },
+  }
+}
+
+function liveControls(
+  snapshot: LoadgenSnapshot,
+  overrides: Partial<LiveControls> = {},
+): LiveControls {
+  return {
+    readerWorkers: desiredControl(snapshot.reader.workers.applied ?? snapshot.reader.workers.min),
+    readBatchSize: desiredControl(snapshot.reader.readBatchSize.applied ?? snapshot.reader.readBatchSize.min),
+    requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? snapshot.throttler.requestedTps.min),
+    installationMode: desiredControl(snapshot.throttler.installationMode.applied ?? 'installed'),
+    senderWorkers: desiredControl(snapshot.sender.workers.applied ?? snapshot.sender.workers.min),
+    simulatedDelayMs: desiredControl(snapshot.sender.simulatedDelayMs.applied ?? snapshot.sender.simulatedDelayMs.min),
+    simulatedErrorRatePercent: desiredControl(snapshot.sender.simulatedErrorRatePercent.applied ?? snapshot.sender.simulatedErrorRatePercent.min),
+    timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? snapshot.sender.timeoutMs.min),
+    ...overrides,
+  }
+}
+
 function renderPipeline(
   snapshot: LoadgenSnapshot,
   orientation: PipelineOrientation = 'landscape',
@@ -383,12 +451,8 @@ function renderPipeline(
       snapshot={snapshot}
       selectedId={null}
       onSelect={vi.fn()}
-      onWorkerCountChange={vi.fn()}
       onChannelCapacityChange={vi.fn()}
-      requestedTpsPreview={null}
-      onRequestedTpsPreviewChange={vi.fn()}
-      onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
-      onInstallationModeChange={vi.fn().mockResolvedValue(true)}
+      liveControls={liveControls(snapshot)}
       orientation={orientation}
       geometry={geometry}
     />,
@@ -443,17 +507,50 @@ function pipelineElement(snapshot: LoadgenSnapshot) {
       snapshot={snapshot}
       selectedId={null}
       onSelect={vi.fn()}
-      onWorkerCountChange={vi.fn()}
       onChannelCapacityChange={vi.fn()}
-      requestedTpsPreview={null}
-      onRequestedTpsPreviewChange={vi.fn()}
-      onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
-      onInstallationModeChange={vi.fn().mockResolvedValue(true)}
+      liveControls={liveControls(snapshot)}
     />
   )
 }
 
 describe('PipelineSvg rendering', () => {
+  it.each(['landscape', 'portrait'] as const)(
+    'renders one unified Batch above Throttler with shared hose width in %s',
+    (orientation) => {
+      const snapshot = activeSnapshot()
+      const view = renderPipeline(snapshot, orientation)
+      const geometry = createPipelineGeometry({
+        orientation,
+        readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+        senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+      })
+      const controls = view.container.querySelectorAll(
+        '.pipeline-batch-stepper',
+      )
+      const cables = view.container.querySelectorAll<SVGPathElement>(
+        '.pipeline-channel-cable',
+      )
+
+      expect(controls).toHaveLength(1)
+      expect(controls[0]?.getAttribute('transform')).toBe(
+        `translate(${geometry.batchControl.anchor.x} ${geometry.batchControl.anchor.y})`,
+      )
+      expect(geometry.batchControl.anchor.y)
+        .toBeLessThan(geometry.actors.throttler.bounds.y)
+      expect(controls[0]?.textContent).toBe(
+        `−Batch ${snapshot.reader.readBatchSize.applied?.toLocaleString('en-US')} tx+`,
+      )
+      expect(view.container.querySelector(
+        '#channel-reader-to-throttler .pipeline-batch-stepper',
+      )).toBeNull()
+      expect(view.container.querySelector(
+        '#channel-throttler-to-sender .pipeline-batch-stepper',
+      )).toBeNull()
+      expect(cables).toHaveLength(2)
+      expect(cables[0]?.style.strokeWidth).toBe(cables[1]?.style.strokeWidth)
+    },
+  )
+
   it('does not synthesize Reader chips from requested count or read rate', () => {
     const adapter = new SimulationAdapter()
     const base = adapter.getSnapshot()
@@ -667,10 +764,6 @@ describe('PipelineSvg rendering', () => {
         actorGeometry.reader.metrics.secondary,
       )
       expectTextPlacement(
-        view.container.querySelector('#reader-actor .pipeline-worker-status'),
-        actorGeometry.reader.metrics.status,
-      )
-      expectTextPlacement(
         view.container.querySelector('.pipeline-title--sender'),
         actorGeometry.sender.title,
       )
@@ -681,6 +774,10 @@ describe('PipelineSvg rendering', () => {
       expectTextPlacement(
         view.container.querySelector('#sender-actor .pipeline-worker-secondary'),
         actorGeometry.sender.metrics.secondary,
+      )
+      expectTextPlacement(
+        view.container.querySelector('#sender-actor .pipeline-worker-status'),
+        actorGeometry.sender.metrics.status,
       )
       expectTextPlacement(
         view.container.querySelector('.pipeline-title--throttler'),
@@ -775,7 +872,7 @@ describe('PipelineSvg rendering', () => {
   )
 
   it.each(['landscape', 'portrait'] as const)(
-    'shows Reader actual rate, capacity, and downstream limitation in %s',
+    'shows Reader actual rate and compact pool summary in %s',
     (orientation) => {
       const base = activeSnapshot()
       const snapshot: LoadgenSnapshot = {
@@ -791,8 +888,7 @@ describe('PipelineSvg rendering', () => {
       const reader = view.container.querySelector('#reader-actor')
 
       expect(reader?.textContent).toContain('Read 50,000 tx/s')
-      expect(reader?.textContent).toContain('Capacity 350,000 tx/s')
-      expect(reader?.textContent).toContain('Downstream limited')
+      expect(reader?.textContent).toContain('4 desired · 0 live · 0 draining')
     },
   )
 
@@ -880,12 +976,8 @@ describe('PipelineSvg rendering', () => {
         snapshot={applied}
         selectedId={null}
         onSelect={vi.fn()}
-        onWorkerCountChange={vi.fn()}
         onChannelCapacityChange={vi.fn()}
-        requestedTpsPreview={null}
-        onRequestedTpsPreviewChange={vi.fn()}
-        onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
-        onInstallationModeChange={vi.fn().mockResolvedValue(true)}
+        liveControls={liveControls(applied)}
       />,
     )
 
@@ -1028,12 +1120,14 @@ describe('PipelineSvg rendering', () => {
         snapshot={snapshot}
         selectedId={null}
         onSelect={vi.fn()}
-        onWorkerCountChange={vi.fn()}
         onChannelCapacityChange={vi.fn()}
-        requestedTpsPreview={null}
-        onRequestedTpsPreviewChange={vi.fn()}
-        onRequestedTpsChange={onRequestedTpsChange}
-        onInstallationModeChange={onInstallationModeChange}
+        liveControls={liveControls(snapshot, {
+          requestedTps: desiredControl<number>(120_000, onRequestedTpsChange),
+          installationMode: desiredControl(
+            snapshot.throttler.installationMode.applied ?? 'installed',
+            onInstallationModeChange,
+          ),
+        })}
         orientation="landscape"
         geometry={geometry}
       />,
@@ -1340,6 +1434,75 @@ describe('PipelineSvg rendering', () => {
     expect(sender.querySelectorAll('.pipeline-worker--backoff')).toHaveLength(0)
   })
 
+  it.each(['idle', 'paused'] as const)(
+    'keeps known empty pools and zero-batch channel state visible in %s',
+    (state) => {
+      const base = activeSnapshot()
+      const zeroBatch = (control: typeof base.reader.readBatchSize) => ({
+        ...control,
+        applied: 0,
+        min: 0,
+        preview: null,
+        pending: null,
+      })
+      const zeroFlowChannel = (channel: typeof base.readerChannel) => ({
+        ...channel,
+        depthBatches: 0,
+        bufferedTransactions: 0,
+        inputBatchesPerSecond: 0,
+        outputBatchesPerSecond: 0,
+        inputTransactionsPerSecond: 0,
+        outputTransactionsPerSecond: 0,
+        inputTps: 0,
+        outputTps: 0,
+        throughputTps: 0,
+        displayedPressure: 0,
+        flowState: 'normal' as const,
+      })
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        reader: {
+          ...base.reader,
+          state,
+          workers: { ...base.reader.workers, applied: 2 },
+          liveWorkers: 0,
+          drainingWorkers: 0,
+          workerSlots: [],
+          readBatchSize: zeroBatch(base.reader.readBatchSize),
+        },
+        sender: {
+          ...base.sender,
+          state,
+          workers: { ...base.sender.workers, applied: 3 },
+          liveWorkers: 0,
+          drainingWorkers: 0,
+          workerSlots: [],
+        },
+        readerChannel: zeroFlowChannel(base.readerChannel),
+        senderChannel: zeroFlowChannel(base.senderChannel),
+      }
+      const view = renderPipeline(snapshot)
+
+      expect(view.container.querySelector('#reader-actor')?.getAttribute(
+        'data-worker-count',
+      )).toBe('2')
+      expect(view.container.querySelector('#sender-actor')?.getAttribute(
+        'data-worker-count',
+      )).toBe('3')
+      expect(view.container.querySelectorAll(
+        '#reader-actor .pipeline-worker--inactive',
+      )).toHaveLength(2)
+      expect(view.container.querySelectorAll(
+        '#sender-actor .pipeline-worker--inactive',
+      )).toHaveLength(3)
+      const batchControls = view.getAllByRole('group', {
+        name: 'Batch: Applied 0 tx',
+      })
+      expect(batchControls).toHaveLength(1)
+      expect(batchControls[0]?.textContent).toBe('−Batch 0 tx+')
+    },
+  )
+
   it.each(['landscape', 'portrait'] as const)(
     'shows the live draining slot beyond desired count in %s',
     (orientation) => {
@@ -1428,12 +1591,8 @@ describe('PipelineSvg rendering', () => {
           snapshot={current}
           selectedId={null}
           onSelect={vi.fn()}
-          onWorkerCountChange={vi.fn()}
           onChannelCapacityChange={vi.fn()}
-          requestedTpsPreview={null}
-          onRequestedTpsPreviewChange={vi.fn()}
-          onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
-          onInstallationModeChange={vi.fn().mockResolvedValue(true)}
+          liveControls={liveControls(current)}
           geometry={createPipelineGeometry({
             orientation: 'landscape',
             readerWorkers: normalizedWorkerCount(current.reader.workers),
@@ -1498,12 +1657,8 @@ describe('PipelineSvg rendering', () => {
           snapshot={snapshot}
           selectedId={null}
           onSelect={vi.fn()}
-          onWorkerCountChange={vi.fn()}
           onChannelCapacityChange={vi.fn()}
-          requestedTpsPreview={null}
-          onRequestedTpsPreviewChange={vi.fn()}
-          onRequestedTpsChange={vi.fn().mockResolvedValue(true)}
-          onInstallationModeChange={vi.fn().mockResolvedValue(true)}
+          liveControls={liveControls(snapshot)}
           geometry={createPipelineGeometry({
             orientation: 'landscape',
             readerWorkers: normalizedWorkerCount(snapshot.reader.workers),

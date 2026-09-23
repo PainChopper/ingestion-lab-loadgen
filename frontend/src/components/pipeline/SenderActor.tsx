@@ -2,13 +2,15 @@ import type { SelectableId, SenderSnapshot } from '../../model/loadgen'
 import { formatInteger, formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
-import { WorkerActor, type WorkerActorId } from './WorkerActor'
+import { WorkerActor } from './WorkerActor'
+import type { DesiredControl } from '../../hooks/useDesiredControl'
 
 interface SenderActorProps {
   snapshot: SenderSnapshot
   selected: boolean
   onSelect: (id: SelectableId) => void
-  onWorkerCountChange: (actor: WorkerActorId, value: number) => void
+  desiredControl: DesiredControl<number>
+  frozenObserved: boolean
   geometry: PipelineGeometry['actors']['sender']
   orientation: PipelineOrientation
 }
@@ -17,14 +19,21 @@ export function SenderActor({
   snapshot,
   selected,
   onSelect,
-  onWorkerCountChange,
+  desiredControl,
+  frozenObserved,
   geometry,
   orientation,
 }: SenderActorProps) {
   const workerSummary =
-    `${formatInteger(snapshot.workers.applied)} desired · ` +
-    `${formatInteger(snapshot.liveWorkers)} live · ` +
+    `${formatInteger(desiredControl.desired)} desired · ` +
+    `${formatInteger(snapshot.liveWorkers)} ${frozenObserved ? 'frozen live' : 'live'} · ` +
     `${formatInteger(snapshot.drainingWorkers)} draining`
+  const workerStateSummary = snapshot.workerSlots === null
+    ? 'Worker state telemetry unavailable'
+    : `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'idle').length)} idle · ` +
+      `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'in-flight').length)} in-flight · ` +
+      `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'backoff').length)} backoff · ` +
+      `${formatInteger(snapshot.workerSlots.filter((slot) => slot.terminalError).length)} errors`
 
   return (
     <WorkerActor
@@ -43,11 +52,12 @@ export function SenderActor({
       outputPort={geometry.ports.output}
       primaryMetric={formatRate(snapshot.attemptedTps)}
       secondaryMetric={workerSummary}
+      statusMetric={workerStateSummary}
       metricPoints={geometry.metrics}
       orientation={orientation}
       selected={selected}
       onSelect={onSelect}
-      onWorkerCountChange={onWorkerCountChange}
+      desiredControl={desiredControl}
     />
   )
 }

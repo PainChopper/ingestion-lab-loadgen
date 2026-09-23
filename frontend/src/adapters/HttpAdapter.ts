@@ -328,7 +328,6 @@ function createSnapshot(
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
       simulatedDelayMs: senderControl(wire?.sender.simulatedDelayMs ?? null, wire?.policy.senderSimulatedDelayMs ?? null, connectionState, 'milliseconds'),
       simulatedErrorRatePercent: senderControl(wire?.sender.simulatedErrorRatePercent ?? null, wire?.policy.senderSimulatedErrorRatePercent ?? null, connectionState, 'percent'),
-      httpBatchSize: unavailableControl('tx'),
       timeoutMs: unavailableControl('ms'),
       workerSlots: wire?.sender.workerSlots ?? null,
       retryPolicy: null,

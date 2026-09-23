@@ -15,6 +15,7 @@ import type {
   ThrottlerInstallationMode,
   ThrottlerSnapshot,
 } from '../../model/loadgen'
+import type { DesiredControl } from '../../hooks/useDesiredControl'
 import { channelPressureColor } from '../../model/channelFlowState'
 import { formatRate } from './formatters'
 import { ACTOR_GEOMETRY, type PipelineGeometry } from './geometry'
@@ -38,14 +39,10 @@ import {
 interface ThrottlerActorProps {
   snapshot: ThrottlerSnapshot
   upstreamChannel: ChannelSnapshot
-  previewTps: number | null
+  requestedTpsControl: DesiredControl<number>
+  installationModeControl: DesiredControl<ThrottlerInstallationMode>
   selected: boolean
   onSelect: (id: SelectableId) => void
-  onPreviewTpsChange: (value: number | null) => void
-  onRequestedTpsChange: (value: number) => Promise<boolean>
-  onInstallationModeChange: (
-    value: ThrottlerInstallationMode,
-  ) => Promise<boolean>
   geometry: PipelineGeometry['actors']['throttler']
   orientation: PipelineOrientation
 }
@@ -61,12 +58,10 @@ function flowColor(channel: ChannelSnapshot): string {
 export function ThrottlerActor({
   snapshot,
   upstreamChannel,
-  previewTps,
+  requestedTpsControl,
+  installationModeControl,
   selected,
   onSelect,
-  onPreviewTpsChange,
-  onRequestedTpsChange,
-  onInstallationModeChange,
   geometry,
   orientation,
 }: ThrottlerActorProps) {
@@ -81,29 +76,25 @@ export function ThrottlerActor({
     ? resolvedGeometry.portraitPipe
     : null
   const targets = getValveTargets(snapshot.requestedTps)
-  const adjustable = valveIsAdjustable(snapshot.requestedTps)
+  const adjustable = valveIsAdjustable(snapshot.requestedTps) &&
+    requestedTpsControl.available && requestedTpsControl.phase !== 'pending'
   const appliedIndex = valueToOpeningIndex(
     snapshot.requestedTps.applied,
     snapshot.requestedTps,
     targets,
   )
-  const snapshotCandidate = snapshot.requestedTps.preview ??
-    snapshot.requestedTps.pending
-  const candidateValue = previewTps ?? snapshotCandidate
+  const candidateValue = requestedTpsControl.phase === 'idle'
+    ? null
+    : requestedTpsControl.desired
   const candidateIndex = candidateValue === null
     ? null
     : valueToOpeningIndex(candidateValue, snapshot.requestedTps, targets)
-  const candidateKind = previewTps !== null || snapshot.requestedTps.preview !== null
-    ? 'preview'
-    : snapshot.requestedTps.pending !== null
-      ? 'pending'
-      : null
+  const candidateKind = requestedTpsControl.phase === 'idle'
+    ? null
+    : requestedTpsControl.phase
   const [confirmedWheelPhase, setConfirmedWheelPhase] = useState(0)
   const [candidateWheelPhase, setCandidateWheelPhase] = useState<number | null>(null)
-  const [installationPreview, setInstallationPreview] =
-    useState<ThrottlerInstallationMode | null>(null)
   const [installationDragProgress, setInstallationDragProgress] = useState(0)
-  const [installationError, setInstallationError] = useState<string | null>(null)
   const previousAppliedIndex = useRef(appliedIndex)
   const previousAppliedMode = useRef(snapshot.installationMode.applied)
   const holdTimer = useRef<number | null>(null)
@@ -114,7 +105,6 @@ export function ThrottlerActor({
   const targetsRef = useRef(targets)
   const adjustableRef = useRef(adjustable)
   const installationControlRef = useRef<SVGGElement>(null)
-  const installationCommandActive = useRef(false)
   const installationFocusRequested = useRef(false)
   const installationDragProgressRef = useRef(0)
   const suppressInstallationClick = useRef(false)
@@ -123,6 +113,10 @@ export function ThrottlerActor({
     startY: number
     moved: boolean
   } | null>(null)
+  const cancelInstallationMode = installationModeControl.cancel
+  const previewInstallationMode = installationModeControl.preview
+  const commitInstallationMode = installationModeControl.commit
+  const previewRequestedTps = requestedTpsControl.preview
 
   const derivedCandidatePhase = candidateIndex === null
     ? confirmedWheelPhase
@@ -157,9 +151,9 @@ export function ThrottlerActor({
   const cancelInstallationPreview = useCallback(() => {
     installationDrag.current = null
     installationDragProgressRef.current = 0
-    setInstallationPreview(null)
+    cancelInstallationMode()
     setInstallationDragProgress(0)
-  }, [])
+  }, [cancelInstallationMode])
 
   useEffect(() => {
     const handleWindowBlur = () => cancelInstallationPreview()
@@ -205,15 +199,9 @@ export function ThrottlerActor({
     candidateIndexRef.current = targetIndex
     wheelPhaseRef.current = targetPhase
     setCandidateWheelPhase(targetPhase)
-    onPreviewTpsChange(targetTps)
-    void onRequestedTpsChange(targetTps).then((accepted) => {
-      if (!accepted) {
-        onPreviewTpsChange(null)
-        setCandidateWheelPhase(null)
-      }
-    })
+    previewRequestedTps(targetTps)
     return true
-  }, [onPreviewTpsChange, onRequestedTpsChange, stopHold])
+  }, [previewRequestedTps, stopHold])
 
   const handlePointerDown = (
     event: ReactPointerEvent<SVGRectElement>,
@@ -224,15 +212,28 @@ export function ThrottlerActor({
     stopHold()
     if (!requestDelta(delta)) return
 
-    const release = () => stopHold()
+    const release = () => {
+      stopHold()
+      void requestedTpsControl.commit()
+    }
+    const cancel = () => {
+      stopHold()
+      requestedTpsControl.cancel()
+      setCandidateWheelPhase(null)
+    }
+    const cancelKey = (keyboardEvent: globalThis.KeyboardEvent) => {
+      if (keyboardEvent.key === 'Escape') cancel()
+    }
     releaseListeners.current = () => {
       window.removeEventListener('pointerup', release)
-      window.removeEventListener('pointercancel', release)
-      window.removeEventListener('blur', release)
+      window.removeEventListener('pointercancel', cancel)
+      window.removeEventListener('blur', cancel)
+      window.removeEventListener('keydown', cancelKey)
     }
     window.addEventListener('pointerup', release)
-    window.addEventListener('pointercancel', release)
-    window.addEventListener('blur', release)
+    window.addEventListener('pointercancel', cancel)
+    window.addEventListener('blur', cancel)
+    window.addEventListener('keydown', cancelKey)
     holdTimer.current = window.setTimeout(() => {
       repeatTimer.current = window.setInterval(() => {
         requestDelta(delta)
@@ -258,60 +259,53 @@ export function ThrottlerActor({
       End: 11,
     }
     const delta = changes[event.key]
-    if (delta === undefined) return
+    if (delta === undefined || event.repeat) return
     event.preventDefault()
     event.stopPropagation()
-    requestDelta(delta)
+    if (requestDelta(delta)) void requestedTpsControl.commit()
+  }
+
+  const handleWheelKeyDown = (
+    event: KeyboardEvent<SVGRectElement>,
+    delta: -1 | 1,
+  ) => {
+    if (!['Enter', ' ', 'ArrowLeft', 'ArrowRight'].includes(event.key) ||
+      event.repeat) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (requestDelta(delta)) void requestedTpsControl.commit()
   }
 
   const appliedInstallationMode = snapshot.installationMode.applied
   const metricGeometry = appliedInstallationMode === 'bypass'
     ? resolvedGeometry.metrics.bypass
     : resolvedGeometry.metrics.installed
-  const installationCandidate = installationPreview ??
-    snapshot.installationMode.pending
-  const installationCandidateKind = installationPreview !== null
-    ? 'preview'
-    : snapshot.installationMode.pending !== null
-      ? 'pending'
-      : null
+  const installationCandidate = installationModeControl.phase === 'idle'
+    ? null
+    : installationModeControl.desired
+  const installationCandidateKind = installationModeControl.phase === 'idle'
+    ? null
+    : installationModeControl.phase
   const targetInstallationMode: ThrottlerInstallationMode =
     appliedInstallationMode === 'bypass' ? 'installed' : 'bypass'
   const installationControlAvailable =
     appliedInstallationMode !== null &&
-    snapshot.installationMode.writable &&
-    snapshot.installationMode.applyMode !== 'unavailable' &&
-    snapshot.installationMode.pending === null
+    installationModeControl.available &&
+    installationModeControl.phase !== 'pending'
 
   const requestInstallationMode = useCallback(() => {
-    if (!installationControlAvailable || installationCommandActive.current) {
-      return
-    }
-    installationCommandActive.current = true
+    if (!installationControlAvailable) return
     installationFocusRequested.current = true
-    setInstallationError(null)
-    setInstallationPreview(targetInstallationMode)
-    void onInstallationModeChange(targetInstallationMode).then((accepted) => {
-      installationCommandActive.current = false
-      if (accepted) {
-        cancelInstallationPreview()
-        return
-      }
-      cancelInstallationPreview()
-      setInstallationError('Valve mode change rejected')
-      installationControlRef.current?.focus()
-      installationFocusRequested.current = false
-    }).catch(() => {
-      installationCommandActive.current = false
-      cancelInstallationPreview()
-      setInstallationError('Valve mode change unavailable')
+    previewInstallationMode(targetInstallationMode)
+    void commitInstallationMode(targetInstallationMode).then((accepted) => {
+      if (accepted) return
       installationControlRef.current?.focus()
       installationFocusRequested.current = false
     })
   }, [
-    cancelInstallationPreview,
     installationControlAvailable,
-    onInstallationModeChange,
+    commitInstallationMode,
+    previewInstallationMode,
     targetInstallationMode,
   ])
 
@@ -327,8 +321,7 @@ export function ThrottlerActor({
       startY: event.clientY,
       moved: false,
     }
-    setInstallationError(null)
-    setInstallationPreview(targetInstallationMode)
+    previewInstallationMode(targetInstallationMode)
     installationDragProgressRef.current = 0
     setInstallationDragProgress(0)
     event.currentTarget.setPointerCapture?.(event.pointerId)
@@ -618,7 +611,7 @@ export function ThrottlerActor({
               className="pipeline-value"
               data-actor-metric="requested-value"
             >
-              {formatRate(snapshot.requestedTps.applied)}
+              {formatRate(requestedTpsControl.desired)}
             </text>
           </>
         )}
@@ -701,13 +694,50 @@ export function ThrottlerActor({
             data-wheel-phase={wheelPhase}
             data-opening-index={rangeIndex}
             onKeyDown={handleValveKeyDown}
-            onBlur={stopHold}
+            onBlur={() => {
+              stopHold()
+              requestedTpsControl.cancel()
+            }}
             onClick={(event) => event.stopPropagation()}
           >
             <ellipse cx="430" cy="350" rx="49" ry="29" className="pipeline-valve-focus-ring" />
             {renderWheel(
               'pipeline-valve-wheel',
             )}
+            <rect
+              x="400.25"
+              y="336.75"
+              width="29.75"
+              height="26.5"
+              className="pipeline-valve-wheel-hit-area"
+              data-wheel-direction="decrease"
+              role="button"
+              tabIndex={0}
+              aria-label="Decrease throttle opening"
+              onPointerDown={(event) => handlePointerDown(event, -1)}
+              onKeyDown={(event) => handleWheelKeyDown(event, -1)}
+              onLostPointerCapture={() => {
+                stopHold()
+                requestedTpsControl.cancel()
+              }}
+            />
+            <rect
+              x="430"
+              y="336.75"
+              width="29.75"
+              height="26.5"
+              className="pipeline-valve-wheel-hit-area"
+              data-wheel-direction="increase"
+              role="button"
+              tabIndex={0}
+              aria-label="Increase throttle opening"
+              onPointerDown={(event) => handlePointerDown(event, 1)}
+              onKeyDown={(event) => handleWheelKeyDown(event, 1)}
+              onLostPointerCapture={() => {
+                stopHold()
+                requestedTpsControl.cancel()
+              }}
+            />
             <rect
               x={VALVE_OPENING_CONTROLS.decrease.x}
               y={VALVE_OPENING_CONTROLS.decrease.y}
@@ -716,7 +746,10 @@ export function ThrottlerActor({
               className="pipeline-valve-hit-area"
               data-direction="decrease"
               onPointerDown={(event) => handlePointerDown(event, -1)}
-              onLostPointerCapture={stopHold}
+              onLostPointerCapture={() => {
+                stopHold()
+                requestedTpsControl.cancel()
+              }}
             />
             <rect
               x={VALVE_OPENING_CONTROLS.increase.x}
@@ -726,7 +759,10 @@ export function ThrottlerActor({
               className="pipeline-valve-hit-area"
               data-direction="increase"
               onPointerDown={(event) => handlePointerDown(event, 1)}
-              onLostPointerCapture={stopHold}
+              onLostPointerCapture={() => {
+                stopHold()
+                requestedTpsControl.cancel()
+              }}
             />
           </g>
         )}
@@ -853,7 +889,7 @@ export function ThrottlerActor({
                 ? `${targetInstallationMode.toUpperCase()} PENDING`
                 : ''}
         </text>
-        {installationError !== null && (
+        {installationModeControl.error !== null && (
           <text
             x="430"
             y="486"
@@ -861,7 +897,7 @@ export function ThrottlerActor({
             className="pipeline-valve-installation-error"
             role="status"
           >
-            {installationError}
+            {installationModeControl.error}
           </text>
         )}
       </g>
