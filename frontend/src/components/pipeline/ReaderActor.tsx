@@ -1,5 +1,5 @@
 import type { ReaderSnapshot, SelectableId } from '../../model/loadgen'
-import { formatInteger, formatRate } from './formatters'
+import { formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { WorkerActor } from './WorkerActor'
@@ -22,7 +22,7 @@ export function ReaderActor({
   selected,
   onSelect,
   desiredControl,
-  frozenObserved,
+  frozenObserved: _frozenObserved,
   geometry,
   orientation,
 }: ReaderActorProps) {
@@ -44,11 +44,6 @@ export function ReaderActor({
         : undefined}
       outputPort={geometry.ports.output}
       primaryMetric={`Read ${formatRate(snapshot.readTps)}`}
-      secondaryMetric={
-        `${formatInteger(desiredControl.desired)} desired · ` +
-        `${formatInteger(snapshot.liveWorkers)} ${frozenObserved ? 'frozen live' : 'live'} · ` +
-        `${formatInteger(snapshot.drainingWorkers)} draining`
-      }
       metricPoints={geometry.metrics}
       orientation={orientation}
       selected={selected}

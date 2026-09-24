@@ -758,20 +758,12 @@ describe('PipelineSvg rendering', () => {
         actorGeometry.reader.metrics.primary,
       )
       expectTextPlacement(
-        view.container.querySelector('#reader-actor .pipeline-worker-secondary'),
-        actorGeometry.reader.metrics.secondary,
-      )
-      expectTextPlacement(
         view.container.querySelector('.pipeline-title--sender'),
         actorGeometry.sender.title,
       )
       expectTextPlacement(
         view.container.querySelector('#sender-actor .pipeline-worker-primary'),
         actorGeometry.sender.metrics.primary,
-      )
-      expectTextPlacement(
-        view.container.querySelector('#sender-actor .pipeline-worker-secondary'),
-        actorGeometry.sender.metrics.secondary,
       )
       expectTextPlacement(
         view.container.querySelector('#sender-actor .pipeline-worker-status'),
@@ -870,7 +862,7 @@ describe('PipelineSvg rendering', () => {
   )
 
   it.each(['landscape', 'portrait'] as const)(
-    'shows Reader actual rate and compact pool summary in %s',
+    'shows Reader rate without the duplicated canvas pool summary in %s',
     (orientation) => {
       const base = activeSnapshot()
       const snapshot: LoadgenSnapshot = {
@@ -886,7 +878,7 @@ describe('PipelineSvg rendering', () => {
       const reader = view.container.querySelector('#reader-actor')
 
       expect(reader?.textContent).toContain('Read 50,000 tx/s')
-      expect(reader?.textContent).toContain('4 desired · 0 live · 0 draining')
+      expect(reader?.textContent).not.toContain('desired ·')
     },
   )
 
@@ -1337,7 +1329,6 @@ describe('PipelineSvg rendering', () => {
     }
 
     assertTypography('#reader-actor .pipeline-worker-primary', '15px', '650')
-    assertTypography('#reader-actor .pipeline-worker-secondary', '12px', '600')
     assertTypography('#target-actor .pipeline-target-primary', '15px', '650')
     assertTypography('#target-actor .pipeline-target-secondary', '12px', '600')
     assertTypography('.pipeline-channel-metric.pipeline-small-strong', '15px', '700')
@@ -1372,7 +1363,7 @@ describe('PipelineSvg rendering', () => {
       const view = renderPipeline(snapshot, orientation)
       const sender = view.container.querySelector('#sender-actor')!
 
-      expect(sender.textContent).toContain('3 desired · 3 live · 0 draining')
+      expect(sender.textContent).not.toContain('desired ·')
       expect(sender.getAttribute('aria-label'))
         .toBe('Inspect sender, 3 desired, 3 live, 0 draining')
       expect(sender.querySelectorAll('.pipeline-worker--in-flight'))

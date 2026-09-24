@@ -20,14 +20,10 @@ export function SenderActor({
   selected,
   onSelect,
   desiredControl,
-  frozenObserved,
+  frozenObserved: _frozenObserved,
   geometry,
   orientation,
 }: SenderActorProps) {
-  const workerSummary =
-    `${formatInteger(desiredControl.desired)} desired · ` +
-    `${formatInteger(snapshot.liveWorkers)} ${frozenObserved ? 'frozen live' : 'live'} · ` +
-    `${formatInteger(snapshot.drainingWorkers)} draining`
   const workerStateSummary = snapshot.workerSlots === null
     ? 'Worker state telemetry unavailable'
     : `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'idle').length)} idle · ` +
@@ -51,7 +47,6 @@ export function SenderActor({
       inputPort={geometry.ports.input}
       outputPort={geometry.ports.output}
       primaryMetric={formatRate(snapshot.attemptedTps)}
-      secondaryMetric={workerSummary}
       statusMetric={workerStateSummary}
       metricPoints={geometry.metrics}
       orientation={orientation}
