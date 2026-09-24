@@ -40,7 +40,7 @@ describe('LabShell', () => {
 
     await user.click(view.container.querySelector('#sender-actor')!)
     expect(screen.getByLabelText('Sender configuration').children)
-      .toHaveLength(2)
+      .toHaveLength(1)
   })
 
   it('renders a snapshot start error and clears its alert on the next snapshot', () => {
@@ -133,7 +133,7 @@ describe('LabShell', () => {
     expect(qualifier.getAttribute('role')).toBe('status')
     await waitFor(() => expect(document.querySelector('#sender-count')?.textContent).toBe('7'))
     expect(document.querySelector('#sender-actor')?.textContent)
-      .toContain('7 desired · 2 frozen live')
+      .not.toContain('desired ·')
     expect(document.querySelector('#sender-actor')?.textContent)
       .toContain('0 idle · 1 in-flight · 0 backoff · 0 errors')
     expect(screen.getByRole('button', { name: 'Resume run' })).not.toBeNull()
@@ -263,7 +263,7 @@ describe('LabShell', () => {
     await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
     expect(screen.getByLabelText('Sender configuration')).not.toBeNull()
     expect(screen.getByRole('spinbutton', { name: /^Workers/ })).not.toBeNull()
-    expect(screen.getByRole('spinbutton', { name: /^HTTP timeout/ })).not.toBeNull()
+    expect(screen.queryByRole('spinbutton', { name: /^HTTP timeout/ })).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Add sender worker' }))
     expect(dispatch).toHaveBeenCalledWith({ type: 'set-sender-workers', value: 4 })
 
@@ -271,6 +271,34 @@ describe('LabShell', () => {
     expect(screen.queryByLabelText('Sender configuration')).toBeNull()
     expect(screen.queryByRole('spinbutton', { name: /^Workers/ })).toBeNull()
     expect(screen.queryByRole('spinbutton', { name: /^HTTP timeout/ })).toBeNull()
+  })
+
+  it('changes Valve mode through the existing throttler command', async () => {
+    const user = userEvent.setup()
+    adapter = new SimulationAdapter()
+    const dispatch = vi.spyOn(adapter, 'dispatch')
+    render(<LabShell adapter={adapter} />)
+
+    await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
+    const valveMode = screen.getByRole('combobox', { name: 'Valve mode' })
+    await user.selectOptions(valveMode, 'bypass')
+
+    await waitFor(() => {
+      expect(dispatch).toHaveBeenCalledWith({
+        type: 'set-throttler-installation-mode', value: 'bypass',
+      })
+      expect((valveMode as HTMLSelectElement).value).toBe('bypass')
+    })
+  })
+
+  it('renders only supported channel states in the legend', () => {
+    adapter = new SimulationAdapter()
+    render(<LabShell adapter={adapter} />)
+
+    expect(screen.queryByText('Connection error')).toBeNull()
+    for (const label of ['Normal flow', 'Near limit', 'Backpressure', 'Stopped']) {
+      expect(screen.getByText(label)).not.toBeNull()
+    }
   })
 
   it('renders all Sender sections and keeps long policy rows full width', async () => {

@@ -41,7 +41,7 @@ interface WorkerActorProps {
   inputPort?: Point
   outputPort: Point
   primaryMetric: string
-  secondaryMetric: string
+  secondaryMetric?: string
   statusMetric?: string
   metricPoints: {
     readonly primary: TextPlacement
@@ -502,14 +502,16 @@ export function WorkerActor({
         >
           {primaryMetric}
         </text>
-        <text
-          x={metricPoints.secondary.x}
-          y={metricPoints.secondary.y}
-          textAnchor={metricPoints.secondary.anchor}
-          className="pipeline-small pipeline-worker-secondary"
-        >
-          {secondaryMetric}
-        </text>
+        {secondaryMetric && (
+          <text
+            x={metricPoints.secondary.x}
+            y={metricPoints.secondary.y}
+            textAnchor={metricPoints.secondary.anchor}
+            className="pipeline-small pipeline-worker-secondary"
+          >
+            {secondaryMetric}
+          </text>
+        )}
         {statusMetric && (
           <text
             x={metricPoints.status.x}

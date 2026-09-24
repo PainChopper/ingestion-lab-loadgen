@@ -48,7 +48,6 @@ const CHANNEL_STATES: ReadonlyArray<{
   { state: 'near-limit', label: 'Near limit' },
   { state: 'backpressure', label: 'Backpressure' },
   { state: 'stopped', label: 'Stopped' },
-  { state: 'connection-error', label: 'Connection error' },
 ]
 
 function formatDuration(elapsedMs: number): string {
@@ -264,6 +263,22 @@ function InspectorControls({
             control={snapshot.throttler.requestedTps}
             desiredControl={liveControls.requestedTps}
           />
+          <label className="inspector-select-control">
+            <span>Valve mode</span>
+            <select
+              value={liveControls.installationMode.desired}
+              disabled={!liveControls.installationMode.available || liveControls.installationMode.phase === 'pending'}
+              onChange={(event) => {
+                liveControls.installationMode.preview(
+                  event.currentTarget.value as ThrottlerInstallationMode,
+                )
+                void liveControls.installationMode.commit()
+              }}
+            >
+              <option value="installed">Installed</option>
+              <option value="bypass">Bypassed</option>
+            </select>
+          </label>
         </div>
       )
     }
@@ -274,11 +289,6 @@ function InspectorControls({
             label="Workers"
             control={snapshot.sender.workers}
             desiredControl={liveControls.senderWorkers}
-          />
-          <NumericControl
-            label="HTTP timeout"
-            control={snapshot.sender.timeoutMs}
-            desiredControl={liveControls.timeoutMs}
           />
         </div>
       )
@@ -324,7 +334,6 @@ function InspectorDock({
           <p>{model?.kind ?? 'No selection'}</p>
         </div>
         <div className="inspector-head-actions">
-          <span className="adapter-badge">{snapshot.adapterKind}</span>
           {model !== null && (
             <button
               className="inspector-close"

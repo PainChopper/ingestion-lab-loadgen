@@ -143,7 +143,7 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
-  it('uses capability rows instead of HTTP adapter placeholder telemetry', () => {
+  it('uses neutral placeholders for unavailable HTTP telemetry', () => {
     const adapter = new SimulationAdapter()
     const snapshot = {
       ...derivedSnapshot(adapter),
@@ -151,13 +151,13 @@ describe('inspector view model', () => {
     }
 
     expect(getInspectorViewModel(snapshot, 'http')?.rows).toEqual([
-      { label: 'Telemetry', value: 'Not reported by HTTP adapter' },
+      { label: 'Telemetry', value: '—' },
     ])
     expect(getInspectorViewModel(snapshot, 'target')?.rows).toEqual([
-      { label: 'Telemetry', value: 'Not reported by HTTP adapter' },
+      { label: 'Telemetry', value: '—' },
     ])
     expect(getInspectorViewModel(snapshot, 'sender')?.sections?.[1].rows).toEqual([
-      { label: 'Delivery telemetry', value: 'Not reported by HTTP adapter' },
+      { label: 'Delivery telemetry', value: '—' },
     ])
     adapter.dispose()
   })
@@ -212,7 +212,7 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
-  it('separates reader actual rate, configured capacity, and limitation', () => {
+  it('keeps Reader Inspector focused on pool, state segments, rate, and rows', () => {
     const adapter = new SimulationAdapter()
     const base = derivedSnapshot(adapter)
     const model = getInspectorViewModel({
@@ -229,19 +229,25 @@ describe('inspector view model', () => {
 
     expect(model?.rows).toEqual(expect.arrayContaining([
       { label: 'Actual Read TPS', value: '50,000 tx/s' },
-      { label: 'Configured capacity', value: '350,000 tx/s' },
-      { label: 'Capacity state', value: 'Downstream limited' },
       { label: 'Rows read', value: '14,000' },
       expect.objectContaining({
-        label: 'Source',
-        value: 'input.parquet',
-        disclosureValue: 'MBD-mini/trx/part/input.parquet',
+        label: 'Worker states',
+        value: '0 idle · 0 reading · 0 blocked · — errors',
+        segments: [
+          { value: '0 idle', tone: 'idle' },
+          { value: '0 reading', tone: 'in-flight' },
+          { value: '0 blocked', tone: 'backoff' },
+          { value: '— errors', tone: 'error' },
+        ],
       }),
+    ]))
+    expect(model?.rows.map((row) => row.label)).not.toEqual(expect.arrayContaining([
+      'Reader slots', 'Capacity telemetry', 'Configured capacity', 'Capacity state', 'Source', 'State',
     ]))
     adapter.dispose()
   })
 
-  it('formats channel depth, capacity, state, and rates from the snapshot', () => {
+  it('keeps every Channel Inspector to the fixed four rows', () => {
     const adapter = new SimulationAdapter()
     const model = getInspectorViewModel(
       derivedSnapshot(adapter),
@@ -252,26 +258,29 @@ describe('inspector view model', () => {
       label: 'Depth / capacity',
       value: '0 / 4 batches',
     })
-    expect(model?.rows).toContainEqual({ label: 'Flow state', value: 'Stopped' })
-    expect(model?.rows).toContainEqual({ label: 'Pressure', value: '0%' })
-    expect(model?.rows).toContainEqual({ label: 'Throughput', value: '0 tx/s' })
+    expect(model?.rows).toEqual([
+      { label: 'Throughput', value: '0 tx/s' },
+      { label: 'Depth / capacity', value: '0 / 4 batches' },
+      { label: 'Waiting upstream', value: '0' },
+      { label: 'Oldest wait', value: '—' },
+    ])
     adapter.dispose()
   })
 
-  it('separates historical blocked time from current upstream waiters', () => {
+  it('keeps current upstream wait values in the fixed Channel rows', () => {
     const adapter = new SimulationAdapter()
     const cases = [
       {
         blockedSenders: 0,
         oldestMs: 0,
         blockedMs: 1_250,
-        expected: ['0', '—', '1,250 ms'],
+        expected: ['0', '—'],
       },
       {
         blockedSenders: 1,
         oldestMs: 450,
         blockedMs: 1_600,
-        expected: ['1', '450 ms', '1,600 ms'],
+        expected: ['1', '450 ms'],
       },
     ] as const
 
@@ -284,20 +293,19 @@ describe('inspector view model', () => {
       )
       const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
       const labels = [
-        'Waiting upstream now',
-        'Oldest current wait',
-        'Accumulated blocked time',
+        'Waiting upstream',
+        'Oldest wait',
       ]
 
       expect(labels.map((label) =>
         model?.rows.find((row) => row.label === label)?.value,
       )).toEqual(testCase.expected)
-      expect(model?.rows.some((row) => row.label === 'Blocked time')).toBe(false)
+      expect(model?.rows.some((row) => row.label === 'Accumulated blocked time')).toBe(false)
     }
     adapter.dispose()
   })
 
-  it('projects immediate rendezvous pressure without inventing channel depth', () => {
+  it('keeps rendezvous channel values without adding inspector pressure rows', () => {
     const adapter = new SimulationAdapter()
     const base = adapter.getSnapshot()
     const snapshot = new ChannelFlowStateDeriver().derive({
@@ -320,15 +328,13 @@ describe('inspector view model', () => {
 
     expect(model?.rows).toEqual(expect.arrayContaining([
       { label: 'Depth / capacity', value: '0 / 0 batches' },
-      { label: 'Pressure', value: '100%' },
-      { label: 'Waiting upstream now', value: '1' },
-      { label: 'Oldest current wait', value: '10 ms' },
-      { label: 'Flow state', value: 'Backpressure' },
+      { label: 'Waiting upstream', value: '1' },
+      { label: 'Oldest wait', value: '10 ms' },
     ]))
     adapter.dispose()
   })
 
-  it('keeps channel depth and capacity truthful across apply states', () => {
+  it('keeps channel depth and capacity truthful without capacity-change rows', () => {
     const cases = [
     {
       name: 'applied 4, depth 4, pending 0',
@@ -336,7 +342,6 @@ describe('inspector view model', () => {
       depth: 4,
       pending: 0,
       expectedDepth: '4 / 4 batches',
-      expectedChange: 'Pending 0 batches',
     },
     {
       name: 'applied 12, depth 12, pending 4',
@@ -344,7 +349,6 @@ describe('inspector view model', () => {
       depth: 12,
       pending: 4,
       expectedDepth: '12 / 12 batches',
-      expectedChange: 'Pending 4 batches',
     },
     {
       name: 'increase from 4 to 12 applied immediately',
@@ -352,7 +356,6 @@ describe('inspector view model', () => {
       depth: 4,
       pending: null,
       expectedDepth: '4 / 12 batches',
-      expectedChange: null,
     },
     {
       name: 'zero capacity applied',
@@ -360,7 +363,6 @@ describe('inspector view model', () => {
       depth: 0,
       pending: null,
       expectedDepth: '0 / 0 batches',
-      expectedChange: null,
     },
     ]
     const adapter = new SimulationAdapter()
@@ -376,14 +378,9 @@ describe('inspector view model', () => {
       const depthRow = model?.rows.find(
         (row) => row.label === 'Depth / capacity',
       )
-      const changeRow = model?.rows.find(
-        (row) => row.label === 'Capacity change',
-      )
-
       expect(depthRow?.value, testCase.name).toBe(testCase.expectedDepth)
-      expect(changeRow?.value ?? null, testCase.name).toBe(
-        testCase.expectedChange,
-      )
+      expect(model?.rows.some((row) => row.label === 'Capacity change'), testCase.name)
+        .toBe(false)
     }
     adapter.dispose()
   })

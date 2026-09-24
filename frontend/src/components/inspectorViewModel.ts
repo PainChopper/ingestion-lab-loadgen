@@ -46,14 +46,8 @@ function formatControl(
   return value === '—' ? value : `${value} ${unit}`
 }
 
-function formatSourceLabel(source: string | null): string {
-  if (source === null) return '—'
-  const parts = source.split(/[\\/]/)
-  return parts[parts.length - 1] || source
-}
-
-function notReportedRow(label = 'Telemetry'): InspectorRow {
-  return { label, value: 'Not reported by HTTP adapter' }
+function unavailableRow(label = 'Telemetry'): InspectorRow {
+  return { label, value: '—' }
 }
 
 export function formatStateLabel(value: string): string {
@@ -70,49 +64,27 @@ function channelViewModel(channel: ChannelSnapshot): InspectorViewModel {
     applied: capacity.applied,
   })
   const depth = formatInteger(channel.depthBatches)
-  const capacityChange =
-    capacity.requestState === null
-      ? []
-      : [{
-          label: 'Capacity change',
-          value: `${capacity.requestState === 'pending' ? 'Pending' : 'Preview'} ${formatInteger(capacity.candidate)} ${channel.capacity.unit}`,
-        }]
-
   return {
     id: channel.id,
     title: channel.id === 'reader-to-throttler' ? 'Reader channel' : 'Sender channel',
     kind: `${formatStateLabel(channel.from)} to ${formatStateLabel(channel.to)}`,
     rows: [
       { label: 'Throughput', value: formatRate(channel.throughputTps) },
-      { label: 'Input rate', value: formatRate(channel.inputTps) },
-      { label: 'Output rate', value: formatRate(channel.outputTps) },
       {
         label: 'Depth / capacity',
         value: `${depth} / ${appliedCapacity}`,
       },
       {
-        label: 'Pressure',
-        value: `${Math.round(channel.displayedPressure * 100)}%`,
-      },
-      ...capacityChange,
-      { label: 'Buffered tx', value: formatInteger(channel.bufferedTransactions) },
-      {
-        label: 'Waiting upstream now',
+        label: 'Waiting upstream',
         value: formatInteger(channel.blockedSenders),
       },
       {
-        label: 'Oldest current wait',
+        label: 'Oldest wait',
         value:
           channel.blockedSenders > 0
             ? formatMilliseconds(channel.oldestBlockedSenderMs)
             : '—',
       },
-      {
-        label: 'Accumulated blocked time',
-        value: formatMilliseconds(channel.blockedMs),
-      },
-      { label: 'Trend', value: formatStateLabel(channel.trend) },
-      { label: 'Flow state', value: formatStateLabel(channel.flowState) },
     ],
   }
 }
@@ -124,6 +96,11 @@ export function getInspectorViewModel(
 ): InspectorViewModel | null {
   switch (selectedId) {
     case 'reader':
+      {
+        const workerSlots = snapshot.reader.workerSlots ?? []
+        const idleWorkers = workerSlots.filter((slot) => slot.activity === 'idle').length
+        const readingWorkers = workerSlots.filter((slot) => slot.activity === 'reading').length
+        const blockedWorkers = workerSlots.filter((slot) => slot.activity === 'blocked').length
       return {
         id: selectedId,
         title: 'READER',
@@ -134,36 +111,23 @@ export function getInspectorViewModel(
 			value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
 		  },
           {
-            label: 'Reader slots',
-            value: (snapshot.reader.workerSlots ?? []).map((slot) => `${slot.id}: ${slot.lifecycle} ${slot.activity}`).join(' · ') || '—',
+            label: 'Worker states',
+            value:
+              `${formatInteger(idleWorkers)} idle · ` +
+              `${formatInteger(readingWorkers)} reading · ` +
+              `${formatInteger(blockedWorkers)} blocked · — errors`,
             layout: 'full-width',
+            segments: [
+              { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
+              { value: `${formatInteger(readingWorkers)} reading`, tone: 'in-flight' },
+              { value: `${formatInteger(blockedWorkers)} blocked`, tone: 'backoff' },
+              { value: '— errors', tone: 'error' },
+            ],
           },
           { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
-          ...(snapshot.adapterKind === 'http'
-            ? [notReportedRow('Capacity telemetry')]
-            : [
-                {
-                  label: 'Configured capacity',
-                  value: formatRate(snapshot.reader.configuredCapacityTps),
-                },
-                {
-                  label: 'Capacity state',
-                  value: snapshot.reader.limitationReason === 'downstream-backpressure'
-                    ? 'Downstream limited'
-                    : 'Available',
-                },
-              ]),
           { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
-          {
-            label: 'Source',
-            value: formatSourceLabel(snapshot.reader.source),
-            disclosureLabel: snapshot.reader.source === null
-              ? undefined
-              : 'Show full source path',
-            disclosureValue: snapshot.reader.source ?? undefined,
-          },
-          { label: 'State', value: formatStateLabel(snapshot.reader.state) },
         ],
+      }
       }
     case 'throttler':
       return {
@@ -171,19 +135,7 @@ export function getInspectorViewModel(
         title: 'THROTTLER',
         kind: 'Rate control',
         rows: [
-          {
-            label: 'Valve mode',
-            value: snapshot.throttler.installationMode.pending === null
-              ? formatStateLabel(
-                snapshot.throttler.installationMode.applied ?? 'unavailable',
-              )
-              : `${formatStateLabel(snapshot.throttler.installationMode.applied ?? 'unavailable')} → ${formatStateLabel(snapshot.throttler.installationMode.pending)}`,
-          },
           { label: 'Admitted TPS', value: formatRate(snapshot.throttler.admittedTps) },
-          { label: 'State', value: formatStateLabel(snapshot.throttler.state) },
-          ...(snapshot.adapterKind === 'http'
-            ? [notReportedRow('Limited time')]
-            : [{ label: 'Limited time', value: formatMilliseconds(snapshot.throttler.limitedMs) }]),
         ],
       }
     case 'sender': {
@@ -225,7 +177,7 @@ export function getInspectorViewModel(
                 { value: `${formatInteger(terminalErrorWorkers)} errors`, tone: 'error' },
               ],
             }
-          : notReportedRow('Worker states'),
+          : unavailableRow('Worker states'),
       ]
       const deliveryRows: ReadonlyArray<InspectorRow> = hasSenderTelemetry ? [
         { label: 'Attempted TPS', value: formatRate(snapshot.sender.attemptedTps) },
@@ -245,7 +197,7 @@ export function getInspectorViewModel(
           value: formatInteger(snapshot.sender.failedResponses),
         },
         { label: 'Timeouts', value: formatInteger(snapshot.sender.timeoutsTotal) },
-      ] : [notReportedRow('Delivery telemetry')]
+      ] : [unavailableRow('Delivery telemetry')]
       const diagnosticsRows: ReadonlyArray<InspectorRow> = hasSenderTelemetry ? [
         { label: 'Attempts', value: formatInteger(snapshot.sender.attemptsStartedTotal) },
         {
@@ -282,7 +234,7 @@ export function getInspectorViewModel(
           value: 'Retries, timeouts, terminal failures, and ambiguous outcomes are counted separately.',
           layout: 'full-width',
         },
-      ] : [notReportedRow('Diagnostics telemetry')]
+      ] : [unavailableRow('Diagnostics telemetry')]
       const sections: ReadonlyArray<InspectorSection> = [
         { title: 'Pool', rows: poolRows },
         { title: 'Delivery', rows: deliveryRows },
@@ -291,7 +243,7 @@ export function getInspectorViewModel(
       return {
         id: selectedId,
         title: 'SENDER',
-        kind: 'Simulated sender',
+        kind: 'HTTP sender',
         rows: [...poolRows, ...deliveryRows, ...diagnosticsRows],
         sections,
       }
@@ -302,7 +254,7 @@ export function getInspectorViewModel(
           id: selectedId,
           title: 'TARGET',
           kind: 'HTTP endpoint',
-          rows: [notReportedRow()],
+          rows: [unavailableRow()],
         }
       }
       return {
@@ -329,7 +281,7 @@ export function getInspectorViewModel(
           id: selectedId,
           title: 'HTTP',
           kind: 'Sender to target',
-          rows: [notReportedRow()],
+          rows: [unavailableRow()],
         }
       }
       return {
