@@ -1,5 +1,5 @@
 import type { ReaderSnapshot, SelectableId } from '../../model/loadgen'
-import { formatRate } from './formatters'
+import { formatInteger, formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { WorkerActor } from './WorkerActor'
@@ -26,6 +26,24 @@ export function ReaderActor({
   geometry,
   orientation,
 }: ReaderActorProps) {
+  const workerStateSegments = snapshot.workerSlots === null
+    ? [{ value: 'Worker state telemetry unavailable', tone: 'idle' as const }]
+    : [
+        {
+          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'idle').length)} idle`,
+          tone: 'idle' as const,
+        },
+        {
+          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'reading').length)} reading`,
+          tone: 'in-flight' as const,
+        },
+        {
+          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'blocked').length)} blocked`,
+          tone: 'backoff' as const,
+        },
+        { value: '— errors', tone: 'error' as const },
+      ]
+
   return (
     <WorkerActor
       actor="reader"
@@ -44,6 +62,7 @@ export function ReaderActor({
         : undefined}
       outputPort={geometry.ports.output}
       primaryMetric={`Read ${formatRate(snapshot.readTps)}`}
+      statusMetricSegments={workerStateSegments}
       metricPoints={geometry.metrics}
       orientation={orientation}
       selected={selected}

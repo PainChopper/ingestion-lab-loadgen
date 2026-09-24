@@ -1,6 +1,7 @@
 import { Minus, Plus } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { DesiredControl } from '../../hooks/useDesiredControl'
+import type { InspectorRowSegment } from '../inspectorViewModel'
 import type {
   NumericControlSnapshot,
   ReaderWorkerSlotSnapshot,
@@ -43,6 +44,7 @@ interface WorkerActorProps {
   primaryMetric: string
   secondaryMetric?: string
   statusMetric?: string
+  statusMetricSegments?: ReadonlyArray<InspectorRowSegment>
   metricPoints: {
     readonly primary: TextPlacement
     readonly secondary: TextPlacement
@@ -145,6 +147,7 @@ export function WorkerActor({
   primaryMetric,
   secondaryMetric,
   statusMetric,
+  statusMetricSegments,
   metricPoints,
   orientation = 'landscape',
   selected,
@@ -511,14 +514,23 @@ export function WorkerActor({
             {secondaryMetric}
           </text>
         )}
-        {statusMetric && (
+        {(statusMetric || statusMetricSegments) && (
           <text
             x={metricPoints.status.x}
             y={metricPoints.status.y}
             textAnchor={metricPoints.status.anchor}
             className="pipeline-worker-status"
           >
-            {statusMetric}
+            {statusMetricSegments === undefined
+              ? statusMetric
+              : statusMetricSegments.map((segment, index) => (
+                  <tspan
+                    key={segment.value}
+                    className={`worker-state worker-state--${segment.tone}`}
+                  >
+                    {index > 0 && ' · '}{segment.value}
+                  </tspan>
+                ))}
           </text>
         )}
       </g>

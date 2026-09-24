@@ -24,12 +24,26 @@ export function SenderActor({
   geometry,
   orientation,
 }: SenderActorProps) {
-  const workerStateSummary = snapshot.workerSlots === null
-    ? 'Worker state telemetry unavailable'
-    : `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'idle').length)} idle · ` +
-      `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'in-flight').length)} in-flight · ` +
-      `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'backoff').length)} backoff · ` +
-      `${formatInteger(snapshot.workerSlots.filter((slot) => slot.terminalError).length)} errors`
+  const workerStateSegments = snapshot.workerSlots === null
+    ? [{ value: 'Worker state telemetry unavailable', tone: 'idle' as const }]
+    : [
+        {
+          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'idle').length)} idle`,
+          tone: 'idle' as const,
+        },
+        {
+          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'in-flight').length)} in-flight`,
+          tone: 'in-flight' as const,
+        },
+        {
+          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'backoff').length)} backoff`,
+          tone: 'backoff' as const,
+        },
+        {
+          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.terminalError).length)} errors`,
+          tone: 'error' as const,
+        },
+      ]
 
   return (
     <WorkerActor
@@ -47,7 +61,7 @@ export function SenderActor({
       inputPort={geometry.ports.input}
       outputPort={geometry.ports.output}
       primaryMetric={formatRate(snapshot.attemptedTps)}
-      statusMetric={workerStateSummary}
+      statusMetricSegments={workerStateSegments}
       metricPoints={geometry.metrics}
       orientation={orientation}
       selected={selected}
