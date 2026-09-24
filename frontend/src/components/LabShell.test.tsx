@@ -40,7 +40,7 @@ describe('LabShell', () => {
 
     await user.click(view.container.querySelector('#sender-actor')!)
     expect(screen.getByLabelText('Sender configuration').children)
-      .toHaveLength(4)
+      .toHaveLength(2)
   })
 
   it('renders a snapshot start error and clears its alert on the next snapshot', () => {
@@ -254,7 +254,7 @@ describe('LabShell', () => {
       .getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('owns Sender controls and leaves Target without migrated controls', async () => {
+  it('owns retained Sender controls and leaves Target without controls', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()
     const dispatch = vi.spyOn(adapter, 'dispatch')
@@ -262,15 +262,15 @@ describe('LabShell', () => {
 
     await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
     expect(screen.getByLabelText('Sender configuration')).not.toBeNull()
-    expect(screen.getByRole('spinbutton', { name: /^Simulated delay/ })).not.toBeNull()
-    expect(screen.getByRole('spinbutton', { name: /^Simulated error rate/ })).not.toBeNull()
+    expect(screen.getByRole('spinbutton', { name: /^Workers/ })).not.toBeNull()
+    expect(screen.getByRole('spinbutton', { name: /^HTTP timeout/ })).not.toBeNull()
     await user.click(screen.getByRole('button', { name: 'Add sender worker' }))
     expect(dispatch).toHaveBeenCalledWith({ type: 'set-sender-workers', value: 4 })
 
     await user.click(screen.getByRole('button', { name: 'Inspect target' }))
     expect(screen.queryByLabelText('Sender configuration')).toBeNull()
-    expect(screen.queryByRole('spinbutton', { name: /^Simulated delay/ })).toBeNull()
-    expect(screen.queryByRole('spinbutton', { name: /^Simulated error rate/ })).toBeNull()
+    expect(screen.queryByRole('spinbutton', { name: /^Workers/ })).toBeNull()
+    expect(screen.queryByRole('spinbutton', { name: /^HTTP timeout/ })).toBeNull()
   })
 
   it('renders all Sender sections and keeps long policy rows full width', async () => {

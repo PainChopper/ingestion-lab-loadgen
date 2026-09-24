@@ -143,8 +143,6 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 	reply := make(chan commandResult, 1)
 	for _, command := range []request{
 		{kind: cmdSetSenderWorkers, value: 3, commandReply: reply},
-		{kind: cmdSetSenderSimulatedDelayMS, value: 40, commandReply: reply},
-		{kind: cmdSetSenderSimulatedErrorRatePercent, value: 9, commandReply: reply},
 	} {
 		requests <- command
 		if result := <-reply; result.status != commandAccepted {
@@ -157,8 +155,7 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 		requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 		snapshot := <-snapshotReply
 		sender := snapshot.Sender
-		if snapshot.Run.State != wantState || sender.Workers != 3 || sender.SimulatedDelayMS != 40 ||
-			sender.SimulatedErrorRatePercent != 9 || sender.LiveWorkers != wantLive ||
+		if snapshot.Run.State != wantState || sender.Workers != 3 || sender.LiveWorkers != wantLive ||
 			sender.DrainingWorkers != 0 || len(sender.WorkerSlots) != wantLive {
 			t.Fatalf("Sender snapshot = %+v in %s", sender, snapshot.Run.State)
 		}

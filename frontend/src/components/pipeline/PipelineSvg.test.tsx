@@ -428,8 +428,6 @@ function liveControls(
     requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? snapshot.throttler.requestedTps.min),
     installationMode: desiredControl(snapshot.throttler.installationMode.applied ?? 'installed'),
     senderWorkers: desiredControl(snapshot.sender.workers.applied ?? snapshot.sender.workers.min),
-    simulatedDelayMs: desiredControl(snapshot.sender.simulatedDelayMs.applied ?? snapshot.sender.simulatedDelayMs.min),
-    simulatedErrorRatePercent: desiredControl(snapshot.sender.simulatedErrorRatePercent.applied ?? snapshot.sender.simulatedErrorRatePercent.min),
     timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? snapshot.sender.timeoutMs.min),
     ...overrides,
   }

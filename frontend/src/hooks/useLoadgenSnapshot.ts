@@ -88,8 +88,6 @@ function freezeObservedTelemetry(
     sender: Object.freeze({
       ...observed.sender,
       workers: live.sender.workers,
-      simulatedDelayMs: live.sender.simulatedDelayMs,
-      simulatedErrorRatePercent: live.sender.simulatedErrorRatePercent,
       timeoutMs: live.sender.timeoutMs,
       state: live.sender.state,
     }),

@@ -35,9 +35,7 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			cr.Action == "set-throttler-installation-mode" ||
 			cr.Action == "set-sender-channel-capacity" ||
 			cr.Action == "set-reader-workers" ||
-			cr.Action == "set-sender-workers" ||
-			cr.Action == "set-sender-simulated-delay-ms" ||
-			cr.Action == "set-sender-simulated-error-rate-percent"
+			cr.Action == "set-sender-workers"
 		if strictAction {
 			decoder := json.NewDecoder(bytes.NewReader(body))
 			decoder.DisallowUnknownFields()
@@ -151,7 +149,7 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			if result := <-reply; result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
-		case "set-sender-workers", "set-sender-simulated-delay-ms", "set-sender-simulated-error-rate-percent":
+		case "set-sender-workers":
 			var value int
 			if len(cr.Value) == 0 || string(cr.Value) == "null" {
 				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
@@ -163,14 +161,7 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 			}
 			var setting rangePolicy
 			var kind requestKind
-			switch cr.Action {
-			case "set-sender-workers":
-				setting, kind = policy.Sender.Workers, cmdSetSenderWorkers
-			case "set-sender-simulated-delay-ms":
-				setting, kind = policy.Sender.Simulated.DelayMS, cmdSetSenderSimulatedDelayMS
-			case "set-sender-simulated-error-rate-percent":
-				setting, kind = policy.Sender.Simulated.ErrorRatePercent, cmdSetSenderSimulatedErrorRatePercent
-			}
+			setting, kind = policy.Sender.Workers, cmdSetSenderWorkers
 			if !setting.contains(value) {
 				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
 				return

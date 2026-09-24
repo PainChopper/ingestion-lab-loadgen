@@ -23,7 +23,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 			ReadBatchSize: 50000, ReadTps: 123.5, RowsRead: 47, Source: &source,
 		},
 		Throttler:     throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
-		Sender:        senderSnapshot{Workers: 32, WorkerSlots: []senderWorkerSlot{}, SimulatedDelayMS: 10, SimulatedErrorRatePercent: 2},
+		Sender:        senderSnapshot{Workers: 32, WorkerSlots: []senderWorkerSlot{}},
 		ReaderChannel: channelSnapshot{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, SentBatchesTotal: 2, SentTransactionsTotal: 4, ReceivedBatchesTotal: 1, ReceivedTransactionsTotal: 2, SentBatchesPerSecond: 1.5, SentTransactionsPerSecond: 3, ReceivedBatchesPerSecond: 0.5, ReceivedTransactionsPerSecond: 1},
 		SenderChannel: channelSnapshot{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, SentBatchesTotal: 3, SentTransactionsTotal: 6, ReceivedBatchesTotal: 2, ReceivedTransactionsTotal: 3, SentBatchesPerSecond: 2, SentTransactionsPerSecond: 4, ReceivedBatchesPerSecond: 1.5, ReceivedTransactionsPerSecond: 2.5},
 		Policy:        testPolicy(t).snapshot(),
@@ -50,7 +50,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		"run":           {"elapsedMs", "startError", "state", "totalTransactions"},
 		"reader":        {"drainingWorkers", "liveWorkers", "readBatchSize", "readTps", "rowsRead", "source", "workerSlots", "workers"},
 		"throttler":     {"admittedTps", "installationMode", "requestedTps"},
-		"sender":        {"drainingWorkers", "liveWorkers", "simulatedDelayMs", "simulatedErrorRatePercent", "workerSlots", "workers"},
+		"sender":        {"drainingWorkers", "liveWorkers", "workerSlots", "workers"},
 		"readerChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
 		"senderChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
 	} {
@@ -67,7 +67,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(root["policy"], &policy); err != nil {
 		t.Fatalf("decode policy: %v", err)
 	}
-	assertExactJSONKeys(t, policy, []string{"metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "senderSimulatedDelayMs", "senderSimulatedErrorRatePercent", "senderRetry", "throttlerInstallationMode", "throttlerRequestedTps"})
+	assertExactJSONKeys(t, policy, []string{"metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "senderRetry", "throttlerInstallationMode", "throttlerRequestedTps"})
 	var workers rangePolicy
 	if err := json.Unmarshal(policy["readerWorkers"], &workers); err != nil {
 		t.Fatal(err)

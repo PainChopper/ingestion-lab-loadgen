@@ -20,8 +20,6 @@ export interface LiveControls {
   requestedTps: DesiredControl<number>
   installationMode: DesiredControl<ThrottlerInstallationMode>
   senderWorkers: DesiredControl<number>
-  simulatedDelayMs: DesiredControl<number>
-  simulatedErrorRatePercent: DesiredControl<number>
   timeoutMs: DesiredControl<number>
 }
 

@@ -1,10 +1,10 @@
-# Reader(s), Sender pool и managed simulated workers
+# Reader(s), Sender pool и HTTP delivery
 
 ## Итог
 
-Sender pipeline получает управляемый pool: configuration policy задаёт desired state, а pool постепенно приводит к нему фактическое число workers. Целевая схема: `Reader(s) → Reader channel → Throttler → Sender channel → Sender pool`.
+Sender pipeline получает управляемый pool: configuration policy задаёт desired state, а pool постепенно приводит к нему фактическое число workers. Целевая схема: `Reader(s) → Reader channel → Throttler → Sender channel → Sender pool → HTTP endpoint`.
 
-В этом срезе не появляется реальный HTTP, endpoint или внешний server. Sender получает deterministic simulated success/error responses, чтобы проверять retry, terminal errors и lifecycle.
+Sender выполняет HTTP POST по startup-only адресу `sender.api.url` (в локальной конфигурации — `/internal/test/ingest`). Ответы endpoint классифицируются как успешные, retryable или terminal; retry policy применяется к retryable HTTP/network/timeout исходам.
 
 ## Конфигурация и snapshot
 
@@ -21,22 +21,6 @@ step = 1
 unit = "workers"
 mutability = "immediate"
 
-[sender.simulated.delay_ms]
-default = 10
-min = 0
-max = 2_000
-step = 10
-unit = "milliseconds"
-mutability = "immediate"
-
-[sender.simulated.error_rate_percent]
-default = 2
-min = 0
-max = 100
-step = 1
-unit = "percent"
-mutability = "immediate"
-
 [sender.retry]
 max_attempts = 3
 backoff_base_ms = 250
@@ -45,13 +29,11 @@ jitter_percent = 20
 mutability = "startup-only"
 ```
 
-Policy snapshot публикует workers, simulated delay/error rate и retry policy. Команды сразу изменяют workers, delay и error rate; retry policy только читается из configuration.
+Policy snapshot публикует workers и retry policy. Команда сразу изменяет workers; retry policy только читается из configuration.
 
 Строгие команды используют существующее тело `{ "action": string, "value": number }`:
 
-- `set-sender-workers`: целое `1…32` с шагом `1`;
-- `set-sender-simulated-delay-ms`: целое `0…2_000` с шагом `10`;
-- `set-sender-simulated-error-rate-percent`: целое `0…100` с шагом `1`.
+- `set-sender-workers`: целое `1…32` с шагом `1`.
 
 Каждая допускается в `idle`, `running` и `paused`; неизвестный ключ, trailing JSON, `null`, дробное, строковое, вне диапазона или вне шага значение дают `400`.
 
@@ -63,7 +45,7 @@ Policy snapshot публикует workers, simulated delay/error rate и retry 
 
 В `idle` и `paused` desired value сохраняется, а `liveWorkers` и `drainingWorkers` равны нулю.
 
-`sender` имеет ровно шесть полей: `workers`, `liveWorkers`, `drainingWorkers`, `workerSlots`, `simulatedDelayMs`, `simulatedErrorRatePercent`. Последние два поля показывают применённые значения команд, в том числе после повторного подключения UI. У каждого slot ровно `id`, `ordinal`, `activity`, `lifecycle`, `terminalError`; slots упорядочены по `ordinal`, а `id` имеет вид `sender-worker-<ordinal>`. `workerSlots.length` равен `liveWorkers`, число draining slots равно `drainingWorkers`.
+`sender` имеет ровно четыре поля: `workers`, `liveWorkers`, `drainingWorkers`, `workerSlots`. У каждого slot ровно `id`, `ordinal`, `activity`, `lifecycle`, `terminalError`; slots упорядочены по `ordinal`, а `id` имеет вид `sender-worker-<ordinal>`. `workerSlots.length` равен `liveWorkers`, число draining slots равно `drainingWorkers`.
 
 ## Приведение Sender pool к заданному размеру и lifecycle
 
@@ -77,7 +59,7 @@ Policy snapshot публикует workers, simulated delay/error rate и retry 
 
 `Pause` прекращает новые receives и ждёт завершения всех accepted batch. `Reset` и teardown сначала join-ят Sender pool, затем останавливают Reader(s) и Throttler, после чего очищают очереди.
 
-Simulated error запускает до трёх попыток с backoff 250 и 500 ms и jitter ±20%. После третьей неудачи batch получает terminal failure. Terminal error остаётся на worker до следующего успешного batch.
+Retryable HTTP/network/timeout исход запускает до трёх попыток с backoff 250 и 500 ms и jitter ±20%. После третьей неудачи batch получает terminal failure. Terminal error остаётся на worker до следующего успешного batch.
 
 ## UI и цвета
 

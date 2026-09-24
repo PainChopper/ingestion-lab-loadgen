@@ -32,8 +32,6 @@ function liveControls(snapshot: LoadgenSnapshot): LiveControls {
     requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? 0),
     installationMode: desiredControl(snapshot.throttler.installationMode.applied ?? 'installed'),
     senderWorkers: desiredControl(snapshot.sender.workers.applied ?? 0),
-    simulatedDelayMs: desiredControl(snapshot.sender.simulatedDelayMs.applied ?? 0),
-    simulatedErrorRatePercent: desiredControl(snapshot.sender.simulatedErrorRatePercent.applied ?? 0),
     timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? 0),
   }
 }
@@ -98,8 +96,7 @@ function snapshotFor(state: SenderState): LoadgenSnapshot {
   }
   const sender = {
     id: 'sender' as const, workers: numericControl(workers, 'workers'), liveWorkers: active ? 3 : draining ? 1 : 2,
-    drainingWorkers: draining ? 2 : 0, simulatedDelayMs: numericControl(0, 'ms'),
-    simulatedErrorRatePercent: numericControl(terminalFailure || retrying ? 15 : 0, '%'),
+    drainingWorkers: draining ? 2 : 0,
     timeoutMs: numericControl(5_000, 'ms'), workerSlots: senderSlots(state),
     retryPolicy: retrying || terminalFailure ? retryPolicy : null, attemptedTps,
     retryAttemptedTps: retrying ? 240 : terminalFailure ? 120 : 0,

@@ -21,8 +21,6 @@ const (
 	cmdSetRequestedTPS
 	cmdSetThrottlerInstallationMode
 	cmdSetSenderWorkers
-	cmdSetSenderSimulatedDelayMS
-	cmdSetSenderSimulatedErrorRatePercent
 )
 
 type request struct {
@@ -47,11 +45,13 @@ type commandResult struct {
 
 const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
+const internalTestIngestPath = "/internal/test/ingest"
 
 func newServeMux(requests chan<- request, metrics *Metrics, policy policy) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle(snapshotPath, snapshotHandler(requests))
 	mux.Handle(commandsPath, commandsHandler(requests, policy))
+	mux.Handle(internalTestIngestPath, internalTestIngestHandler())
 
 	if metrics != nil {
 		mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))

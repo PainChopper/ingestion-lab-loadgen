@@ -96,8 +96,6 @@ export interface LoadgenPolicySnapshot {
   readonly throttlerRequestedTps: RangeControlPolicySnapshot
   readonly throttlerInstallationMode: InstallationModePolicySnapshot
   readonly senderWorkers: RangeControlPolicySnapshot
-  readonly senderSimulatedDelayMs: RangeControlPolicySnapshot
-  readonly senderSimulatedErrorRatePercent: RangeControlPolicySnapshot
   readonly senderRetry: SenderRetryPolicySnapshot
 }
 
@@ -183,8 +181,6 @@ export interface SenderSnapshot {
   readonly workers: NumericControlSnapshot
   readonly liveWorkers: number
   readonly drainingWorkers: number
-  readonly simulatedDelayMs: NumericControlSnapshot
-  readonly simulatedErrorRatePercent: NumericControlSnapshot
   readonly timeoutMs: NumericControlSnapshot
   readonly workerSlots: readonly SenderWorkerSlotSnapshot[] | null
   readonly retryPolicy: RetryPolicySnapshot | null
@@ -278,8 +274,6 @@ export type LoadgenCommand =
     }
   | { type: 'set-worker-count'; actor: 'reader'; value: number }
   | { type: 'set-sender-workers'; value: number }
-  | { type: 'set-sender-simulated-delay-ms'; value: number }
-  | { type: 'set-sender-simulated-error-rate-percent'; value: number }
   | { type: 'set-reader-channel-capacity'; value: number }
   | { type: 'set-sender-channel-capacity'; value: number }
   | { type: 'set-read-batch-size'; value: number }

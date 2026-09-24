@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"time"
@@ -77,14 +78,14 @@ type metricsPolicy struct {
 }
 
 type senderPolicy struct {
-	Workers   rangePolicy           `mapstructure:"workers"`
-	Simulated senderSimulatedPolicy `mapstructure:"simulated"`
-	Retry     senderRetryPolicy     `mapstructure:"retry"`
+	Workers rangePolicy       `mapstructure:"workers"`
+	API     senderAPIPolicy   `mapstructure:"api"`
+	Retry   senderRetryPolicy `mapstructure:"retry"`
 }
 
-type senderSimulatedPolicy struct {
-	DelayMS          rangePolicy `mapstructure:"delay_ms"`
-	ErrorRatePercent rangePolicy `mapstructure:"error_rate_percent"`
+type senderAPIPolicy struct {
+	URL        string `mapstructure:"url"`
+	Mutability string `mapstructure:"mutability"`
 }
 
 type senderRetryPolicy struct {
@@ -190,14 +191,35 @@ func (p senderPolicy) validate() error {
 	if err := p.Workers.validateExact(32, 1, 32, 1, workersUnit, immediate); err != nil {
 		return fmt.Errorf("workers: %w", err)
 	}
-	if err := p.Simulated.DelayMS.validateExact(10, 0, 2_000, 10, metricsWindowUnit, immediate); err != nil {
-		return fmt.Errorf("simulated.delay_ms: %w", err)
-	}
-	if err := p.Simulated.ErrorRatePercent.validateExact(2, 0, 100, 1, percentUnit, immediate); err != nil {
-		return fmt.Errorf("simulated.error_rate_percent: %w", err)
+	if err := p.API.validate(); err != nil {
+		return fmt.Errorf("api: %w", err)
 	}
 	if p.Retry != (senderRetryPolicy{MaxAttempts: 3, BackoffBaseMS: 250, BackoffMultiplier: 2, JitterPercent: 20, Mutability: startupOnly}) {
 		return fmt.Errorf("retry must match the approved startup-only policy")
+	}
+	return nil
+}
+
+func (p senderAPIPolicy) validate() error {
+	if p.URL == "" {
+		return fmt.Errorf("url must not be empty")
+	}
+	if p.Mutability != startupOnly {
+		return fmt.Errorf("mutability must be %q", startupOnly)
+	}
+
+	parsed, err := url.Parse(p.URL)
+	if err != nil {
+		return fmt.Errorf("url must be a valid absolute HTTP(S) URL")
+	}
+	if !parsed.IsAbs() || parsed.Host == "" {
+		return fmt.Errorf("url must be an absolute HTTP(S) URL with host")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("url must use http or https")
+	}
+	if parsed.Fragment != "" {
+		return fmt.Errorf("url must not contain a fragment")
 	}
 	return nil
 }
@@ -317,31 +339,27 @@ func (p allowedPolicy) validateSenderChannelCapacity() error {
 }
 
 type policySnapshot struct {
-	ReaderReadBatchSize             rangePolicy            `json:"readerReadBatchSize"`
-	ReaderWorkers                   rangePolicy            `json:"readerWorkers"`
-	ReaderChannelCapacity           allowedPolicy          `json:"readerChannelCapacity"`
-	SenderChannelCapacity           allowedPolicy          `json:"senderChannelCapacity"`
-	ThrottlerRequestedTPS           rangePolicy            `json:"throttlerRequestedTps"`
-	ThrottlerInstallationMode       installationModePolicy `json:"throttlerInstallationMode"`
-	MetricsWindowMS                 rangePolicy            `json:"metricsWindowMs"`
-	SenderWorkers                   rangePolicy            `json:"senderWorkers"`
-	SenderSimulatedDelayMS          rangePolicy            `json:"senderSimulatedDelayMs"`
-	SenderSimulatedErrorRatePercent rangePolicy            `json:"senderSimulatedErrorRatePercent"`
-	SenderRetry                     senderRetryPolicy      `json:"senderRetry"`
+	ReaderReadBatchSize       rangePolicy            `json:"readerReadBatchSize"`
+	ReaderWorkers             rangePolicy            `json:"readerWorkers"`
+	ReaderChannelCapacity     allowedPolicy          `json:"readerChannelCapacity"`
+	SenderChannelCapacity     allowedPolicy          `json:"senderChannelCapacity"`
+	ThrottlerRequestedTPS     rangePolicy            `json:"throttlerRequestedTps"`
+	ThrottlerInstallationMode installationModePolicy `json:"throttlerInstallationMode"`
+	MetricsWindowMS           rangePolicy            `json:"metricsWindowMs"`
+	SenderWorkers             rangePolicy            `json:"senderWorkers"`
+	SenderRetry               senderRetryPolicy      `json:"senderRetry"`
 }
 
 func (p policy) snapshot() policySnapshot {
 	return policySnapshot{
-		ReaderReadBatchSize:             p.Reader.ReadBatchSize,
-		ReaderWorkers:                   p.Reader.Workers,
-		ReaderChannelCapacity:           p.ReaderChannel.Capacity,
-		SenderChannelCapacity:           p.SenderChannel.Capacity,
-		ThrottlerRequestedTPS:           p.Throttler.RequestedTPS,
-		ThrottlerInstallationMode:       p.Throttler.InstallationMode,
-		MetricsWindowMS:                 p.Metrics.WindowMS,
-		SenderWorkers:                   p.Sender.Workers,
-		SenderSimulatedDelayMS:          p.Sender.Simulated.DelayMS,
-		SenderSimulatedErrorRatePercent: p.Sender.Simulated.ErrorRatePercent,
-		SenderRetry:                     p.Sender.Retry,
+		ReaderReadBatchSize:       p.Reader.ReadBatchSize,
+		ReaderWorkers:             p.Reader.Workers,
+		ReaderChannelCapacity:     p.ReaderChannel.Capacity,
+		SenderChannelCapacity:     p.SenderChannel.Capacity,
+		ThrottlerRequestedTPS:     p.Throttler.RequestedTPS,
+		ThrottlerInstallationMode: p.Throttler.InstallationMode,
+		MetricsWindowMS:           p.Metrics.WindowMS,
+		SenderWorkers:             p.Sender.Workers,
+		SenderRetry:               p.Sender.Retry,
 	}
 }

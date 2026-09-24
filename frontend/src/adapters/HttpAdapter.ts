@@ -24,7 +24,7 @@ const RUN_KEYS = Object.freeze(['elapsedMs', 'startError', 'state', 'totalTransa
 const READER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'readBatchSize', 'readTps', 'rowsRead', 'source', 'workerSlots', 'workers'])
 const READER_SLOT_KEYS = Object.freeze(['activity', 'id', 'lifecycle', 'ordinal', 'source'])
 const THROTTLER_KEYS = Object.freeze(['admittedTps', 'installationMode', 'requestedTps'])
-const SENDER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'simulatedDelayMs', 'simulatedErrorRatePercent', 'workerSlots', 'workers'])
+const SENDER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'workerSlots', 'workers'])
 const SENDER_SLOT_KEYS = Object.freeze(['activity', 'id', 'lifecycle', 'ordinal', 'terminalError'])
 const CHANNEL_KEYS = Object.freeze([
   'blockedMs', 'blockedSenders', 'bufferedTransactions', 'capacity', 'depthBatches',
@@ -40,8 +40,6 @@ interface WireSender {
   readonly workers: number
   readonly liveWorkers: number
   readonly drainingWorkers: number
-  readonly simulatedDelayMs: number
-  readonly simulatedErrorRatePercent: number
   readonly workerSlots: readonly {
     readonly id: string
     readonly ordinal: number
@@ -67,8 +65,6 @@ type SupportedCommand = Extract<
       | 'set-throttler-installation-mode'
       | 'set-worker-count'
       | 'set-sender-workers'
-      | 'set-sender-simulated-delay-ms'
-      | 'set-sender-simulated-error-rate-percent'
   }
 >
 
@@ -95,9 +91,7 @@ function isSupportedCommand(
     command.type === 'set-requested-tps' ||
     command.type === 'set-throttler-installation-mode' ||
     command.type === 'set-worker-count' ||
-    command.type === 'set-sender-workers' ||
-    command.type === 'set-sender-simulated-delay-ms' ||
-    command.type === 'set-sender-simulated-error-rate-percent'
+    command.type === 'set-sender-workers'
 }
 
 function unavailableControl(unit: string): NumericControlSnapshot {
@@ -326,8 +320,6 @@ function createSnapshot(
       workers: senderControl(wire?.sender.workers ?? null, wire?.policy.senderWorkers ?? null, connectionState),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
-      simulatedDelayMs: senderControl(wire?.sender.simulatedDelayMs ?? null, wire?.policy.senderSimulatedDelayMs ?? null, connectionState, 'milliseconds'),
-      simulatedErrorRatePercent: senderControl(wire?.sender.simulatedErrorRatePercent ?? null, wire?.policy.senderSimulatedErrorRatePercent ?? null, connectionState, 'percent'),
       timeoutMs: unavailableControl('ms'),
       workerSlots: wire?.sender.workerSlots ?? null,
       retryPolicy: null,
@@ -434,8 +426,6 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
     'readerReadBatchSize', 'readerWorkers',
     'senderChannelCapacity',
     'senderRetry',
-    'senderSimulatedDelayMs',
-    'senderSimulatedErrorRatePercent',
     'senderWorkers',
     'throttlerInstallationMode',
     'throttlerRequestedTps',
@@ -575,8 +565,6 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   }
   const senderRanges = [
     [value.senderWorkers, 32, 1, 32, 1, 'workers'],
-    [value.senderSimulatedDelayMs, 10, 0, 2000, 10, 'milliseconds'],
-    [value.senderSimulatedErrorRatePercent, 2, 0, 100, 1, 'percent'],
   ] as const
   for (const [senderRange, defaultValue, min, max, step, unit] of senderRanges) {
     if (!isExactObject(senderRange, ['default', 'max', 'min', 'mutability', 'step', 'unit']) ||
@@ -616,8 +604,6 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
       mutability: installationMode.mutability,
     }),
     senderWorkers: Object.freeze(value.senderWorkers as unknown as LoadgenPolicySnapshot['senderWorkers']),
-    senderSimulatedDelayMs: Object.freeze(value.senderSimulatedDelayMs as unknown as LoadgenPolicySnapshot['senderSimulatedDelayMs']),
-    senderSimulatedErrorRatePercent: Object.freeze(value.senderSimulatedErrorRatePercent as unknown as LoadgenPolicySnapshot['senderSimulatedErrorRatePercent']),
     senderRetry: Object.freeze(retry as unknown as LoadgenPolicySnapshot['senderRetry']),
   })
 }
@@ -666,8 +652,6 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   if (reader.source !== null && (typeof reader.source !== 'string' || reader.source.length === 0)) throw new Error('snapshot reader source is invalid')
   if (!isRangeValue(throttler.requestedTps, policy.throttlerRequestedTps) || !isWireNumber(throttler.admittedTps) || (throttler.installationMode !== 'installed' && throttler.installationMode !== 'bypass') || !policy.throttlerInstallationMode.allowed.includes(throttler.installationMode)) throw new Error('snapshot throttler values are invalid')
   if (!isRangeValue(sender.workers, policy.senderWorkers) ||
-    !isRangeValue(sender.simulatedDelayMs, policy.senderSimulatedDelayMs) ||
-    !isRangeValue(sender.simulatedErrorRatePercent, policy.senderSimulatedErrorRatePercent) ||
     !isWireInteger(sender.liveWorkers) || !isWireInteger(sender.drainingWorkers) ||
     !Array.isArray(sender.workerSlots) || sender.workerSlots.length !== sender.liveWorkers ||
     sender.drainingWorkers > sender.liveWorkers ||
@@ -747,14 +731,6 @@ function canDispatchPolicyCommand(
   }
   if (command.type === 'set-worker-count' && command.actor === 'reader') {
     return snapshot.connectionState === 'connected' && policy?.readerWorkers !== undefined && isRangeValue(command.value, policy.readerWorkers)
-  }
-  if (command.type === 'set-sender-simulated-delay-ms') {
-    return snapshot.connectionState === 'connected' && policy !== null &&
-      isRangeValue(command.value, policy.senderSimulatedDelayMs)
-  }
-  if (command.type === 'set-sender-simulated-error-rate-percent') {
-    return snapshot.connectionState === 'connected' && policy !== null &&
-      isRangeValue(command.value, policy.senderSimulatedErrorRatePercent)
   }
   if (
     snapshot.connectionState !== 'connected' ||
@@ -965,9 +941,7 @@ export class HttpAdapter implements LoadgenAdapter {
           command.type === 'set-sender-channel-capacity' ||
           command.type === 'set-requested-tps' ||
           command.type === 'set-throttler-installation-mode' ||
-          command.type === 'set-sender-workers' ||
-          command.type === 'set-sender-simulated-delay-ms' ||
-          command.type === 'set-sender-simulated-error-rate-percent'
+          command.type === 'set-sender-workers'
             ? { action: command.type, value: command.value }
             : command.type === 'set-worker-count' && command.actor === 'reader'
               ? { action: 'set-reader-workers', value: command.value }

@@ -49,8 +49,6 @@ interface TestWireSnapshot {
       readonly lifecycle: 'active' | 'draining'
       readonly terminalError: boolean
     }[]
-    readonly simulatedDelayMs: number
-    readonly simulatedErrorRatePercent: number
   }
   readonly readerChannel: TestWireChannel
   readonly senderChannel: TestWireChannel
@@ -84,7 +82,7 @@ const VALID_WIRE: TestWireSnapshot = {
   run: { state: 'running', elapsedMs: 12_345, startError: null, totalTransactions: 42_000 },
   reader: { workers: 1, liveWorkers: 1, drainingWorkers: 0, workerSlots: [{ id: 'reader-worker-0', ordinal: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/input.parquet' }], readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, source: 'MBD-mini/trx/part/input.parquet' },
   throttler: { requestedTps: 200, admittedTps: 125_000.5, installationMode: 'installed' },
-  sender: { workers: 32, liveWorkers: 0, drainingWorkers: 0, workerSlots: [], simulatedDelayMs: 10, simulatedErrorRatePercent: 2 },
+  sender: { workers: 32, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] },
   readerChannel: {
     capacity: 8, sentBatchesTotal: 11, sentTransactionsTotal: 550_000, receivedBatchesTotal: 5, receivedTransactionsTotal: 250_000,
     depthBatches: 6, bufferedTransactions: 300_000, blockedSenders: 1, oldestBlockedSenderMs: 450, blockedMs: 1_600,
@@ -146,8 +144,6 @@ const VALID_WIRE: TestWireSnapshot = {
       mutability: 'immediate',
     },
     senderWorkers: { default: 32, min: 1, max: 32, step: 1, unit: 'workers', mutability: 'immediate' },
-    senderSimulatedDelayMs: { default: 10, min: 0, max: 2000, step: 10, unit: 'milliseconds', mutability: 'immediate' },
-    senderSimulatedErrorRatePercent: { default: 2, min: 0, max: 100, step: 1, unit: 'percent', mutability: 'immediate' },
     senderRetry: { maxAttempts: 3, backoffBaseMs: 250, backoffMultiplier: 2, jitterPercent: 20, mutability: 'startup-only' },
   },
 }
@@ -469,8 +465,6 @@ function expectedSnapshot(
       workers: wire ? { ...control('workers', wire.sender.workers), min: 1, max: 32, step: 1, applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable' } : control('workers'),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
-      simulatedDelayMs: wire ? { ...control('milliseconds', wire.sender.simulatedDelayMs), min: 0, max: 2000, step: 10, applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable' } : control('milliseconds'),
-      simulatedErrorRatePercent: wire ? { ...control('percent', wire.sender.simulatedErrorRatePercent), min: 0, max: 100, step: 1, applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable' } : control('percent'),
       timeoutMs: control('ms'),
       workerSlots: wire?.sender.workerSlots ?? null,
       retryPolicy: null,
@@ -624,30 +618,6 @@ const malformedCases: ReadonlyArray<{
       })(),
     }),
   },
-  ...(['simulatedDelayMs', 'simulatedErrorRatePercent'] as const).flatMap((field) => [
-    {
-      name: `missing sender ${field}`,
-      result: async () => {
-        const sender = { ...VALID_WIRE.sender } as Record<string, unknown>
-        delete sender[field]
-        return mockResponse({ ...VALID_WIRE, sender })
-      },
-    },
-    {
-      name: `wrong-type sender ${field}`,
-      result: async () => mockResponse({
-        ...VALID_WIRE,
-        sender: { ...VALID_WIRE.sender, [field]: '10' },
-      }),
-    },
-    {
-      name: `off-step sender ${field}`,
-      result: async () => mockResponse({
-        ...VALID_WIRE,
-        sender: { ...VALID_WIRE.sender, [field]: field === 'simulatedDelayMs' ? 11 : 101 },
-      }),
-    },
-  ]),
   {
     name: 'extra sender field',
     result: async () => mockResponse({
@@ -655,7 +625,7 @@ const malformedCases: ReadonlyArray<{
       sender: { ...VALID_WIRE.sender, extra: true },
     }),
   },
-  ...(['senderWorkers', 'senderSimulatedDelayMs', 'senderSimulatedErrorRatePercent', 'senderRetry'] as const).flatMap((field) => [
+  ...(['senderWorkers', 'senderRetry'] as const).flatMap((field) => [
     {
       name: `missing policy ${field}`,
       result: async () => {
@@ -679,6 +649,21 @@ const malformedCases: ReadonlyArray<{
       }),
     },
   ]),
+  {
+    name: 'extra obsolete Sender simulation policy fields',
+    result: async () => {
+      const obsoleteDelayKey = ['sender', 'Simulated', 'DelayMs'].join('')
+      const obsoleteErrorRateKey = ['sender', 'Simulated', 'ErrorRatePercent'].join('')
+      return mockResponse({
+        ...VALID_WIRE,
+        policy: {
+          ...VALID_WIRE.policy,
+          [obsoleteDelayKey]: { default: 10, min: 0, max: 2000, step: 10, unit: 'milliseconds', mutability: 'immediate' },
+          [obsoleteErrorRateKey]: { default: 2, min: 0, max: 100, step: 1, unit: 'percent', mutability: 'immediate' },
+        },
+      })
+    },
+  },
   ...(['activity', 'lifecycle', 'terminalError'] as const).flatMap((field) => [
     {
       name: `missing sender slot ${field}`,
@@ -1493,8 +1478,6 @@ describe('HttpAdapter', () => {
         sender: {
           ...firstWire.sender,
           workers: 7,
-          simulatedDelayMs: 40,
-          simulatedErrorRatePercent: 9,
         },
       }
       let polls = 0
@@ -1506,8 +1489,6 @@ describe('HttpAdapter', () => {
 
       for (const command of [
         { type: 'set-sender-workers', value: 7 },
-        { type: 'set-sender-simulated-delay-ms', value: 40 },
-        { type: 'set-sender-simulated-error-rate-percent', value: 9 },
       ] as const) {
         await expect(adapter.dispatch(command)).resolves.toMatchObject({
           accepted: true,
@@ -1516,16 +1497,10 @@ describe('HttpAdapter', () => {
       }
       expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
         '{"action":"set-sender-workers","value":7}',
-        '{"action":"set-sender-simulated-delay-ms","value":40}',
-        '{"action":"set-sender-simulated-error-rate-percent","value":9}',
       ])
-      expect(adapter.getSnapshot().sender.simulatedDelayMs.applied).toBe(10)
-      expect(adapter.getSnapshot().sender.simulatedErrorRatePercent.applied).toBe(2)
       await vi.advanceTimersByTimeAsync(1_000)
       await flushPoll()
       expect(adapter.getSnapshot().sender.workers.applied).toBe(7)
-      expect(adapter.getSnapshot().sender.simulatedDelayMs.applied).toBe(40)
-      expect(adapter.getSnapshot().sender.simulatedErrorRatePercent.applied).toBe(9)
       adapter.dispose()
     },
   )
@@ -1879,8 +1854,6 @@ describe('HttpAdapter', () => {
       { type: 'set-worker-count', actor: 'reader', value: 2 },
       { type: 'set-sender-workers', value: 3 },
       { type: 'set-http-timeout', valueMs: 500 },
-      { type: 'set-sender-simulated-delay-ms', value: 40 },
-      { type: 'set-sender-simulated-error-rate-percent', value: 2 },
     ]
     const adapter = new HttpAdapter()
     const initial = adapter.getSnapshot()
