@@ -110,11 +110,11 @@ func TestReaderPoolOwnsFilesAcrossConcurrentCycles(t *testing.T) {
 	defer pool.cancel()
 	first, second := &readerWorker{}, &readerWorker{}
 	for cycle := range 20 {
-		one, ok := pool.nextJob(first)
+		one, ok := pool.claimNextFile(first)
 		if !ok {
 			t.Fatalf("cycle %d: first job unavailable", cycle)
 		}
-		two, ok := pool.nextJob(second)
+		two, ok := pool.claimNextFile(second)
 		if !ok || one == two {
 			t.Fatalf("cycle %d: simultaneous jobs %q and %q", cycle, one, two)
 		}
@@ -122,7 +122,7 @@ func TestReaderPoolOwnsFilesAcrossConcurrentCycles(t *testing.T) {
 		delete(pool.active, two)
 		pool.available.Broadcast()
 		pool.mu.Unlock()
-		next, ok := pool.nextJob(second)
+		next, ok := pool.claimNextFile(second)
 		if !ok || next == one {
 			t.Fatalf("cycle %d: reissued active file %q while %q is owned", cycle, next, one)
 		}
@@ -158,7 +158,7 @@ func TestReaderPoolPrioritizesReplayWithoutDoubleClaim(t *testing.T) {
 	for range 2 {
 		go func() {
 			<-start
-			filePath, ok := pool.nextJob(&readerWorker{})
+			filePath, ok := pool.claimNextFile(&readerWorker{})
 			results <- result{filePath: filePath, ok: ok}
 		}()
 	}
@@ -203,7 +203,7 @@ func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 	pool.ctx, pool.cancel = context.WithCancel(context.Background())
 	pool.available = sync.NewCond(&pool.mu)
 	defer pool.cancel()
-	if job, ok := pool.nextJob(pool.workers[1]); ok || job != "" {
+	if job, ok := pool.claimNextFile(pool.workers[1]); ok || job != "" {
 		t.Fatalf("draining idle worker acquired %q", job)
 	}
 	pool.mu.Lock()
@@ -212,7 +212,7 @@ func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 	}
 	pool.mu.Unlock()
 	pool.reconcile(2)
-	if job, ok := pool.nextJob(pool.workers[1]); !ok || job != "a" {
+	if job, ok := pool.claimNextFile(pool.workers[1]); !ok || job != "a" {
 		t.Fatalf("reactivated worker job = %q, want a", job)
 	}
 }
@@ -220,7 +220,7 @@ func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 func TestReaderPoolDownscaleSelectsIdleBeforeBusyRegardlessOfOrdinal(t *testing.T) {
 	var telemetry readerTelemetry
 	for ordinal := range 3 {
-		telemetry.startWorker(ordinal)
+		telemetry.registerWorker(ordinal)
 	}
 	pool := &readerPool{
 		workers: map[int]*readerWorker{
@@ -239,7 +239,7 @@ func TestReaderPoolDownscaleSelectsIdleBeforeBusyRegardlessOfOrdinal(t *testing.
 	if slots[0].Lifecycle != "active" || slots[1].Lifecycle != "active" || slots[2].Lifecycle != "draining" {
 		t.Fatalf("downscale lifecycle = %+v, want idle ordinal 2 draining", slots)
 	}
-	if _, ok := pool.nextJob(pool.workers[2]); ok {
+	if _, ok := pool.claimNextFile(pool.workers[2]); ok {
 		t.Fatal("idle victim accepted another file")
 	}
 }

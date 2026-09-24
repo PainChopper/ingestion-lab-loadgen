@@ -42,7 +42,7 @@ func TestReaderTelemetryMeasuresElapsedIntervals(t *testing.T) {
 
 func TestReaderWorkerActivityPreservesSourceUntilIdle(t *testing.T) {
 	var telemetry readerTelemetry
-	telemetry.startWorker(0)
+	telemetry.registerWorker(0)
 	assertSlot := func(activity, lifecycle string, source *string) {
 		t.Helper()
 		slot := telemetry.snapshot().workerSlots[0]
@@ -64,7 +64,7 @@ func TestReaderWorkerActivityPreservesSourceUntilIdle(t *testing.T) {
 	assertSlot("completed", "draining", &source)
 	telemetry.setWorkerIdle(0)
 	assertSlot("idle", "draining", nil)
-	telemetry.finishWorker(0)
+	telemetry.unregisterWorker(0)
 	if got := telemetry.snapshot().workerSlots; len(got) != 0 {
 		t.Fatalf("finished slots = %+v", got)
 	}
