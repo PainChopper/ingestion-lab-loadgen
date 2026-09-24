@@ -97,3 +97,10 @@ HTTP handler → bounded dispatch channel → uploader pool → S3
 - Зафиксировать, что именно означает успешный HTTP response Sender.
 - Для каждого визуального индикатора определить источник snapshot, единицу измерения, denominator и условия цвета.
 - Не добавлять field, control или animation, пока их нельзя получить из реального runtime state.
+
+## Исполнение
+
+Первый визуальный этап выполнен: Target заменён статическим INGESTION SERVICE,
+`Accepted TPS` показан в HTTP receiver, а широкая и portrait-топологии покрыты
+регрессиями. Реальные domain-модели и telemetry для следующих этапов в этот
+результат не входят.
