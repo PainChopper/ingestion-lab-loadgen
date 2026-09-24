@@ -263,6 +263,26 @@
   opacity: 0.34;
 }
 
+.pipeline-worker-status .worker-state {
+  fill: currentColor;
+}
+
+.pipeline-worker-status .worker-state--idle {
+  color: var(--muted);
+}
+
+.pipeline-worker-status .worker-state--in-flight {
+  color: var(--cyan);
+}
+
+.pipeline-worker-status .worker-state--backoff {
+  color: var(--yellow);
+}
+
+.pipeline-worker-status .worker-state--error {
+  color: var(--red);
+}
+
 .pipeline-worker--reading .pipeline-worker-chip {
   fill: color-mix(in srgb, var(--cyan) 18%, #0b314a);
   stroke: var(--cyan);

@@ -825,7 +825,7 @@ describe('PipelineSvg rendering', () => {
   )
 
   it.each(['landscape', 'portrait'] as const)(
-    'shows Reader rate without the duplicated canvas pool summary in %s',
+    'shows Reader worker state summary under its rate in %s',
     (orientation) => {
       const base = activeSnapshot()
       const snapshot: LoadgenSnapshot = {
@@ -835,13 +835,55 @@ describe('PipelineSvg rendering', () => {
           readTps: 50_000,
           configuredCapacityTps: 350_000,
           limitationReason: 'downstream-backpressure',
+          workerSlots: [
+            { workerId: 0, activity: 'idle', lifecycle: 'active', source: null },
+            { workerId: 1, activity: 'reading', lifecycle: 'active', source: 'a' },
+            { workerId: 2, activity: 'blocked', lifecycle: 'active', source: 'b' },
+          ],
         },
       }
       const view = renderPipeline(snapshot, orientation)
       const reader = view.container.querySelector('#reader-actor')
 
       expect(reader?.textContent).toContain('Read 50,000 tx/s')
-      expect(reader?.textContent).not.toContain('desired ·')
+      expect(reader?.textContent).toContain('— errors')
+      expect(reader?.querySelector('.pipeline-worker-status')?.textContent)
+        .toContain('1 idle · 1 reading · 1 blocked · — errors')
+      expect(reader?.querySelector('.pipeline-worker-status .worker-state--idle'))
+        .toHaveProperty('textContent', '1 idle')
+      expect(reader?.querySelector('.pipeline-worker-status .worker-state--in-flight'))
+        .toHaveProperty('textContent', ' · 1 reading')
+      expect(reader?.querySelector('.pipeline-worker-status .worker-state--backoff'))
+        .toHaveProperty('textContent', ' · 1 blocked')
+      expect(reader?.querySelector('.pipeline-worker-status .worker-state--error'))
+        .toHaveProperty('textContent', ' · — errors')
+    },
+  )
+
+  it.each(['landscape', 'portrait'] as const)(
+    'renders Sender worker state summary as semantic segments in %s',
+    (orientation) => {
+      const base = activeSnapshot()
+      const view = renderPipeline({
+        ...base,
+        sender: {
+          ...base.sender,
+          workerSlots: [
+            { workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false },
+            { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+            { workerId: 2, activity: 'backoff', lifecycle: 'active', terminalError: true },
+          ],
+        },
+      }, orientation)
+      const status = view.container.querySelector('#sender-actor .pipeline-worker-status')!
+
+      expect(status.textContent).toContain('1 idle · 1 in-flight · 1 backoff · 1 errors')
+      expect(status.querySelectorAll('.worker-state')).toHaveLength(4)
+      expect(status.querySelector('.worker-state--idle')).toHaveProperty('textContent', '1 idle')
+      expect(status.querySelector('.worker-state--in-flight')).toHaveProperty('textContent', ' · 1 in-flight')
+      expect(status.querySelector('.worker-state--backoff')).toHaveProperty('textContent', ' · 1 backoff')
+      expect(status.querySelector('.worker-state--error')).toHaveProperty('textContent', ' · 1 errors')
+      view.unmount()
     },
   )
 
