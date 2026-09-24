@@ -796,6 +796,17 @@
   opacity: 1;
 }
 
+.pipeline-service-stage {
+  fill: rgba(12, 52, 78, 0.72);
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.pipeline-service-connector {
+  stroke: var(--line-strong);
+  stroke-width: 2;
+}
+
 .pipeline-batch-stepper {
   color: var(--cyan);
   cursor: default;

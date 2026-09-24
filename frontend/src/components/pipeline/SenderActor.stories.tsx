@@ -40,28 +40,28 @@ type SenderState = 'idle' | 'sending' | 'retry-backoff' | 'terminal-failure' | '
 
 function senderSlots(state: SenderState): readonly SenderWorkerSlotSnapshot[] {
   if (state === 'idle') return [
-    { id: 'sender-1', ordinal: 1, activity: 'idle', lifecycle: 'active', terminalError: false },
-    { id: 'sender-2', ordinal: 2, activity: 'idle', lifecycle: 'active', terminalError: false },
+    { workerId: 1, activity: 'idle', lifecycle: 'active', terminalError: false },
+    { workerId: 2, activity: 'idle', lifecycle: 'active', terminalError: false },
   ]
   if (state === 'sending') return [
-    { id: 'sender-1', ordinal: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { id: 'sender-2', ordinal: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { id: 'sender-3', ordinal: 3, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+    { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+    { workerId: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+    { workerId: 3, activity: 'in-flight', lifecycle: 'active', terminalError: false },
   ]
   if (state === 'retry-backoff') return [
-    { id: 'sender-1', ordinal: 1, activity: 'backoff', lifecycle: 'active', terminalError: false },
-    { id: 'sender-2', ordinal: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { id: 'sender-3', ordinal: 3, activity: 'backoff', lifecycle: 'active', terminalError: false },
+    { workerId: 1, activity: 'backoff', lifecycle: 'active', terminalError: false },
+    { workerId: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+    { workerId: 3, activity: 'backoff', lifecycle: 'active', terminalError: false },
   ]
   if (state === 'terminal-failure') return [
-    { id: 'sender-1', ordinal: 1, activity: 'idle', lifecycle: 'active', terminalError: true },
-    { id: 'sender-2', ordinal: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { id: 'sender-3', ordinal: 3, activity: 'idle', lifecycle: 'active', terminalError: true },
+    { workerId: 1, activity: 'idle', lifecycle: 'active', terminalError: true },
+    { workerId: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+    { workerId: 3, activity: 'idle', lifecycle: 'active', terminalError: true },
   ]
   return [
-    { id: 'sender-1', ordinal: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { id: 'sender-2', ordinal: 2, activity: 'idle', lifecycle: 'draining', terminalError: false },
-    { id: 'sender-3', ordinal: 3, activity: 'backoff', lifecycle: 'draining', terminalError: false },
+    { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+    { workerId: 2, activity: 'idle', lifecycle: 'draining', terminalError: false },
+    { workerId: 3, activity: 'backoff', lifecycle: 'draining', terminalError: false },
   ]
 }
 

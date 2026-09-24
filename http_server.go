@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"log"
 	"net/http"
 	"net/http/pprof"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+const gracefulShutdownTimeout = 10 * time.Second
 
 type requestKind int
 
@@ -66,7 +72,7 @@ func newServeMux(requests chan<- request, metrics *Metrics, policy policy) *http
 	return mux
 }
 
-func startHttpServer(requests chan request, metrics *Metrics, policy policy) {
+func startHTTPServer(requests chan request, metrics *Metrics, policy policy) (*http.Server, <-chan error) {
 	mux := newServeMux(requests, metrics, policy)
 
 	server := &http.Server{
@@ -74,7 +80,25 @@ func startHttpServer(requests chan request, metrics *Metrics, policy policy) {
 		Handler: mux,
 	}
 
+	done := make(chan error, 1)
 	go func() {
-		_ = server.ListenAndServe()
+		err := server.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
+		}
+		done <- err
 	}()
+	return server, done
+}
+
+func shutdownHTTPServer(ctx context.Context, server *http.Server, done <-chan error) {
+	if err := server.Shutdown(ctx); err != nil {
+		log.Printf("graceful HTTP shutdown failed: %v", err)
+		if closeErr := server.Close(); closeErr != nil {
+			log.Printf("forced HTTP close failed: %v", closeErr)
+		}
+	}
+	if err := <-done; err != nil {
+		log.Printf("HTTP server stopped unexpectedly: %v", err)
+	}
 }

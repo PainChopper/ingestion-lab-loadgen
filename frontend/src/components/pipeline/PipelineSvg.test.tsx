@@ -15,7 +15,6 @@ import {
   createPipelineGeometry,
   FLOW_BASELINE,
   PIPELINE_BATCH_CONTROL,
-  PORTRAIT_THROTTLER_LIFT,
   type TextPlacement,
 } from './geometry'
 import {
@@ -85,10 +84,10 @@ describe('responsive pipeline geometry', () => {
     expect(geometry.actors.reader.bounds.width).toBe(120)
     expect(geometry.actors.throttler.bounds.width).toBe(150)
     expect(geometry.actors.sender.bounds.width).toBe(120)
-    expect(geometry.actors.target.bounds.width).toBe(140)
+    expect(geometry.actors.target.bounds.width).toBe(190)
     expect(width - (
       geometry.actors.target.bounds.x + geometry.actors.target.bounds.width
-    )).toBe(50)
+    )).toBe(30)
     expect(
       geometry.channels['reader-to-throttler'].end.x -
       geometry.channels['reader-to-throttler'].start.x,
@@ -98,51 +97,42 @@ describe('responsive pipeline geometry', () => {
       geometry.channels['throttler-to-sender'].start.x,
     ).toBeCloseTo(215 + delta, 10)
     expect(geometry.http.end.x - geometry.http.start.x)
-      .toBeCloseTo(90 + delta, 10)
+      .toBeCloseTo(60 + delta, 10)
   })
 
   it.each([
-    { reader: 1, sender: 1, readerHeight: 113, senderHeight: 113 },
-    { reader: 7, sender: 1, readerHeight: 158, senderHeight: 113 },
-    { reader: 7, sender: 7, readerHeight: 158, senderHeight: 158 },
-    { reader: 7, sender: 8, readerHeight: 158, senderHeight: 96 },
-    { reader: 7, sender: 16, readerHeight: 158, senderHeight: 124 },
-    { reader: 7, sender: 32, readerHeight: 158, senderHeight: 180 },
+    { reader: 1, sender: 1 },
+    { reader: 7, sender: 1 },
+    { reader: 7, sender: 7 },
+    { reader: 7, sender: 8 },
+    { reader: 7, sender: 16 },
+    { reader: 7, sender: 32 },
   ])(
     'derives portrait stages for Reader $reader and Sender $sender',
-    ({ reader, sender, readerHeight, senderHeight }) => {
+    ({ reader, sender }) => {
       const geometry = createPipelineGeometry({
         orientation: 'portrait',
         readerWorkers: reader,
         senderWorkers: sender,
       })
-      const readerBottom = 88 + readerHeight
-      const throttlerSlotInput = readerBottom + 247 +
-        PIPELINE_BATCH_CONTROL.portraitReserve
-      const throttlerInput = throttlerSlotInput - PORTRAIT_THROTTLER_LIFT
-      const throttlerOutput = throttlerInput + 193
-      const throttlerSlotOutput = throttlerSlotInput + 193
-      const senderTop = throttlerSlotOutput + 222
-      const senderBottom = senderTop + senderHeight
-      const targetTop = senderBottom + 170
+      const topRowBaseline = 275
+      const targetTop = topRowBaseline + 55
 
-      expect(geometry.actors.reader.ports.output.y).toBe(readerBottom)
-      expect(geometry.actors.throttler.ports.input.y).toBe(throttlerInput)
-      expect(geometry.actors.throttler.ports.output.y).toBe(throttlerOutput)
-      expect(geometry.actors.sender.ports.input.y).toBe(senderTop)
-      expect(geometry.actors.sender.ports.output.y).toBe(senderBottom)
-      expect(geometry.actors.target.ports.input.y).toBe(targetTop)
-      expect(geometry.viewBox.height)
-        .toBe(1160 + readerHeight + senderHeight +
-          PIPELINE_BATCH_CONTROL.portraitReserve)
+      expect(geometry.actors.reader.ports.output).toEqual({ x: 140, y: topRowBaseline })
+      expect(geometry.actors.throttler.ports.input).toEqual({ x: 165, y: topRowBaseline })
+      expect(geometry.actors.throttler.ports.output).toEqual({ x: 315, y: topRowBaseline })
+      expect(geometry.actors.sender.ports.input).toEqual({ x: 340, y: topRowBaseline })
+      expect(geometry.actors.sender.ports.output).toEqual({ x: 405, y: topRowBaseline })
+      expect(geometry.actors.target.ports.input).toEqual({ x: 240, y: targetTop })
+      expect(geometry.viewBox.height).toBe(targetTop + 340)
       expect(geometry.batchControl.anchor).toEqual({
-        x: 240,
-        y: throttlerInput - PIPELINE_BATCH_CONTROL.portraitInputOffset,
+        x: 165,
+        y: topRowBaseline - PIPELINE_BATCH_CONTROL.portraitInputOffset,
       })
       expect(geometry.channels['reader-to-throttler'].metrics.throughputY)
-        .toBe(readerBottom + 60)
+        .toBe(topRowBaseline + 60)
       expect(geometry.channels['throttler-to-sender'].metrics.throughputY)
-        .toBe(throttlerSlotOutput + 42)
+        .toBe(topRowBaseline + 42)
     },
   )
 
@@ -207,14 +197,6 @@ describe('responsive pipeline geometry', () => {
         ]
       const cardRight = throttler.bounds.x + throttler.bounds.width
       const cardBottom = throttler.bounds.y + throttler.bounds.height
-      const inputChannelMetricBottom = Math.max(
-        ...Object.values(geometry.channels['reader-to-throttler'].metrics)
-          .filter((value): value is number => value !== 350),
-      )
-      const outputChannelMetricTop = Math.min(
-        ...Object.values(geometry.channels['throttler-to-sender'].metrics)
-          .filter((value): value is number => value !== 350),
-      )
       const pipeRight = Math.max(
         throttler.portraitPipe.input.start.x,
         throttler.portraitPipe.output.start.x,
@@ -241,10 +223,8 @@ describe('responsive pipeline geometry', () => {
         expect(globalX).toBeGreaterThan(cardRight)
         expect(globalX).toBeGreaterThan(pipeRight)
         expect(globalX).toBeGreaterThan(throttler.ports.output.x)
-        expect(globalY).toBeGreaterThan(inputChannelMetricBottom)
-        expect(globalY).toBeLessThan(outputChannelMetricTop)
         expect(globalY).toBeLessThan(cardBottom)
-        expect(globalY).toBeLessThan(geometry.actors.sender.title.y)
+        expect(globalY).toBeGreaterThan(geometry.actors.throttler.bounds.y)
         expect(placement.anchor).toBe('start')
       }
 
@@ -254,16 +234,16 @@ describe('responsive pipeline geometry', () => {
       }))
       if (installationMode === 'installed') {
         expect(globalPlacements).toEqual([
-          { x: 330, y: 500 + PIPELINE_BATCH_CONTROL.portraitReserve },
-          { x: 330, y: 521 + PIPELINE_BATCH_CONTROL.portraitReserve },
-          { x: 330, y: 560 + PIPELINE_BATCH_CONTROL.portraitReserve },
-          { x: 330, y: 581 + PIPELINE_BATCH_CONTROL.portraitReserve },
+          { x: 330, y: 233 },
+          { x: 330, y: 254 },
+          { x: 330, y: 293 },
+          { x: 330, y: 314 },
         ])
         expect(globalPlacements[1].y).toBeLessThan(globalPlacements[2].y)
       } else {
         expect(globalPlacements).toEqual([
-          { x: 330, y: 560 + PIPELINE_BATCH_CONTROL.portraitReserve },
-          { x: 330, y: 581 + PIPELINE_BATCH_CONTROL.portraitReserve },
+          { x: 330, y: 293 },
+          { x: 330, y: 314 },
         ])
         expect(throttler.metrics.bypass.admitted)
           .toEqual(throttler.metrics.installed.admitted)
@@ -329,10 +309,10 @@ describe('responsive pipeline geometry', () => {
       expect(directionChanges.length).toBeLessThanOrEqual(1)
     }
 
-    expect(globalPoint(input.start)).toEqual(throttler.ports.input)
+    expect(globalPoint(input.start)).toEqual({ x: 240, y: 178 })
     expect(input.end).toEqual({ x: VALVE_FLANGES.left, y: 415 })
     expect(output.start).toEqual({ x: VALVE_FLANGES.right, y: 415 })
-    expect(globalPoint(output.end)).toEqual(throttler.ports.output)
+    expect(globalPoint(output.end)).toEqual({ x: 240, y: 371 })
     expect(input.d).toBe(
       'M430 282 V306 Q430 322 414 322 H390 Q374 322 374 338 V399 Q374 415 390 415 H401',
     )
@@ -534,7 +514,7 @@ describe('PipelineSvg rendering', () => {
         `translate(${geometry.batchControl.anchor.x} ${geometry.batchControl.anchor.y})`,
       )
       expect(geometry.batchControl.anchor.y)
-        .toBeLessThan(geometry.actors.throttler.bounds.y)
+        .toBeLessThan(geometry.actors.throttler.ports.input.y)
       expect(controls[0]?.textContent).toBe(
         `−Batch ${snapshot.reader.readBatchSize.applied?.toLocaleString('en-US')} tx+`,
       )
@@ -568,7 +548,7 @@ describe('PipelineSvg rendering', () => {
       }, 0)
 
     const simulation = renderPipeline(withReadRate('simulation', 'running', 0))
-    expect(simulation.container.querySelectorAll('#reader-actor [data-worker-slot-id]'))
+    expect(simulation.container.querySelectorAll('#reader-actor [data-worker-id]'))
       .toHaveLength(0)
     simulation.unmount()
 
@@ -578,12 +558,12 @@ describe('PipelineSvg rendering', () => {
     idle.unmount()
 
     const running = renderPipeline(withReadRate('http', 'running', 1))
-    expect(running.container.querySelectorAll('#reader-actor [data-worker-slot-id]'))
+    expect(running.container.querySelectorAll('#reader-actor [data-worker-id]'))
       .toHaveLength(0)
     running.unmount()
 
     const paused = renderPipeline(withReadRate('http', 'paused', 1))
-    expect(paused.container.querySelectorAll('#reader-actor [data-worker-slot-id]'))
+    expect(paused.container.querySelectorAll('#reader-actor [data-worker-id]'))
       .toHaveLength(0)
     paused.unmount()
   })
@@ -777,24 +757,14 @@ describe('PipelineSvg rendering', () => {
         view.container.querySelector('.pipeline-title--target'),
         actorGeometry.target.title,
       )
-      expectTextPlacement(
-        view.container.querySelector('#target-actor .pipeline-target-secondary'),
-        actorGeometry.target.labels.caption,
+      const receiverDetails = view.container.querySelectorAll(
+        '#target-actor .pipeline-target-secondary',
       )
-      expectTextPlacement(
-        view.container.querySelector('#target-actor .pipeline-target-primary'),
-        actorGeometry.target.labels.value,
-      )
-      expectTextPlacement(
-        view.container.querySelector('#target-actor .pipeline-target-failure'),
-        actorGeometry.target.labels.failure,
-      )
-      expectTextPlacement(
-        view.container.querySelectorAll(
-          '#target-actor .pipeline-target-secondary',
-        ).item(2),
-        actorGeometry.target.labels.state,
-      )
+      expectTextPlacement(receiverDetails.item(0), actorGeometry.target.stages[0].detail!)
+      expectTextPlacement(receiverDetails.item(1), {
+        ...actorGeometry.target.stages[0].label,
+        y: actorGeometry.target.stages[0].label.y - 8,
+      })
 
       const throttlerMetrics = installationMode === 'installed'
         ? actorGeometry.throttler.metrics.installed
@@ -845,13 +815,6 @@ describe('PipelineSvg rendering', () => {
         for (const placement of globalPlacements) {
           expect(placement.x).toBeGreaterThan(throttlerRight)
           expect(placement.x).toBeGreaterThan(throttler.ports.output.x)
-          expect(Math.min(
-            ...Object.values(
-              geometry.channels['throttler-to-sender'].metrics,
-            ).filter((value): value is number => value !== 350)
-              .map((channelY) => Math.abs(placement.y - channelY)),
-          )).toBeGreaterThanOrEqual(24)
-          expect(placement.y).toBeLessThan(actorGeometry.sender.title.y)
           expect(placement.y).toBeLessThan(throttlerBottom)
           expect(placement.anchor).toBe('start')
         }
@@ -883,7 +846,7 @@ describe('PipelineSvg rendering', () => {
   )
 
   it.each(['landscape', 'portrait'] as const)(
-    'shows applied target failures and rolling failed TPS in %s',
+    'renders the static ingestion stages and receiver Accepted TPS in %s',
     (orientation) => {
       const base = activeSnapshot()
       const snapshot: LoadgenSnapshot = {
@@ -901,35 +864,38 @@ describe('PipelineSvg rendering', () => {
         readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
         senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
       })
-      const boundsBottom = geometry.actors.target.bounds.y +
-        geometry.actors.target.bounds.height
-
-      expect(target.textContent).toContain('245,000 tx/s')
-      expect(target.textContent).toContain('5,000 rejected tx/s')
-      expect(target.textContent).not.toContain('503 rate')
-      expect(target.textContent).toContain('connected')
-      expect(geometry.actors.target.labels.state.y).toBeLessThan(boundsBottom)
+      expect(target.textContent).toContain('HTTP receiver')
+      expect(target.textContent).toContain('Accepted TPS 245,000 tx/s')
+      expect(target.textContent).toContain('POST batch')
+      expect(target.textContent).toContain('S3 / Vaultbox')
+      expect(target.textContent).toContain('Postgres outbox')
+      expect(target.textContent).toContain('Kafka')
+      expect(target.textContent).not.toContain('5,000 rejected tx/s')
+      expect(target.querySelectorAll('.pipeline-service-stage')).toHaveLength(4)
+      expect(target.querySelectorAll('.pipeline-service-connector')).toHaveLength(3)
+      expect(geometry.actors.target.stages.every((stage) =>
+        stage.y >= geometry.actors.target.bounds.y &&
+        stage.y + stage.height <= geometry.actors.target.bounds.y + geometry.actors.target.bounds.height,
+      )).toBe(true)
     },
   )
 
-  it('preserves unknown and measured zero target failure telemetry', () => {
+  it('keeps HTTP adapter telemetry unavailable without invented service telemetry', () => {
     const base = activeSnapshot()
-    const cases = [
-      { rejectedTps: null, expected: '— rejected tx/s' },
-      { rejectedTps: 0, expected: '0 rejected tx/s' },
-    ] as const
+    const cases = [null, 0] as const
 
     for (const testCase of cases) {
       const snapshot: LoadgenSnapshot = {
         ...base,
+        adapterKind: 'http',
         target: {
           ...base.target,
-          rejectedTps: testCase.rejectedTps,
+          rejectedTps: testCase,
         },
       }
       const view = renderPipeline(snapshot)
       expect(view.container.querySelector('#target-actor')?.textContent)
-        .toContain(testCase.expected)
+        .toContain('TELEMETRY UNAVAILABLE')
       view.unmount()
     }
   })
@@ -1187,8 +1153,8 @@ describe('PipelineSvg rendering', () => {
       expect(cable.getAttribute('d')?.startsWith(
         `M${endpoints.start.x} ${endpoints.start.y}`,
       )).toBe(true)
-      expect(cable.getAttribute('d')?.endsWith(`V${endpoints.end.y}`))
-        .toBe(true)
+      expect(cable.getAttribute('d')).toContain(String(endpoints.end.x))
+      expect(cable.getAttribute('d')).toContain(String(endpoints.end.y))
     }
 
     const throttler = view.container.querySelector('#throttler-actor')!
@@ -1329,7 +1295,7 @@ describe('PipelineSvg rendering', () => {
     }
 
     assertTypography('#reader-actor .pipeline-worker-primary', '15px', '650')
-    assertTypography('#target-actor .pipeline-target-primary', '15px', '650')
+    assertTypography('#target-actor .pipeline-small-strong', '11px', '650')
     assertTypography('#target-actor .pipeline-target-secondary', '12px', '600')
     assertTypography('.pipeline-channel-metric.pipeline-small-strong', '15px', '700')
     assertTypography('.pipeline-channel-metric.pipeline-small', '13px', '600')
@@ -1353,9 +1319,9 @@ describe('PipelineSvg rendering', () => {
           ...base.sender,
           liveWorkers: 3,
           workerSlots: [
-            { id: 'sender-worker-0', ordinal: 0, activity: 'backoff', lifecycle: 'active', terminalError: false },
-            { id: 'sender-worker-1', ordinal: 1, activity: 'idle', lifecycle: 'active', terminalError: false },
-            { id: 'sender-worker-2', ordinal: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+            { workerId: 0, activity: 'backoff', lifecycle: 'active', terminalError: false },
+            { workerId: 1, activity: 'idle', lifecycle: 'active', terminalError: false },
+            { workerId: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
           ],
           inFlightRequests: 1,
         },
@@ -1372,28 +1338,24 @@ describe('PipelineSvg rendering', () => {
         .toHaveLength(1)
       expect(sender.querySelectorAll('.pipeline-worker--idle')).toHaveLength(1)
       expect(
-        [...sender.querySelectorAll('[data-worker-slot-id]')].map((slot) => ({
-          id: slot.getAttribute('data-worker-slot-id'),
-          ordinal: slot.getAttribute('data-worker-ordinal'),
+        [...sender.querySelectorAll('[data-worker-id]')].map((slot) => ({
+          workerId: slot.getAttribute('data-worker-id'),
           activity: slot.getAttribute('data-worker-activity'),
           className: slot.getAttribute('class'),
         })),
       ).toEqual([
         {
-          id: 'sender-worker-0',
-          ordinal: '0',
+          workerId: '0',
           activity: 'backoff',
           className: 'pipeline-worker--backoff',
         },
         {
-          id: 'sender-worker-1',
-          ordinal: '1',
+          workerId: '1',
           activity: 'idle',
           className: 'pipeline-worker--idle',
         },
         {
-          id: 'sender-worker-2',
-          ordinal: '2',
+          workerId: '2',
           activity: 'in-flight',
           className: 'pipeline-worker--in-flight',
         },
@@ -1418,7 +1380,7 @@ describe('PipelineSvg rendering', () => {
     const view = renderPipeline(snapshot)
     const sender = view.container.querySelector('#sender-actor')!
 
-    expect(sender.querySelectorAll('[data-worker-slot-id]')).toHaveLength(0)
+    expect(sender.querySelectorAll('[data-worker-id]')).toHaveLength(0)
     expect(sender.querySelectorAll('.pipeline-worker--active')).toHaveLength(0)
     expect(sender.querySelectorAll('.pipeline-worker--backoff')).toHaveLength(0)
   })
@@ -1504,8 +1466,8 @@ describe('PipelineSvg rendering', () => {
           liveWorkers: 2,
           drainingWorkers: 1,
           workerSlots: [
-            { id: 'sender-worker-0', ordinal: 0, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-            { id: 'sender-worker-1', ordinal: 1, activity: 'idle', lifecycle: 'draining', terminalError: false },
+            { workerId: 0, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+            { workerId: 1, activity: 'idle', lifecycle: 'draining', terminalError: false },
           ],
         },
       }
@@ -1514,10 +1476,10 @@ describe('PipelineSvg rendering', () => {
 
       expect(sender.getAttribute('data-worker-count')).toBe('1')
       expect(sender.getAttribute('aria-label')).toBe('Inspect sender, 1 desired, 2 live, 1 draining')
-      expect(sender.querySelectorAll('[data-worker-slot-id]')).toHaveLength(2)
-      expect(sender.querySelector('[data-worker-slot-id="sender-worker-0"]')?.classList)
+      expect(sender.querySelectorAll('[data-worker-id]')).toHaveLength(2)
+      expect(sender.querySelector('[data-worker-id="0"]')?.classList)
         .toContain('pipeline-worker--in-flight')
-      const draining = sender.querySelector('[data-worker-slot-id="sender-worker-1"]')!
+      const draining = sender.querySelector('[data-worker-id="1"]')!
       expect(draining.classList).toContain('pipeline-worker--draining')
       expect(getComputedStyle(draining.querySelector('.pipeline-worker-led')!).fill)
         .toBe('var(--purple)')
@@ -1538,25 +1500,25 @@ describe('PipelineSvg rendering', () => {
           liveWorkers: 5,
           drainingWorkers: 2,
           workerSlots: [
-            { id: 'reader-worker-0', ordinal: 0, activity: 'reading', lifecycle: 'active', source: 'a' },
-            { id: 'reader-worker-1', ordinal: 1, activity: 'idle', lifecycle: 'active', source: null },
-            { id: 'reader-worker-2', ordinal: 2, activity: 'completed', lifecycle: 'active', source: 'b' },
-            { id: 'reader-worker-3', ordinal: 3, activity: 'reading', lifecycle: 'draining', source: 'c' },
-            { id: 'reader-worker-4', ordinal: 4, activity: 'blocked', lifecycle: 'draining', source: 'd' },
+            { workerId: 0, activity: 'reading', lifecycle: 'active', source: 'a' },
+            { workerId: 1, activity: 'idle', lifecycle: 'active', source: null },
+            { workerId: 2, activity: 'completed', lifecycle: 'active', source: 'b' },
+            { workerId: 3, activity: 'reading', lifecycle: 'draining', source: 'c' },
+            { workerId: 4, activity: 'blocked', lifecycle: 'draining', source: 'd' },
           ],
         },
       }, orientation)
       const reader = view.container.querySelector('#reader-actor')!
       expect(reader.getAttribute('aria-label')).toBe('Inspect reader')
-      expect(reader.querySelectorAll('[data-worker-slot-id]')).toHaveLength(5)
-      for (const [ordinal, state, color] of [
+      expect(reader.querySelectorAll('[data-worker-id]')).toHaveLength(5)
+      for (const [workerId, state, color] of [
         [0, 'reading', 'var(--cyan)'],
         [1, 'idle', 'var(--green)'],
         [2, 'success', 'var(--green)'],
         [3, 'draining', 'var(--purple)'],
         [4, 'blocked', 'var(--red)'],
       ] as const) {
-        const chip = reader.querySelector(`[data-worker-ordinal="${ordinal}"]`)!
+        const chip = reader.querySelector(`[data-worker-id="${workerId}"]`)!
         expect(chip.classList).toContain(`pipeline-worker--${state}`)
         expect(getComputedStyle(chip.querySelector('.pipeline-worker-led')!).fill).toBe(color)
       }
@@ -1569,7 +1531,7 @@ describe('PipelineSvg rendering', () => {
     vi.useFakeTimers()
     try {
       const base = activeSnapshot()
-      const slot = { id: 'reader-worker-0', ordinal: 0, activity: 'reading' as const, lifecycle: 'active' as const, source: 'a' }
+      const slot = { workerId: 0, activity: 'reading' as const, lifecycle: 'active' as const, source: 'a' }
       const snapshot = (activity: 'reading' | 'completed' | 'idle' | 'blocked', lifecycle: 'active' | 'draining' = 'active'): LoadgenSnapshot => ({
         ...base,
         reader: { ...base.reader, liveWorkers: 1, workerSlots: [{ ...slot, activity, lifecycle }] },
@@ -1589,7 +1551,7 @@ describe('PipelineSvg rendering', () => {
           })}
         />,
       )
-      const chip = () => view.container.querySelector('[data-worker-slot-id="reader-worker-0"]')!
+      const chip = () => view.container.querySelector('[data-worker-id="0"]')!
       rerender(snapshot('completed'))
       expect(chip().classList).toContain('pipeline-worker--success')
       rerender(snapshot('idle'))
@@ -1609,7 +1571,7 @@ describe('PipelineSvg rendering', () => {
       rerender(snapshot('reading'))
       rerender(snapshot('completed'))
       rerender({ ...base, reader: { ...base.reader, workerSlots: [], liveWorkers: 0 } })
-      expect(view.container.querySelector('[data-worker-slot-id="reader-worker-0"]')).toBeNull()
+      expect(view.container.querySelector('[data-worker-id="0"]')).toBeNull()
       view.unmount()
       act(() => { vi.advanceTimersByTime(1_000) })
     } finally {
@@ -1627,7 +1589,7 @@ describe('PipelineSvg rendering', () => {
           ...base.sender,
           liveWorkers: 1,
           workerSlots: [
-            { id: 'sender-worker-0', ordinal: 0, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+            { workerId: 0, activity: 'in-flight', lifecycle: 'active', terminalError: false },
           ],
         },
       }
@@ -1636,7 +1598,7 @@ describe('PipelineSvg rendering', () => {
         sender: {
           ...inFlight.sender,
           workerSlots: [
-            { id: 'sender-worker-0', ordinal: 0, activity: 'idle', lifecycle: 'active', terminalError: false },
+            { workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false },
           ],
         },
       }
@@ -1657,7 +1619,7 @@ describe('PipelineSvg rendering', () => {
       )
 
       rerender(idle)
-      const worker = () => view.container.querySelector('[data-worker-slot-id="sender-worker-0"]')!
+      const worker = () => view.container.querySelector('[data-worker-id="0"]')!
       expect(worker().classList).toContain('pipeline-worker--success')
 
       rerender({
@@ -1702,10 +1664,10 @@ describe('PipelineSvg rendering', () => {
   it('prioritizes terminal error, retry and draining, then clears red after success', () => {
     const base = activeSnapshot()
     const slots = [
-      { id: 'sender-worker-0', ordinal: 0, activity: 'idle' as const, lifecycle: 'active' as const, terminalError: false },
-      { id: 'sender-worker-1', ordinal: 1, activity: 'backoff' as const, lifecycle: 'draining' as const, terminalError: true },
-      { id: 'sender-worker-2', ordinal: 2, activity: 'backoff' as const, lifecycle: 'draining' as const, terminalError: false },
-      { id: 'sender-worker-3', ordinal: 3, activity: 'in-flight' as const, lifecycle: 'draining' as const, terminalError: false },
+      { workerId: 0, activity: 'idle' as const, lifecycle: 'active' as const, terminalError: false },
+      { workerId: 1, activity: 'backoff' as const, lifecycle: 'draining' as const, terminalError: true },
+      { workerId: 2, activity: 'backoff' as const, lifecycle: 'draining' as const, terminalError: false },
+      { workerId: 3, activity: 'in-flight' as const, lifecycle: 'draining' as const, terminalError: false },
     ]
     const view = renderPipeline({
       ...base,
@@ -1719,11 +1681,11 @@ describe('PipelineSvg rendering', () => {
     })
     const sender = view.container.querySelector('#sender-actor')!
     expect(sender.getAttribute('aria-label')).toBe('Inspect sender, 1 desired, 4 live, 3 draining')
-    expect(sender.querySelector('[data-worker-slot-id="sender-worker-1"]')?.classList)
+    expect(sender.querySelector('[data-worker-id="1"]')?.classList)
       .toContain('pipeline-worker--terminal-error')
-    expect(sender.querySelector('[data-worker-slot-id="sender-worker-2"]')?.classList)
+    expect(sender.querySelector('[data-worker-id="2"]')?.classList)
       .toContain('pipeline-worker--backoff')
-    expect(sender.querySelector('[data-worker-slot-id="sender-worker-3"]')?.classList)
+    expect(sender.querySelector('[data-worker-id="3"]')?.classList)
       .toContain('pipeline-worker--draining')
 
     view.unmount()
@@ -1737,7 +1699,7 @@ describe('PipelineSvg rendering', () => {
         workerSlots: [slots[0], { ...slots[1], activity: 'idle', terminalError: false }, ...slots.slice(2)],
       },
     })
-    expect(afterSuccess.container.querySelector('[data-worker-slot-id="sender-worker-1"]')?.classList)
+    expect(afterSuccess.container.querySelector('[data-worker-id="1"]')?.classList)
       .toContain('pipeline-worker--draining')
     afterSuccess.unmount()
   })
@@ -1771,15 +1733,15 @@ describe('PipelineSvg rendering', () => {
           ...base.sender,
           liveWorkers: 3,
           workerSlots: [
-            { id: 'sender-worker-0', ordinal: 0, activity: 'idle', lifecycle: 'active', terminalError: false },
-            { id: 'sender-worker-1', ordinal: 1, activity: 'backoff', lifecycle: 'active', terminalError: false },
-            { id: 'sender-worker-2', ordinal: 2, activity: 'idle', lifecycle: 'active', terminalError: false },
+            { workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false },
+            { workerId: 1, activity: 'backoff', lifecycle: 'active', terminalError: false },
+            { workerId: 2, activity: 'idle', lifecycle: 'active', terminalError: false },
           ],
         },
       }
       const view = renderPipeline(snapshot)
       const backoff = view.container.querySelector(
-        '[data-worker-slot-id="sender-worker-1"]',
+        '[data-worker-id="1"]',
       )!
 
       expect(backoff.classList).toContain('pipeline-worker--backoff')

@@ -197,7 +197,7 @@ func TestReaderPoolPrioritizesReplayWithoutDoubleClaim(t *testing.T) {
 func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 	pool := &readerPool{
 		files: []string{"a"}, active: map[string]bool{},
-		workers:   map[int]*readerWorker{0: {ordinal: 0}, 1: {ordinal: 1, draining: true}},
+		workers:   map[int]*readerWorker{0: {workerID: 0}, 1: {workerID: 1, draining: true}},
 		telemetry: &readerTelemetry{}, done: make(chan struct{}),
 	}
 	pool.ctx, pool.cancel = context.WithCancel(context.Background())
@@ -217,16 +217,16 @@ func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 	}
 }
 
-func TestReaderPoolDownscaleSelectsIdleBeforeBusyRegardlessOfOrdinal(t *testing.T) {
+func TestReaderPoolDownscaleSelectsIdleBeforeBusyRegardlessOfWorkerID(t *testing.T) {
 	var telemetry readerTelemetry
-	for ordinal := range 3 {
-		telemetry.registerWorker(ordinal)
+	for workerID := range 3 {
+		telemetry.registerWorker(workerID)
 	}
 	pool := &readerPool{
 		workers: map[int]*readerWorker{
-			0: {ordinal: 0, busy: true},
-			1: {ordinal: 1, busy: true},
-			2: {ordinal: 2},
+			0: {workerID: 0, busy: true},
+			1: {workerID: 1, busy: true},
+			2: {workerID: 2},
 		},
 		telemetry: &telemetry,
 	}
@@ -237,7 +237,7 @@ func TestReaderPoolDownscaleSelectsIdleBeforeBusyRegardlessOfOrdinal(t *testing.
 	pool.reconcile(2)
 	slots := telemetry.snapshot().workerSlots
 	if slots[0].Lifecycle != "active" || slots[1].Lifecycle != "active" || slots[2].Lifecycle != "draining" {
-		t.Fatalf("downscale lifecycle = %+v, want idle ordinal 2 draining", slots)
+		t.Fatalf("downscale lifecycle = %+v, want idle worker 2 draining", slots)
 	}
 	if _, ok := pool.claimNextFile(pool.workers[2]); ok {
 		t.Fatal("idle victim accepted another file")
@@ -267,10 +267,10 @@ func TestReaderPoolBlockedDownscaleFlushesEntireFile(t *testing.T) {
 	if len(slots) != 2 || (slots[0].Activity != "blocked" && slots[1].Activity != "blocked") {
 		t.Fatalf("before downscale slots = %+v", slots)
 	}
-	var blockedOrdinal int
+	var blockedWorkerID int
 	for _, slot := range slots {
 		if slot.Activity == "blocked" {
-			blockedOrdinal = slot.Ordinal
+			blockedWorkerID = slot.WorkerID
 			if slot.Source == nil {
 				t.Fatalf("blocked source missing: %+v", slot)
 			}
@@ -287,7 +287,7 @@ func TestReaderPoolBlockedDownscaleFlushesEntireFile(t *testing.T) {
 			t.Fatal("idle victim did not exit")
 		}
 	}
-	if slot := telemetry.snapshot().workerSlots[0]; slot.Ordinal != blockedOrdinal || slot.Activity != "blocked" || slot.Lifecycle != "active" {
+	if slot := telemetry.snapshot().workerSlots[0]; slot.WorkerID != blockedWorkerID || slot.Activity != "blocked" || slot.Lifecycle != "active" {
 		t.Fatalf("busy worker was selected before idle: %+v", slot)
 	}
 	pool.reconcile(0)
@@ -556,19 +556,19 @@ func TestReaderPoolBlockedDownscaleForcesOnePerSecond(t *testing.T) {
 	pool.afterForce = clock.after
 	pool.mu.Unlock()
 	waitForBlockedSenders(t, &channel, 3)
-	sourcesByOrdinal := make(map[int]string, 3)
+	sourcesByWorkerID := make(map[int]string, 3)
 	for _, slot := range telemetry.snapshot().workerSlots {
 		if slot.Source == nil {
 			t.Fatalf("blocked worker source missing: %+v", slot)
 		}
-		sourcesByOrdinal[slot.Ordinal] = *slot.Source
+		sourcesByWorkerID[slot.WorkerID] = *slot.Source
 	}
 	pool.reconcile(0)
 	clock.advance(999 * time.Millisecond)
 	if got := telemetry.snapshot().liveWorkers; got != 3 {
 		t.Fatalf("before grace deadline live=%d, want 3", got)
 	}
-	for forcedOrdinal, want := 0, 2; want >= 0; forcedOrdinal, want = forcedOrdinal+1, want-1 {
+	for forcedWorkerID, want := 0, 2; want >= 0; forcedWorkerID, want = forcedWorkerID+1, want-1 {
 		clock.advance(time.Millisecond)
 		waitForReaderLive(t, &telemetry, want)
 		if got := channel.snapshot(time.Now()).blockedSenders; got != want {
@@ -577,11 +577,11 @@ func TestReaderPoolBlockedDownscaleForcesOnePerSecond(t *testing.T) {
 		pool.mu.Lock()
 		replayFiles := slices.Clone(pool.replayFiles)
 		pool.mu.Unlock()
-		if len(replayFiles) != forcedOrdinal+1 {
-			t.Fatalf("after forced exit replay=%v, want %d files", replayFiles, forcedOrdinal+1)
+		if len(replayFiles) != forcedWorkerID+1 {
+			t.Fatalf("after forced exit replay=%v, want %d files", replayFiles, forcedWorkerID+1)
 		}
-		if got := filepath.ToSlash(replayFiles[forcedOrdinal]); got != sourcesByOrdinal[forcedOrdinal] {
-			t.Fatalf("forced ordinal %d replay = %q, want %q", forcedOrdinal, got, sourcesByOrdinal[forcedOrdinal])
+		if got := filepath.ToSlash(replayFiles[forcedWorkerID]); got != sourcesByWorkerID[forcedWorkerID] {
+			t.Fatalf("forced worker %d replay = %q, want %q", forcedWorkerID, got, sourcesByWorkerID[forcedWorkerID])
 		}
 		if want > 0 {
 			clock.advance(999 * time.Millisecond)
@@ -664,7 +664,7 @@ func TestReaderPoolReactivatesBlockedWorkerWithoutDuplicateSlot(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("reactivated worker did not flush its blocked batch")
 	}
-	if slots := telemetry.snapshot().workerSlots; len(slots) != 1 || slots[0].ID != "reader-worker-0" || slots[0].Lifecycle != "active" {
+	if slots := telemetry.snapshot().workerSlots; len(slots) != 1 || slots[0].WorkerID != 0 || slots[0].Lifecycle != "active" {
 		t.Fatalf("worker replaced or duplicated = %+v", slots)
 	}
 	cancel()

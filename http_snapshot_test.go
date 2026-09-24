@@ -17,8 +17,8 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		Reader: readerSnapshot{
 			Workers: 1, LiveWorkers: 2, DrainingWorkers: 1,
 			WorkerSlots: []readerWorkerSlot{
-				{ID: "reader-worker-0", Ordinal: 0, Activity: "reading", Lifecycle: "active", Source: &source},
-				{ID: "reader-worker-1", Ordinal: 1, Activity: "reading", Lifecycle: "draining", Source: &source},
+				{WorkerID: 0, Activity: "reading", Lifecycle: "active", Source: &source},
+				{WorkerID: 1, Activity: "reading", Lifecycle: "draining", Source: &source},
 			},
 			ReadBatchSize: 50000, ReadTps: 123.5, RowsRead: 47, Source: &source,
 		},
@@ -89,7 +89,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if len(slots) != 2 {
 		t.Fatalf("Reader slot count = %d, want 2", len(slots))
 	}
-	assertExactJSONKeys(t, slots[0], []string{"activity", "id", "lifecycle", "ordinal", "source"})
+	assertExactJSONKeys(t, slots[0], []string{"activity", "lifecycle", "source", "workerId"})
 }
 
 func assertExactJSONKeys(t *testing.T, object map[string]json.RawMessage, want []string) {

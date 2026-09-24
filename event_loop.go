@@ -29,10 +29,30 @@ func (state *controlState) eventLoop(
 	promMetrics *Metrics,
 	read readerStarter,
 ) {
-	state.eventLoopWithThrottler(requests, metrics, promMetrics, read, startThrottler)
+	state.eventLoopWithThrottlerContext(context.Background(), requests, metrics, promMetrics, read, startThrottler)
+}
+
+func (state *controlState) runEventLoop(
+	ctx context.Context,
+	requests <-chan request,
+	metrics <-chan time.Time,
+	promMetrics *Metrics,
+) {
+	state.eventLoopWithThrottlerContext(ctx, requests, metrics, promMetrics, state.startReaderPool, startThrottler)
 }
 
 func (state *controlState) eventLoopWithThrottler(
+	requests <-chan request,
+	metrics <-chan time.Time,
+	promMetrics *Metrics,
+	read readerStarter,
+	start throttlerStarter,
+) {
+	state.eventLoopWithThrottlerContext(context.Background(), requests, metrics, promMetrics, read, start)
+}
+
+func (state *controlState) eventLoopWithThrottlerContext(
+	ctx context.Context,
 	requests <-chan request,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
@@ -82,6 +102,8 @@ func (state *controlState) eventLoopWithThrottler(
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case cmd, ok := <-requests:
 			if !ok {
 				return
@@ -161,7 +183,7 @@ func (state *controlState) eventLoopWithThrottler(
 					batches, readerCreated = state.prepareReaderChannel(batches)
 					var senderCreated bool
 					senderBatches, senderCreated = state.prepareSenderChannel(senderBatches)
-					readerContext, cancel := context.WithCancel(context.Background())
+					readerContext, cancel := context.WithCancel(ctx)
 					started, err := read(
 						readerContext,
 						batches,
@@ -192,7 +214,7 @@ func (state *controlState) eventLoopWithThrottler(
 					readerDone = started.done
 					readerReconcile = started.reconcile
 					cancelReader = cancel
-					throttlerContext, cancel := context.WithCancel(context.Background())
+					throttlerContext, cancel := context.WithCancel(ctx)
 					cancelThrottler = cancel
 					throttlerDone, throttlerUpdates = start(
 						throttlerContext,

@@ -72,8 +72,7 @@ function WorkerChip({
     <g
       className={`pipeline-worker--${state}`}
       transform={`translate(${x} ${y}) scale(${scale})`}
-      data-worker-slot-id={slot?.id}
-      data-worker-ordinal={slot?.ordinal}
+      data-worker-id={slot?.workerId}
       data-worker-activity={slot?.activity}
       data-worker-lifecycle={slot?.lifecycle}
       data-worker-terminal-error={slot && 'terminalError' in slot ? slot.terminalError : undefined}
@@ -152,14 +151,14 @@ export function WorkerActor({
   onSelect,
   desiredControl,
 }: WorkerActorProps) {
-  const [recentlySuccessfulWorkerIds, setRecentlySuccessfulWorkerIds] = useState<ReadonlySet<string>>(
+  const [recentlySuccessfulWorkerIds, setRecentlySuccessfulWorkerIds] = useState<ReadonlySet<number>>(
     () => new Set(),
   )
-  const previousWorkerActivity = useRef<ReadonlyMap<string, SenderWorkerState>>(new Map())
-  const successTimeouts = useRef(new Map<string, ReturnType<typeof setTimeout>>())
-  const [completedReaderIds, setCompletedReaderIds] = useState<ReadonlySet<string>>(() => new Set())
-  const previousReaderActivity = useRef<ReadonlyMap<string, ReaderWorkerSlotSnapshot['activity']>>(new Map())
-  const readerTimeouts = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const previousWorkerActivity = useRef<ReadonlyMap<number, SenderWorkerState>>(new Map())
+  const successTimeouts = useRef(new Map<number, ReturnType<typeof setTimeout>>())
+  const [completedReaderIds, setCompletedReaderIds] = useState<ReadonlySet<number>>(() => new Set())
+  const previousReaderActivity = useRef<ReadonlyMap<number, ReaderWorkerSlotSnapshot['activity']>>(new Map())
+  const readerTimeouts = useRef(new Map<number, ReturnType<typeof setTimeout>>())
   const holdTimer = useRef<number | null>(null)
   const repeatTimer = useRef<number | null>(null)
   const releaseListeners = useRef<(() => void) | null>(null)
@@ -179,21 +178,21 @@ export function WorkerActor({
       return
     }
 
-    const nextActivity = new Map<string, ReaderWorkerSlotSnapshot['activity']>()
-    const completed: string[] = []
+    const nextActivity = new Map<number, ReaderWorkerSlotSnapshot['activity']>()
+    const completed: number[] = []
     for (const slot of workerSlots as readonly ReaderWorkerSlotSnapshot[]) {
-      nextActivity.set(slot.id, slot.activity)
+      nextActivity.set(slot.workerId, slot.activity)
       if (
-        (previousReaderActivity.current.get(slot.id) === undefined ||
-          previousReaderActivity.current.get(slot.id) === 'reading' ||
-          previousReaderActivity.current.get(slot.id) === 'blocked') &&
+        (previousReaderActivity.current.get(slot.workerId) === undefined ||
+          previousReaderActivity.current.get(slot.workerId) === 'reading' ||
+          previousReaderActivity.current.get(slot.workerId) === 'blocked') &&
         slot.activity === 'completed' && slot.lifecycle === 'active'
-      ) completed.push(slot.id)
+      ) completed.push(slot.workerId)
     }
     previousReaderActivity.current = nextActivity
 
     for (const [id, timeout] of readerTimeouts.current) {
-      const slot = workerSlots.find((candidate) => candidate.id === id)
+      const slot = workerSlots.find((candidate) => candidate.workerId === id)
       if (slot && slot.lifecycle === 'active' && (slot.activity === 'completed' || slot.activity === 'idle')) continue
       clearTimeout(timeout)
       readerTimeouts.current.delete(id)
@@ -230,15 +229,15 @@ export function WorkerActor({
       return
     }
 
-    const nextWorkerActivity = new Map<string, SenderWorkerState>()
-    const newlySuccessfulWorkerIds: string[] = []
+    const nextWorkerActivity = new Map<number, SenderWorkerState>()
+    const newlySuccessfulWorkerIds: number[] = []
     for (const slot of workerSlots as readonly SenderWorkerSlotSnapshot[]) {
-      nextWorkerActivity.set(slot.id, slot.activity)
+      nextWorkerActivity.set(slot.workerId, slot.activity)
       if (
-        previousWorkerActivity.current.get(slot.id) === 'in-flight' &&
+        previousWorkerActivity.current.get(slot.workerId) === 'in-flight' &&
         slot.activity === 'idle'
       ) {
-        newlySuccessfulWorkerIds.push(slot.id)
+        newlySuccessfulWorkerIds.push(slot.workerId)
       }
     }
     previousWorkerActivity.current = nextWorkerActivity
@@ -328,9 +327,9 @@ export function WorkerActor({
     if (slot.activity === 'backoff') return 'backoff'
     if (slot.activity === 'blocked') return 'blocked'
     if (slot.lifecycle === 'draining') return 'draining'
-    if (actor === 'reader' && completedReaderIds.has(slot.id)) return 'success'
+    if (actor === 'reader' && completedReaderIds.has(slot.workerId)) return 'success'
     if (slot.activity === 'completed') return 'idle'
-    if (slot.activity === 'idle' && recentlySuccessfulWorkerIds.has(slot.id)) return 'success'
+    if (slot.activity === 'idle' && recentlySuccessfulWorkerIds.has(slot.workerId)) return 'success'
     return slot.activity
   }
   const actorAriaLabel = actor === 'reader' || liveWorkers === undefined
@@ -474,7 +473,7 @@ export function WorkerActor({
         />
         {layout.chips.filter((_, index) => workerSlots === undefined || workerSlots?.length === 0 || (workerSlots !== null && index < workerSlots.length)).map((chip, index) => (
           <WorkerChip
-            key={workerSlots?.[index]?.id ?? index}
+            key={workerSlots?.[index]?.workerId ?? index}
             {...chip}
             state={chipState(index)}
             slot={workerSlots?.[index]}

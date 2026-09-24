@@ -143,6 +143,23 @@ func TestSenderPoolScaleDownJoinsIdleWorkerBeforeNextReceive(t *testing.T) {
 	<-pool.stop()
 }
 
+func TestSenderPoolReplacementGetsNewWorkerID(t *testing.T) {
+	batches := make(chan []Transaction)
+	var channel channelTelemetry
+	var telemetry senderTelemetry
+	var consumed atomic.Int64
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
+
+	pool.reconcile(1)
+	pool.reconcile(2)
+	slots := telemetry.snapshot().workerSlots
+	if len(slots) != 2 || slots[0].WorkerID != 0 || slots[1].WorkerID != 2 {
+		t.Fatalf("replacement worker IDs = %+v, want 0 and 2", slots)
+	}
+	<-pool.stop()
+}
+
 func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	var channel channelTelemetry

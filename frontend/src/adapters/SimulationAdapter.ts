@@ -169,9 +169,8 @@ function freezeSnapshot(
       workerSlots: Object.freeze(
         Array.from(
           { length: readerPoolLive ? config.readerWorkers : 0 },
-          (_, ordinal) => Object.freeze({
-            id: `reader-worker-${ordinal}`,
-            ordinal,
+          (_, workerId) => Object.freeze({
+            workerId,
             activity: readerReadTps > 0 ? 'reading' as const : 'idle' as const,
             lifecycle: 'active' as const,
             source: readerReadTps > 0 ? 'events.parquet' : null,
@@ -238,8 +237,7 @@ function freezeSnapshot(
       ),
       workerSlots: Object.freeze(
         (running ? telemetry.sender.workerSlots : []).map((slot) => Object.freeze({
-          id: slot.id,
-          ordinal: slot.ordinal,
+          workerId: slot.workerId,
           activity: slot.state,
           lifecycle: slot.lifecycle,
           terminalError: slot.terminalError,

@@ -98,8 +98,7 @@ export interface SenderTelemetry {
 }
 
 export interface SenderWorkerSlotTelemetry {
-  readonly id: string
-  readonly ordinal: number
+  readonly workerId: number
   readonly state: SenderWorkerState
   readonly lifecycle: 'active' | 'draining'
   readonly terminalError: boolean
@@ -186,8 +185,7 @@ interface ReaderProductionResult extends AdmissionResult {
 type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
 
 interface SenderWorker {
-  readonly id: string
-  readonly ordinal: number
+  readonly workerId: number
   retiring: boolean
   terminalError: boolean
   state: SenderWorkerState
@@ -223,10 +221,9 @@ function createStepActivity(): StepActivity {
   }
 }
 
-function createWorker(ordinal: number): SenderWorker {
+function createWorker(workerId: number): SenderWorker {
   return {
-    id: `sender-worker-${ordinal}`,
-    ordinal,
+    workerId,
     retiring: false,
     terminalError: false,
     state: 'idle',
@@ -700,9 +697,8 @@ export class FixedStepSimulation {
   }
 
   private get workerSlots(): readonly SenderWorkerSlotTelemetry[] {
-    return this.workers.map(({ id, ordinal, state, retiring, terminalError }) => ({
-      id,
-      ordinal,
+    return this.workers.map(({ workerId, state, retiring, terminalError }) => ({
+      workerId,
       state,
       lifecycle: retiring ? 'draining' : 'active',
       terminalError,

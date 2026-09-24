@@ -100,11 +100,10 @@ describe('inspector view model', () => {
         },
         liveWorkers: 32,
         drainingWorkers: 8,
-        workerSlots: Array.from({ length: 32 }, (_, ordinal) => ({
-          id: `sender-worker-${ordinal}`,
-          ordinal,
-          activity: ordinal < 2 ? 'idle' as const : ordinal < 13 ? 'in-flight' as const : 'backoff' as const,
-          lifecycle: ordinal < 24 ? 'active' as const : 'draining' as const,
+        workerSlots: Array.from({ length: 32 }, (_, workerId) => ({
+          workerId,
+          activity: workerId < 2 ? 'idle' as const : workerId < 13 ? 'in-flight' as const : 'backoff' as const,
+          lifecycle: workerId < 24 ? 'active' as const : 'draining' as const,
           terminalError: false,
         })),
         attemptedTps: 80_000,

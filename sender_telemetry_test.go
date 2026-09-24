@@ -13,7 +13,7 @@ func TestSenderTelemetryReturnsSortedIndependentSlotCopies(t *testing.T) {
 	if snapshot.liveWorkers != 2 || snapshot.drainingWorkers != 1 || snapshot.terminalBatches != 1 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
-	if snapshot.workerSlots[0].Ordinal != 0 || snapshot.workerSlots[1].Ordinal != 2 {
+	if snapshot.workerSlots[0].WorkerID != 0 || snapshot.workerSlots[1].WorkerID != 2 {
 		t.Fatalf("slots not sorted: %+v", snapshot.workerSlots)
 	}
 	if !snapshot.workerSlots[0].TerminalError || snapshot.workerSlots[1].Lifecycle != "draining" {

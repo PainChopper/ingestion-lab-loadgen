@@ -87,7 +87,7 @@ describe('LabShell', () => {
         state: 'running',
         liveWorkers: 2,
         workerSlots: [
-          { id: 'sender-1', ordinal: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+          { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
         ],
       },
     }
@@ -254,7 +254,7 @@ describe('LabShell', () => {
       .getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('owns retained Sender controls and leaves Target without controls', async () => {
+  it('owns retained Sender controls and leaves ingestion service without controls', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()
     const dispatch = vi.spyOn(adapter, 'dispatch')
@@ -267,7 +267,7 @@ describe('LabShell', () => {
     await user.click(screen.getByRole('button', { name: 'Add sender worker' }))
     expect(dispatch).toHaveBeenCalledWith({ type: 'set-sender-workers', value: 4 })
 
-    await user.click(screen.getByRole('button', { name: 'Inspect target' }))
+    await user.click(screen.getByRole('button', { name: 'Inspect ingestion service' }))
     expect(screen.queryByLabelText('Sender configuration')).toBeNull()
     expect(screen.queryByRole('spinbutton', { name: /^Workers/ })).toBeNull()
     expect(screen.queryByRole('spinbutton', { name: /^HTTP timeout/ })).toBeNull()
@@ -498,6 +498,6 @@ describe('LabShell', () => {
     expect((requested as HTMLInputElement).value).toBe('135000')
     expect(document.activeElement).toBe(requested)
     expect(document.querySelector('.pipeline-svg')?.getAttribute('viewBox'))
-      .toMatch(/^0 0 480 1[34]\d{2}$/)
+      .toBe('0 0 480 670')
   })
 })
