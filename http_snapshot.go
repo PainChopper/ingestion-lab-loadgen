@@ -41,12 +41,10 @@ type throttlerSnapshot struct {
 }
 
 type senderSnapshot struct {
-	Workers                   int                `json:"workers"`
-	LiveWorkers               int                `json:"liveWorkers"`
-	DrainingWorkers           int                `json:"drainingWorkers"`
-	WorkerSlots               []senderWorkerSlot `json:"workerSlots"`
-	SimulatedDelayMS          int                `json:"simulatedDelayMs"`
-	SimulatedErrorRatePercent int                `json:"simulatedErrorRatePercent"`
+	Workers         int                `json:"workers"`
+	LiveWorkers     int                `json:"liveWorkers"`
+	DrainingWorkers int                `json:"drainingWorkers"`
+	WorkerSlots     []senderWorkerSlot `json:"workerSlots"`
 }
 
 type channelSnapshot struct {

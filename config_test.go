@@ -42,11 +42,49 @@ func testConfigContents() string {
 		"", "[throttler.requested_tps]", "default = 2000000", "min = 0", "max = 4000000", "step = 200000", "unit = \"transactions/s\"", "mutability = \"immediate\"",
 		"", "[throttler.installation_mode]", "default = \"installed\"", "allowed = [\"installed\", \"bypass\"]", "mutability = \"immediate\"",
 		"", "[sender.workers]", "default = 32", "min = 1", "max = 32", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"",
-		"", "[sender.simulated.delay_ms]", "default = 10", "min = 0", "max = 2000", "step = 10", "unit = \"milliseconds\"", "mutability = \"immediate\"",
-		"", "[sender.simulated.error_rate_percent]", "default = 2", "min = 0", "max = 100", "step = 1", "unit = \"percent\"", "mutability = \"immediate\"",
+		"", "[sender.api]", "url = \"http://127.0.0.1:8080/internal/test/ingest\"", "mutability = \"startup-only\"",
 		"", "[sender.retry]", "max_attempts = 3", "backoff_base_ms = 250", "backoff_multiplier = 2", "jitter_percent = 20", "mutability = \"startup-only\"",
 		"", "[metrics.window_ms]", "default = 1000", "min = 100", "max = 10000", "step = 100", "unit = \"milliseconds\"", "mutability = \"startup-only\"",
 	}, "\n")
+}
+
+func TestLoadPolicyValidatesSenderAPI(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		wantErr  bool
+	}{
+		{name: "default", contents: testConfigContents()},
+		{name: "external HTTPS", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "https://ingest.example.test/v1/batches")},
+		{name: "missing URL", contents: strings.ReplaceAll(testConfigContents(), "url = \"http://127.0.0.1:8080/internal/test/ingest\"\n", ""), wantErr: true},
+		{name: "relative URL", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "/internal/test/ingest"), wantErr: true},
+		{name: "unsupported scheme", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "ftp://ingest.example.test/batches"), wantErr: true},
+		{name: "missing host", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "http:/internal/test/ingest"), wantErr: true},
+		{name: "fragment", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "https://ingest.example.test/batches#fragment"), wantErr: true},
+		{name: "runtime mutability", contents: strings.ReplaceAll(testConfigContents(), "[sender.api]\nurl = \"http://127.0.0.1:8080/internal/test/ingest\"\nmutability = \"startup-only\"", "[sender.api]\nurl = \"http://127.0.0.1:8080/internal/test/ingest\"\nmutability = \"immediate\""), wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, _, err := loadPolicy(path)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("loadPolicy error = nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadPolicy: %v", err)
+			}
+			if loaded.Sender.API.URL == "" {
+				t.Fatal("loaded sender API URL is empty")
+			}
+		})
+	}
 }
 
 func TestLoadPolicyRejectsInvalidConfiguration(t *testing.T) {
@@ -351,12 +389,6 @@ func TestSenderPolicyUsesApprovedProfile(t *testing.T) {
 	if sender.Workers != (rangePolicy{Default: 32, Min: 1, Max: 32, Step: 1, Unit: workersUnit, Mutability: immediate}) {
 		t.Fatalf("workers policy = %+v", sender.Workers)
 	}
-	if sender.Simulated.DelayMS != (rangePolicy{Default: 10, Min: 0, Max: 2000, Step: 10, Unit: metricsWindowUnit, Mutability: immediate}) {
-		t.Fatalf("delay policy = %+v", sender.Simulated.DelayMS)
-	}
-	if sender.Simulated.ErrorRatePercent != (rangePolicy{Default: 2, Min: 0, Max: 100, Step: 1, Unit: percentUnit, Mutability: immediate}) {
-		t.Fatalf("error rate policy = %+v", sender.Simulated.ErrorRatePercent)
-	}
 }
 
 func TestReaderWorkersPolicyUsesApprovedProfile(t *testing.T) {
@@ -397,9 +429,6 @@ func TestLoadPolicyRejectsInvalidSenderPolicy(t *testing.T) {
 	tests := []struct{ name, old, replacement string }{
 		{"missing workers", "[sender.workers]\ndefault = 32", "[sender.workers]"},
 		{"wrong workers max", "max = 32", "max = 33"},
-		{"missing delay", "[sender.simulated.delay_ms]\ndefault = 10", "[sender.simulated.delay_ms]"},
-		{"wrong delay step", "[sender.simulated.delay_ms]\ndefault = 10\nmin = 0\nmax = 2000\nstep = 10", "[sender.simulated.delay_ms]\ndefault = 10\nmin = 0\nmax = 2000\nstep = 5"},
-		{"wrong error default", "[sender.simulated.error_rate_percent]\ndefault = 2", "[sender.simulated.error_rate_percent]\ndefault = 3"},
 		{"wrong retry attempts", "max_attempts = 3", "max_attempts = 4"},
 		{"missing retry mutability", "[sender.retry]\nmax_attempts = 3\nbackoff_base_ms = 250\nbackoff_multiplier = 2\njitter_percent = 20\nmutability = \"startup-only\"", "[sender.retry]\nmax_attempts = 3\nbackoff_base_ms = 250\nbackoff_multiplier = 2\njitter_percent = 20"},
 	}

@@ -40,8 +40,6 @@ function liveControls(snapshot: LoadgenSnapshot): LiveControls {
     requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? 0),
     installationMode: desiredControl(snapshot.throttler.installationMode.applied ?? 'installed'),
     senderWorkers: desiredControl(snapshot.sender.workers.applied ?? 0),
-    simulatedDelayMs: desiredControl(snapshot.sender.simulatedDelayMs.applied ?? 0),
-    simulatedErrorRatePercent: desiredControl(snapshot.sender.simulatedErrorRatePercent.applied ?? 0),
     timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? 0),
   }
 }
@@ -128,7 +126,6 @@ function snapshotFor(
     senderChannel: channel('throttler-to-sender', 'throttler', 'sender'),
     sender: {
       id: 'sender', workers: workerControl, liveWorkers: workers, drainingWorkers: 0,
-      simulatedDelayMs: numericControl(0, 'ms'), simulatedErrorRatePercent: numericControl(0, '%'),
       timeoutMs: numericControl(5_000, 'ms'), workerSlots: workerSlots(workers, active ? (blocked ? 'backoff' : 'in-flight') : 'idle') as LoadgenSnapshot['sender']['workerSlots'],
       retryPolicy: null, attemptedTps: active ? 1_200 : 0, retryAttemptedTps: 0, terminalFailedTps: 0,
       inFlightRequests: active ? 3 : 0, attemptsStartedTotal: active ? 12_000 : 0, retryAttemptsStartedTotal: 0,

@@ -4,12 +4,22 @@ import (
 	"context"
 	"encoding/binary"
 	"hash/fnv"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-type senderAttempt func(batch []Transaction, ordinal, attempt, delayMS, errorRate int) bool
+type senderAttemptOutcome uint8
+
+const (
+	senderAttemptSuccess senderAttemptOutcome = iota
+	senderAttemptRetryableFailure
+	senderAttemptTerminalFailure
+	senderAttemptCanceled
+)
+
+type senderAttempt func(context.Context, []Transaction, int, int) senderAttemptOutcome
 
 type senderWorker struct {
 	ordinal  int
@@ -32,15 +42,13 @@ type senderPool struct {
 	workers                                  map[int]*senderWorker
 	desired                                  int
 	stopping                                 bool
-	delayMS                                  int
-	errorRate                                int
 	retry                                    senderRetryPolicy
 	batches                                  <-chan []Transaction
 	channelTelemetry                         *channelTelemetry
 	telemetry                                *senderTelemetry
 	terminallyCompletedTransactionsSinceTick *atomic.Int64
 	attempt                                  senderAttempt
-	wait                                     func(time.Duration)
+	wait                                     func(context.Context, time.Duration) bool
 }
 
 func startSenderPool(
@@ -48,7 +56,8 @@ func startSenderPool(
 	channelTelemetry *channelTelemetry,
 	telemetry *senderTelemetry,
 	terminallyCompletedTransactionsSinceTick *atomic.Int64,
-	workers, delayMS, errorRate int,
+	workers int,
+	api senderAPIPolicy,
 	retry senderRetryPolicy,
 ) *senderPool {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -57,15 +66,13 @@ func startSenderPool(
 		cancel:                                   cancel,
 		intakeDone:                               make(chan struct{}),
 		workers:                                  make(map[int]*senderWorker),
-		delayMS:                                  delayMS,
-		errorRate:                                errorRate,
 		retry:                                    retry,
 		batches:                                  batches,
 		channelTelemetry:                         channelTelemetry,
 		telemetry:                                telemetry,
 		terminallyCompletedTransactionsSinceTick: terminallyCompletedTransactionsSinceTick,
-		attempt:                                  simulatedSenderAttempt,
-		wait:                                     time.Sleep,
+		attempt:                                  newSenderHTTPAttempt(api.URL, http.DefaultClient).deliver,
+		wait:                                     waitSenderBackoff,
 	}
 	pool.available = sync.NewCond(&pool.mu)
 	pool.reconcile(workers)
@@ -110,13 +117,6 @@ func (p *senderPool) reconcile(desired int) {
 	for _, done := range idleDraining {
 		<-done
 	}
-}
-
-func (p *senderPool) updateSimulation(delayMS, errorRate int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.delayMS = delayMS
-	p.errorRate = errorRate
 }
 
 func (p *senderPool) stop() <-chan struct{} {
@@ -262,31 +262,43 @@ func (p *senderPool) workerExited(worker *senderWorker) {
 
 func (p *senderPool) processBatch(ordinal int, batch []Transaction) {
 	for attempt := 1; attempt <= p.retry.MaxAttempts; attempt++ {
-		p.mu.Lock()
-		delayMS, errorRate := p.delayMS, p.errorRate
-		p.mu.Unlock()
 		p.telemetry.setActivity(ordinal, "in-flight")
-		if p.attempt(batch, ordinal, attempt, delayMS, errorRate) {
+		switch p.attempt(p.ctx, batch, ordinal, attempt) {
+		case senderAttemptSuccess:
 			p.telemetry.finishBatch(ordinal, true)
 			return
-		}
-		if attempt == p.retry.MaxAttempts {
+		case senderAttemptTerminalFailure, senderAttemptCanceled:
 			p.telemetry.finishBatch(ordinal, false)
 			return
+		case senderAttemptRetryableFailure:
+			if attempt == p.retry.MaxAttempts {
+				p.telemetry.finishBatch(ordinal, false)
+				return
+			}
 		}
+
 		p.telemetry.setActivity(ordinal, "backoff")
 		base := time.Duration(p.retry.BackoffBaseMS) * time.Millisecond
 		if attempt > 1 {
 			base *= time.Duration(p.retry.BackoffMultiplier)
 		}
 		jitter := deterministicSenderValue(batch, ordinal, attempt, 41) - 20
-		p.wait(base + base*time.Duration(jitter)/100)
+		if !p.wait(p.ctx, base+base*time.Duration(jitter)/100) {
+			p.telemetry.finishBatch(ordinal, false)
+			return
+		}
 	}
 }
 
-func simulatedSenderAttempt(batch []Transaction, ordinal, attempt, delayMS, errorRate int) bool {
-	time.Sleep(time.Duration(delayMS) * time.Millisecond)
-	return deterministicSenderValue(batch, ordinal, attempt, 100) >= errorRate
+func waitSenderBackoff(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func deterministicSenderValue(batch []Transaction, ordinal, attempt int, modulus uint64) int {

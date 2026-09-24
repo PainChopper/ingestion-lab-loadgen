@@ -10,6 +10,7 @@ func TestServeMuxRoutes(t *testing.T) {
 	routes := []string{
 		snapshotPath,
 		commandsPath,
+		internalTestIngestPath,
 	}
 
 	for _, route := range routes {

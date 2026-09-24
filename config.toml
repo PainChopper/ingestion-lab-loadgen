@@ -54,21 +54,9 @@ step = 1
 unit = "workers"
 mutability = "immediate"
 
-[sender.simulated.delay_ms]
-default = 10
-min = 0
-max = 2_000
-step = 10
-unit = "milliseconds"
-mutability = "immediate"
-
-[sender.simulated.error_rate_percent]
-default = 2
-min = 0
-max = 100
-step = 1
-unit = "percent"
-mutability = "immediate"
+[sender.api]
+url = "http://127.0.0.1:8080/internal/test/ingest"
+mutability = "startup-only"
 
 [sender.retry]
 max_attempts = 3

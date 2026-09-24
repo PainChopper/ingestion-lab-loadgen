@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,18 +19,69 @@ func waitForSenderCondition(t *testing.T, condition func() bool) {
 	}
 }
 
+func TestSenderPoolDoesNotRetryTerminalFailure(t *testing.T) {
+	batches := make(chan []Transaction)
+	var channel channelTelemetry
+	var telemetry senderTelemetry
+	var consumed atomic.Int64
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+	var attempts atomic.Int64
+	var backoffs atomic.Int64
+	pool.attempt = func(context.Context, []Transaction, int, int) senderAttemptOutcome {
+		attempts.Add(1)
+		return senderAttemptTerminalFailure
+	}
+	pool.wait = func(context.Context, time.Duration) bool {
+		backoffs.Add(1)
+		return true
+	}
+
+	batches <- []Transaction{{ClientID: "invalid"}}
+	waitForSenderCondition(t, func() bool { return telemetry.snapshot().terminalBatches == 1 })
+	<-pool.stop()
+	if attempts.Load() != 1 || backoffs.Load() != 0 {
+		t.Fatalf("terminal failure attempts=%d backoffs=%d, want 1 and 0", attempts.Load(), backoffs.Load())
+	}
+}
+
+func TestSenderPoolCancellationStopsRetry(t *testing.T) {
+	batches := make(chan []Transaction)
+	var channel channelTelemetry
+	var telemetry senderTelemetry
+	var consumed atomic.Int64
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+	entered := make(chan struct{})
+	var attempts atomic.Int64
+	pool.attempt = func(ctx context.Context, _ []Transaction, _, _ int) senderAttemptOutcome {
+		attempts.Add(1)
+		close(entered)
+		<-ctx.Done()
+		return senderAttemptCanceled
+	}
+
+	batches <- []Transaction{{ClientID: "canceled"}}
+	<-entered
+	<-pool.stop()
+	if attempts.Load() != 1 {
+		t.Fatalf("canceled attempts = %d, want 1", attempts.Load())
+	}
+}
+
 func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) {
 	batches := make(chan []Transaction, 3)
 	var channel channelTelemetry
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, 0, 0, testPolicy(t).Sender.Retry)
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	entered := make(chan int, 3)
 	release := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
-	pool.attempt = func(_ []Transaction, ordinal, _, _, _ int) bool {
+	pool.attempt = func(_ context.Context, _ []Transaction, ordinal, _ int) senderAttemptOutcome {
 		entered <- ordinal
 		<-release[ordinal]
-		return true
+		return senderAttemptSuccess
 	}
 
 	batches <- []Transaction{{ClientID: "A"}}
@@ -73,11 +125,12 @@ func TestSenderPoolScaleDownJoinsIdleWorkerBeforeNextReceive(t *testing.T) {
 	var channel channelTelemetry
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, 0, 0, testPolicy(t).Sender.Retry)
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	entered := make(chan int, 1)
-	pool.attempt = func(_ []Transaction, ordinal, _, _, _ int) bool {
+	pool.attempt = func(_ context.Context, _ []Transaction, ordinal, _ int) senderAttemptOutcome {
 		entered <- ordinal
-		return true
+		return senderAttemptSuccess
 	}
 	pool.reconcile(1)
 	if snapshot := telemetry.snapshot(); snapshot.liveWorkers != 1 || snapshot.drainingWorkers != 0 {
@@ -95,15 +148,16 @@ func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 	var channel channelTelemetry
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, 0, 0, testPolicy(t).Sender.Retry)
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	entered := make(chan int, 2)
 	releaseFirst := make(chan struct{})
-	pool.attempt = func(batch []Transaction, ordinal, _, _, _ int) bool {
+	pool.attempt = func(_ context.Context, batch []Transaction, ordinal, _ int) senderAttemptOutcome {
 		entered <- ordinal
 		if batch[0].ClientID == "first" {
 			<-releaseFirst
 		}
-		return true
+		return senderAttemptSuccess
 	}
 	batches <- []Transaction{{ClientID: "first"}}
 	if ordinal := <-entered; ordinal != 0 {
@@ -135,13 +189,20 @@ func TestSenderPoolRetriesAndClearsStickyTerminalErrorOnSuccess(t *testing.T) {
 	var channel channelTelemetry
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, 0, 100, testPolicy(t).Sender.Retry)
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	var attempts atomic.Int64
 	var backoffs atomic.Int64
-	pool.attempt = func(_ []Transaction, _, _, _, _ int) bool {
-		return attempts.Add(1) == 4
+	pool.attempt = func(_ context.Context, _ []Transaction, _, _ int) senderAttemptOutcome {
+		if attempts.Add(1) == 4 {
+			return senderAttemptSuccess
+		}
+		return senderAttemptRetryableFailure
 	}
-	pool.wait = func(time.Duration) { backoffs.Add(1) }
+	pool.wait = func(context.Context, time.Duration) bool {
+		backoffs.Add(1)
+		return true
+	}
 	batches <- []Transaction{{ClientID: "failure"}}
 	waitForSenderCondition(t, func() bool { return telemetry.snapshot().terminalBatches == 1 })
 	if slot := telemetry.snapshot().workerSlots[0]; !slot.TerminalError || slot.Activity != "idle" {
@@ -166,13 +227,14 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	var channel channelTelemetry
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, 0, 0, testPolicy(t).Sender.Retry)
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	pool.attempt = func(_ []Transaction, _, _, _, _ int) bool {
+	pool.attempt = func(_ context.Context, _ []Transaction, _, _ int) senderAttemptOutcome {
 		close(entered)
 		<-release
-		return true
+		return senderAttemptSuccess
 	}
 	batches <- []Transaction{{ClientID: "accepted"}}
 	<-entered
@@ -194,14 +256,14 @@ func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
 	var channel channelTelemetry
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
-	retry := testPolicy(t).Sender.Retry
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, 0, 0, retry)
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	pool.attempt = func(_ []Transaction, _, _, _, _ int) bool {
+	pool.attempt = func(_ context.Context, _ []Transaction, _, _ int) senderAttemptOutcome {
 		close(entered)
 		<-release
-		return true
+		return senderAttemptSuccess
 	}
 
 	batches <- []Transaction{{ClientID: "accepted"}}
@@ -235,7 +297,7 @@ func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
 		t.Fatalf("after stop: completed=%d queued=%d, want one of each", consumed.Load(), len(batches))
 	}
 
-	resumed := startSenderPool(batches, &channel, &telemetry, &consumed, 1, 0, 0, retry)
+	resumed := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	waitForSenderCondition(t, func() bool { return consumed.Load() == 2 })
 	<-resumed.stop()
 	if got := channel.snapshot(time.Now()).receivedBatchesTotal; got != 2 {

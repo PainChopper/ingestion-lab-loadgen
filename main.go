@@ -35,10 +35,6 @@ type configuredControls struct {
 	configuredInstallationMode      string
 	configuredSenderWorkers         int
 	senderWorkersConfigured         bool
-	configuredSenderDelayMS         int
-	senderDelayConfigured           bool
-	configuredSenderErrorRate       int
-	senderErrorRateConfigured       bool
 	policy                          policy
 }
 

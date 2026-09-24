@@ -276,16 +276,6 @@ function InspectorControls({
             desiredControl={liveControls.senderWorkers}
           />
           <NumericControl
-            label="Simulated delay"
-            control={snapshot.sender.simulatedDelayMs}
-            desiredControl={liveControls.simulatedDelayMs}
-          />
-          <NumericControl
-            label="Simulated error rate"
-            control={snapshot.sender.simulatedErrorRatePercent}
-            desiredControl={liveControls.simulatedErrorRatePercent}
-          />
-          <NumericControl
             label="HTTP timeout"
             control={snapshot.sender.timeoutMs}
             desiredControl={liveControls.timeoutMs}
@@ -508,18 +498,6 @@ export function LabShell({ adapter }: AdapterProps) {
     available: immediate(liveSnapshot.sender.workers),
     dispatch: (value) => adapter.dispatch({ type: 'set-sender-workers', value }),
   })
-  const simulatedDelayMs = useDesiredControl({
-    applied: liveSnapshot.sender.simulatedDelayMs.applied ?? liveSnapshot.sender.simulatedDelayMs.min,
-    revision: liveSnapshot.revision,
-    available: immediate(liveSnapshot.sender.simulatedDelayMs),
-    dispatch: (value) => adapter.dispatch({ type: 'set-sender-simulated-delay-ms', value }),
-  })
-  const simulatedErrorRatePercent = useDesiredControl({
-    applied: liveSnapshot.sender.simulatedErrorRatePercent.applied ?? liveSnapshot.sender.simulatedErrorRatePercent.min,
-    revision: liveSnapshot.revision,
-    available: immediate(liveSnapshot.sender.simulatedErrorRatePercent),
-    dispatch: (value) => adapter.dispatch({ type: 'set-sender-simulated-error-rate-percent', value }),
-  })
   const timeoutMs = useDesiredControl({
     applied: liveSnapshot.sender.timeoutMs.applied ?? liveSnapshot.sender.timeoutMs.min,
     revision: liveSnapshot.revision,
@@ -532,8 +510,6 @@ export function LabShell({ adapter }: AdapterProps) {
     requestedTps,
     installationMode,
     senderWorkers,
-    simulatedDelayMs,
-    simulatedErrorRatePercent,
     timeoutMs,
   }
   const handleChannelCapacityChange = (channel: ChannelId, value: number) => {

@@ -231,8 +231,6 @@ function freezeSnapshot(
       drainingWorkers: running
         ? telemetry.sender.workerSlots.filter((slot) => slot.lifecycle === 'draining').length
         : 0,
-      simulatedDelayMs: numericControl(config.targetDelayMs, CONTROL_RANGES.targetDelayMs, 'milliseconds'),
-      simulatedErrorRatePercent: numericControl(config.targetErrorRatePercent, CONTROL_RANGES.targetErrorRatePercent, 'percent'),
       timeoutMs: numericControl(
         config.httpTimeoutMs,
         CONTROL_RANGES.httpTimeoutMs,
@@ -455,27 +453,6 @@ export class SimulationAdapter implements LoadgenAdapter {
         changed = this.updateConfig(
           'httpTimeoutMs',
           normalizeNumericValue(command.valueMs, CONTROL_RANGES.httpTimeoutMs),
-        )
-        break
-      case 'set-sender-simulated-delay-ms':
-        if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber(commandId, command, 'sender simulated delay')
-        }
-        changed = this.updateConfig(
-          'targetDelayMs',
-          normalizeNumericValue(command.value, CONTROL_RANGES.targetDelayMs),
-        )
-        break
-      case 'set-sender-simulated-error-rate-percent':
-        if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber(commandId, command, 'sender simulated error rate')
-        }
-        changed = this.updateConfig(
-          'targetErrorRatePercent',
-          normalizeNumericValue(
-            command.value,
-            CONTROL_RANGES.targetErrorRatePercent,
-          ),
         )
         break
       default:

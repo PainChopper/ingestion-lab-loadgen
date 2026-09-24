@@ -117,8 +117,6 @@ func (state *controlState) eventLoopWithThrottler(
 					Sender: senderSnapshot{
 						Workers: state.senderWorkers(), LiveWorkers: sender.liveWorkers,
 						DrainingWorkers: sender.drainingWorkers, WorkerSlots: sender.workerSlots,
-						SimulatedDelayMS:          state.senderDelayMS(),
-						SimulatedErrorRatePercent: state.senderErrorRate(),
 					},
 					ReaderChannel: channelSnapshot{
 						Capacity:                      readerChannel.capacity,
@@ -213,8 +211,8 @@ func (state *controlState) eventLoopWithThrottler(
 					}
 					pool = startSenderPool(
 						senderBatches, &state.telemetry.senderChannel, &state.telemetry.sender,
-						&terminallyCompletedTransactionsSinceTick, state.senderWorkers(), state.senderDelayMS(),
-						state.senderErrorRate(), state.controls.policy.Sender.Retry,
+						&terminallyCompletedTransactionsSinceTick, state.senderWorkers(), state.controls.policy.Sender.API,
+						state.controls.policy.Sender.Retry,
 					)
 				}
 				if cmd.commandReply != nil {
@@ -347,36 +345,6 @@ func (state *controlState) eventLoopWithThrottler(
 				if cmd.commandReply != nil {
 					cmd.commandReply <- commandResult{}
 				}
-			case cmdSetSenderSimulatedDelayMS:
-				if !state.controls.policy.Sender.Simulated.DelayMS.contains(cmd.value) {
-					if cmd.commandReply != nil {
-						cmd.commandReply <- commandResult{status: commandConflict}
-					}
-					continue
-				}
-				state.controls.configuredSenderDelayMS = cmd.value
-				state.controls.senderDelayConfigured = true
-				if pool != nil {
-					pool.updateSimulation(state.senderDelayMS(), state.senderErrorRate())
-				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- commandResult{}
-				}
-			case cmdSetSenderSimulatedErrorRatePercent:
-				if !state.controls.policy.Sender.Simulated.ErrorRatePercent.contains(cmd.value) {
-					if cmd.commandReply != nil {
-						cmd.commandReply <- commandResult{status: commandConflict}
-					}
-					continue
-				}
-				state.controls.configuredSenderErrorRate = cmd.value
-				state.controls.senderErrorRateConfigured = true
-				if pool != nil {
-					pool.updateSimulation(state.senderDelayMS(), state.senderErrorRate())
-				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- commandResult{}
-				}
 			}
 
 		case <-metrics:
@@ -403,20 +371,6 @@ func (state *controlState) senderWorkers() int {
 		return state.controls.configuredSenderWorkers
 	}
 	return state.controls.policy.Sender.Workers.Default
-}
-
-func (state *controlState) senderDelayMS() int {
-	if state.controls.senderDelayConfigured {
-		return state.controls.configuredSenderDelayMS
-	}
-	return state.controls.policy.Sender.Simulated.DelayMS.Default
-}
-
-func (state *controlState) senderErrorRate() int {
-	if state.controls.senderErrorRateConfigured {
-		return state.controls.configuredSenderErrorRate
-	}
-	return state.controls.policy.Sender.Simulated.ErrorRatePercent.Default
 }
 
 func (state *controlState) requestedTPS() int {
