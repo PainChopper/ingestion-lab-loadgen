@@ -51,7 +51,7 @@ func (r *readerTelemetry) recordRead(n int, source string) {
 	r.source = source
 }
 
-func (r *readerTelemetry) startWorker(ordinal int) {
+func (r *readerTelemetry) registerWorker(ordinal int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.slots == nil {
@@ -60,7 +60,7 @@ func (r *readerTelemetry) startWorker(ordinal int) {
 	r.slots[ordinal] = readerWorkerSlot{ID: fmt.Sprintf("reader-worker-%d", ordinal), Ordinal: ordinal, Activity: "idle", Lifecycle: "active"}
 }
 
-func (r *readerTelemetry) finishWorker(ordinal int) {
+func (r *readerTelemetry) unregisterWorker(ordinal int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.slots, ordinal)

@@ -13,39 +13,67 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
+// readerWorker holds the per-worker cancellation and lifecycle state.
 type readerWorker struct {
-	ordinal  int
-	ctx      context.Context
-	cancel   context.CancelFunc
+	// Identifies this worker within the pool and its telemetry.
+	ordinal int
+	// Is canceled when the pool stops or this worker must exit.
+	ctx context.Context
+	// Requests cancellation of only this worker.
+	cancel context.CancelFunc
+	// Prevents the worker from claiming another file.
 	draining bool
-	busy     bool
-	blocked  bool
-	forced   bool
+	// Indicates that the worker currently owns a source file.
+	busy bool
+	// Indicates that the worker is blocked while sending a batch.
+	blocked bool
+	// Indicates that the worker was canceled to finish draining.
+	forced bool
 }
 
 // readerPool owns file admission. A file is assigned once to exactly one worker;
 // workers emit their locally completed batches directly to the reader channel.
 type readerPool struct {
-	mu            sync.Mutex
-	available     *sync.Cond
-	ctx           context.Context
-	cancel        context.CancelFunc
-	files         []string
-	active        map[string]bool
-	replayFiles   []string
-	nextFile      int
-	batchSize     int
-	batches       chan<- []Transaction
-	telemetry     *readerTelemetry
-	channel       *channelTelemetry
-	workers       map[int]*readerWorker
-	desired       int
-	stopping      bool
-	forcePending  bool
-	forceSequence uint64
-	afterForce    func(time.Duration, func())
-	wg            sync.WaitGroup
-	done          chan struct{}
+	// Protects mutable pool state and coordinates condition-variable waits.
+	mu sync.Mutex
+	// Wakes workers when a file, configuration change, or shutdown is available.
+	available *sync.Cond
+	// Is canceled when the whole pool must stop.
+	ctx context.Context
+	// Requests cancellation of the pool context.
+	cancel context.CancelFunc
+	// Tracks every started worker goroutine until it exits.
+	wg sync.WaitGroup
+	// Closes after pool cancellation and all workers have exited.
+	done chan struct{}
+	// Contains the sorted, immutable set of source Parquet paths.
+	files []string
+	// Records source paths currently claimed by a worker.
+	active map[string]bool
+	// Holds released files that must be assigned again.
+	replayFiles []string
+	// Is the round-robin cursor into the source paths.
+	nextFile int
+	// Is the maximum number of transactions in an emitted batch.
+	batchSize int
+	// Receives completed batches from Reader workers.
+	batches chan<- []Transaction
+	// Records Reader-stage observations.
+	telemetry *readerTelemetry
+	// Records observations for batches.
+	channel *channelTelemetry
+	// Contains live Reader workers keyed by worker ID.
+	workers map[int]*readerWorker
+	// Is the requested number of active Reader workers.
+	desired int
+	// Prevents new work while the pool is shutting down.
+	stopping bool
+	// Reports whether a delayed forced-drain callback is scheduled.
+	forcePending bool
+	// Invalidates forced-drain callbacks from an older configuration.
+	forceGeneration uint64
+	// Optionally schedules forced-drain callbacks for tests.
+	afterForce func(time.Duration, func())
 }
 
 func startReaderPool(
@@ -92,29 +120,29 @@ func (p *readerPool) reconcile(desired int) {
 		return
 	}
 	if desired != p.desired {
-		p.forceSequence++
+		p.forceGeneration++
 		p.forcePending = false
 	}
 	p.desired = desired
-	ordinals := make([]int, 0, len(p.workers))
-	for ordinal := range p.workers {
-		ordinals = append(ordinals, ordinal)
+	workerOrdinals := make([]int, 0, len(p.workers))
+	for workerID := range p.workers {
+		workerOrdinals = append(workerOrdinals, workerID)
 	}
-	sort.Slice(ordinals, func(i, j int) bool {
-		left, right := p.workers[ordinals[i]], p.workers[ordinals[j]]
+	sort.Slice(workerOrdinals, func(i, j int) bool {
+		left, right := p.workers[workerOrdinals[i]], p.workers[workerOrdinals[j]]
 		if left.busy != right.busy {
 			return !left.busy
 		}
 		return left.ordinal < right.ordinal
 	})
-	for index, ordinal := range ordinals {
-		worker := p.workers[ordinal]
-		worker.draining = worker.forced || index < len(ordinals)-desired
+	for index, workerID := range workerOrdinals {
+		worker := p.workers[workerID]
+		worker.draining = worker.forced || index < len(workerOrdinals)-desired
 		lifecycle := "active"
 		if worker.draining {
 			lifecycle = "draining"
 		}
-		p.telemetry.setWorkerLifecycle(ordinal, lifecycle)
+		p.telemetry.setWorkerLifecycle(workerID, lifecycle)
 	}
 	for len(p.workers) < desired {
 		p.startReplacementLocked()
@@ -138,8 +166,8 @@ func (p *readerPool) scheduleBlockedForceLocked() {
 		return
 	}
 	p.forcePending = true
-	p.forceSequence++
-	sequence := p.forceSequence
+	p.forceGeneration++
+	sequence := p.forceGeneration
 	callback := func() { p.forceBlocked(sequence) }
 	if p.afterForce != nil {
 		p.afterForce(time.Second, callback)
@@ -151,7 +179,7 @@ func (p *readerPool) scheduleBlockedForceLocked() {
 func (p *readerPool) forceBlocked(sequence uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if sequence != p.forceSequence || p.stopping || p.ctx.Err() != nil {
+	if sequence != p.forceGeneration || p.stopping || p.ctx.Err() != nil {
 		return
 	}
 	p.forcePending = false
@@ -188,14 +216,14 @@ func (p *readerPool) runWorker(worker *readerWorker) {
 	defer func() {
 		p.mu.Lock()
 		delete(p.workers, worker.ordinal)
-		p.telemetry.finishWorker(worker.ordinal)
+		p.telemetry.unregisterWorker(worker.ordinal)
 		if !p.stopping && p.ctx.Err() == nil && len(p.workers) < p.desired {
 			p.startReplacementLocked()
 		}
 		p.mu.Unlock()
 	}()
 	for {
-		filePath, ok := p.nextJob(worker)
+		filePath, ok := p.claimNextFile(worker)
 		if !ok {
 			return
 		}
@@ -226,12 +254,12 @@ func (p *readerPool) startReplacementLocked() {
 	workerCtx, cancel := context.WithCancel(p.ctx)
 	worker := &readerWorker{ordinal: ordinal, ctx: workerCtx, cancel: cancel}
 	p.workers[ordinal] = worker
-	p.telemetry.startWorker(ordinal)
+	p.telemetry.registerWorker(ordinal)
 	p.wg.Add(1)
 	go p.runWorker(worker)
 }
 
-func (p *readerPool) nextJob(worker *readerWorker) (string, bool) {
+func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for !p.stopping && p.ctx.Err() == nil {
