@@ -22,7 +22,7 @@ const (
 type senderAttempt func(context.Context, []Transaction, int, int) senderAttemptOutcome
 
 type senderWorker struct {
-	ordinal  int
+	workerID int
 	wake     chan struct{}
 	work     chan []Transaction
 	done     chan struct{}
@@ -40,6 +40,7 @@ type senderPool struct {
 	intakeDone                               chan struct{}
 	wg                                       sync.WaitGroup
 	workers                                  map[int]*senderWorker
+	nextWorkerID                             int
 	desired                                  int
 	stopping                                 bool
 	retry                                    senderRetryPolicy
@@ -88,29 +89,48 @@ func (p *senderPool) reconcile(desired int) {
 	}
 	var idleDraining []<-chan struct{}
 	p.desired = desired
-	for ordinal, worker := range p.workers {
-		draining := ordinal >= desired
-		if worker.draining == draining {
-			continue
+	activeWorkers := 0
+	for _, worker := range p.workers {
+		if !worker.draining {
+			activeWorkers++
 		}
-		worker.draining = draining
-		if draining && !worker.busy {
-			idleDraining = append(idleDraining, worker.done)
+	}
+	if activeWorkers > desired {
+		for workerID := p.nextWorkerID - 1; activeWorkers > desired && workerID >= 0; workerID-- {
+			worker, ok := p.workers[workerID]
+			if !ok || worker.draining {
+				continue
+			}
+			worker.draining = true
+			activeWorkers--
 		}
+	} else if activeWorkers < desired {
+		for workerID := 0; activeWorkers < desired && workerID < p.nextWorkerID; workerID++ {
+			worker, ok := p.workers[workerID]
+			if !ok || !worker.draining {
+				continue
+			}
+			worker.draining = false
+			activeWorkers++
+		}
+	}
+	for workerID, worker := range p.workers {
 		lifecycle := "active"
-		if draining {
+		if worker.draining {
 			lifecycle = "draining"
+			if !worker.busy {
+				idleDraining = append(idleDraining, worker.done)
+			}
 		}
-		p.telemetry.setLifecycle(ordinal, lifecycle)
+		p.telemetry.setLifecycle(workerID, lifecycle)
 		select {
 		case worker.wake <- struct{}{}:
 		default:
 		}
 	}
-	for ordinal := range desired {
-		if _, ok := p.workers[ordinal]; !ok {
-			p.startWorkerLocked(ordinal)
-		}
+	for activeWorkers < desired {
+		p.startWorkerLocked()
+		activeWorkers++
 	}
 	p.available.Broadcast()
 	p.mu.Unlock()
@@ -142,15 +162,17 @@ func (p *senderPool) stop() <-chan struct{} {
 	return done
 }
 
-func (p *senderPool) startWorkerLocked(ordinal int) {
+func (p *senderPool) startWorkerLocked() {
+	workerID := p.nextWorkerID
+	p.nextWorkerID++
 	worker := &senderWorker{
-		ordinal: ordinal,
-		wake:    make(chan struct{}, 1),
-		work:    make(chan []Transaction, 1),
-		done:    make(chan struct{}),
+		workerID: workerID,
+		wake:     make(chan struct{}, 1),
+		work:     make(chan []Transaction, 1),
+		done:     make(chan struct{}),
 	}
-	p.workers[ordinal] = worker
-	p.telemetry.startWorker(ordinal)
+	p.workers[workerID] = worker
+	p.telemetry.startWorker(workerID)
 	p.wg.Add(1)
 	go p.runWorker(worker)
 }
@@ -199,10 +221,10 @@ func (p *senderPool) runIntake() {
 func (p *senderPool) availableWorkerLocked() *senderWorker {
 	var selected *senderWorker
 	for _, worker := range p.workers {
-		if worker.draining || worker.busy || worker.ordinal >= p.desired {
+		if worker.draining || worker.busy {
 			continue
 		}
-		if selected == nil || worker.ordinal < selected.ordinal {
+		if selected == nil || worker.workerID < selected.workerID {
 			selected = worker
 		}
 	}
@@ -238,7 +260,7 @@ func (p *senderPool) runWorker(worker *senderWorker) {
 }
 
 func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transaction) {
-	p.processBatch(worker.ordinal, batch)
+	p.processBatch(worker.workerID, batch)
 	p.terminallyCompletedTransactionsSinceTick.Add(int64(len(batch)))
 	p.mu.Lock()
 	worker.busy = false
@@ -249,42 +271,52 @@ func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transacti
 func (p *senderPool) workerExited(worker *senderWorker) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.workers[worker.ordinal] != worker {
+	if p.workers[worker.workerID] != worker {
 		return
 	}
-	delete(p.workers, worker.ordinal)
-	p.telemetry.finishWorker(worker.ordinal)
-	if !p.stopping && worker.ordinal < p.desired {
-		p.startWorkerLocked(worker.ordinal)
+	delete(p.workers, worker.workerID)
+	p.telemetry.finishWorker(worker.workerID)
+	if !p.stopping && !worker.draining && p.activeWorkerCountLocked() < p.desired {
+		p.startWorkerLocked()
 	}
 	p.available.Broadcast()
 }
 
-func (p *senderPool) processBatch(ordinal int, batch []Transaction) {
+func (p *senderPool) activeWorkerCountLocked() int {
+	activeWorkers := 0
+	for _, worker := range p.workers {
+		if !worker.draining {
+			activeWorkers++
+		}
+	}
+	return activeWorkers
+}
+
+func (p *senderPool) processBatch(workerID int, batch []Transaction) {
 	for attempt := 1; attempt <= p.retry.MaxAttempts; attempt++ {
-		p.telemetry.setActivity(ordinal, "in-flight")
-		switch p.attempt(p.ctx, batch, ordinal, attempt) {
+		p.telemetry.setActivity(workerID, "in-flight")
+		switch p.attempt(p.ctx, batch, workerID, attempt) {
 		case senderAttemptSuccess:
-			p.telemetry.finishBatch(ordinal, true)
+			p.telemetry.finishBatch(workerID, true)
 			return
 		case senderAttemptTerminalFailure, senderAttemptCanceled:
-			p.telemetry.finishBatch(ordinal, false)
+			p.telemetry.finishBatch(workerID, false)
 			return
 		case senderAttemptRetryableFailure:
 			if attempt == p.retry.MaxAttempts {
-				p.telemetry.finishBatch(ordinal, false)
+				p.telemetry.finishBatch(workerID, false)
 				return
 			}
 		}
 
-		p.telemetry.setActivity(ordinal, "backoff")
+		p.telemetry.setActivity(workerID, "backoff")
 		base := time.Duration(p.retry.BackoffBaseMS) * time.Millisecond
 		if attempt > 1 {
 			base *= time.Duration(p.retry.BackoffMultiplier)
 		}
-		jitter := deterministicSenderValue(batch, ordinal, attempt, 41) - 20
+		jitter := deterministicSenderValue(batch, workerID, attempt, 41) - 20
 		if !p.wait(p.ctx, base+base*time.Duration(jitter)/100) {
-			p.telemetry.finishBatch(ordinal, false)
+			p.telemetry.finishBatch(workerID, false)
 			return
 		}
 	}
@@ -301,11 +333,11 @@ func waitSenderBackoff(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
-func deterministicSenderValue(batch []Transaction, ordinal, attempt int, modulus uint64) int {
+func deterministicSenderValue(batch []Transaction, workerID, attempt int, modulus uint64) int {
 	hash := fnv.New64a()
 	var values [24]byte
 	binary.LittleEndian.PutUint64(values[:8], uint64(len(batch)))
-	binary.LittleEndian.PutUint64(values[8:16], uint64(ordinal))
+	binary.LittleEndian.PutUint64(values[8:16], uint64(workerID))
 	binary.LittleEndian.PutUint64(values[16:], uint64(attempt))
 	_, _ = hash.Write(values[:])
 	if len(batch) > 0 {

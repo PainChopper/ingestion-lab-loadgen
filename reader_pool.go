@@ -13,10 +13,12 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
+const readerForcedDrainGracePeriod = time.Second
+
 // readerWorker holds the per-worker cancellation and lifecycle state.
 type readerWorker struct {
 	// Identifies this worker within the pool and its telemetry.
-	ordinal int
+	workerID int
 	// Is canceled when the pool stops or this worker must exit.
 	ctx context.Context
 	// Requests cancellation of only this worker.
@@ -64,6 +66,8 @@ type readerPool struct {
 	channel *channelTelemetry
 	// Contains live Reader workers keyed by worker ID.
 	workers map[int]*readerWorker
+	// Allocates unique worker identities for this pool lifetime.
+	nextWorkerID int
 	// Is the requested number of active Reader workers.
 	desired int
 	// Prevents new work while the pool is shutting down.
@@ -124,20 +128,20 @@ func (p *readerPool) reconcile(desired int) {
 		p.forcePending = false
 	}
 	p.desired = desired
-	workerOrdinals := make([]int, 0, len(p.workers))
+	workerIDs := make([]int, 0, len(p.workers))
 	for workerID := range p.workers {
-		workerOrdinals = append(workerOrdinals, workerID)
+		workerIDs = append(workerIDs, workerID)
 	}
-	sort.Slice(workerOrdinals, func(i, j int) bool {
-		left, right := p.workers[workerOrdinals[i]], p.workers[workerOrdinals[j]]
+	sort.Slice(workerIDs, func(i, j int) bool {
+		left, right := p.workers[workerIDs[i]], p.workers[workerIDs[j]]
 		if left.busy != right.busy {
 			return !left.busy
 		}
-		return left.ordinal < right.ordinal
+		return left.workerID < right.workerID
 	})
-	for index, workerID := range workerOrdinals {
+	for index, workerID := range workerIDs {
 		worker := p.workers[workerID]
-		worker.draining = worker.forced || index < len(workerOrdinals)-desired
+		worker.draining = worker.forced || index < len(workerIDs)-desired
 		lifecycle := "active"
 		if worker.draining {
 			lifecycle = "draining"
@@ -170,10 +174,10 @@ func (p *readerPool) scheduleBlockedForceLocked() {
 	sequence := p.forceGeneration
 	callback := func() { p.forceBlocked(sequence) }
 	if p.afterForce != nil {
-		p.afterForce(time.Second, callback)
+		p.afterForce(readerForcedDrainGracePeriod, callback)
 		return
 	}
-	time.AfterFunc(time.Second, callback)
+	time.AfterFunc(readerForcedDrainGracePeriod, callback)
 }
 
 func (p *readerPool) forceBlocked(sequence uint64) {
@@ -189,7 +193,7 @@ func (p *readerPool) forceBlocked(sequence uint64) {
 	var victim *readerWorker
 	for _, worker := range p.workers {
 		if worker.draining && worker.blocked && !worker.forced &&
-			(victim == nil || worker.ordinal < victim.ordinal) {
+			(victim == nil || worker.workerID < victim.workerID) {
 			victim = worker
 		}
 	}
@@ -215,8 +219,8 @@ func (p *readerPool) runWorker(worker *readerWorker) {
 	defer worker.cancel()
 	defer func() {
 		p.mu.Lock()
-		delete(p.workers, worker.ordinal)
-		p.telemetry.unregisterWorker(worker.ordinal)
+		delete(p.workers, worker.workerID)
+		p.telemetry.unregisterWorker(worker.workerID)
 		if !p.stopping && p.ctx.Err() == nil && len(p.workers) < p.desired {
 			p.startReplacementLocked()
 		}
@@ -241,20 +245,18 @@ func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
 	delete(p.active, filePath)
 	worker.busy = false
 	if !worker.forced {
-		p.telemetry.setWorkerIdle(worker.ordinal)
+		p.telemetry.setWorkerIdle(worker.workerID)
 	}
 	p.available.Broadcast()
 }
 
 func (p *readerPool) startReplacementLocked() {
-	ordinal := 0
-	for p.workers[ordinal] != nil {
-		ordinal++
-	}
+	workerID := p.nextWorkerID
+	p.nextWorkerID++
 	workerCtx, cancel := context.WithCancel(p.ctx)
-	worker := &readerWorker{ordinal: ordinal, ctx: workerCtx, cancel: cancel}
-	p.workers[ordinal] = worker
-	p.telemetry.registerWorker(ordinal)
+	worker := &readerWorker{workerID: workerID, ctx: workerCtx, cancel: cancel}
+	p.workers[workerID] = worker
+	p.telemetry.registerWorker(workerID)
 	p.wg.Add(1)
 	go p.runWorker(worker)
 }
@@ -291,7 +293,7 @@ func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
 
 func (p *readerPool) readFile(worker *readerWorker, filePath string) {
 	source := filepath.ToSlash(filePath)
-	p.telemetry.setWorkerReading(worker.ordinal, source)
+	p.telemetry.setWorkerReading(worker.workerID, source)
 	file, err := os.Open(filePath)
 	if err != nil {
 		panic(fmt.Sprintf("failed to open file %s: %v", filePath, err))
@@ -335,7 +337,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) {
 		}
 	}
 	if worker.ctx.Err() == nil {
-		p.telemetry.setWorkerCompleted(worker.ordinal)
+		p.telemetry.setWorkerCompleted(worker.workerID)
 	}
 }
 
@@ -378,13 +380,13 @@ func (p *readerPool) sendBatch(worker *readerWorker, source string, batch []Tran
 			worker.blocked = true
 			p.scheduleBlockedForceLocked()
 			p.mu.Unlock()
-			p.telemetry.setWorkerBlocked(worker.ordinal)
+			p.telemetry.setWorkerBlocked(worker.workerID)
 		},
 		func() {
 			p.mu.Lock()
 			worker.blocked = false
 			p.mu.Unlock()
-			p.telemetry.setWorkerReading(worker.ordinal, source)
+			p.telemetry.setWorkerReading(worker.workerID, source)
 		},
 	)
 }

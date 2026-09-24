@@ -29,8 +29,7 @@ export interface SenderWorkerStateCounts {
 }
 
 export interface SenderWorkerSlotSnapshot {
-  readonly id: string
-  readonly ordinal: number
+  readonly workerId: number
   readonly activity: SenderWorkerState
   readonly lifecycle: 'active' | 'draining'
   readonly terminalError: boolean
@@ -203,8 +202,7 @@ export interface SenderSnapshot {
 }
 
 export interface ReaderWorkerSlotSnapshot {
-  readonly id: string
-  readonly ordinal: number
+  readonly workerId: number
   readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'
   readonly lifecycle: 'active' | 'draining'
   readonly source: string | null

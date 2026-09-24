@@ -1,14 +1,12 @@
 package main
 
 import (
-	"fmt"
 	"sort"
 	"sync"
 )
 
 type senderWorkerSlot struct {
-	ID            string `json:"id"`
-	Ordinal       int    `json:"ordinal"`
+	WorkerID      int    `json:"workerId"`
 	Activity      string `json:"activity"`
 	Lifecycle     string `json:"lifecycle"`
 	TerminalError bool   `json:"terminalError"`
@@ -27,58 +25,57 @@ type senderTelemetry struct {
 	terminalBatches int64
 }
 
-func (t *senderTelemetry) startWorker(ordinal int) {
+func (t *senderTelemetry) startWorker(workerID int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.slots == nil {
 		t.slots = make(map[int]senderWorkerSlot)
 	}
-	t.slots[ordinal] = senderWorkerSlot{
-		ID:        fmt.Sprintf("sender-worker-%d", ordinal),
-		Ordinal:   ordinal,
+	t.slots[workerID] = senderWorkerSlot{
+		WorkerID:  workerID,
 		Activity:  "idle",
 		Lifecycle: "active",
 	}
 }
 
-func (t *senderTelemetry) finishWorker(ordinal int) {
+func (t *senderTelemetry) finishWorker(workerID int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.slots, ordinal)
+	delete(t.slots, workerID)
 }
 
-func (t *senderTelemetry) setLifecycle(ordinal int, lifecycle string) {
+func (t *senderTelemetry) setLifecycle(workerID int, lifecycle string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	slot, ok := t.slots[ordinal]
+	slot, ok := t.slots[workerID]
 	if !ok {
 		return
 	}
 	slot.Lifecycle = lifecycle
-	t.slots[ordinal] = slot
+	t.slots[workerID] = slot
 }
 
-func (t *senderTelemetry) setActivity(ordinal int, activity string) {
+func (t *senderTelemetry) setActivity(workerID int, activity string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	slot, ok := t.slots[ordinal]
+	slot, ok := t.slots[workerID]
 	if !ok {
 		return
 	}
 	slot.Activity = activity
-	t.slots[ordinal] = slot
+	t.slots[workerID] = slot
 }
 
-func (t *senderTelemetry) finishBatch(ordinal int, success bool) {
+func (t *senderTelemetry) finishBatch(workerID int, success bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	slot, ok := t.slots[ordinal]
+	slot, ok := t.slots[workerID]
 	if !ok {
 		return
 	}
 	slot.Activity = "idle"
 	slot.TerminalError = !success
-	t.slots[ordinal] = slot
+	t.slots[workerID] = slot
 	t.terminalBatches++
 }
 
@@ -96,7 +93,7 @@ func (t *senderTelemetry) snapshot() senderMeasurements {
 		}
 	}
 	sort.Slice(result.workerSlots, func(i, j int) bool {
-		return result.workerSlots[i].Ordinal < result.workerSlots[j].Ordinal
+		return result.workerSlots[i].WorkerID < result.workerSlots[j].WorkerID
 	})
 	result.liveWorkers = len(result.workerSlots)
 	return result

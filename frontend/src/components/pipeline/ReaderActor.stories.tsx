@@ -52,27 +52,27 @@ type ReaderState = 'idle' | 'reading' | 'backpressured' | 'draining' | 'error'
 
 function readerSlots(state: ReaderState): readonly ReaderWorkerSlotSnapshot[] {
   if (state === 'idle') return [
-    { id: 'reader-1', ordinal: 1, activity: 'idle', lifecycle: 'active', source: 'fixture' },
-    { id: 'reader-2', ordinal: 2, activity: 'idle', lifecycle: 'active', source: 'fixture' },
+    { workerId: 1, activity: 'idle', lifecycle: 'active', source: 'fixture' },
+    { workerId: 2, activity: 'idle', lifecycle: 'active', source: 'fixture' },
   ]
   if (state === 'reading') return [
-    { id: 'reader-1', ordinal: 1, activity: 'reading', lifecycle: 'active', source: 'fixture' },
-    { id: 'reader-2', ordinal: 2, activity: 'reading', lifecycle: 'active', source: 'fixture' },
-    { id: 'reader-3', ordinal: 3, activity: 'reading', lifecycle: 'active', source: 'fixture' },
+    { workerId: 1, activity: 'reading', lifecycle: 'active', source: 'fixture' },
+    { workerId: 2, activity: 'reading', lifecycle: 'active', source: 'fixture' },
+    { workerId: 3, activity: 'reading', lifecycle: 'active', source: 'fixture' },
   ]
   if (state === 'backpressured') return [
-    { id: 'reader-1', ordinal: 1, activity: 'blocked', lifecycle: 'active', source: 'fixture' },
-    { id: 'reader-2', ordinal: 2, activity: 'blocked', lifecycle: 'active', source: 'fixture' },
-    { id: 'reader-3', ordinal: 3, activity: 'blocked', lifecycle: 'active', source: 'fixture' },
+    { workerId: 1, activity: 'blocked', lifecycle: 'active', source: 'fixture' },
+    { workerId: 2, activity: 'blocked', lifecycle: 'active', source: 'fixture' },
+    { workerId: 3, activity: 'blocked', lifecycle: 'active', source: 'fixture' },
   ]
   if (state === 'draining') return [
-    { id: 'reader-1', ordinal: 1, activity: 'completed', lifecycle: 'active', source: 'fixture' },
-    { id: 'reader-2', ordinal: 2, activity: 'reading', lifecycle: 'draining', source: 'fixture' },
-    { id: 'reader-3', ordinal: 3, activity: 'idle', lifecycle: 'draining', source: 'fixture' },
+    { workerId: 1, activity: 'completed', lifecycle: 'active', source: 'fixture' },
+    { workerId: 2, activity: 'reading', lifecycle: 'draining', source: 'fixture' },
+    { workerId: 3, activity: 'idle', lifecycle: 'draining', source: 'fixture' },
   ]
   return [
-    { id: 'reader-1', ordinal: 1, activity: 'idle', lifecycle: 'active', source: null },
-    { id: 'reader-2', ordinal: 2, activity: 'idle', lifecycle: 'active', source: null },
+    { workerId: 1, activity: 'idle', lifecycle: 'active', source: null },
+    { workerId: 2, activity: 'idle', lifecycle: 'active', source: null },
   ]
 }
 

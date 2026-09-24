@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from 'react'
 import type { SelectableId, TargetSnapshot } from '../../model/loadgen'
-import { formatInteger, formatRate } from './formatters'
+import { formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
 
 interface TargetActorProps {
@@ -18,8 +18,7 @@ export function TargetActor({
   onSelect,
   geometry,
 }: TargetActorProps) {
-  const { center, labels } = geometry
-  const rejectedTps = formatInteger(snapshot.rejectedTps)
+  const [receiver, storage, outbox, kafka] = geometry.stages
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
@@ -34,14 +33,14 @@ export function TargetActor({
         textAnchor={geometry.title.anchor}
         className="pipeline-title pipeline-title--target"
       >
-        TARGET
+        INGESTION SERVICE
       </text>
       <g
         id="target-actor"
         className={`pipeline-actor pipeline-selectable${selected ? ' pipeline-selectable--selected' : ''}`}
         role="button"
         tabIndex={0}
-        aria-label="Inspect target"
+        aria-label="Inspect ingestion service"
         aria-pressed={selected}
         onClick={() => onSelect(snapshot.id)}
         onKeyDown={handleKeyDown}
@@ -60,31 +59,14 @@ export function TargetActor({
           r="7"
           className="pipeline-port"
         />
-        <circle cx={center.x} cy={center.y} r="30" className="pipeline-target-ring" />
-        <circle cx={center.x} cy={center.y} r="17" className="pipeline-target-ring" />
-        <circle cx={center.x} cy={center.y} r="4" className="pipeline-target-center" />
-        <line x1={center.x} y1={center.y - 37} x2={center.x} y2={center.y + 37} className="pipeline-target-ring" />
-        <line x1={center.x - 37} y1={center.y} x2={center.x + 37} y2={center.y} className="pipeline-target-ring" />
-        {telemetryAvailable ? (
-          <>
-            <text x={labels.caption.x} y={labels.caption.y} textAnchor={labels.caption.anchor} className="pipeline-small pipeline-target-secondary">
-              Accepted TPS
-            </text>
-            <text x={labels.value.x} y={labels.value.y} textAnchor={labels.value.anchor} className="pipeline-value pipeline-target-primary">
-              {formatRate(snapshot.acceptedTps)}
-            </text>
-            <text x={labels.failure.x} y={labels.failure.y} textAnchor={labels.failure.anchor} className="pipeline-small pipeline-target-secondary pipeline-target-failure">
-              {rejectedTps} rejected tx/s
-            </text>
-            <text x={labels.state.x} y={labels.state.y} textAnchor={labels.state.anchor} className="pipeline-small pipeline-target-secondary">
-              {snapshot.connectionState}
-            </text>
-          </>
-        ) : (
-          <text x={labels.value.x} y={labels.value.y} textAnchor={labels.value.anchor} className="pipeline-small pipeline-target-secondary">
-            TELEMETRY UNAVAILABLE
-          </text>
-        )}
+        {geometry.connectors.map((connector) => <line key={connector.y1} x1={connector.x} y1={connector.y1} x2={connector.x} y2={connector.y2} className="pipeline-service-connector" />)}
+        {[receiver, storage, outbox, kafka].map((stage) => <rect key={stage.y} x={stage.x} y={stage.y} width={stage.width} height={stage.height} rx="4" className="pipeline-service-stage" />)}
+        <text x={receiver.label.x} y={receiver.label.y} textAnchor={receiver.label.anchor} className="pipeline-small-strong">HTTP receiver</text>
+        <text x={receiver.detail!.x} y={receiver.detail!.y} textAnchor={receiver.detail!.anchor} className="pipeline-small pipeline-target-secondary">{telemetryAvailable ? `Accepted TPS ${formatRate(snapshot.acceptedTps)}` : 'TELEMETRY UNAVAILABLE'}</text>
+        <text x={storage.label.x} y={storage.label.y} textAnchor={storage.label.anchor} className="pipeline-small-strong">S3 / Vaultbox</text>
+        <text x={outbox.label.x} y={outbox.label.y} textAnchor={outbox.label.anchor} className="pipeline-small-strong">Postgres outbox</text>
+        <text x={kafka.label.x} y={kafka.label.y} textAnchor={kafka.label.anchor} className="pipeline-small-strong">Kafka</text>
+        <text x={receiver.label.x} y={receiver.label.y - 8} textAnchor={receiver.label.anchor} className="pipeline-small pipeline-target-secondary">POST batch</text>
       </g>
     </>
   )

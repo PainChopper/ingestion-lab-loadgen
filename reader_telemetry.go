@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -27,8 +26,7 @@ type readerMeasurements struct {
 }
 
 type readerWorkerSlot struct {
-	ID        string  `json:"id"`
-	Ordinal   int     `json:"ordinal"`
+	WorkerID  int     `json:"workerId"`
 	Activity  string  `json:"activity"`
 	Lifecycle string  `json:"lifecycle"`
 	Source    *string `json:"source"`
@@ -51,73 +49,73 @@ func (r *readerTelemetry) recordRead(n int, source string) {
 	r.source = source
 }
 
-func (r *readerTelemetry) registerWorker(ordinal int) {
+func (r *readerTelemetry) registerWorker(workerID int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.slots == nil {
 		r.slots = make(map[int]readerWorkerSlot)
 	}
-	r.slots[ordinal] = readerWorkerSlot{ID: fmt.Sprintf("reader-worker-%d", ordinal), Ordinal: ordinal, Activity: "idle", Lifecycle: "active"}
+	r.slots[workerID] = readerWorkerSlot{WorkerID: workerID, Activity: "idle", Lifecycle: "active"}
 }
 
-func (r *readerTelemetry) unregisterWorker(ordinal int) {
+func (r *readerTelemetry) unregisterWorker(workerID int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.slots, ordinal)
+	delete(r.slots, workerID)
 }
 
-func (r *readerTelemetry) setWorkerLifecycle(ordinal int, lifecycle string) {
+func (r *readerTelemetry) setWorkerLifecycle(workerID int, lifecycle string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	slot, ok := r.slots[ordinal]
+	slot, ok := r.slots[workerID]
 	if !ok {
 		return
 	}
 	slot.Lifecycle = lifecycle
-	r.slots[ordinal] = slot
+	r.slots[workerID] = slot
 }
 
-func (r *readerTelemetry) setWorkerReading(ordinal int, source string) {
+func (r *readerTelemetry) setWorkerReading(workerID int, source string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	slot, ok := r.slots[ordinal]
+	slot, ok := r.slots[workerID]
 	if !ok {
 		return
 	}
 	slot.Activity = "reading"
 	slot.Source = &source
-	r.slots[ordinal] = slot
+	r.slots[workerID] = slot
 }
 
-func (r *readerTelemetry) setWorkerBlocked(ordinal int) {
-	r.setWorkerActivity(ordinal, "blocked")
+func (r *readerTelemetry) setWorkerBlocked(workerID int) {
+	r.setWorkerActivity(workerID, "blocked")
 }
 
-func (r *readerTelemetry) setWorkerCompleted(ordinal int) {
-	r.setWorkerActivity(ordinal, "completed")
+func (r *readerTelemetry) setWorkerCompleted(workerID int) {
+	r.setWorkerActivity(workerID, "completed")
 }
 
-func (r *readerTelemetry) setWorkerActivity(ordinal int, activity string) {
+func (r *readerTelemetry) setWorkerActivity(workerID int, activity string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	slot, ok := r.slots[ordinal]
+	slot, ok := r.slots[workerID]
 	if !ok {
 		return
 	}
 	slot.Activity = activity
-	r.slots[ordinal] = slot
+	r.slots[workerID] = slot
 }
 
-func (r *readerTelemetry) setWorkerIdle(ordinal int) {
+func (r *readerTelemetry) setWorkerIdle(workerID int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	slot, ok := r.slots[ordinal]
+	slot, ok := r.slots[workerID]
 	if !ok {
 		return
 	}
 	slot.Activity = "idle"
 	slot.Source = nil
-	r.slots[ordinal] = slot
+	r.slots[workerID] = slot
 }
 
 func (r *readerTelemetry) sample(now time.Time) {
@@ -149,7 +147,9 @@ func (r *readerTelemetry) snapshot() readerMeasurements {
 			measurements.drainingWorkers++
 		}
 	}
-	sort.Slice(measurements.workerSlots, func(i, j int) bool { return measurements.workerSlots[i].Ordinal < measurements.workerSlots[j].Ordinal })
+	sort.Slice(measurements.workerSlots, func(i, j int) bool {
+		return measurements.workerSlots[i].WorkerID < measurements.workerSlots[j].WorkerID
+	})
 	measurements.liveWorkers = len(measurements.workerSlots)
 	if r.source != "" {
 		source := r.source

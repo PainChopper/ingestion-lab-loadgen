@@ -22,8 +22,7 @@ interface TestWireSnapshot {
     readonly liveWorkers: number
     readonly drainingWorkers: number
     readonly workerSlots: readonly {
-      readonly id: string
-      readonly ordinal: number
+      readonly workerId: number
       readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'
       readonly lifecycle: 'active' | 'draining'
       readonly source: string | null
@@ -43,8 +42,7 @@ interface TestWireSnapshot {
     readonly liveWorkers: number
     readonly drainingWorkers: number
     readonly workerSlots: readonly {
-      readonly id: string
-      readonly ordinal: number
+      readonly workerId: number
       readonly activity: 'idle' | 'in-flight' | 'backoff'
       readonly lifecycle: 'active' | 'draining'
       readonly terminalError: boolean
@@ -80,7 +78,7 @@ interface MockResponseOptions {
 
 const VALID_WIRE: TestWireSnapshot = {
   run: { state: 'running', elapsedMs: 12_345, startError: null, totalTransactions: 42_000 },
-  reader: { workers: 1, liveWorkers: 1, drainingWorkers: 0, workerSlots: [{ id: 'reader-worker-0', ordinal: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/input.parquet' }], readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, source: 'MBD-mini/trx/part/input.parquet' },
+  reader: { workers: 1, liveWorkers: 1, drainingWorkers: 0, workerSlots: [{ workerId: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/input.parquet' }], readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, source: 'MBD-mini/trx/part/input.parquet' },
   throttler: { requestedTps: 200, admittedTps: 125_000.5, installationMode: 'installed' },
   sender: { workers: 32, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] },
   readerChannel: {
@@ -669,7 +667,7 @@ const malformedCases: ReadonlyArray<{
       name: `missing sender slot ${field}`,
       result: async () => {
         const slot: Record<string, unknown> = {
-          id: 'sender-worker-0', ordinal: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
+          workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
         }
         delete slot[field]
         return mockResponse({
@@ -686,7 +684,7 @@ const malformedCases: ReadonlyArray<{
           ...VALID_WIRE.sender,
           liveWorkers: 1,
           workerSlots: [{
-            id: 'sender-worker-0', ordinal: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
+            workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
             [field]: 7,
           }],
         },
@@ -701,7 +699,7 @@ const malformedCases: ReadonlyArray<{
         ...VALID_WIRE.sender,
         liveWorkers: 1,
         workerSlots: [{
-          id: 'sender-worker-0', ordinal: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
+          workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
           extra: true,
         }],
       },
@@ -1096,8 +1094,8 @@ describe('HttpAdapter', () => {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'paused', elapsedMs: 67_890, startError: 'previous start failed', totalTransactions: 84_000 },
       reader: { ...VALID_WIRE.reader, workers: 2, liveWorkers: 2, workerSlots: [
-        { id: 'reader-worker-0', ordinal: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/recovered.parquet' },
-        { id: 'reader-worker-1', ordinal: 1, activity: 'idle', lifecycle: 'active', source: null },
+        { workerId: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/recovered.parquet' },
+        { workerId: 1, activity: 'idle', lifecycle: 'active', source: null },
       ], readTps: 2_000, readBatchSize: 25_000, rowsRead: 28_000, source: 'MBD-mini/trx/part/recovered.parquet' },
       sender: { ...VALID_WIRE.sender, workers: 3 },
       readerChannel: { ...VALID_WIRE.readerChannel, capacity: 16, depthBatches: 4, bufferedTransactions: 100_000, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 2_000 },
@@ -1506,7 +1504,7 @@ describe('HttpAdapter', () => {
   )
 
   it.each(['idle', 'reading', 'completed', 'blocked'] as const)(
-    'accepts Reader activity %s with unchanged five-key slot wire shape',
+    'accepts Reader activity %s with the strict four-key workerId slot shape',
     async (activity) => {
       const slot = { ...VALID_WIRE.reader.workerSlots[0]!, activity }
       const wire = { ...VALID_WIRE, reader: { ...VALID_WIRE.reader, workerSlots: [slot] } }
@@ -1514,7 +1512,7 @@ describe('HttpAdapter', () => {
       const adapter = new HttpAdapter()
       await flushPoll()
       expect(adapter.getSnapshot().reader.workerSlots?.[0]).toEqual(slot)
-      expect(Object.keys(adapter.getSnapshot().reader.workerSlots![0]!)).toHaveLength(5)
+      expect(Object.keys(adapter.getSnapshot().reader.workerSlots![0]!)).toHaveLength(4)
       adapter.dispose()
     },
   )

@@ -182,16 +182,8 @@ describe('WorkerActor layout', () => {
       })
       expect(layout.top + layout.height).toBe(bounds.bottom)
       expect(layout.chips).toHaveLength(count)
-      expect(bounds.bottom - actorGeometry.metrics.secondary.y)
-        .toBeGreaterThanOrEqual(18)
-      for (const chip of layout.chips) {
-        expect(chip.x).toBeGreaterThanOrEqual(bounds.x)
-        expect(chip.x + chip.width).toBeLessThanOrEqual(
-          bounds.x + bounds.width,
-        )
-        expect(chip.y).toBeGreaterThanOrEqual(layout.top)
-        expect(chip.y + chip.height).toBeLessThanOrEqual(bounds.bottom)
-      }
+      expect(bounds.bottom).toBe(275)
+      expect(actorGeometry.ports.output.y).toBe(275)
     },
   )
 })

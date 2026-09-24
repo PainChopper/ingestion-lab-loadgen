@@ -18,7 +18,7 @@ function runningSnapshot(): LoadgenTelemetrySnapshot {
       state: 'running',
       liveWorkers: 2,
       workerSlots: [
-        { id: 'reader-1', ordinal: 1, activity: 'reading', lifecycle: 'active', source: 'rows.csv' },
+        { workerId: 1, activity: 'reading', lifecycle: 'active', source: 'rows.csv' },
       ],
       readTps: 75,
       rowsRead: 900,
@@ -31,7 +31,7 @@ function runningSnapshot(): LoadgenTelemetrySnapshot {
       state: 'running',
       liveWorkers: 2,
       workerSlots: [
-        { id: 'sender-1', ordinal: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
+        { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
       ],
       attemptedTps: 65,
       successfulResponses: 780,

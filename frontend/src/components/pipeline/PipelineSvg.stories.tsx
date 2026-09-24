@@ -46,8 +46,7 @@ function liveControls(snapshot: LoadgenSnapshot): LiveControls {
 
 function workerSlots(count: number, activity: 'idle' | 'reading' | 'in-flight' | 'backoff' | 'blocked') {
   return Array.from({ length: count }, (_, index) => ({
-    id: `worker-${index + 1}`,
-    ordinal: index + 1,
+    workerId: index + 1,
     activity,
     lifecycle: 'active' as const,
     source: 'fixture',

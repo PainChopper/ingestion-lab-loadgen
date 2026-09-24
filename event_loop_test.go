@@ -40,6 +40,23 @@ func TestElapsedMsUsesRunStartAndAccumulatedTime(t *testing.T) {
 	}
 }
 
+func TestRunEventLoopStopsWhenApplicationContextIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	state := newTestControlState(t)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		state.runEventLoop(ctx, make(chan request), make(chan time.Time), NewMetrics())
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("event loop did not stop after application cancellation")
+	}
+}
+
 func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 	requests := make(chan request)
 	metrics := make(chan time.Time)

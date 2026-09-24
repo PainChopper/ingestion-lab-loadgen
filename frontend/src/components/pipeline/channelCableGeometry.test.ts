@@ -437,11 +437,9 @@ describe('channel cable capacity geometry', () => {
 
       expect(presentation.cablePath).toContain(String(bypassX))
       expect(presentation.requestedPath).toContain(String(bypassX))
-      expect(geometry.batchControl.guard.y).toBeGreaterThan(
-        channel.metrics.requestY,
-      )
       expect(geometry.batchControl.guard.y +
-        geometry.batchControl.guard.height).toBeLessThan(channel.end.y)
+        geometry.batchControl.guard.height).toBeLessThan(channel.metrics.requestY)
+      expect(channel.start.y).toBe(channel.end.y)
     },
   )
 })
