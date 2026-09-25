@@ -12,7 +12,7 @@ export type ConnectionState =
   | 'disconnected'
   | 'error'
 
-export type RunState = 'idle' | 'running' | 'paused'
+export type RunState = 'idle' | 'running' | 'paused' | 'faulted'
 
 export type ApplyMode = 'immediate' | 'next-run' | 'unavailable'
 
@@ -132,6 +132,8 @@ export interface ReaderSnapshot {
   readonly limitationReason: ReaderLimitationReason | null
   readonly rowsRead: number | null
   readonly source: string | null
+  readonly sourceDirectory?: string
+  readonly sourceError: ReaderSourceErrorSnapshot | null
   readonly state: RunState
 }
 
@@ -208,6 +210,14 @@ export interface ReaderWorkerSlotSnapshot {
   readonly source: string | null
 }
 
+export interface ReaderSourceErrorSnapshot {
+  readonly category: 'source'
+  readonly operation: 'glob' | 'open' | 'read' | 'close' | 'reader-close'
+  readonly relativePath: string
+  readonly message: string
+  readonly workerId: number | null
+}
+
 export interface HttpSnapshot {
   readonly id: 'http'
   readonly connectionState: ConnectionState
@@ -241,7 +251,6 @@ export interface LoadgenTelemetrySnapshot {
   readonly connectionState: ConnectionState
   readonly runState: RunState
   readonly elapsedMs: number
-  readonly startError: string | null
   readonly totalTransactions: number
   readonly policy: LoadgenPolicySnapshot | null
   readonly reader: ReaderSnapshot

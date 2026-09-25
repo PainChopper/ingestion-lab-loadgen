@@ -16,7 +16,7 @@ type controlRunState struct {
 	totalTransactions int64
 	elapsedBeforeRun  time.Duration
 	runStartedAt      time.Time
-	startError        *string
+	sourceError       *readerSourceError
 	lifecycle         *lifecycle
 }
 
@@ -48,5 +48,5 @@ func (state *controlState) startReaderPool(ctx context.Context, batches chan<- [
 	if err != nil {
 		return readerRun{}, err
 	}
-	return readerRun{done: pool.done, reconcile: pool.reconcile}, nil
+	return readerRun{done: pool.done, reconcile: pool.reconcile, sourceErrors: pool.sourceErrors}, nil
 }

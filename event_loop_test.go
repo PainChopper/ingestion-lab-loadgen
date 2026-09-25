@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -196,7 +197,45 @@ func gaugeValue(t *testing.T, gauge interface{ Write(*dto.Metric) error }) float
 	return metric.GetGauge().GetValue()
 }
 
-func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
+func assertFaultedChannelSnapshot(
+	t *testing.T,
+	snapshot statusSnapshot,
+	readerCapacity int,
+	senderCapacity int,
+) {
+	t.Helper()
+	if snapshot.Run.TotalTransactions != 0 || snapshot.Reader.ReadTps != 0 || snapshot.Reader.RowsRead != 0 {
+		t.Fatalf("faulted flow = %+v, want zero", snapshot)
+	}
+	if snapshot.ReaderChannel != (channelSnapshot{Capacity: readerCapacity}) {
+		t.Fatalf("faulted Reader channel = %+v, want configured capacity %d and zero flow", snapshot.ReaderChannel, readerCapacity)
+	}
+	if snapshot.SenderChannel != (channelSnapshot{Capacity: senderCapacity}) {
+		t.Fatalf("faulted Sender channel = %+v, want configured capacity %d and zero flow", snapshot.SenderChannel, senderCapacity)
+	}
+}
+
+func configureFaultedChannelCapacities(
+	t *testing.T,
+	requests chan<- request,
+	reply chan commandResult,
+) {
+	t.Helper()
+	for _, setting := range []struct {
+		kind     requestKind
+		capacity int
+	}{
+		{kind: cmdSetReaderChannelCapacity, capacity: 4},
+		{kind: cmdSetSenderChannelCapacity, capacity: 8},
+	} {
+		requests <- request{kind: setting.kind, value: setting.capacity, commandReply: reply}
+		if result := <-reply; result.status != commandAccepted {
+			t.Fatalf("set capacity %v = %+v", setting.kind, result)
+		}
+	}
+}
+
+func TestRunFailureFaultsAndResetClearsSourceError(t *testing.T) {
 	requests := make(chan request, 3)
 	metrics := make(chan time.Time)
 	readerDone := make(chan struct{})
@@ -218,26 +257,30 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 	startCustomEventLoopForTest(t, requests, metrics, read)
 	reply := make(chan commandResult, 1)
 	snapshotReply := make(chan statusSnapshot, 1)
+	configureFaultedChannelCapacities(t, requests, reply)
 
-	for index, want := range []string{"first failure", "second failure"} {
+	for _, want := range []string{"first failure", "second failure"} {
 		requests <- request{kind: cmdRun, commandReply: reply}
 		if result := <-reply; result.err == nil || result.err.Error() != want {
 			t.Fatalf("Run error = %v, want %q", result.err, want)
 		}
 		requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 		snapshot := <-snapshotReply
-		if snapshot.Run.State != runStateIdle || snapshot.Run.ElapsedMs != 0 || snapshot.Run.StartError == nil || *snapshot.Run.StartError != want {
-			t.Fatalf("failed Run snapshot = %+v, want idle, zero elapsed, %q", snapshot, want)
+		if snapshot.Run.State != runStateFaulted || snapshot.Run.ElapsedMs != 0 || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.Message != want || snapshot.Reader.SourceError.WorkerID != nil {
+			t.Fatalf("failed Run snapshot = %+v, want faulted, zero elapsed, %q", snapshot, want)
 		}
-		if index == 0 {
-			requests <- request{kind: cmdReset, commandReply: reply}
-			if result := <-reply; result.status != commandAccepted {
-				t.Fatalf("Reset status = %v, want accepted", result.status)
-			}
-			requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
-			if snapshot := <-snapshotReply; snapshot.Run.StartError != nil || snapshot.Run.ElapsedMs != 0 {
-				t.Fatalf("Reset snapshot = %+v, want cleared error and elapsed", snapshot)
-			}
+		assertFaultedChannelSnapshot(t, snapshot, 4, 8)
+		requests <- request{kind: cmdRun, commandReply: reply}
+		if result := <-reply; result.status != commandConflict {
+			t.Fatalf("Run while faulted = %+v, want conflict", result)
+		}
+		requests <- request{kind: cmdReset, commandReply: reply}
+		if result := <-reply; result.status != commandAccepted {
+			t.Fatalf("Reset status = %v, want accepted", result.status)
+		}
+		requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+		if snapshot := <-snapshotReply; snapshot.Run.State != runStateIdle || snapshot.Reader.SourceError != nil || snapshot.Run.ElapsedMs != 0 {
+			t.Fatalf("Reset snapshot = %+v, want idle and cleared error", snapshot)
 		}
 	}
 
@@ -246,7 +289,7 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 		t.Fatalf("retry Run error = %v, want nil", result.err)
 	}
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
-	if snapshot := <-snapshotReply; snapshot.Run.State != runStateRunning || snapshot.Run.StartError != nil {
+	if snapshot := <-snapshotReply; snapshot.Run.State != runStateRunning || snapshot.Reader.SourceError != nil {
 		t.Fatalf("successful Run snapshot = %+v", snapshot)
 	}
 	requests <- request{kind: cmdRun, commandReply: reply}
@@ -266,6 +309,143 @@ func TestRunFailureRetryAndResetUpdateStartError(t *testing.T) {
 	if snapshot := <-snapshotReply; snapshot.Run.State != runStateIdle || snapshot.Run.ElapsedMs != 0 {
 		t.Fatalf("paused Reset snapshot = %+v", snapshot)
 	}
+}
+
+func TestRuntimeSourceErrorResetClearsFaultedSnapshot(t *testing.T) {
+	requests := make(chan request)
+	metrics := make(chan time.Time)
+	sourceErrors := make(chan readerSourceError, 1)
+	var starts int
+	read := func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
+		starts++
+		done := make(chan struct{})
+		go func() {
+			<-ctx.Done()
+			close(done)
+		}()
+		return readerRun{done: done, reconcile: func(int) {}, sourceErrors: sourceErrors}, nil
+	}
+	startCustomEventLoopForTest(t, requests, metrics, read)
+	reply := make(chan commandResult, 1)
+	configureFaultedChannelCapacities(t, requests, reply)
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("Run = %+v", result)
+	}
+	sourceErrors <- readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt", WorkerID: new(int)}
+
+	var faulted statusSnapshot
+	deadline := time.After(time.Second)
+	for {
+		snapshotReply := make(chan statusSnapshot, 1)
+		requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+		faulted = <-snapshotReply
+		if faulted.Run.State == runStateFaulted {
+			break
+		}
+		select {
+		case <-time.After(time.Millisecond):
+		case <-deadline:
+			t.Fatal("runtime source error did not fault the run")
+		}
+	}
+	if faulted.Reader.SourceError == nil || faulted.Reader.SourceError.Message != "corrupt" {
+		t.Fatalf("faulted snapshot source error = %+v", faulted.Reader.SourceError)
+	}
+	assertFaultedChannelSnapshot(t, faulted, 4, 8)
+
+	requests <- request{kind: cmdReset, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("Reset = %+v", result)
+	}
+	snapshotReply := make(chan statusSnapshot, 1)
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	reset := <-snapshotReply
+	if reset.Run.State != runStateIdle || reset.Reader.SourceError != nil {
+		t.Fatalf("Reset snapshot = %+v, want clean idle", reset)
+	}
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted || starts != 2 {
+		t.Fatalf("Run after Reset = %+v, starts=%d", result, starts)
+	}
+}
+
+func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testing.T) {
+	fixtureDirectory := t.TempDir()
+	fixturePath := filepath.Join(fixtureDirectory, "broken.parquet")
+	if err := os.WriteFile(fixturePath, []byte("not a parquet file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := newTestControlState(t)
+	state.controls.policy.Source.Path = filepath.Join(fixtureDirectory, "*.parquet")
+	requests := make(chan request)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		state.runEventLoop(ctx, requests, make(chan time.Time), NewMetrics())
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	reply := make(chan commandResult, 1)
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.status != commandAccepted {
+		t.Fatalf("Run = %+v", result)
+	}
+	var snapshot statusSnapshot
+	deadline := time.After(time.Second)
+	for snapshot.Run.State != runStateFaulted {
+		snapshotReply := make(chan statusSnapshot, 1)
+		requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+		snapshot = <-snapshotReply
+		select {
+		case <-deadline:
+			t.Fatal("corrupt parquet did not fault the run")
+		default:
+		}
+	}
+	if snapshot.Reader.SourceDirectory != filepath.ToSlash(fixtureDirectory) || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.WorkerID == nil || *snapshot.Reader.SourceError.WorkerID != 0 || snapshot.Reader.SourceError.RelativePath != "broken.parquet" || snapshot.Reader.SourceError.Message == "" {
+		t.Fatalf("corrupt parquet snapshot = %+v", snapshot.Reader)
+	}
+	if snapshot.Reader.LiveWorkers != 0 || len(snapshot.Reader.WorkerSlots) != 0 || snapshot.Sender.LiveWorkers != 0 || len(snapshot.Sender.WorkerSlots) != 0 {
+		t.Fatalf("faulted workers = reader %+v sender %+v", snapshot.Reader, snapshot.Sender)
+	}
+	assertFaultedChannelSnapshot(t, snapshot, state.readerChannelCapacity(), state.senderChannelCapacity())
+}
+
+func TestRunEventLoopFaultsBeforeWorkersForUnavailableSourceDirectory(t *testing.T) {
+	fixtureRoot := t.TempDir()
+	missingDirectory := filepath.Join(fixtureRoot, "unavailable")
+	state := newTestControlState(t)
+	state.controls.policy.Source.Path = filepath.Join(missingDirectory, "*.parquet")
+	requests := make(chan request)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		state.runEventLoop(ctx, requests, make(chan time.Time), NewMetrics())
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	reply := make(chan commandResult, 1)
+	requests <- request{kind: cmdRun, commandReply: reply}
+	if result := <-reply; result.err == nil {
+		t.Fatal("Run error = nil, want unavailable directory error")
+	}
+	snapshotReply := make(chan statusSnapshot, 1)
+	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
+	snapshot := <-snapshotReply
+	if snapshot.Run.State != runStateFaulted || snapshot.Reader.SourceDirectory != filepath.ToSlash(missingDirectory) || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.Operation != "glob" || snapshot.Reader.SourceError.RelativePath != "*.parquet" || snapshot.Reader.SourceError.WorkerID != nil || snapshot.Reader.SourceError.Message != "no files found matching pattern" {
+		t.Fatalf("unavailable source snapshot = %+v", snapshot)
+	}
+	if snapshot.Reader.LiveWorkers != 0 || len(snapshot.Reader.WorkerSlots) != 0 || snapshot.Sender.LiveWorkers != 0 || len(snapshot.Sender.WorkerSlots) != 0 {
+		t.Fatalf("startup failure workers = reader %+v sender %+v", snapshot.Reader, snapshot.Sender)
+	}
+	assertFaultedChannelSnapshot(t, snapshot, state.readerChannelCapacity(), state.senderChannelCapacity())
 }
 
 func TestRunCommandStartsPipelineOnce(t *testing.T) {

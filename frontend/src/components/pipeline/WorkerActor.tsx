@@ -54,6 +54,8 @@ interface WorkerActorProps {
   selected: boolean
   onSelect: (id: SelectableId) => void
   desiredControl: DesiredControl<number>
+  muted?: boolean
+  sourceErrorOperation?: string
 }
 
 function WorkerChip({
@@ -153,6 +155,8 @@ export function WorkerActor({
   selected,
   onSelect,
   desiredControl,
+  muted = false,
+  sourceErrorOperation,
 }: WorkerActorProps) {
   const [recentlySuccessfulWorkerIds, setRecentlySuccessfulWorkerIds] = useState<ReadonlySet<number>>(
     () => new Set(),
@@ -321,6 +325,7 @@ export function WorkerActor({
   const workerStep = Math.max(1, Math.round(workers.step))
   const workerControlDisabled = !desiredControl.available || desiredControl.phase === 'pending'
   const chipState = (index: number): SenderWorkerState | ReaderWorkerSlotSnapshot['activity'] | 'active' | 'inactive' | 'success' | 'draining' | 'terminal-error' => {
+	if (muted) return 'inactive'
     if (workerSlots === undefined || workerSlots === null) {
       return (active ?? (runState === 'running')) ? 'active' : 'inactive'
     }
@@ -482,6 +487,34 @@ export function WorkerActor({
             slot={workerSlots?.[index]}
           />
         ))}
+        {sourceErrorOperation !== undefined && (
+          <g
+            role="alert"
+            aria-label={`Reader source error: ${sourceErrorOperation}`}
+            pointerEvents="none"
+            data-testid="reader-source-error-overlay"
+          >
+            <rect
+              x={bounds.x}
+              y={layout.top}
+              width={bounds.width}
+              height={layout.height}
+              rx="5"
+              fill="#5f1018"
+              fillOpacity="0.84"
+            />
+            <text
+              x={bounds.x + bounds.width / 2}
+              y={layout.top + layout.height / 2}
+              fill="#ffd9dc"
+              fontSize="13"
+              fontWeight="700"
+              textAnchor="middle"
+            >
+              SOURCE ERROR
+            </text>
+          </g>
+        )}
         {inputPort && (
           <circle
             cx={inputPort.x}

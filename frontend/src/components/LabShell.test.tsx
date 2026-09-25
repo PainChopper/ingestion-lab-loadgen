@@ -43,11 +43,16 @@ describe('LabShell', () => {
       .toHaveLength(1)
   })
 
-  it('renders a snapshot start error and clears its alert on the next snapshot', () => {
+  it('renders a Reader source error overlay and clears it on the next snapshot', async () => {
     const simulation = new SimulationAdapter()
     let snapshot: LoadgenTelemetrySnapshot = {
       ...simulation.getSnapshot(),
-      startError: 'producer is unavailable',
+		runState: 'faulted',
+		reader: {
+			...simulation.getSnapshot().reader,
+			state: 'faulted',
+			sourceDirectory: 'C:/dataset', sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt parquet', workerId: 2 },
+		},
     }
     const listeners = new Set<(next: LoadgenTelemetrySnapshot) => void>()
     const errorAdapter: LoadgenAdapter = {
@@ -63,11 +68,16 @@ describe('LabShell', () => {
     }
     render(<LabShell adapter={errorAdapter} />)
 
-    expect(screen.getByRole('alert').textContent)
-      .toBe('Не удалось запустить: producer is unavailable')
+		expect(screen.getByRole('alert').textContent).toBe('SOURCE ERROR')
+		await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect reader' }))
+		const label = screen.getByTestId('reader-source-error-label')
+		expect(label.textContent).toBe('SOURCE ERROR')
+		expect(label.parentElement?.className).toContain('inspector-data__row--source-error')
+		expect(label.nextElementSibling?.tagName).toBe('DD')
+		expect(label.parentElement?.querySelectorAll('dd')).toHaveLength(1)
 
     act(() => {
-      snapshot = { ...snapshot, startError: null }
+			snapshot = { ...snapshot, runState: 'idle', reader: { ...snapshot.reader, state: 'idle', sourceError: null } }
       listeners.forEach((listener) => listener(snapshot))
     })
     expect(screen.queryByRole('alert')).toBeNull()

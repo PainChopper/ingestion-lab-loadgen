@@ -20,7 +20,6 @@ type runSnapshot struct {
 	State             runState `json:"state"`
 	TotalTransactions int64    `json:"totalTransactions"`
 	ElapsedMs         int64    `json:"elapsedMs"`
-	StartError        *string  `json:"startError"`
 }
 
 type readerSnapshot struct {
@@ -32,6 +31,20 @@ type readerSnapshot struct {
 	ReadTps         float64            `json:"readTps"`
 	RowsRead        int64              `json:"rowsRead"`
 	Source          *string            `json:"source"`
+	SourceDirectory string             `json:"sourceDirectory"`
+	SourceError     *readerSourceError `json:"sourceError"`
+}
+
+type readerSourceError struct {
+	Category     string `json:"category"`
+	Operation    string `json:"operation"`
+	RelativePath string `json:"relativePath"`
+	Message      string `json:"message"`
+	WorkerID     *int   `json:"workerId"`
+}
+
+func (error readerSourceError) Error() string {
+	return error.Message
 }
 
 type throttlerSnapshot struct {

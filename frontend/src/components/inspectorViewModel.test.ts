@@ -246,6 +246,42 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
+  it('shows only the current Reader source error text', () => {
+    const adapter = new SimulationAdapter()
+    const base = derivedSnapshot(adapter)
+    const sourceDirectory = 'C:/dataset'
+    const model = getInspectorViewModel({
+      ...base,
+      reader: {
+        ...base.reader,
+        sourceDirectory,
+        sourceError: {
+          category: 'source',
+          operation: 'read',
+          relativePath: 'broken/very-long-source.parquet',
+          message: 'corrupt parquet',
+          workerId: 7,
+        },
+      },
+    }, 'reader')
+
+    expect(model?.rows).toContainEqual({
+      label: '',
+      key: 'source-error',
+      kind: 'source-error',
+      value: 'Worker ID 7 · C:/dataset/broken/very-long-source.parquet: corrupt parquet',
+      layout: 'full-width',
+    })
+    expect(model?.rows.map((row) => row.label)).not.toEqual(expect.arrayContaining([
+      'Source directory', 'Source error', 'Source status', 'Source operation', 'Source message', 'Reader worker', 'Source path',
+    ]))
+    expect(model?.rows.some((row) =>
+      row.disclosureLabel !== undefined || row.disclosureValue !== undefined,
+    )).toBe(false)
+    expect(model?.rows.filter((row) => row.kind === 'source-error')).toHaveLength(1)
+    adapter.dispose()
+  })
+
   it('keeps every Channel Inspector to the fixed four rows', () => {
     const adapter = new SimulationAdapter()
     const model = getInspectorViewModel(

@@ -8,6 +8,7 @@ import type {
   NumericControlSnapshot,
   ChannelTelemetrySnapshot,
   RunState,
+  ReaderSourceErrorSnapshot,
   ThrottlerInstallationMode,
 } from '../model/loadgen'
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
@@ -20,8 +21,9 @@ const NETWORK_COMMAND_MESSAGE = 'command request failed due to a network error'
 const WIRE_KEYS = Object.freeze([
   'policy', 'reader', 'readerChannel', 'run', 'sender', 'senderChannel', 'throttler',
 ])
-const RUN_KEYS = Object.freeze(['elapsedMs', 'startError', 'state', 'totalTransactions'])
-const READER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'readBatchSize', 'readTps', 'rowsRead', 'source', 'workerSlots', 'workers'])
+const RUN_KEYS = Object.freeze(['elapsedMs', 'state', 'totalTransactions'])
+const READER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'readBatchSize', 'readTps', 'rowsRead', 'source', 'sourceDirectory', 'sourceError', 'workerSlots', 'workers'])
+const SOURCE_ERROR_KEYS = Object.freeze(['category', 'message', 'operation', 'relativePath', 'workerId'])
 const READER_SLOT_KEYS = Object.freeze(['activity', 'lifecycle', 'source', 'workerId'])
 const THROTTLER_KEYS = Object.freeze(['admittedTps', 'installationMode', 'requestedTps'])
 const SENDER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'workerSlots', 'workers'])
@@ -33,8 +35,8 @@ const CHANNEL_KEYS = Object.freeze([
   'receivedTransactionsTotal', 'sentBatchesTotal', 'sentTransactionsTotal',
 ])
 
-interface WireRun { readonly state: RunState; readonly totalTransactions: number; readonly elapsedMs: number; readonly startError: string | null }
-interface WireReader { readonly workers: number; readonly liveWorkers: number; readonly drainingWorkers: number; readonly workerSlots: readonly { readonly workerId: number; readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'; readonly lifecycle: 'active' | 'draining'; readonly source: string | null }[]; readonly readBatchSize: number; readonly readTps: number; readonly rowsRead: number; readonly source: string | null }
+interface WireRun { readonly state: RunState; readonly totalTransactions: number; readonly elapsedMs: number }
+interface WireReader { readonly workers: number; readonly liveWorkers: number; readonly drainingWorkers: number; readonly workerSlots: readonly { readonly workerId: number; readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'; readonly lifecycle: 'active' | 'draining'; readonly source: string | null }[]; readonly readBatchSize: number; readonly readTps: number; readonly rowsRead: number; readonly source: string | null; readonly sourceDirectory: string; readonly sourceError: ReaderSourceErrorSnapshot | null }
 interface WireThrottler { readonly requestedTps: number; readonly admittedTps: number; readonly installationMode: ThrottlerInstallationMode }
 interface WireSender {
   readonly workers: number
@@ -268,7 +270,6 @@ function createSnapshot(
     connectionState,
     runState,
     elapsedMs: wire?.run.elapsedMs ?? 0,
-    startError: wire?.run.startError ?? null,
     totalTransactions: wire?.run.totalTransactions ?? 0,
     policy: wire?.policy ?? null,
     reader: {
@@ -288,6 +289,8 @@ function createSnapshot(
       limitationReason: null,
       rowsRead: wire?.reader.rowsRead ?? null,
       source: wire?.reader.source ?? null,
+      sourceDirectory: wire?.reader.sourceDirectory,
+      sourceError: wire?.reader.sourceError ?? null,
       state: runState,
     },
     throttler: {
@@ -636,9 +639,8 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   const reader = value.reader
   const throttler = value.throttler
   const sender = value.sender
-  if (run.state !== 'idle' && run.state !== 'running' && run.state !== 'paused') throw new Error('snapshot run state is invalid')
+  if (run.state !== 'idle' && run.state !== 'running' && run.state !== 'paused' && run.state !== 'faulted') throw new Error('snapshot run state is invalid')
   if (!isWireInteger(run.elapsedMs) || !isWireInteger(run.totalTransactions)) throw new Error('snapshot run values are invalid')
-  if (run.startError !== null && (typeof run.startError !== 'string' || run.startError.length === 0)) throw new Error('snapshot startError must be null or a nonempty string')
   if (!isRangeValue(reader.workers, policy.readerWorkers!) || !isRangeValue(reader.readBatchSize, policy.readerReadBatchSize) || !isWireNumber(reader.readTps) || !isWireInteger(reader.rowsRead) || !isWireInteger(reader.liveWorkers) || !isWireInteger(reader.drainingWorkers) || !Array.isArray(reader.workerSlots) || reader.workerSlots.length !== reader.liveWorkers || reader.drainingWorkers > reader.liveWorkers) throw new Error('snapshot reader values are invalid')
   let previousReaderWorkerId = -1
   let drainingReaders = 0
@@ -647,14 +649,16 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     previousReaderWorkerId = slot.workerId
     if (slot.lifecycle === 'draining') drainingReaders++
   }
-  if (drainingReaders !== reader.drainingWorkers || (run.state === 'idle' && (reader.liveWorkers !== 0 || reader.drainingWorkers !== 0))) throw new Error('snapshot reader workers are invalid')
+  if (drainingReaders !== reader.drainingWorkers || ((run.state === 'idle' || run.state === 'faulted') && (reader.liveWorkers !== 0 || reader.drainingWorkers !== 0))) throw new Error('snapshot reader workers are invalid')
   if (reader.source !== null && (typeof reader.source !== 'string' || reader.source.length === 0)) throw new Error('snapshot reader source is invalid')
+  if (typeof reader.sourceDirectory !== 'string' || reader.sourceDirectory.length === 0) throw new Error('snapshot reader sourceDirectory is invalid')
+  if (reader.sourceError !== null && (!isExactObject(reader.sourceError, SOURCE_ERROR_KEYS) || reader.sourceError.category !== 'source' || (reader.sourceError.operation !== 'glob' && reader.sourceError.operation !== 'open' && reader.sourceError.operation !== 'read' && reader.sourceError.operation !== 'close' && reader.sourceError.operation !== 'reader-close') || typeof reader.sourceError.relativePath !== 'string' || reader.sourceError.relativePath.length === 0 || reader.sourceError.relativePath.startsWith('/') || reader.sourceError.relativePath.startsWith('../') || typeof reader.sourceError.message !== 'string' || reader.sourceError.message.length === 0 || (reader.sourceError.workerId !== null && !isWireInteger(reader.sourceError.workerId)))) throw new Error('snapshot reader sourceError is invalid')
   if (!isRangeValue(throttler.requestedTps, policy.throttlerRequestedTps) || !isWireNumber(throttler.admittedTps) || (throttler.installationMode !== 'installed' && throttler.installationMode !== 'bypass') || !policy.throttlerInstallationMode.allowed.includes(throttler.installationMode)) throw new Error('snapshot throttler values are invalid')
   if (!isRangeValue(sender.workers, policy.senderWorkers) ||
     !isWireInteger(sender.liveWorkers) || !isWireInteger(sender.drainingWorkers) ||
     !Array.isArray(sender.workerSlots) || sender.workerSlots.length !== sender.liveWorkers ||
     sender.drainingWorkers > sender.liveWorkers ||
-    ((run.state === 'idle' || run.state === 'paused') &&
+    ((run.state === 'idle' || run.state === 'paused' || run.state === 'faulted') &&
       (sender.liveWorkers !== 0 || sender.drainingWorkers !== 0))) {
     throw new Error('snapshot sender values are invalid')
   }

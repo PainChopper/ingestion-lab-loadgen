@@ -71,6 +71,7 @@ function TopBar({
 }: SnapshotProps & { frozenObserved: boolean }) {
   const running = snapshot.runState === 'running'
   const paused = snapshot.runState === 'paused'
+  const faulted = snapshot.runState === 'faulted'
   const runUnavailable = snapshot.adapterKind === 'http' &&
     (snapshot.connectionState !== 'connected' || snapshot.policy === null)
 
@@ -98,7 +99,7 @@ function TopBar({
           onClick={() =>
             void adapter.dispatch({ type: running ? 'pause' : 'run' })
           }
-          disabled={runUnavailable}
+          disabled={runUnavailable || faulted}
           title={running ? 'Pause run' : paused ? 'Resume run' : 'Start run'}
           aria-label={running ? 'Pause run' : paused ? 'Resume run' : 'Start run'}
         >
@@ -120,12 +121,6 @@ function TopBar({
       {frozenObserved && (
         <p className="run-state-qualifier" role="status">
           Paused — last observed telemetry frozen; controls remain desired
-        </p>
-      )}
-
-      {snapshot.startError !== null && (
-        <p className="run-start-error" role="alert">
-          Не удалось запустить: {snapshot.startError}
         </p>
       )}
 
@@ -357,7 +352,7 @@ function InspectorDock({
           {controls}
           {model.sections === undefined ? (
             <dl className="inspector-data">
-              {model.rows.map((row) => <InspectorDataRow key={row.label} row={row} />)}
+              {model.rows.map((row) => <InspectorDataRow key={row.key ?? row.label} row={row} />)}
             </dl>
           ) : model.sections.map((section) => (
             <section className="inspector-section" key={section.title} aria-labelledby={`sender-${section.title}`}>
@@ -380,11 +375,14 @@ function InspectorDataRow({ row }: { row: InspectorRow }) {
   const className = [
     row.layout === 'full-width' ? 'inspector-data__row--full-width' : null,
     row.segments === undefined ? null : 'inspector-data__row--worker-states',
+	row.kind === 'source-error' ? 'inspector-data__row--source-error' : null,
   ].filter(Boolean).join(' ')
 
   return (
     <div className={className || undefined}>
-      <dt>{row.label}</dt>
+      {row.kind === 'source-error'
+        ? <span className="inspector-data__source-error-label" data-testid="reader-source-error-label">SOURCE ERROR</span>
+        : <dt>{row.label}</dt>}
       <dd>
         {row.segments === undefined
           ? row.disclosureValue === undefined

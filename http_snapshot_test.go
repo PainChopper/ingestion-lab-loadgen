@@ -10,10 +10,10 @@ import (
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	requests := make(chan request, 1)
-	startError := "failed to start"
+	workerID := 3
 	source := "data/part/input.parquet"
 	expected := statusSnapshot{
-		Run: runSnapshot{State: runStateRunning, TotalTransactions: 46, ElapsedMs: 1234, StartError: &startError},
+		Run: runSnapshot{State: runStateRunning, TotalTransactions: 46, ElapsedMs: 1234},
 		Reader: readerSnapshot{
 			Workers: 1, LiveWorkers: 2, DrainingWorkers: 1,
 			WorkerSlots: []readerWorkerSlot{
@@ -21,6 +21,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 				{WorkerID: 1, Activity: "reading", Lifecycle: "draining", Source: &source},
 			},
 			ReadBatchSize: 50000, ReadTps: 123.5, RowsRead: 47, Source: &source,
+			SourceDirectory: "data/part", SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet", WorkerID: &workerID},
 		},
 		Throttler:     throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
 		Sender:        senderSnapshot{Workers: 32, WorkerSlots: []senderWorkerSlot{}},
@@ -47,8 +48,8 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	}
 	assertExactJSONKeys(t, root, []string{"policy", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"})
 	for name, want := range map[string][]string{
-		"run":           {"elapsedMs", "startError", "state", "totalTransactions"},
-		"reader":        {"drainingWorkers", "liveWorkers", "readBatchSize", "readTps", "rowsRead", "source", "workerSlots", "workers"},
+		"run":           {"elapsedMs", "state", "totalTransactions"},
+		"reader":        {"drainingWorkers", "liveWorkers", "readBatchSize", "readTps", "rowsRead", "source", "sourceDirectory", "sourceError", "workerSlots", "workers"},
 		"throttler":     {"admittedTps", "installationMode", "requestedTps"},
 		"sender":        {"drainingWorkers", "liveWorkers", "workerSlots", "workers"},
 		"readerChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
@@ -134,7 +135,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	if err := json.Unmarshal(root["reader"], &reader); err != nil {
 		t.Fatal(err)
 	}
-	if string(run["elapsedMs"]) != "0" || string(run["startError"]) != "null" || string(reader["readTps"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["source"]) != "null" {
+	if string(run["elapsedMs"]) != "0" || string(reader["readTps"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["source"]) != "null" || string(reader["sourceDirectory"]) != "\"\"" || string(reader["sourceError"]) != "null" {
 		t.Errorf("idle snapshot body = %v", root)
 	}
 }
