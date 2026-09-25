@@ -1,11 +1,57 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestSenderPoolFailureLogExcludesRequestMarkers(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := newApplicationLogger("info", &output)
+	if err != nil {
+		t.Fatalf("newApplicationLogger() error = %v", err)
+	}
+
+	urlMarker := "url-credential-and-query-marker"
+	headerMarker := "header-value-marker"
+	bodyMarker := "body-payload-marker"
+	clientMarker := "client-id-marker"
+	requestURL := "https://" + urlMarker + "@example.test/ingest?token=" + urlMarker
+	headers := http.Header{"Authorization": {headerMarker}}
+	body := []byte(bodyMarker)
+	if requestURL == "" || len(headers) == 0 || len(body) == 0 {
+		t.Fatal("test request markers were not initialized")
+	}
+
+	batches := make(chan []Transaction)
+	var channel channelTelemetry
+	var telemetry senderTelemetry
+	var consumed atomic.Int64
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry, logger)
+	pool.attempt = func(context.Context, []Transaction, int, int) senderAttemptOutcome {
+		return senderAttemptTerminalFailure
+	}
+
+	batches <- []Transaction{{ClientID: clientMarker}}
+	waitForSenderCondition(t, func() bool { return telemetry.snapshot().terminalBatches == 1 })
+	<-pool.stop()
+
+	line := output.String()
+	if !strings.Contains(line, "event=batch_delivery_failed") {
+		t.Fatalf("failure event was not written")
+	}
+	for _, marker := range []string{urlMarker, headerMarker, bodyMarker, clientMarker} {
+		if strings.Contains(line, marker) {
+			t.Fatal("request marker was written to the log")
+		}
+	}
+}
 
 func waitForSenderCondition(t *testing.T, condition func() bool) {
 	t.Helper()

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type controlState struct {
@@ -10,6 +12,7 @@ type controlState struct {
 	run           controlRunState
 	controls      configuredControls
 	telemetry     controlTelemetry
+	logger        *zap.Logger
 }
 
 type controlRunState struct {
@@ -44,7 +47,7 @@ type controlTelemetry struct {
 }
 
 func (state *controlState) startReaderPool(ctx context.Context, batches chan<- []Transaction, batchSize, workers int) (readerRun, error) {
-	pool, err := startReaderPool(ctx, state.controls.policy.Source.Path, batchSize, workers, batches, &state.telemetry.reader, &state.telemetry.readerChannel)
+	pool, err := startReaderPool(ctx, state.controls.policy.Source.Path, batchSize, workers, batches, &state.telemetry.reader, &state.telemetry.readerChannel, state.logger)
 	if err != nil {
 		return readerRun{}, err
 	}

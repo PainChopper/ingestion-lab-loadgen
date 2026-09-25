@@ -149,7 +149,8 @@ const VALID_WIRE: TestWireSnapshot = {
       mutability: 'immediate',
     },
     senderWorkers: { default: 32, min: 1, max: 32, step: 1, unit: 'workers', mutability: 'immediate' },
-    senderRetry: { maxAttempts: 3, backoffBaseMs: 250, backoffMultiplier: 2, jitterPercent: 20, mutability: 'startup-only' },
+		senderRetry: { maxAttempts: 3, backoffBaseMs: 250, backoffMultiplier: 2, jitterPercent: 20, mutability: 'startup-only' },
+		logging: { level: 'info', mutability: 'startup-only' },
   },
 }
 

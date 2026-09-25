@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type throttlerStarter func(
@@ -61,6 +62,10 @@ func (state *controlState) eventLoopWithThrottlerContext(
 	read readerStarter,
 	start throttlerStarter,
 ) {
+	logger := state.logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	var terminallyCompletedTransactionsSinceTick atomic.Int64
 	var batches chan []Transaction
 	var senderBatches chan []Transaction
@@ -72,6 +77,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 	var readerDone <-chan struct{}
 	var readerReconcile func(int)
 	var readerSourceErrors <-chan readerSourceError
+	var lastRuntimeSnapshot time.Time
 	stopActiveRun := func() {
 		if pool != nil {
 			<-pool.stop()
@@ -213,7 +219,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 							state.telemetry.senderChannel.detach()
 						}
 						state.telemetry.reader.reset()
-						log.Printf("cannot start load generator: %v", err)
+						logger.Error("run failed to start", zap.String("event", "run_failed"), zap.String("operation", sourceError.Operation))
 						state.run.sourceError = &sourceError
 						state.run.lifecycle.faultStart()
 						if cmd.commandReply != nil {
@@ -251,7 +257,13 @@ func (state *controlState) eventLoopWithThrottlerContext(
 						senderBatches, &state.telemetry.senderChannel, &state.telemetry.sender,
 						&terminallyCompletedTransactionsSinceTick, state.senderWorkers(), state.controls.policy.Sender.API,
 						state.controls.policy.Sender.Retry,
+						logger,
 					)
+					if resuming {
+						logger.Info("run resumed", zap.String("event", "run_resumed"))
+					} else {
+						logger.Info("run started", zap.String("event", "run_started"))
+					}
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- commandResult{}
@@ -269,6 +281,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				promMetrics.actualTPS.Set(0)
 				state.run.lifecycle.pause()
 				state.notifyThrottler(throttlerUpdates, throttlerDone, true)
+				logger.Info("run paused", zap.String("event", "run_paused"))
 			case cmdReset:
 				result := commandResult{status: commandAccepted}
 				switch state.run.lifecycle.currentState() {
@@ -298,6 +311,9 @@ func (state *controlState) eventLoopWithThrottlerContext(
 					state.resetProgress(&terminallyCompletedTransactionsSinceTick, promMetrics)
 				default:
 					result.status = commandConflict
+				}
+				if result.status == commandAccepted {
+					logger.Info("run stopped", zap.String("event", "run_stopped"))
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
@@ -359,6 +375,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 					state.controls.requestedTPSConfigured = true
 					promMetrics.targetTPS.Set(float64(state.requestedTPS()))
 					state.notifyThrottler(throttlerUpdates, throttlerDone, state.run.lifecycle.currentState() == runStatePaused)
+					logger.Info("throttler rate changed", zap.String("event", "throttler_rate_changed"), zap.Int("requested_tps", cmd.value))
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
@@ -370,6 +387,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				} else if state.installationMode() != cmd.textValue {
 					state.controls.configuredInstallationMode = cmd.textValue
 					state.notifyThrottler(throttlerUpdates, throttlerDone, state.run.lifecycle.currentState() == runStatePaused)
+					logger.Info("throttler mode changed", zap.String("event", "throttler_mode_changed"), zap.String("mode", cmd.textValue))
 				}
 				if cmd.commandReply != nil {
 					cmd.commandReply <- result
@@ -397,6 +415,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			}
 			state.pauseElapsed(time.Now())
 			state.run.sourceError = &sourceError
+			logger.Error("reader source failed", zap.String("event", "reader_source_failed"), zap.String("operation", sourceError.Operation), zap.String("relative_path", sourceError.RelativePath))
 			stopActiveRun()
 			state.resetFaultedMeasurements(&terminallyCompletedTransactionsSinceTick, promMetrics)
 
@@ -408,6 +427,10 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			state.run.totalTransactions += delta
 			promMetrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
 			promMetrics.transactionsTotal.Add(float64(delta))
+			if time.Since(lastRuntimeSnapshot) >= time.Minute {
+				lastRuntimeSnapshot = time.Now()
+				logger.Info("runtime snapshot", zap.String("event", "runtime_snapshot"), zap.String("state", string(state.run.lifecycle.currentState())), zap.Int64("transactions", state.run.totalTransactions))
+			}
 		}
 	}
 }

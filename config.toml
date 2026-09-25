@@ -72,3 +72,7 @@ max = 10_000
 step = 100
 unit = "milliseconds"
 mutability = "startup-only"
+
+[logging]
+level = "info"
+mutability = "startup-only"

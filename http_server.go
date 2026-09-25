@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"net/http/pprof"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.uber.org/zap"
 )
 
 const gracefulShutdownTimeout = 10 * time.Second
@@ -53,10 +53,11 @@ const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
 const internalTestIngestPath = "/internal/test/ingest"
 
-func newServeMux(requests chan<- request, metrics *Metrics, policy policy) *http.ServeMux {
+func newServeMux(requests chan<- request, metrics *Metrics, policy policy, loggers ...*zap.Logger) *http.ServeMux {
+	logger := loggerOrNop(loggers)
 	mux := http.NewServeMux()
-	mux.Handle(snapshotPath, snapshotHandler(requests))
-	mux.Handle(commandsPath, commandsHandler(requests, policy))
+	mux.Handle(snapshotPath, snapshotHandler(requests, logger))
+	mux.Handle(commandsPath, commandsHandler(requests, policy, logger))
 	mux.Handle(internalTestIngestPath, internalTestIngestHandler())
 
 	if metrics != nil {
@@ -72,8 +73,9 @@ func newServeMux(requests chan<- request, metrics *Metrics, policy policy) *http
 	return mux
 }
 
-func startHTTPServer(requests chan request, metrics *Metrics, policy policy) (*http.Server, <-chan error) {
-	mux := newServeMux(requests, metrics, policy)
+func startHTTPServer(requests chan request, metrics *Metrics, policy policy, loggers ...*zap.Logger) (*http.Server, <-chan error) {
+	logger := loggerOrNop(loggers)
+	mux := newServeMux(requests, metrics, policy, logger)
 
 	server := &http.Server{
 		Addr:    "127.0.0.1:8080",
@@ -88,17 +90,19 @@ func startHTTPServer(requests chan request, metrics *Metrics, policy policy) (*h
 		}
 		done <- err
 	}()
+	logger.Info("HTTP server starting", zap.String("event", "service_started"), zap.String("http_addr", server.Addr))
 	return server, done
 }
 
-func shutdownHTTPServer(ctx context.Context, server *http.Server, done <-chan error) {
+func shutdownHTTPServer(ctx context.Context, server *http.Server, done <-chan error, loggers ...*zap.Logger) {
+	logger := loggerOrNop(loggers)
 	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("graceful HTTP shutdown failed: %v", err)
+		logger.Error("graceful HTTP shutdown failed", zap.String("event", "run_failed"))
 		if closeErr := server.Close(); closeErr != nil {
-			log.Printf("forced HTTP close failed: %v", closeErr)
+			logger.Error("forced HTTP close failed", zap.String("event", "run_failed"))
 		}
 	}
 	if err := <-done; err != nil {
-		log.Printf("HTTP server stopped unexpectedly: %v", err)
+		logger.Error("HTTP server stopped unexpectedly", zap.String("event", "run_failed"))
 	}
 }

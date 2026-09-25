@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type senderAttemptOutcome uint8
@@ -50,6 +52,7 @@ type senderPool struct {
 	terminallyCompletedTransactionsSinceTick *atomic.Int64
 	attempt                                  senderAttempt
 	wait                                     func(context.Context, time.Duration) bool
+	logger                                   *zap.Logger
 }
 
 func startSenderPool(
@@ -60,6 +63,7 @@ func startSenderPool(
 	workers int,
 	api senderAPIPolicy,
 	retry senderRetryPolicy,
+	loggers ...*zap.Logger,
 ) *senderPool {
 	ctx, cancel := context.WithCancel(context.Background())
 	pool := &senderPool{
@@ -74,6 +78,7 @@ func startSenderPool(
 		terminallyCompletedTransactionsSinceTick: terminallyCompletedTransactionsSinceTick,
 		attempt:                                  newSenderHTTPAttempt(api.URL, http.DefaultClient).deliver,
 		wait:                                     waitSenderBackoff,
+		logger:                                   loggerOrNop(loggers),
 	}
 	pool.available = sync.NewCond(&pool.mu)
 	pool.reconcile(workers)
@@ -235,6 +240,8 @@ func (p *senderPool) runWorker(worker *senderWorker) {
 	defer p.wg.Done()
 	defer close(worker.done)
 	defer p.workerExited(worker)
+	p.logger.Info("sender worker started", zap.String("event", "sender_worker_started"), zap.Int("worker_id", worker.workerID))
+	defer p.logger.Info("sender worker stopped", zap.String("event", "sender_worker_stopped"), zap.Int("worker_id", worker.workerID))
 	for {
 		p.mu.Lock()
 		select {
@@ -301,10 +308,12 @@ func (p *senderPool) processBatch(workerID int, batch []Transaction) {
 			return
 		case senderAttemptTerminalFailure, senderAttemptCanceled:
 			p.telemetry.finishBatch(workerID, false)
+			p.logger.Error("batch delivery failed", zap.String("event", "batch_delivery_failed"), zap.Int("worker_id", workerID), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
 			return
 		case senderAttemptRetryableFailure:
 			if attempt == p.retry.MaxAttempts {
 				p.telemetry.finishBatch(workerID, false)
+				p.logger.Error("batch delivery failed", zap.String("event", "batch_delivery_failed"), zap.Int("worker_id", workerID), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
 				return
 			}
 		}

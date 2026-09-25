@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	"go.uber.org/zap"
 )
 
 const readerForcedDrainGracePeriod = time.Second
@@ -84,6 +85,7 @@ type readerPool struct {
 	// Delivers exactly the first fatal source error to the event loop.
 	sourceErrors    chan readerSourceError
 	sourceErrorOnce sync.Once
+	logger          *zap.Logger
 }
 
 func startReaderPool(
@@ -93,6 +95,7 @@ func startReaderPool(
 	batches chan<- []Transaction,
 	telemetry *readerTelemetry,
 	channel *channelTelemetry,
+	loggers ...*zap.Logger,
 ) (*readerPool, error) {
 	sourceDirectory := readerSourceDirectory(dataPath)
 	files, err := filepath.Glob(dataPath)
@@ -110,6 +113,7 @@ func startReaderPool(
 		batchSize:   batchSize, batches: batches, telemetry: telemetry, channel: channel,
 		workers: make(map[int]*readerWorker), done: make(chan struct{}),
 		sourceErrors: make(chan readerSourceError, 1),
+		logger:       loggerOrNop(loggers),
 	}
 	pool.available = sync.NewCond(&pool.mu)
 	pool.reconcile(workers)
@@ -225,7 +229,9 @@ func (p *readerPool) stop() <-chan struct{} {
 func (p *readerPool) runWorker(worker *readerWorker) {
 	defer p.wg.Done()
 	defer worker.cancel()
+	p.logger.Info("reader worker started", zap.String("event", "reader_worker_started"), zap.Int("worker_id", worker.workerID))
 	defer func() {
+		p.logger.Info("reader worker stopped", zap.String("event", "reader_worker_stopped"), zap.Int("worker_id", worker.workerID))
 		p.mu.Lock()
 		delete(p.workers, worker.workerID)
 		p.telemetry.unregisterWorker(worker.workerID)
@@ -322,6 +328,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 	if err != nil {
 		return p.newReaderSourceError("open", filePath, worker.workerID, err)
 	}
+	p.logger.Info("reader source opened", zap.String("event", "reader_source_opened"), zap.Int("worker_id", worker.workerID))
 	reader, err := openParquetReader(file)
 	if err != nil {
 		if closeErr := file.Close(); closeErr != nil && worker.ctx.Err() == nil && p.ctx.Err() == nil {
@@ -362,6 +369,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 	}
 	if sourceError == nil && !batchSendStopped && worker.ctx.Err() == nil {
 		p.telemetry.setWorkerCompleted(worker.workerID)
+		p.logger.Info("reader source exhausted", zap.String("event", "reader_source_exhausted"), zap.Int("worker_id", worker.workerID))
 	}
 	return p.closeResources(worker, filePath, reader, file, sourceError)
 }
