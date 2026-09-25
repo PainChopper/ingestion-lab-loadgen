@@ -107,7 +107,6 @@ function snapshotFor(
     connectionState: 'connected',
     runState,
     elapsedMs: active ? 12_000 : 0,
-    startError: null,
     totalTransactions: active ? 12_000 : 0,
     policy: null,
     reader: {
@@ -115,7 +114,7 @@ function snapshotFor(
       workerSlots: workerSlots(workers, active ? (blocked ? 'blocked' : 'reading') : 'idle') as LoadgenSnapshot['reader']['workerSlots'],
       readBatchSize: batchControl, readTps: active ? 1_200 : 0, configuredCapacityTps: null,
       limitationReason: blocked ? 'downstream-backpressure' : null, rowsRead: active ? 12_000 : 0,
-      source: 'fixture source', state: runState,
+      source: 'fixture source', sourceError: null, state: runState,
     },
     throttler: {
       id: 'throttler', requestedTps: tpsControl, installationMode: modeControl,

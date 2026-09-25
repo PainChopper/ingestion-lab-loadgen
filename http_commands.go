@@ -53,7 +53,9 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 		case "run":
 			reply := make(chan commandResult, 1)
 			commands <- request{kind: cmdRun, commandReply: reply}
-			if result := <-reply; result.err != nil {
+			if result := <-reply; result.status == commandConflict {
+				w.WriteHeader(http.StatusConflict)
+			} else if result.err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnprocessableEntity)
 				if err := json.NewEncoder(w).Encode(struct {

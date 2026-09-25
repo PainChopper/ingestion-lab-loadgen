@@ -154,7 +154,6 @@ function freezeSnapshot(
     connectionState: 'connected',
     runState: state.runState,
     elapsedMs: telemetry.elapsedMs,
-    startError: null,
     totalTransactions: telemetry.totalTransactions,
     policy: null,
     reader: Object.freeze({
@@ -187,6 +186,7 @@ function freezeSnapshot(
       limitationReason: readerLimitationReason,
       rowsRead: telemetry.readerChannel.sentTransactionsTotal,
       source: 'events.parquet',
+      sourceError: null,
       state: state.runState,
     }),
     throttler: Object.freeze({

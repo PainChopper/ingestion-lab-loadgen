@@ -14,7 +14,6 @@ interface TestWireSnapshot {
   readonly run: {
     readonly state: RunState
     readonly elapsedMs: number
-    readonly startError: string | null
     readonly totalTransactions: number
   }
   readonly reader: {
@@ -31,6 +30,14 @@ interface TestWireSnapshot {
     readonly readBatchSize: number
     readonly rowsRead: number
     readonly source: string | null
+    readonly sourceDirectory: string
+    readonly sourceError: {
+      readonly category: 'source'
+      readonly operation: 'glob' | 'open' | 'read' | 'close' | 'reader-close'
+      readonly relativePath: string
+      readonly message: string
+      readonly workerId: number | null
+    } | null
   }
   readonly throttler: {
     readonly requestedTps: number
@@ -77,8 +84,8 @@ interface MockResponseOptions {
 }
 
 const VALID_WIRE: TestWireSnapshot = {
-  run: { state: 'running', elapsedMs: 12_345, startError: null, totalTransactions: 42_000 },
-  reader: { workers: 1, liveWorkers: 1, drainingWorkers: 0, workerSlots: [{ workerId: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/input.parquet' }], readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, source: 'MBD-mini/trx/part/input.parquet' },
+  run: { state: 'running', elapsedMs: 12_345, totalTransactions: 42_000 },
+  reader: { workers: 1, liveWorkers: 1, drainingWorkers: 0, workerSlots: [{ workerId: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/input.parquet' }], readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, source: 'MBD-mini/trx/part/input.parquet', sourceDirectory: 'C:/dataset', sourceError: null },
   throttler: { requestedTps: 200, admittedTps: 125_000.5, installationMode: 'installed' },
   sender: { workers: 32, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] },
   readerChannel: {
@@ -401,7 +408,6 @@ function expectedSnapshot(
     connectionState,
     runState,
     elapsedMs: wire?.run.elapsedMs ?? 0,
-    startError: wire?.run.startError ?? null,
     totalTransactions: wire?.run.totalTransactions ?? 0,
     policy: wire?.policy ?? null,
     reader: {
@@ -432,6 +438,8 @@ function expectedSnapshot(
       limitationReason: null,
       rowsRead: wire?.reader.rowsRead ?? null,
       source: wire?.reader.source ?? null,
+      sourceDirectory: wire?.reader.sourceDirectory,
+      sourceError: wire?.reader.sourceError ?? null,
       state: runState,
     },
     throttler: {
@@ -799,12 +807,12 @@ const malformedCases: ReadonlyArray<{
     }),
   },
   {
-    name: 'empty start error',
-    result: async () => mockResponse({ ...VALID_WIRE, run: { ...VALID_WIRE.run, startError: '' } }),
+    name: 'empty Reader source error message',
+    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: '', workerId: 0 } } }),
   },
   {
-    name: 'invalid start error',
-    result: async () => mockResponse({ ...VALID_WIRE, run: { ...VALID_WIRE.run, startError: 42 } }),
+    name: 'invalid Reader source error worker ID',
+    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt', workerId: -1 } } }),
   },
   {
     name: 'negative integer',
@@ -1092,7 +1100,7 @@ describe('HttpAdapter', () => {
   it('clears telemetry on failure and recovers on success', async () => {
     const recoveredWire: TestWireSnapshot = {
       ...VALID_WIRE,
-      run: { ...VALID_WIRE.run, state: 'paused', elapsedMs: 67_890, startError: 'previous start failed', totalTransactions: 84_000 },
+      run: { ...VALID_WIRE.run, state: 'paused', elapsedMs: 67_890, totalTransactions: 84_000 },
       reader: { ...VALID_WIRE.reader, workers: 2, liveWorkers: 2, workerSlots: [
         { workerId: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/recovered.parquet' },
         { workerId: 1, activity: 'idle', lifecycle: 'active', source: null },

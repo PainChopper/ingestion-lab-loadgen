@@ -115,13 +115,13 @@ function snapshotFor(state: SenderState): LoadgenSnapshot {
   const mode = { applied: 'installed' as const, pending: null, applyMode: 'immediate' as const, writable: true, unavailableReason: null }
   return {
     revision: 1, adapterKind: 'simulation', connectionState: 'connected', runState,
-    elapsedMs: active || draining ? 12_000 : 0, startError: null,
+    elapsedMs: active || draining ? 12_000 : 0,
     totalTransactions: active || draining ? 12_000 : 0, policy: null,
     reader: {
       id: 'reader', workers: readerWorkers, liveWorkers: 2, drainingWorkers: 0,
       workerSlots: null, readBatchSize: batchSize, readTps: active || draining ? 1_200 : null,
       configuredCapacityTps: 1_500, limitationReason: null, rowsRead: active || draining ? 12_000 : null,
-      source: 'fixture source', state: runState,
+      source: 'fixture source', sourceError: null, state: runState,
     },
     throttler: { id: 'throttler', requestedTps: tps, installationMode: mode, admittedTps: attemptedTps, limitedMs: null, state: runState },
     readerChannel: channel,

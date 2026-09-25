@@ -126,7 +126,6 @@ function snapshotFor(state: ReaderState): LoadgenSnapshot {
     connectionState: connectionError ? 'error' : 'connected',
     runState,
     elapsedMs: active ? 12_000 : 0,
-    startError: connectionError ? 'Reader source connection failed' : null,
     totalTransactions: active ? 12_000 : 0,
     policy: null,
     reader: {
@@ -141,6 +140,7 @@ function snapshotFor(state: ReaderState): LoadgenSnapshot {
       limitationReason: state === 'backpressured' ? 'downstream-backpressure' : null,
       rowsRead: active ? 12_000 : null,
       source: connectionError ? null : 'fixture source',
+      sourceError: null,
       state: runState,
     },
     throttler: {

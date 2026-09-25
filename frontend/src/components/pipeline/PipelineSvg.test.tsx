@@ -861,6 +861,88 @@ describe('PipelineSvg rendering', () => {
   )
 
   it.each(['landscape', 'portrait'] as const)(
+    'covers only the Reader actor bounds for a source error in %s',
+    (orientation) => {
+      const base = activeSnapshot()
+      const view = renderPipeline({
+        ...base,
+        reader: {
+          ...base.reader,
+          sourceError: {
+            category: 'source',
+            operation: 'read',
+            relativePath: 'broken.parquet',
+            message: 'corrupt parquet',
+            workerId: 1,
+          },
+        },
+      }, orientation)
+      const reader = view.container.querySelector('#reader-actor')!
+      const box = reader.querySelector<SVGRectElement>('.pipeline-actor-box')!
+      const overlay = reader.querySelector<SVGGElement>('[data-testid="reader-source-error-overlay"]')!
+      const overlayRect = overlay.querySelector<SVGRectElement>('rect')!
+      const overlayText = overlay.querySelector<SVGTextElement>('text')!
+
+      expect(overlay.getAttribute('role')).toBe('alert')
+      expect({
+        x: Number(overlayRect.getAttribute('x')),
+        y: Number(overlayRect.getAttribute('y')),
+        width: Number(overlayRect.getAttribute('width')),
+        height: Number(overlayRect.getAttribute('height')),
+      }).toEqual({
+        x: Number(box.getAttribute('x')),
+        y: Number(box.getAttribute('y')),
+        width: Number(box.getAttribute('width')),
+        height: Number(box.getAttribute('height')),
+      })
+      expect(Number(overlayText.getAttribute('x'))).toBe(
+        Number(box.getAttribute('x')) + Number(box.getAttribute('width')) / 2,
+      )
+      expect(Number(overlayText.getAttribute('y'))).toBe(
+        Number(box.getAttribute('y')) + Number(box.getAttribute('height')) / 2,
+      )
+      expect(view.container.querySelectorAll('[data-testid="reader-source-error-overlay"]')).toHaveLength(1)
+      expect(view.container.querySelector('#sender-actor [data-testid="reader-source-error-overlay"]')).toBeNull()
+      view.unmount()
+    },
+  )
+
+  it('distinguishes runtime Reader errors from startup errors without counting blocked workers', () => {
+    const base = activeSnapshot()
+    const reader = {
+      ...base.reader,
+      workerSlots: [
+        { workerId: 0, activity: 'blocked' as const, lifecycle: 'active' as const, source: 'a' },
+      ],
+    }
+    const runtime = renderPipeline({
+      ...base,
+      reader: {
+        ...reader,
+        sourceError: {
+          category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt', workerId: 0,
+        },
+      },
+    })
+    expect(runtime.container.querySelector('#reader-actor .pipeline-worker-status')?.textContent)
+      .toContain('0 idle · 0 reading · 1 blocked · 1 error')
+    runtime.unmount()
+
+    const startup = renderPipeline({
+      ...base,
+      reader: {
+        ...reader,
+        sourceError: {
+          category: 'source', operation: 'glob', relativePath: 'missing.parquet', message: 'missing', workerId: null,
+        },
+      },
+    })
+    expect(startup.container.querySelector('#reader-actor .pipeline-worker-status')?.textContent)
+      .toContain('0 idle · 0 reading · 1 blocked · — errors')
+    startup.unmount()
+  })
+
+  it.each(['landscape', 'portrait'] as const)(
     'renders Sender worker state summary as semantic segments in %s',
     (orientation) => {
       const base = activeSnapshot()

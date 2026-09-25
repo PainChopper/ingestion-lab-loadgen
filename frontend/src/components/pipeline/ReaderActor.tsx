@@ -41,7 +41,12 @@ export function ReaderActor({
           value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'blocked').length)} blocked`,
           tone: 'backoff' as const,
         },
-        { value: '— errors', tone: 'error' as const },
+        {
+          value: snapshot.sourceError !== null && snapshot.sourceError.workerId !== null
+            ? '1 error'
+            : '— errors',
+          tone: 'error' as const,
+        },
       ]
 
   return (
@@ -68,6 +73,8 @@ export function ReaderActor({
       selected={selected}
       onSelect={onSelect}
       desiredControl={desiredControl}
+      muted={snapshot.sourceError != null}
+      sourceErrorOperation={snapshot.sourceError?.operation}
     />
   )
 }

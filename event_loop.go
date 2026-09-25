@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync/atomic"
 	"time"
@@ -17,8 +18,9 @@ type throttlerStarter func(
 ) (<-chan struct{}, chan<- throttlerUpdate)
 
 type readerRun struct {
-	done      <-chan struct{}
-	reconcile func(int)
+	done         <-chan struct{}
+	reconcile    func(int)
+	sourceErrors <-chan readerSourceError
 }
 
 type readerStarter func(context.Context, chan<- []Transaction, int, int) (readerRun, error)
@@ -69,9 +71,11 @@ func (state *controlState) eventLoopWithThrottlerContext(
 	var cancelReader context.CancelFunc
 	var readerDone <-chan struct{}
 	var readerReconcile func(int)
-	defer func() {
+	var readerSourceErrors <-chan readerSourceError
+	stopActiveRun := func() {
 		if pool != nil {
 			<-pool.stop()
+			pool = nil
 		}
 		if cancelReader != nil {
 			cancelReader()
@@ -91,13 +95,16 @@ func (state *controlState) eventLoopWithThrottlerContext(
 		senderBatches = nil
 		state.telemetry.readerChannel.detach()
 		state.telemetry.senderChannel.detach()
-		pool = nil
 		cancelReader = nil
 		readerDone = nil
 		readerReconcile = nil
+		readerSourceErrors = nil
 		cancelThrottler = nil
 		throttlerDone = nil
 		throttlerUpdates = nil
+	}
+	defer func() {
+		stopActiveRun()
 	}()
 
 	for {
@@ -110,26 +117,28 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			}
 			switch cmd.kind {
 			case getSnapshot:
+				runState := state.run.lifecycle.currentState()
 				reader := state.telemetry.reader.snapshot()
 				readerChannel := state.telemetry.readerChannel.snapshot(time.Now())
 				senderChannel := state.telemetry.senderChannel.snapshot(time.Now())
 				sender := state.telemetry.sender.snapshot()
-				if state.run.lifecycle.currentState() == runStateIdle {
+				if runState == runStateIdle || runState == runStateFaulted {
 					readerChannel.capacity = state.readerChannelCapacity()
 					senderChannel.capacity = state.senderChannelCapacity()
 				}
 				snapshot := statusSnapshot{
 					Run: runSnapshot{
-						State:             state.run.lifecycle.currentState(),
+						State:             runState,
 						TotalTransactions: state.run.totalTransactions,
 						ElapsedMs:         state.elapsedMs(time.Now()),
-						StartError:        state.run.startError,
 					},
 					Reader: readerSnapshot{
 						Workers: state.readerWorkers(), LiveWorkers: reader.liveWorkers,
 						DrainingWorkers: reader.drainingWorkers, WorkerSlots: reader.workerSlots,
 						ReadBatchSize: state.readBatchSize(), ReadTps: reader.readTPS,
 						RowsRead: reader.rowsRead, Source: reader.source,
+						SourceDirectory: readerSourceDirectory(state.controls.policy.Source.Path),
+						SourceError:     state.run.sourceError,
 					},
 					Throttler: throttlerSnapshot{
 						RequestedTps:     state.requestedTPS(),
@@ -191,6 +200,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 						state.readerWorkers(),
 					)
 					if err != nil {
+						sourceError := sourceErrorFromStartup(err, state.controls.policy.Source.Path)
 						cancel()
 						if readerCreated {
 							closeAndDrain(batches)
@@ -204,8 +214,8 @@ func (state *controlState) eventLoopWithThrottlerContext(
 						}
 						state.telemetry.reader.reset()
 						log.Printf("cannot start load generator: %v", err)
-						message := err.Error()
-						state.run.startError = &message
+						state.run.sourceError = &sourceError
+						state.run.lifecycle.faultStart()
 						if cmd.commandReply != nil {
 							cmd.commandReply <- commandResult{err: err}
 						}
@@ -213,6 +223,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 					}
 					readerDone = started.done
 					readerReconcile = started.reconcile
+					readerSourceErrors = started.sourceErrors
 					cancelReader = cancel
 					throttlerContext, cancel := context.WithCancel(ctx)
 					cancelThrottler = cancel
@@ -225,9 +236,14 @@ func (state *controlState) eventLoopWithThrottlerContext(
 						state.throttlerSettings(false),
 					)
 				}
+				if state.run.lifecycle.currentState() == runStateFaulted {
+					if cmd.commandReply != nil {
+						cmd.commandReply <- commandResult{status: commandConflict}
+					}
+					continue
+				}
 				if state.run.lifecycle.run() {
 					state.run.runStartedAt = time.Now()
-					state.run.startError = nil
 					if resuming {
 						state.notifyThrottler(throttlerUpdates, throttlerDone, false)
 					}
@@ -267,9 +283,15 @@ func (state *controlState) eventLoopWithThrottlerContext(
 					cancelReader = nil
 					readerDone = nil
 					readerReconcile = nil
+					readerSourceErrors = nil
 					cancelThrottler = nil
 					throttlerDone = nil
 					throttlerUpdates = nil
+					state.resetProgress(&terminallyCompletedTransactionsSinceTick, promMetrics)
+					state.run.lifecycle.completeReset()
+				case runStateFaulted:
+					state.run.lifecycle.reset()
+					stopActiveRun()
 					state.resetProgress(&terminallyCompletedTransactionsSinceTick, promMetrics)
 					state.run.lifecycle.completeReset()
 				case runStateIdle:
@@ -369,6 +391,15 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				}
 			}
 
+		case sourceError := <-readerSourceErrors:
+			if !state.run.lifecycle.fault() {
+				continue
+			}
+			state.pauseElapsed(time.Now())
+			state.run.sourceError = &sourceError
+			stopActiveRun()
+			state.resetFaultedMeasurements(&terminallyCompletedTransactionsSinceTick, promMetrics)
+
 		case <-metrics:
 			state.telemetry.reader.sample(time.Now())
 			state.telemetry.readerChannel.sample(state.metricsWindow)
@@ -445,8 +476,33 @@ func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTic
 	state.run.totalTransactions = 0
 	state.run.elapsedBeforeRun = 0
 	state.run.runStartedAt = time.Time{}
-	state.run.startError = nil
+	state.run.sourceError = nil
 	promMetrics.actualTPS.Set(0)
+}
+
+func (state *controlState) resetFaultedMeasurements(
+	terminallyCompletedTransactionsSinceTick *atomic.Int64,
+	promMetrics *Metrics,
+) {
+	state.telemetry.reader.reset()
+	state.telemetry.sender.reset()
+	state.telemetry.readerChannel.clearMeasurements()
+	state.telemetry.senderChannel.clearMeasurements()
+	terminallyCompletedTransactionsSinceTick.Store(0)
+	promMetrics.actualTPS.Set(0)
+}
+
+func sourceErrorFromStartup(err error, sourcePath string) readerSourceError {
+	var sourceError readerSourceError
+	if errors.As(err, &sourceError) {
+		return sourceError
+	}
+	return readerSourceError{
+		Category:     "source",
+		Operation:    "glob",
+		RelativePath: relativeSourcePath(readerSourceDirectory(sourcePath), sourcePath),
+		Message:      err.Error(),
+	}
 }
 
 func (state *controlState) prepareReaderChannel(batches chan []Transaction) (chan []Transaction, bool) {

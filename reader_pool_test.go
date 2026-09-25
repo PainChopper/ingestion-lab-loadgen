@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -10,6 +12,16 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 )
+
+type errorCloser struct {
+	err    error
+	closed bool
+}
+
+func (closer *errorCloser) Close() error {
+	closer.closed = true
+	return closer.err
+}
 
 func TestReaderPoolOwnsUniqueFilesAndEmitsPerFileResiduals(t *testing.T) {
 	dir := t.TempDir()
@@ -701,5 +713,66 @@ func TestReaderPoolCancellationUnblocksDrainingWorkers(t *testing.T) {
 	pool.mu.Unlock()
 	if replayCount != 0 {
 		t.Fatalf("global cancellation queued %d replay files, want 0", replayCount)
+	}
+}
+
+func TestReaderPoolClosesFileAfterCanceledResidualBatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "residual.parquet")
+	if err := parquet.WriteFile(path, []Transaction{{ClientID: "residual"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	batches := make(chan []Transaction)
+	var telemetry readerTelemetry
+	var channel channelTelemetry
+	channel.start(batches, 2)
+	pool, err := startReaderPool(ctx, filepath.Join(dir, "*.parquet"), 2, 1, batches, &telemetry, &channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForBlockedSender(t, &channel)
+	cancel()
+	select {
+	case <-pool.done:
+	case <-time.After(time.Second):
+		t.Fatal("Reader pool did not finish after canceled residual batch")
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove closed residual source: %v", err)
+	}
+}
+
+func TestReaderPoolCanceledCleanupIgnoresCloseErrors(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	pool := &readerPool{ctx: ctx}
+	worker := &readerWorker{workerID: 4, ctx: ctx}
+	reader := &errorCloser{err: errors.New("reader close failed")}
+	file := &errorCloser{err: errors.New("file close failed")}
+
+	if sourceError := pool.closeResources(worker, "source.parquet", reader, file, nil); sourceError != nil {
+		t.Fatalf("canceled cleanup source error = %+v, want nil", sourceError)
+	}
+	if !reader.closed || !file.closed {
+		t.Fatalf("cleanup closed reader=%t file=%t, want both true", reader.closed, file.closed)
+	}
+}
+
+func TestReaderPoolActiveCleanupPreservesFirstCloseError(t *testing.T) {
+	ctx := context.Background()
+	pool := &readerPool{ctx: ctx}
+	worker := &readerWorker{workerID: 4, ctx: ctx}
+	reader := &errorCloser{err: errors.New("reader close failed")}
+	file := &errorCloser{err: errors.New("file close failed")}
+
+	sourceError := pool.closeResources(worker, "source.parquet", reader, file, nil)
+	if sourceError == nil || sourceError.Operation != "reader-close" || sourceError.Message != "reader close failed" {
+		t.Fatalf("active cleanup source error = %+v", sourceError)
+	}
+	if !reader.closed || !file.closed {
+		t.Fatalf("cleanup closed reader=%t file=%t, want both true", reader.closed, file.closed)
 	}
 }

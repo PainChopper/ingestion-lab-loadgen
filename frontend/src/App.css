@@ -463,6 +463,37 @@
   text-align: left;
 }
 
+.inspector-data__row--source-error {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: start;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.inspector-data__source-error-label {
+  grid-column: 1;
+  grid-row: 1;
+  color: var(--red);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+}
+
+.inspector-data__row--source-error dd {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 0;
+  color: var(--red);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+  text-align: left;
+  text-indent: 0;
+}
+
 .inspector-data__row--worker-states dd {
   display: flex;
   flex-wrap: wrap;

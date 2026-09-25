@@ -14,6 +14,8 @@ import { getChannelCapacityPresentation } from './pipeline/channelCableGeometry'
 export interface InspectorRow {
   readonly label: string
   readonly value: string
+  readonly key?: string
+  readonly kind?: 'source-error'
   readonly layout?: 'full-width'
   readonly segments?: ReadonlyArray<InspectorRowSegment>
   readonly disclosureLabel?: string
@@ -101,11 +103,8 @@ export function getInspectorViewModel(
         const idleWorkers = workerSlots.filter((slot) => slot.activity === 'idle').length
         const readingWorkers = workerSlots.filter((slot) => slot.activity === 'reading').length
         const blockedWorkers = workerSlots.filter((slot) => slot.activity === 'blocked').length
-      return {
-        id: selectedId,
-        title: 'READER',
-        kind: 'Parquet source',
-        rows: [
+        const sourceError = snapshot.reader.sourceError
+        const rows: InspectorRow[] = [
 		  {
 			label: `Workers desired / ${frozenObserved ? 'frozen live' : 'live'} / draining`,
 			value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
@@ -126,9 +125,28 @@ export function getInspectorViewModel(
           },
           { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
           { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
-        ],
-      }
-      }
+		]
+		if (sourceError != null) {
+			const sourcePath = `${snapshot.reader.sourceDirectory ?? ''}/${sourceError.relativePath}`
+				.replace(/\/+/g, '/')
+				.replace(/\/$/, '')
+			rows.push({
+				label: '',
+				key: 'source-error',
+				kind: 'source-error',
+				value: sourceError.workerId === null
+					? `${sourcePath}: ${sourceError.message}`
+					: `Worker ID ${sourceError.workerId} · ${sourcePath}: ${sourceError.message}`,
+				layout: 'full-width',
+			})
+		}
+		return {
+			id: selectedId,
+			title: 'READER',
+			kind: 'Parquet source',
+			rows,
+		}
+	}
     case 'throttler':
       return {
         id: selectedId,
