@@ -96,6 +96,12 @@ export interface LoadgenPolicySnapshot {
   readonly throttlerInstallationMode: InstallationModePolicySnapshot
   readonly senderWorkers: RangeControlPolicySnapshot
   readonly senderRetry: SenderRetryPolicySnapshot
+	readonly logging?: LoggingPolicySnapshot
+}
+
+export interface LoggingPolicySnapshot {
+	readonly level: 'debug' | 'info' | 'warn' | 'error'
+	readonly mutability: 'startup-only'
 }
 
 export interface SenderRetryPolicySnapshot {

@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
+
+	"go.uber.org/zap"
 )
 
 type commandRequest struct {
@@ -13,7 +14,8 @@ type commandRequest struct {
 	Value  json.RawMessage `json:"value"`
 }
 
-func commandsHandler(commands chan<- request, policy policy) http.Handler {
+func commandsHandler(commands chan<- request, policy policy, loggers ...*zap.Logger) http.Handler {
+	logger := loggerOrNop(loggers)
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -61,7 +63,7 @@ func commandsHandler(commands chan<- request, policy policy) http.Handler {
 				if err := json.NewEncoder(w).Encode(struct {
 					Error string `json:"error"`
 				}{Error: result.err.Error()}); err != nil {
-					log.Printf("encode command error: %v", err)
+					logger.Error("command response encoding failed", zap.String("event", "run_failed"))
 					return
 				}
 			}

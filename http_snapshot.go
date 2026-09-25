@@ -2,8 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
+
+	"go.uber.org/zap"
 )
 
 type statusSnapshot struct {
@@ -77,7 +78,8 @@ type channelSnapshot struct {
 	ReceivedTransactionsPerSecond float64 `json:"outputTransactionsPerSecond"`
 }
 
-func snapshotHandler(requests chan<- request) http.Handler {
+func snapshotHandler(requests chan<- request, loggers ...*zap.Logger) http.Handler {
+	logger := loggerOrNop(loggers)
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -93,7 +95,7 @@ func snapshotHandler(requests chan<- request) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		err := json.NewEncoder(w).Encode(snapshot)
 		if err != nil {
-			log.Printf("encode snapshot: %v", err)
+			logger.Error("snapshot response encoding failed", zap.String("event", "run_failed"))
 			return
 		}
 	}

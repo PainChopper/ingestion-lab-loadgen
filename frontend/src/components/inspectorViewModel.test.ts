@@ -150,7 +150,7 @@ describe('inspector view model', () => {
     }
 
     expect(getInspectorViewModel(snapshot, 'http')?.rows).toEqual([
-      { label: 'Telemetry', value: '—' },
+		{ label: 'Telemetry', value: '—' },
     ])
     expect(getInspectorViewModel(snapshot, 'target')?.rows).toEqual([
       { label: 'Telemetry', value: '—' },

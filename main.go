@@ -2,27 +2,35 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"go.uber.org/zap"
 )
 
 func main() {
 	configArgument := ""
 	if len(os.Args) > 2 {
-		log.Fatal("usage: loadgen [config-path]")
+		return
 	}
 	if len(os.Args) == 2 {
 		configArgument = os.Args[1]
 	}
 	loadedPolicy, _, err := loadPolicy(configArgument)
 	if err != nil {
-		log.Fatal(err)
+		return
 	}
+	logger, err := newStdoutApplicationLogger(loadedPolicy.Logging.Level)
+	if err != nil {
+		return
+	}
+	defer func() { _ = logger.Sync() }()
+	logger.Info("service started", zap.String("event", "service_started"))
 	state := controlState{
 		run:      controlRunState{lifecycle: newLifecycle()},
 		controls: configuredControls{policy: loadedPolicy},
+		logger:   logger,
 	}
 	requests := make(chan request, 10)
 	runtime := newRuntimeMetrics(loadedPolicy)
@@ -31,7 +39,7 @@ func main() {
 
 	appCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-	server, serverDone := startHTTPServer(requests, runtime.promMetrics, loadedPolicy)
+	server, serverDone := startHTTPServer(requests, runtime.promMetrics, loadedPolicy, logger)
 	eventLoopDone := make(chan struct{})
 	go func() {
 		defer close(eventLoopDone)
@@ -42,12 +50,14 @@ func main() {
 	case <-appCtx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
 		defer cancel()
-		shutdownHTTPServer(shutdownCtx, server, serverDone)
+		logger.Info("service stopping", zap.String("event", "service_stopping"))
+		shutdownHTTPServer(shutdownCtx, server, serverDone, logger)
 		select {
 		case <-eventLoopDone:
 		case <-shutdownCtx.Done():
-			log.Printf("load generator shutdown timed out: %v", shutdownCtx.Err())
+			logger.Warn("service shutdown timed out", zap.String("event", "run_stopped"))
 		}
 	case <-eventLoopDone:
 	}
+	logger.Info("service stopped", zap.String("event", "service_stopped"))
 }

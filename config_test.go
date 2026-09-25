@@ -45,6 +45,7 @@ func testConfigContents() string {
 		"", "[sender.api]", "url = \"http://127.0.0.1:8080/internal/test/ingest\"", "mutability = \"startup-only\"",
 		"", "[sender.retry]", "max_attempts = 3", "backoff_base_ms = 250", "backoff_multiplier = 2", "jitter_percent = 20", "mutability = \"startup-only\"",
 		"", "[metrics.window_ms]", "default = 1000", "min = 100", "max = 10000", "step = 100", "unit = \"milliseconds\"", "mutability = \"startup-only\"",
+		"", "[logging]", "level = \"info\"", "mutability = \"startup-only\"",
 	}, "\n")
 }
 

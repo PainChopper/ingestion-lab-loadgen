@@ -423,6 +423,7 @@ function isExactObject(
 
 function decodePolicy(value: unknown): LoadgenPolicySnapshot {
   if (!isExactObject(value, [
+		'logging',
     'metricsWindowMs',
     'readerChannelCapacity',
     'readerReadBatchSize', 'readerWorkers',
@@ -583,6 +584,12 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
     retry.mutability !== 'startup-only') {
     throw new Error('snapshot Sender retry policy is invalid')
   }
+	const logging = value.logging
+	if (!isExactObject(logging, ['level', 'mutability']) ||
+		(logging.level !== 'debug' && logging.level !== 'info' && logging.level !== 'warn' && logging.level !== 'error') ||
+		logging.mutability !== 'startup-only') {
+		throw new Error('snapshot logging policy is invalid')
+	}
   return Object.freeze({
     readerReadBatchSize: Object.freeze(readerPolicy),
     readerWorkers: Object.freeze(readerWorkers as unknown as LoadgenPolicySnapshot['readerWorkers']),
@@ -607,6 +614,7 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
     }),
     senderWorkers: Object.freeze(value.senderWorkers as unknown as LoadgenPolicySnapshot['senderWorkers']),
     senderRetry: Object.freeze(retry as unknown as LoadgenPolicySnapshot['senderRetry']),
+		logging: Object.freeze(logging as unknown as LoadgenPolicySnapshot['logging']),
   })
 }
 

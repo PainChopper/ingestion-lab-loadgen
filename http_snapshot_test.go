@@ -68,7 +68,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(root["policy"], &policy); err != nil {
 		t.Fatalf("decode policy: %v", err)
 	}
-	assertExactJSONKeys(t, policy, []string{"metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "senderRetry", "throttlerInstallationMode", "throttlerRequestedTps"})
+	assertExactJSONKeys(t, policy, []string{"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "senderRetry", "throttlerInstallationMode", "throttlerRequestedTps"})
 	var workers rangePolicy
 	if err := json.Unmarshal(policy["readerWorkers"], &workers); err != nil {
 		t.Fatal(err)

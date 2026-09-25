@@ -51,6 +51,7 @@ type policy struct {
 	Throttler     throttlerPolicy     `mapstructure:"throttler"`
 	Sender        senderPolicy        `mapstructure:"sender"`
 	Metrics       metricsPolicy       `mapstructure:"metrics"`
+	Logging       loggingPolicy       `mapstructure:"logging"`
 }
 
 type sourcePolicy struct {
@@ -75,6 +76,11 @@ type throttlerPolicy struct {
 
 type metricsPolicy struct {
 	WindowMS rangePolicy `mapstructure:"window_ms"`
+}
+
+type loggingPolicy struct {
+	Level      string `mapstructure:"level" json:"level"`
+	Mutability string `mapstructure:"mutability" json:"mutability"`
 }
 
 type senderPolicy struct {
@@ -183,6 +189,19 @@ func (p policy) validate() error {
 	}
 	if err := p.Metrics.WindowMS.validateMetricsWindow(); err != nil {
 		return fmt.Errorf("metrics.window_ms: %w", err)
+	}
+	if err := p.Logging.validate(); err != nil {
+		return fmt.Errorf("logging: %w", err)
+	}
+	return nil
+}
+
+func (p loggingPolicy) validate() error {
+	if p.Mutability != startupOnly {
+		return fmt.Errorf("mutability must be %q", startupOnly)
+	}
+	if !slices.Contains([]string{"debug", "info", "warn", "error"}, p.Level) {
+		return fmt.Errorf("level must be debug, info, warn, or error")
 	}
 	return nil
 }
@@ -348,6 +367,7 @@ type policySnapshot struct {
 	MetricsWindowMS           rangePolicy            `json:"metricsWindowMs"`
 	SenderWorkers             rangePolicy            `json:"senderWorkers"`
 	SenderRetry               senderRetryPolicy      `json:"senderRetry"`
+	Logging                   loggingPolicy          `json:"logging"`
 }
 
 func (p policy) snapshot() policySnapshot {
@@ -361,5 +381,6 @@ func (p policy) snapshot() policySnapshot {
 		MetricsWindowMS:           p.Metrics.WindowMS,
 		SenderWorkers:             p.Sender.Workers,
 		SenderRetry:               p.Sender.Retry,
+		Logging:                   p.Logging,
 	}
 }
