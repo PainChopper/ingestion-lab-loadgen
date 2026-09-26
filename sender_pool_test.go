@@ -100,6 +100,22 @@ func TestSenderPoolRetriesTerminalFailureUntilSuccess(t *testing.T) {
 	}
 }
 
+func TestSenderPoolAggregateSnapshotPartitionsActivities(t *testing.T) {
+	pool := &senderPool{workers: []*senderWorker{
+		{}, {draining: true},
+		{busy: true}, {busy: true, draining: true},
+		{busy: true, backoff: true}, {busy: true, backoff: true, draining: true},
+	}}
+
+	snapshot := pool.aggregateSnapshot()
+	if snapshot.liveWorkers != 6 || snapshot.idleWorkers != 2 || snapshot.inFlightWorkers != 2 || snapshot.backoffWorkers != 2 {
+		t.Fatalf("activity partition = %+v", snapshot)
+	}
+	if snapshot.drainingWorkers != 3 || snapshot.drainingIdleWorkers != 1 || snapshot.drainingInFlightWorkers != 1 || snapshot.drainingBackoffWorkers != 1 {
+		t.Fatalf("draining intersections = %+v", snapshot)
+	}
+}
+
 func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
