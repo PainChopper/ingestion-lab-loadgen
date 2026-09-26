@@ -30,6 +30,18 @@ type senderWorker struct {
 	done     chan struct{}
 	draining bool
 	busy     bool
+	backoff  bool
+}
+
+type senderPoolSnapshot struct {
+	liveWorkers             int
+	idleWorkers             int
+	inFlightWorkers         int
+	backoffWorkers          int
+	drainingWorkers         int
+	drainingIdleWorkers     int
+	drainingInFlightWorkers int
+	drainingBackoffWorkers  int
 }
 
 type senderPool struct {
@@ -271,6 +283,7 @@ func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transacti
 	}
 	p.mu.Lock()
 	worker.busy = false
+	worker.backoff = false
 	p.available.Broadcast()
 	p.mu.Unlock()
 }
@@ -308,6 +321,9 @@ func (p *senderPool) activeWorkerCountLocked() int {
 
 func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) bool {
 	for attempt := 1; ; attempt++ {
+		p.mu.Lock()
+		worker.backoff = false
+		p.mu.Unlock()
 		p.telemetry.setActivity(worker.workerID, "in-flight")
 		switch p.attempt(p.ctx, batch, worker.workerID, attempt) {
 		case senderAttemptSuccess:
@@ -319,12 +335,41 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 			p.logger.Warn("batch delivery will retry", zap.String("event", "batch_delivery_retry"), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
 		}
 
+		p.mu.Lock()
+		worker.backoff = true
+		p.mu.Unlock()
 		p.telemetry.setActivity(worker.workerID, "backoff")
 		delay := p.retry.delay(attempt, batch)
 		if !p.wait(p.ctx, delay) {
 			return false
 		}
 	}
+}
+
+func (p *senderPool) aggregateSnapshot() senderPoolSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	snapshot := senderPoolSnapshot{liveWorkers: len(p.workers)}
+	for _, worker := range p.workers {
+		var draining *int
+		switch {
+		case worker.backoff:
+			snapshot.backoffWorkers++
+			draining = &snapshot.drainingBackoffWorkers
+		case worker.busy:
+			snapshot.inFlightWorkers++
+			draining = &snapshot.drainingInFlightWorkers
+		default:
+			snapshot.idleWorkers++
+			draining = &snapshot.drainingIdleWorkers
+		}
+		if worker.draining {
+			snapshot.drainingWorkers++
+			(*draining)++
+		}
+	}
+	return snapshot
 }
 
 func waitSenderBackoff(ctx context.Context, duration time.Duration) bool {

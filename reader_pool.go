@@ -9,30 +9,34 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
 )
 
-const readerForcedDrainGracePeriod = time.Second
-
 // readerWorker holds the per-worker cancellation and lifecycle state.
 type readerWorker struct {
 	// Identifies this worker within the pool and its telemetry.
 	workerID int
-	// Is canceled when the pool stops or this worker must exit.
+	// Is canceled when the pool stops.
 	ctx context.Context
-	// Requests cancellation of only this worker.
-	cancel context.CancelFunc
 	// Prevents the worker from claiming another file.
 	draining bool
 	// Indicates that the worker currently owns a source file.
 	busy bool
 	// Indicates that the worker is blocked while sending a batch.
 	blocked bool
-	// Indicates that the worker was canceled to finish draining.
-	forced bool
+}
+
+type readerPoolSnapshot struct {
+	liveWorkers            int
+	idleWorkers            int
+	readingWorkers         int
+	blockedWorkers         int
+	drainingWorkers        int
+	drainingIdleWorkers    int
+	drainingReadingWorkers int
+	drainingBlockedWorkers int
 }
 
 // readerPool owns file admission. A file is assigned once to exactly one worker;
@@ -56,8 +60,6 @@ type readerPool struct {
 	sourceDirectory string
 	// Records source paths currently claimed by a worker.
 	active map[string]bool
-	// Holds released files that must be assigned again.
-	replayFiles []string
 	// Is the round-robin cursor into the source paths.
 	nextFile int
 	// Is the maximum number of transactions in an emitted batch.
@@ -76,12 +78,6 @@ type readerPool struct {
 	desired int
 	// Prevents new work while the pool is shutting down.
 	stopping bool
-	// Reports whether a delayed forced-drain callback is scheduled.
-	forcePending bool
-	// Invalidates forced-drain callbacks from an older configuration.
-	forceGeneration uint64
-	// Optionally schedules forced-drain callbacks for tests.
-	afterForce func(time.Duration, func())
 	// Delivers exactly the first fatal source error to the event loop.
 	sourceErrors    chan readerSourceError
 	sourceErrorOnce sync.Once
@@ -109,8 +105,7 @@ func startReaderPool(
 	poolCtx, cancel := context.WithCancel(ctx)
 	pool := &readerPool{
 		ctx: poolCtx, cancel: cancel, files: files, sourceDirectory: sourceDirectory, active: make(map[string]bool),
-		replayFiles: make([]string, 0),
-		batchSize:   batchSize, batches: batches, telemetry: telemetry, channel: channel,
+		batchSize: batchSize, batches: batches, telemetry: telemetry, channel: channel,
 		workers: make([]*readerWorker, 0, workers), done: make(chan struct{}),
 		sourceErrors: make(chan readerSourceError, 1),
 		logger:       loggerOrNop(loggers),
@@ -135,10 +130,6 @@ func (p *readerPool) reconcile(desired int) {
 	if p.stopping || p.ctx.Err() != nil {
 		return
 	}
-	if desired != p.desired {
-		p.forceGeneration++
-		p.forcePending = false
-	}
 	p.desired = desired
 	orderedWorkers := append([]*readerWorker(nil), p.workers...)
 	sort.SliceStable(orderedWorkers, func(i, j int) bool {
@@ -149,7 +140,7 @@ func (p *readerPool) reconcile(desired int) {
 		return false
 	})
 	for index, worker := range orderedWorkers {
-		worker.draining = worker.forced || index < len(orderedWorkers)-desired
+		worker.draining = index < len(orderedWorkers)-desired
 		lifecycle := "active"
 		if worker.draining {
 			lifecycle = "draining"
@@ -159,57 +150,7 @@ func (p *readerPool) reconcile(desired int) {
 	for len(p.workers) < desired {
 		p.startReplacementLocked()
 	}
-	p.scheduleBlockedForceLocked()
 	p.available.Broadcast()
-}
-
-func (p *readerPool) scheduleBlockedForceLocked() {
-	if p.forcePending || p.stopping || p.ctx.Err() != nil || len(p.workers) <= p.desired {
-		return
-	}
-	var blocked bool
-	for _, worker := range p.workers {
-		if worker.draining && worker.blocked && !worker.forced {
-			blocked = true
-			break
-		}
-	}
-	if !blocked {
-		return
-	}
-	p.forcePending = true
-	p.forceGeneration++
-	sequence := p.forceGeneration
-	callback := func() { p.forceBlocked(sequence) }
-	if p.afterForce != nil {
-		p.afterForce(readerForcedDrainGracePeriod, callback)
-		return
-	}
-	time.AfterFunc(readerForcedDrainGracePeriod, callback)
-}
-
-func (p *readerPool) forceBlocked(sequence uint64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if sequence != p.forceGeneration || p.stopping || p.ctx.Err() != nil {
-		return
-	}
-	p.forcePending = false
-	if len(p.workers) <= p.desired {
-		return
-	}
-	var victim *readerWorker
-	for _, worker := range p.workers {
-		if worker.draining && worker.blocked && !worker.forced && victim == nil {
-			victim = worker
-		}
-	}
-	if victim == nil {
-		return
-	}
-	victim.forced = true
-	victim.cancel()
-	p.scheduleBlockedForceLocked()
 }
 
 func (p *readerPool) stop() <-chan struct{} {
@@ -223,7 +164,6 @@ func (p *readerPool) stop() <-chan struct{} {
 
 func (p *readerPool) runWorker(worker *readerWorker) {
 	defer p.wg.Done()
-	defer worker.cancel()
 	p.logger.Info("reader worker started", zap.String("event", "reader_worker_started"), zap.Int("worker_id", worker.workerID))
 	defer func() {
 		p.logger.Info("reader worker stopped", zap.String("event", "reader_worker_stopped"), zap.Int("worker_id", worker.workerID))
@@ -264,22 +204,16 @@ func (p *readerPool) reportSourceError(sourceError readerSourceError) {
 }
 
 func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
-	if worker.forced && !p.stopping && p.ctx.Err() == nil {
-		p.replayFiles = append(p.replayFiles, filePath)
-	}
 	delete(p.active, filePath)
 	worker.busy = false
-	if !worker.forced {
-		p.telemetry.setWorkerIdle(worker.workerID)
-	}
+	p.telemetry.setWorkerIdle(worker.workerID)
 	p.available.Broadcast()
 }
 
 func (p *readerPool) startReplacementLocked() {
 	workerID := p.nextWorkerID
 	p.nextWorkerID++
-	workerCtx, cancel := context.WithCancel(p.ctx)
-	worker := &readerWorker{workerID: workerID, ctx: workerCtx, cancel: cancel}
+	worker := &readerWorker{workerID: workerID, ctx: p.ctx}
 	p.workers = append(p.workers, worker)
 	p.telemetry.registerWorker(workerID)
 	p.wg.Add(1)
@@ -301,14 +235,6 @@ func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
 	for !p.stopping && p.ctx.Err() == nil {
 		if worker.draining {
 			return "", false
-		}
-		if len(p.replayFiles) > 0 {
-			filePath := p.replayFiles[0]
-			p.replayFiles[0] = ""
-			p.replayFiles = p.replayFiles[1:]
-			p.active[filePath] = true
-			worker.busy = true
-			return filePath, true
 		}
 		for offset := range p.files {
 			index := (p.nextFile + offset) % len(p.files)
@@ -471,7 +397,6 @@ func (p *readerPool) sendBatch(worker *readerWorker, source string, batch []Tran
 	pending := p.channel.beginBlockedSend(p.batches, batch)
 	p.mu.Lock()
 	worker.blocked = true
-	p.scheduleBlockedForceLocked()
 	p.mu.Unlock()
 	p.telemetry.setWorkerBlocked(worker.workerID)
 
@@ -483,4 +408,30 @@ func (p *readerPool) sendBatch(worker *readerWorker, source string, batch []Tran
 		p.telemetry.setWorkerReading(worker.workerID, source)
 	}
 	return sent
+}
+
+func (p *readerPool) aggregateSnapshot() readerPoolSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	snapshot := readerPoolSnapshot{liveWorkers: len(p.workers)}
+	for _, worker := range p.workers {
+		var draining *int
+		switch {
+		case worker.blocked:
+			snapshot.blockedWorkers++
+			draining = &snapshot.drainingBlockedWorkers
+		case worker.busy:
+			snapshot.readingWorkers++
+			draining = &snapshot.drainingReadingWorkers
+		default:
+			snapshot.idleWorkers++
+			draining = &snapshot.drainingIdleWorkers
+		}
+		if worker.draining {
+			snapshot.drainingWorkers++
+			(*draining)++
+		}
+	}
+	return snapshot
 }
