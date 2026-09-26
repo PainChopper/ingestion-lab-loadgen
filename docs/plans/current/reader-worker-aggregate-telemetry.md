@@ -7,8 +7,9 @@ activity, lifecycle и source. Это создаёт «панель жизни �
 не нужно знать, чем занимается конкретный worker №N.
 
 Внутренний lifecycle Reader pool всё ещё нужен для корректного downscale: `busy`,
-`draining`, `blocked` и `forced` участвуют в выборе worker, grace period, forced
-cancellation и replay файла. Их нельзя удалять в рамках этой очистки.
+`draining` и `blocked` участвуют в выборе worker и штатном завершении работы.
+Draining Reader, остановившийся на заполненном канале, ждёт освобождения очереди;
+принудительная отмена и replay файла для этого пути не применяются.
 
 ## Решение
 
@@ -88,9 +89,8 @@ Reader pool — для map, логов, source error и детерминизма
 ## Не менять в этом этапе
 
 - safe downscale;
-- `busy`, `draining`, `blocked`, `forced` как внутренние поля;
-- grace timer, `forcePending`, generation;
-- forced cancellation и replay файлов;
+- `busy`, `draining` и `blocked` как внутренние поля;
+- штатное ожидание draining Reader освобождения заполненного канала;
 - callback-free границу Reader pool / channel telemetry, реализованную в T0386.
 
 Отдельно рассмотреть позднее: `blockedChannelSend` сейчас хранит channel и batch,
@@ -105,5 +105,5 @@ Reader pool — для map, логов, source error и детерминизма
 - `readerPool` остаётся единственным источником lifecycle worker'ов.
 - Нет второй slot-модели в telemetry.
 - `completed` отсутствует как отображаемое worker-состояние.
-- Safe downscale, cancellation и replay сохраняют поведение.
+- Draining Reader на заполненном канале штатно ждёт освобождения очереди.
 - Channel occupancy и backpressure остаются наблюдаемыми.

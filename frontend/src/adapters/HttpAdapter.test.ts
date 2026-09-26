@@ -147,7 +147,6 @@ const VALID_WIRE: TestWireSnapshot = {
       mutability: 'immediate',
     },
     senderWorkers: { default: 32, min: 1, max: 32, step: 1, unit: 'workers', mutability: 'immediate' },
-		senderRetry: { maxAttempts: 3, backoffBaseMs: 250, backoffMultiplier: 2, jitterPercent: 20, mutability: 'startup-only' },
 		logging: { level: 'info', mutability: 'startup-only' },
   },
 }
@@ -632,7 +631,7 @@ const malformedCases: ReadonlyArray<{
       sender: { ...VALID_WIRE.sender, extra: true },
     }),
   },
-  ...(['senderWorkers', 'senderRetry'] as const).flatMap((field) => [
+  ...(['senderWorkers'] as const).flatMap((field) => [
     {
       name: `missing policy ${field}`,
       result: async () => {
@@ -656,6 +655,16 @@ const malformedCases: ReadonlyArray<{
       }),
     },
   ]),
+  {
+    name: 'unexpected sender retry policy',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      policy: {
+        ...VALID_WIRE.policy,
+        senderRetry: { maxAttempts: 3, backoffBaseMs: 250, backoffMultiplier: 2, jitterPercent: 20, mutability: 'startup-only' },
+      },
+    }),
+  },
   {
     name: 'extra obsolete Sender simulation policy fields',
     result: async () => {
