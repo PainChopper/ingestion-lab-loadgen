@@ -51,6 +51,13 @@ type channelTelemetry struct {
 	measurements channelTelemetryMeasurements
 }
 
+type blockedChannelSend struct {
+	telemetry *channelTelemetry
+	batches   chan<- []Transaction
+	batch     []Transaction
+	blockedID uint64
+}
+
 func (q *channelTelemetry) start(batches <-chan []Transaction, batchSize int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -59,36 +66,39 @@ func (q *channelTelemetry) start(batches <-chan []Transaction, batchSize int) {
 }
 
 func (q *channelTelemetry) send(ctx context.Context, batches chan<- []Transaction, batch []Transaction) bool {
-	return q.sendWithBlocked(ctx, batches, batch, nil, nil)
+	if q.trySend(batches, batch) {
+		return true
+	}
+	return q.beginBlockedSend(batches, batch).wait(ctx)
 }
 
-func (q *channelTelemetry) sendWithBlocked(
-	ctx context.Context, batches chan<- []Transaction, batch []Transaction,
-	onBlocked, onSent func(),
-) bool {
+func (q *channelTelemetry) trySend(batches chan<- []Transaction, batch []Transaction) bool {
 	select {
 	case batches <- batch:
 		q.recordSend(len(batch))
 		return true
-	case <-ctx.Done():
-		return false
 	default:
+		return false
 	}
+}
 
-	blockedID := q.startBlocked(time.Now())
-	if onBlocked != nil {
-		onBlocked()
+func (q *channelTelemetry) beginBlockedSend(batches chan<- []Transaction, batch []Transaction) blockedChannelSend {
+	return blockedChannelSend{
+		telemetry: q,
+		batches:   batches,
+		batch:     batch,
+		blockedID: q.startBlocked(time.Now()),
 	}
+}
+
+func (send blockedChannelSend) wait(ctx context.Context) bool {
 	select {
-	case batches <- batch:
-		q.finishBlockedWriter(blockedID, time.Now())
-		if onSent != nil {
-			onSent()
-		}
-		q.recordSend(len(batch))
+	case send.batches <- send.batch:
+		send.telemetry.finishBlockedWriter(send.blockedID, time.Now())
+		send.telemetry.recordSend(len(send.batch))
 		return true
 	case <-ctx.Done():
-		q.finishBlockedWriter(blockedID, time.Now())
+		send.telemetry.finishBlockedWriter(send.blockedID, time.Now())
 		return false
 	}
 }

@@ -115,6 +115,144 @@ func TestReaderPoolAppendRowsSplitsShortReadsAtBatchBoundary(t *testing.T) {
 	}
 }
 
+func TestReaderPoolImmediateSendKeepsWorkerReading(t *testing.T) {
+	batches := make(chan []Transaction, 1)
+	var telemetry readerTelemetry
+	telemetry.registerWorker(0)
+	telemetry.setWorkerReading(0, "data/a.parquet")
+	var channel channelTelemetry
+	channel.start(batches, 1)
+	worker := &readerWorker{workerID: 0, ctx: context.Background()}
+	pool := &readerPool{
+		ctx:       context.Background(),
+		batches:   batches,
+		telemetry: &telemetry,
+		channel:   &channel,
+	}
+
+	if !pool.sendBatch(worker, "data/a.parquet", []Transaction{{ClientID: "a"}}) {
+		t.Fatal("immediate send failed")
+	}
+	if worker.blocked {
+		t.Fatal("immediate send marked worker blocked")
+	}
+	if slot := telemetry.snapshot().workerSlots[0]; slot.Activity != "reading" {
+		t.Fatalf("immediate send activity = %q, want reading", slot.Activity)
+	}
+	if measurements := channel.snapshot(time.Now()); measurements.blockedSenders != 0 ||
+		measurements.sentBatchesTotal != 1 || measurements.sentTransactionsTotal != 1 {
+		t.Fatalf("immediate send channel measurements = %+v", measurements)
+	}
+}
+
+func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
+	batches := make(chan []Transaction, 1)
+	batches <- []Transaction{{ClientID: "preexisting"}}
+	var telemetry readerTelemetry
+	telemetry.registerWorker(0)
+	telemetry.setWorkerReading(0, "data/a.parquet")
+	telemetry.setWorkerLifecycle(0, "draining")
+	var channel channelTelemetry
+	channel.start(batches, 1)
+	worker := &readerWorker{workerID: 0, ctx: context.Background(), draining: true}
+	clock := &readerForceClock{}
+	pool := &readerPool{
+		ctx:        context.Background(),
+		desired:    0,
+		workers:    map[int]*readerWorker{0: worker},
+		batches:    batches,
+		telemetry:  &telemetry,
+		channel:    &channel,
+		afterForce: clock.after,
+	}
+	sent := make(chan bool, 1)
+	go func() {
+		sent <- pool.sendBatch(worker, "data/a.parquet", []Transaction{{ClientID: "a"}})
+	}()
+
+	waitForBlockedSender(t, &channel)
+	pool.mu.Lock()
+	blocked := worker.blocked
+	forcePending := pool.forcePending
+	pool.mu.Unlock()
+	if !blocked || !forcePending {
+		t.Fatalf("blocked state = %t, force pending = %t", blocked, forcePending)
+	}
+	if slot := telemetry.snapshot().workerSlots[0]; slot.Activity != "blocked" || slot.Lifecycle != "draining" {
+		t.Fatalf("blocked draining slot = %+v", slot)
+	}
+
+	<-batches
+	select {
+	case ok := <-sent:
+		if !ok {
+			t.Fatal("blocked send was cancelled after drain")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked send did not complete after drain")
+	}
+	pool.mu.Lock()
+	blocked = worker.blocked
+	pool.mu.Unlock()
+	if blocked {
+		t.Fatal("drained send left worker blocked")
+	}
+	if slot := telemetry.snapshot().workerSlots[0]; slot.Activity != "reading" || slot.Lifecycle != "draining" {
+		t.Fatalf("drained slot = %+v", slot)
+	}
+	if measurements := channel.snapshot(time.Now()); measurements.blockedSenders != 0 ||
+		measurements.sentBatchesTotal != 1 || measurements.sentTransactionsTotal != 1 {
+		t.Fatalf("drained send channel measurements = %+v", measurements)
+	}
+}
+
+func TestReaderPoolCanceledBlockedSendDoesNotRestoreReading(t *testing.T) {
+	batches := make(chan []Transaction, 1)
+	batches <- []Transaction{{ClientID: "preexisting"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var telemetry readerTelemetry
+	telemetry.registerWorker(0)
+	telemetry.setWorkerReading(0, "data/a.parquet")
+	var channel channelTelemetry
+	channel.start(batches, 1)
+	worker := &readerWorker{workerID: 0, ctx: ctx}
+	pool := &readerPool{
+		ctx:       context.Background(),
+		batches:   batches,
+		telemetry: &telemetry,
+		channel:   &channel,
+	}
+	sent := make(chan bool, 1)
+	go func() {
+		sent <- pool.sendBatch(worker, "data/a.parquet", []Transaction{{ClientID: "a"}})
+	}()
+
+	waitForBlockedSender(t, &channel)
+	cancel()
+	select {
+	case ok := <-sent:
+		if ok {
+			t.Fatal("cancelled blocked send succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled blocked send did not complete")
+	}
+	pool.mu.Lock()
+	blocked := worker.blocked
+	pool.mu.Unlock()
+	if blocked {
+		t.Fatal("cancelled send left worker blocked")
+	}
+	if slot := telemetry.snapshot().workerSlots[0]; slot.Activity != "blocked" {
+		t.Fatalf("cancelled send activity = %q, want blocked", slot.Activity)
+	}
+	if measurements := channel.snapshot(time.Now()); measurements.blockedSenders != 0 ||
+		measurements.sentBatchesTotal != 0 || measurements.sentTransactionsTotal != 0 {
+		t.Fatalf("cancelled send channel measurements = %+v", measurements)
+	}
+}
+
 func TestReaderPoolOwnsFilesAcrossConcurrentCycles(t *testing.T) {
 	pool := &readerPool{files: []string{"a", "b"}, active: map[string]bool{}}
 	pool.ctx, pool.cancel = context.WithCancel(context.Background())

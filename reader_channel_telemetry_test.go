@@ -59,6 +59,22 @@ func TestReaderChannelTelemetryMeasuresBlockedSendUntilThrottlerReceives(t *test
 	}
 }
 
+func TestReaderChannelTelemetryTrySendCountsImmediateSendWithoutBlockedMeasurement(t *testing.T) {
+	batches := make(chan []Transaction, 1)
+	var telemetry channelTelemetry
+	telemetry.start(batches, 1)
+
+	if !telemetry.trySend(batches, []Transaction{{}}) {
+		t.Fatal("immediate send failed")
+	}
+
+	measurements := telemetry.snapshot(time.Now())
+	if measurements.blockedSenders != 0 || measurements.blockedMs != 0 ||
+		measurements.sentBatchesTotal != 1 || measurements.sentTransactionsTotal != 1 {
+		t.Fatalf("immediate send measurements = %+v", measurements)
+	}
+}
+
 func TestReaderChannelTelemetrySnapshotAccumulatesSubMillisecondBlockedDurations(t *testing.T) {
 	now := time.Date(2026, time.September, 19, 0, 0, 0, 0, time.UTC)
 	telemetry := channelTelemetry{
