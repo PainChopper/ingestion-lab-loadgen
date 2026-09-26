@@ -55,23 +55,23 @@ adapters, но не содержит деталей запуска конкре�
 
 ## Этапы
 
-1. Упростить composition root: очистить `main`, выделить runtime metrics и
+1. [x] Упростить composition root: очистить `main`, выделить runtime metrics и
    сделать явными сценарии первого запуска и resume.
-2. Ввести application context и единый graceful shutdown: отмена процесса
+2. [x] Ввести application context и единый graceful shutdown: отмена процесса
    останавливает control plane и активный pipeline, а HTTP server прекращает
    работу штатно после завершения зависимых goroutine.
-3. Вынести внутренние команды, результаты команд и snapshot из `http_*` файлов
+3. [ ] Вынести внутренние команды, результаты команд и snapshot из `http_*` файлов
    в независимый control-plane слой без изменения HTTP-контракта.
-4. Выделить pipeline runtime как владельца ресурсов одного run; сократить
+4. [ ] Выделить pipeline runtime как владельца ресурсов одного run; сократить
    Reader-specific поля и операции в `eventLoop`.
-5. Перевести HTTP server на новый control plane и подтвердить неизменность
+5. [ ] Перевести HTTP server на новый control plane и подтвердить неизменность
    существующего API.
-6. Спроектировать и реализовать CLI adapter поверх того же control plane.
-7. Провести узкий анализ общей lifecycle-логики Reader и Sender workers после
+6. [ ] Спроектировать и реализовать CLI adapter поверх того же control plane.
+7. [ ] Провести узкий анализ общей lifecycle-логики Reader и Sender workers после
    выделения pipeline runtime. Выносить общий примитив только если совпадают
    владение ресурсами, масштабирование, shutdown и telemetry, а новая
    абстракция не требует type switches или stage-specific флагов.
-8. В контрольной точке оценить, нужна ли следующая абстракция входной стадии
+8. [ ] В контрольной точке оценить, нужна ли следующая абстракция входной стадии
    после Reader/Parquet; не создавать её заранее.
 
 ## Инварианты
