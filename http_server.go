@@ -13,51 +13,15 @@ import (
 
 const gracefulShutdownTimeout = 10 * time.Second
 
-type requestKind int
-
-const (
-	getSnapshot requestKind = iota
-	cmdRun
-	cmdPause
-	cmdReset
-	cmdSetReadBatchSize
-	cmdSetReaderWorkers
-	cmdSetReaderChannelCapacity
-	cmdSetSenderChannelCapacity
-	cmdSetRequestedTPS
-	cmdSetThrottlerInstallationMode
-	cmdSetSenderWorkers
-)
-
-type request struct {
-	kind          requestKind
-	snapshotReply chan statusSnapshot
-	commandReply  chan commandResult
-	value         int
-	textValue     string
-}
-
-type commandStatus int
-
-const (
-	commandAccepted commandStatus = iota
-	commandConflict
-)
-
-type commandResult struct {
-	status commandStatus
-	err    error
-}
-
 const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
 const internalTestIngestPath = "/internal/test/ingest"
 
-func newServeMux(requests chan<- request, metrics *Metrics, policy policy, loggers ...*zap.Logger) *http.ServeMux {
+func newServeMux(plane controlPlane, metrics *Metrics, policy policy, loggers ...*zap.Logger) *http.ServeMux {
 	logger := loggerOrNop(loggers)
 	mux := http.NewServeMux()
-	mux.Handle(snapshotPath, snapshotHandler(requests, logger))
-	mux.Handle(commandsPath, commandsHandler(requests, policy, logger))
+	mux.Handle(snapshotPath, snapshotHandler(plane, logger))
+	mux.Handle(commandsPath, commandsHandler(plane, policy, logger))
 	mux.Handle(internalTestIngestPath, internalTestIngestHandler())
 
 	if metrics != nil {
@@ -73,9 +37,9 @@ func newServeMux(requests chan<- request, metrics *Metrics, policy policy, logge
 	return mux
 }
 
-func startHTTPServer(requests chan request, metrics *Metrics, policy policy, loggers ...*zap.Logger) (*http.Server, <-chan error) {
+func startHTTPServer(plane controlPlane, metrics *Metrics, policy policy, loggers ...*zap.Logger) (*http.Server, <-chan error) {
 	logger := loggerOrNop(loggers)
-	mux := newServeMux(requests, metrics, policy, logger)
+	mux := newServeMux(plane, metrics, policy, logger)
 
 	server := &http.Server{
 		Addr:    "127.0.0.1:8080",

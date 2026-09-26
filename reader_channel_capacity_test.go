@@ -34,7 +34,7 @@ func TestReaderChannelCapacityValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(commands, testPolicy(t)).ServeHTTP(recorder, request)
+				commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(recorder, request)
 			}()
 
 			if test.want == http.StatusOK {
@@ -98,7 +98,7 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 			go func() {
 				defer close(done)
 				state.eventLoopWithThrottler(
-					requests,
+					testControlPlane(requests),
 					metrics,
 					NewMetrics(),
 					read,
@@ -113,11 +113,11 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 					t.Error("event loop did not stop")
 				}
 			})
-			commands := commandsHandler(requests, state.controls.policy)
+			commands := commandsHandler(testControlPlane(requests), state.controls.policy)
 			snapshot := func() statusSnapshot {
 				t.Helper()
 				recorder := httptest.NewRecorder()
-				snapshotHandler(requests).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+				snapshotHandler(testControlPlane(requests)).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 				var value statusSnapshot
 				if err := json.Unmarshal(recorder.Body.Bytes(), &value); err != nil {
 					t.Fatal(err)

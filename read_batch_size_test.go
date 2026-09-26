@@ -35,7 +35,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(commands, testPolicy(t)).ServeHTTP(recorder, request)
+				commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(recorder, request)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -83,11 +83,11 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 		return readerRun{done: done, reconcile: func(int) {}}, nil
 	}
 	startCustomEventLoopForTest(t, requests, metrics, read)
-	commands := commandsHandler(requests, testPolicy(t))
+	commands := commandsHandler(testControlPlane(requests), testPolicy(t))
 	snapshot := func() statusSnapshot {
 		t.Helper()
 		recorder := httptest.NewRecorder()
-		snapshotHandler(requests).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+		snapshotHandler(testControlPlane(requests)).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 		var value statusSnapshot
 		if err := json.Unmarshal(recorder.Body.Bytes(), &value); err != nil {
 			t.Fatal(err)

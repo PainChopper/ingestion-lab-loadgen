@@ -26,7 +26,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	go func() { (<-requests).snapshotReply <- expected }()
-	snapshotHandler(requests).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	snapshotHandler(testControlPlane(requests)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reply code = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -122,7 +122,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	requests := make(chan request, 1)
 	go func() { (<-requests).snapshotReply <- statusSnapshot{Run: runSnapshot{State: runStateIdle}} }()
 	recorder := httptest.NewRecorder()
-	snapshotHandler(requests).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	snapshotHandler(testControlPlane(requests)).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 func TestSnapshotHandlerRejectsPost(t *testing.T) {
 	requests := make(chan request, 1)
 	rec := httptest.NewRecorder()
-	snapshotHandler(requests).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
+	snapshotHandler(testControlPlane(requests)).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
