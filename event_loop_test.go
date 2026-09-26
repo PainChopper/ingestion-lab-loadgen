@@ -98,7 +98,7 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 	output <- []Transaction{{}, {}, {}}
 	waitForSenderHandoff(t, requests, 1)
 	deadline := time.After(time.Second)
-	for state.telemetry.sender.snapshot().terminalBatches < 1 {
+	for state.telemetry.sender.snapshot().completedBatches < 1 {
 		select {
 		case <-deadline:
 			t.Fatal("Sender did not complete the accepted batch")
@@ -406,7 +406,7 @@ func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testi
 		default:
 		}
 	}
-	if snapshot.Reader.SourceDirectory != filepath.ToSlash(fixtureDirectory) || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.WorkerID == nil || *snapshot.Reader.SourceError.WorkerID != 0 || snapshot.Reader.SourceError.RelativePath != "broken.parquet" || snapshot.Reader.SourceError.Message == "" {
+	if snapshot.Reader.SourceDirectory != filepath.ToSlash(fixtureDirectory) || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.WorkerID != nil || snapshot.Reader.SourceError.RelativePath != "broken.parquet" || snapshot.Reader.SourceError.Message == "" {
 		t.Fatalf("corrupt parquet snapshot = %+v", snapshot.Reader)
 	}
 	if snapshot.Reader.LiveWorkers != 0 || len(snapshot.Reader.WorkerSlots) != 0 || snapshot.Sender.LiveWorkers != 0 || len(snapshot.Sender.WorkerSlots) != 0 {

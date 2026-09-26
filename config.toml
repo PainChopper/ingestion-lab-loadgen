@@ -59,9 +59,9 @@ url = "http://127.0.0.1:8080/internal/test/ingest"
 mutability = "startup-only"
 
 [sender.retry]
-max_attempts = 3
-backoff_base_ms = 250
-backoff_multiplier = 2
+# After the final delay, retries continue at that delay until delivery succeeds
+# or the operator explicitly stops or resets the run.
+delays_ms = [250, 500, 1000, 2000, 5000]
 jitter_percent = 20
 mutability = "startup-only"
 

@@ -13,16 +13,16 @@ type senderWorkerSlot struct {
 }
 
 type senderMeasurements struct {
-	liveWorkers     int
-	drainingWorkers int
-	workerSlots     []senderWorkerSlot
-	terminalBatches int64
+	liveWorkers      int
+	drainingWorkers  int
+	workerSlots      []senderWorkerSlot
+	completedBatches int64
 }
 
 type senderTelemetry struct {
-	mu              sync.Mutex
-	slots           map[int]senderWorkerSlot
-	terminalBatches int64
+	mu               sync.Mutex
+	slots            map[int]senderWorkerSlot
+	completedBatches int64
 }
 
 func (t *senderTelemetry) startWorker(workerID int) {
@@ -66,7 +66,7 @@ func (t *senderTelemetry) setActivity(workerID int, activity string) {
 	t.slots[workerID] = slot
 }
 
-func (t *senderTelemetry) finishBatch(workerID int, success bool) {
+func (t *senderTelemetry) finishBatch(workerID int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	slot, ok := t.slots[workerID]
@@ -74,17 +74,17 @@ func (t *senderTelemetry) finishBatch(workerID int, success bool) {
 		return
 	}
 	slot.Activity = "idle"
-	slot.TerminalError = !success
+	slot.TerminalError = false
 	t.slots[workerID] = slot
-	t.terminalBatches++
+	t.completedBatches++
 }
 
 func (t *senderTelemetry) snapshot() senderMeasurements {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	result := senderMeasurements{
-		workerSlots:     make([]senderWorkerSlot, 0, len(t.slots)),
-		terminalBatches: t.terminalBatches,
+		workerSlots:      make([]senderWorkerSlot, 0, len(t.slots)),
+		completedBatches: t.completedBatches,
 	}
 	for _, slot := range t.slots {
 		result.workerSlots = append(result.workerSlots, slot)
@@ -102,5 +102,5 @@ func (t *senderTelemetry) snapshot() senderMeasurements {
 func (t *senderTelemetry) reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.terminalBatches = 0
+	t.completedBatches = 0
 }

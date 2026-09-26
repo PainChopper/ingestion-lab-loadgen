@@ -95,11 +95,9 @@ type senderAPIPolicy struct {
 }
 
 type senderRetryPolicy struct {
-	MaxAttempts       int    `mapstructure:"max_attempts" json:"maxAttempts"`
-	BackoffBaseMS     int    `mapstructure:"backoff_base_ms" json:"backoffBaseMs"`
-	BackoffMultiplier int    `mapstructure:"backoff_multiplier" json:"backoffMultiplier"`
-	JitterPercent     int    `mapstructure:"jitter_percent" json:"jitterPercent"`
-	Mutability        string `mapstructure:"mutability" json:"mutability"`
+	DelaysMS      []int  `mapstructure:"delays_ms" json:"delaysMs"`
+	JitterPercent int    `mapstructure:"jitter_percent" json:"jitterPercent"`
+	Mutability    string `mapstructure:"mutability" json:"mutability"`
 }
 
 type installationModePolicy struct {
@@ -213,10 +211,61 @@ func (p senderPolicy) validate() error {
 	if err := p.API.validate(); err != nil {
 		return fmt.Errorf("api: %w", err)
 	}
-	if p.Retry != (senderRetryPolicy{MaxAttempts: 3, BackoffBaseMS: 250, BackoffMultiplier: 2, JitterPercent: 20, Mutability: startupOnly}) {
-		return fmt.Errorf("retry must match the approved startup-only policy")
+	return p.Retry.validate()
+}
+
+func (p senderRetryPolicy) validate() error {
+	if p.Mutability != startupOnly {
+		return fmt.Errorf("mutability must be %q", startupOnly)
+	}
+	if p.JitterPercent != 20 {
+		return fmt.Errorf("jitter_percent must be 20")
+	}
+	if len(p.DelaysMS) == 0 {
+		return fmt.Errorf("delays_ms must not be empty")
+	}
+	for index, delay := range p.DelaysMS {
+		if delay <= 0 {
+			return fmt.Errorf("delays_ms[%d] must be positive", index)
+		}
+		if int64(delay) > senderRetryMaxDelayMS(p.JitterPercent) {
+			return fmt.Errorf("delays_ms[%d] exceeds the maximum safe retry duration", index)
+		}
+		if index > 0 && delay < p.DelaysMS[index-1] {
+			return fmt.Errorf("delays_ms must be nondecreasing")
+		}
 	}
 	return nil
+}
+
+func (p senderRetryPolicy) delay(attempt int, batch []Transaction) time.Duration {
+	index := min(attempt-1, len(p.DelaysMS)-1)
+	jitter := deterministicSenderValue(batch, attempt, uint64(2*p.JitterPercent+1)) - p.JitterPercent
+	return senderRetryDuration(p.DelaysMS[index], jitter)
+}
+
+func senderRetryMaxDelayMS(jitterPercent int) int64 {
+	factor := int64(time.Millisecond)
+	if jitterPercent > 0 {
+		factor += factor * int64(jitterPercent) / 100
+	}
+	return math.MaxInt64 / factor
+}
+
+func senderRetryDuration(delayMS, jitterPercent int) time.Duration {
+	if delayMS <= 0 || int64(delayMS) > math.MaxInt64/int64(time.Millisecond) {
+		return time.Duration(math.MaxInt64)
+	}
+	base := time.Duration(delayMS) * time.Millisecond
+	adjustment := base/100*time.Duration(jitterPercent) + base%100*time.Duration(jitterPercent)/100
+	if adjustment > 0 && adjustment > time.Duration(math.MaxInt64)-base {
+		return time.Duration(math.MaxInt64)
+	}
+	delay := base + adjustment
+	if delay <= 0 {
+		return time.Millisecond
+	}
+	return delay
 }
 
 func (p senderAPIPolicy) validate() error {

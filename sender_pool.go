@@ -41,7 +41,7 @@ type senderPool struct {
 	cancel                                   context.CancelFunc
 	intakeDone                               chan struct{}
 	wg                                       sync.WaitGroup
-	workers                                  map[int]*senderWorker
+	workers                                  []*senderWorker
 	nextWorkerID                             int
 	desired                                  int
 	stopping                                 bool
@@ -70,7 +70,7 @@ func startSenderPool(
 		ctx:                                      ctx,
 		cancel:                                   cancel,
 		intakeDone:                               make(chan struct{}),
-		workers:                                  make(map[int]*senderWorker),
+		workers:                                  make([]*senderWorker, 0, workers),
 		retry:                                    retry,
 		batches:                                  batches,
 		channelTelemetry:                         channelTelemetry,
@@ -101,25 +101,24 @@ func (p *senderPool) reconcile(desired int) {
 		}
 	}
 	if activeWorkers > desired {
-		for workerID := p.nextWorkerID - 1; activeWorkers > desired && workerID >= 0; workerID-- {
-			worker, ok := p.workers[workerID]
-			if !ok || worker.draining {
+		for index := len(p.workers) - 1; activeWorkers > desired && index >= 0; index-- {
+			worker := p.workers[index]
+			if worker.draining {
 				continue
 			}
 			worker.draining = true
 			activeWorkers--
 		}
 	} else if activeWorkers < desired {
-		for workerID := 0; activeWorkers < desired && workerID < p.nextWorkerID; workerID++ {
-			worker, ok := p.workers[workerID]
-			if !ok || !worker.draining {
+		for _, worker := range p.workers {
+			if !worker.draining {
 				continue
 			}
 			worker.draining = false
 			activeWorkers++
 		}
 	}
-	for workerID, worker := range p.workers {
+	for _, worker := range p.workers {
 		lifecycle := "active"
 		if worker.draining {
 			lifecycle = "draining"
@@ -127,7 +126,7 @@ func (p *senderPool) reconcile(desired int) {
 				idleDraining = append(idleDraining, worker.done)
 			}
 		}
-		p.telemetry.setLifecycle(workerID, lifecycle)
+		p.telemetry.setLifecycle(worker.workerID, lifecycle)
 		select {
 		case worker.wake <- struct{}{}:
 		default:
@@ -176,7 +175,7 @@ func (p *senderPool) startWorkerLocked() {
 		work:     make(chan []Transaction, 1),
 		done:     make(chan struct{}),
 	}
-	p.workers[workerID] = worker
+	p.workers = append(p.workers, worker)
 	p.telemetry.startWorker(workerID)
 	p.wg.Add(1)
 	go p.runWorker(worker)
@@ -229,7 +228,7 @@ func (p *senderPool) availableWorkerLocked() *senderWorker {
 		if worker.draining || worker.busy {
 			continue
 		}
-		if selected == nil || worker.workerID < selected.workerID {
+		if selected == nil {
 			selected = worker
 		}
 	}
@@ -267,8 +266,9 @@ func (p *senderPool) runWorker(worker *senderWorker) {
 }
 
 func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transaction) {
-	p.processBatch(worker.workerID, batch)
-	p.terminallyCompletedTransactionsSinceTick.Add(int64(len(batch)))
+	if p.processBatch(worker, batch) {
+		p.terminallyCompletedTransactionsSinceTick.Add(int64(len(batch)))
+	}
 	p.mu.Lock()
 	worker.busy = false
 	p.available.Broadcast()
@@ -278,10 +278,17 @@ func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transacti
 func (p *senderPool) workerExited(worker *senderWorker) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.workers[worker.workerID] != worker {
+	index := -1
+	for candidateIndex, candidate := range p.workers {
+		if candidate == worker {
+			index = candidateIndex
+			break
+		}
+	}
+	if index < 0 {
 		return
 	}
-	delete(p.workers, worker.workerID)
+	p.workers = append(p.workers[:index], p.workers[index+1:]...)
 	p.telemetry.finishWorker(worker.workerID)
 	if !p.stopping && !worker.draining && p.activeWorkerCountLocked() < p.desired {
 		p.startWorkerLocked()
@@ -299,34 +306,23 @@ func (p *senderPool) activeWorkerCountLocked() int {
 	return activeWorkers
 }
 
-func (p *senderPool) processBatch(workerID int, batch []Transaction) {
-	for attempt := 1; attempt <= p.retry.MaxAttempts; attempt++ {
-		p.telemetry.setActivity(workerID, "in-flight")
-		switch p.attempt(p.ctx, batch, workerID, attempt) {
+func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) bool {
+	for attempt := 1; ; attempt++ {
+		p.telemetry.setActivity(worker.workerID, "in-flight")
+		switch p.attempt(p.ctx, batch, worker.workerID, attempt) {
 		case senderAttemptSuccess:
-			p.telemetry.finishBatch(workerID, true)
-			return
-		case senderAttemptTerminalFailure, senderAttemptCanceled:
-			p.telemetry.finishBatch(workerID, false)
-			p.logger.Error("batch delivery failed", zap.String("event", "batch_delivery_failed"), zap.Int("worker_id", workerID), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
-			return
-		case senderAttemptRetryableFailure:
-			if attempt == p.retry.MaxAttempts {
-				p.telemetry.finishBatch(workerID, false)
-				p.logger.Error("batch delivery failed", zap.String("event", "batch_delivery_failed"), zap.Int("worker_id", workerID), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
-				return
-			}
+			p.telemetry.finishBatch(worker.workerID)
+			return true
+		case senderAttemptCanceled:
+			return false
+		case senderAttemptRetryableFailure, senderAttemptTerminalFailure:
+			p.logger.Warn("batch delivery will retry", zap.String("event", "batch_delivery_retry"), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
 		}
 
-		p.telemetry.setActivity(workerID, "backoff")
-		base := time.Duration(p.retry.BackoffBaseMS) * time.Millisecond
-		if attempt > 1 {
-			base *= time.Duration(p.retry.BackoffMultiplier)
-		}
-		jitter := deterministicSenderValue(batch, workerID, attempt, 41) - 20
-		if !p.wait(p.ctx, base+base*time.Duration(jitter)/100) {
-			p.telemetry.finishBatch(workerID, false)
-			return
+		p.telemetry.setActivity(worker.workerID, "backoff")
+		delay := p.retry.delay(attempt, batch)
+		if !p.wait(p.ctx, delay) {
+			return false
 		}
 	}
 }
@@ -342,12 +338,11 @@ func waitSenderBackoff(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
-func deterministicSenderValue(batch []Transaction, workerID, attempt int, modulus uint64) int {
+func deterministicSenderValue(batch []Transaction, attempt int, modulus uint64) int {
 	hash := fnv.New64a()
-	var values [24]byte
+	var values [16]byte
 	binary.LittleEndian.PutUint64(values[:8], uint64(len(batch)))
-	binary.LittleEndian.PutUint64(values[8:16], uint64(workerID))
-	binary.LittleEndian.PutUint64(values[16:], uint64(attempt))
+	binary.LittleEndian.PutUint64(values[8:], uint64(attempt))
 	_, _ = hash.Write(values[:])
 	if len(batch) > 0 {
 		_, _ = hash.Write([]byte(batch[0].ClientID))
