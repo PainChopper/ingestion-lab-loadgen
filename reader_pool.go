@@ -461,19 +461,23 @@ func (p *readerPool) sendBatch(worker *readerWorker, source string, batch []Tran
 	if worker.ctx.Err() != nil {
 		return false
 	}
-	return p.channel.sendWithBlocked(worker.ctx, p.batches, batch,
-		func() {
-			p.mu.Lock()
-			worker.blocked = true
-			p.scheduleBlockedForceLocked()
-			p.mu.Unlock()
-			p.telemetry.setWorkerBlocked(worker.workerID)
-		},
-		func() {
-			p.mu.Lock()
-			worker.blocked = false
-			p.mu.Unlock()
-			p.telemetry.setWorkerReading(worker.workerID, source)
-		},
-	)
+	if p.channel.trySend(p.batches, batch) {
+		return true
+	}
+
+	pending := p.channel.beginBlockedSend(p.batches, batch)
+	p.mu.Lock()
+	worker.blocked = true
+	p.scheduleBlockedForceLocked()
+	p.mu.Unlock()
+	p.telemetry.setWorkerBlocked(worker.workerID)
+
+	sent := pending.wait(worker.ctx)
+	p.mu.Lock()
+	worker.blocked = false
+	p.mu.Unlock()
+	if sent && worker.ctx.Err() == nil {
+		p.telemetry.setWorkerReading(worker.workerID, source)
+	}
+	return sent
 }
