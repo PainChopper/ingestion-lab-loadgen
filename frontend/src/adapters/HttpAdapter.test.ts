@@ -19,24 +19,22 @@ interface TestWireSnapshot {
   readonly reader: {
     readonly workers: number
     readonly liveWorkers: number
+    readonly idleWorkers: number
+    readonly readingWorkers: number
+    readonly blockedWorkers: number
     readonly drainingWorkers: number
-    readonly workerSlots: readonly {
-      readonly workerId: number
-      readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'
-      readonly lifecycle: 'active' | 'draining'
-      readonly source: string | null
-    }[]
+    readonly drainingIdleWorkers: number
+    readonly drainingReadingWorkers: number
+    readonly drainingBlockedWorkers: number
     readonly readTps: number
     readonly readBatchSize: number
     readonly rowsRead: number
-    readonly source: string | null
     readonly sourceDirectory: string
     readonly sourceError: {
       readonly category: 'source'
       readonly operation: 'glob' | 'open' | 'read' | 'close' | 'reader-close'
       readonly relativePath: string
       readonly message: string
-      readonly workerId: number | null
     } | null
   }
   readonly throttler: {
@@ -47,13 +45,13 @@ interface TestWireSnapshot {
   readonly sender: {
     readonly workers: number
     readonly liveWorkers: number
+    readonly idleWorkers: number
+    readonly inFlightWorkers: number
+    readonly backoffWorkers: number
     readonly drainingWorkers: number
-    readonly workerSlots: readonly {
-      readonly workerId: number
-      readonly activity: 'idle' | 'in-flight' | 'backoff'
-      readonly lifecycle: 'active' | 'draining'
-      readonly terminalError: boolean
-    }[]
+    readonly drainingIdleWorkers: number
+    readonly drainingInFlightWorkers: number
+    readonly drainingBackoffWorkers: number
   }
   readonly readerChannel: TestWireChannel
   readonly senderChannel: TestWireChannel
@@ -85,9 +83,9 @@ interface MockResponseOptions {
 
 const VALID_WIRE: TestWireSnapshot = {
   run: { state: 'running', elapsedMs: 12_345, totalTransactions: 42_000 },
-  reader: { workers: 1, liveWorkers: 1, drainingWorkers: 0, workerSlots: [{ workerId: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/input.parquet' }], readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, source: 'MBD-mini/trx/part/input.parquet', sourceDirectory: 'C:/dataset', sourceError: null },
+  reader: { workers: 1, liveWorkers: 1, idleWorkers: 0, readingWorkers: 1, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0, readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, sourceDirectory: 'C:/dataset', sourceError: null },
   throttler: { requestedTps: 200, admittedTps: 125_000.5, installationMode: 'installed' },
-  sender: { workers: 32, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] },
+  sender: { workers: 32, liveWorkers: 0, idleWorkers: 0, inFlightWorkers: 0, backoffWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingInFlightWorkers: 0, drainingBackoffWorkers: 0 },
   readerChannel: {
     capacity: 8, sentBatchesTotal: 11, sentTransactionsTotal: 550_000, receivedBatchesTotal: 5, receivedTransactionsTotal: 250_000,
     depthBatches: 6, bufferedTransactions: 300_000, blockedSenders: 1, oldestBlockedSenderMs: 450, blockedMs: 1_600,
@@ -159,7 +157,7 @@ function withRunState(state: RunState): TestWireSnapshot {
     ...VALID_WIRE,
     run: { ...VALID_WIRE.run, state },
     reader: state === 'idle'
-      ? { ...VALID_WIRE.reader, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] }
+      ? { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0 }
       : VALID_WIRE.reader,
   }
 }
@@ -427,7 +425,12 @@ function expectedSnapshot(
           },
       liveWorkers: wire?.reader.liveWorkers ?? 0,
       drainingWorkers: wire?.reader.drainingWorkers ?? 0,
-      workerSlots: wire?.reader.workerSlots ?? null,
+      idleWorkers: wire?.reader.idleWorkers ?? 0,
+      readingWorkers: wire?.reader.readingWorkers ?? 0,
+      blockedWorkers: wire?.reader.blockedWorkers ?? 0,
+      drainingIdleWorkers: wire?.reader.drainingIdleWorkers ?? 0,
+      drainingReadingWorkers: wire?.reader.drainingReadingWorkers ?? 0,
+      drainingBlockedWorkers: wire?.reader.drainingBlockedWorkers ?? 0,
       readBatchSize: readBatchSizeControl(
         wire?.reader.readBatchSize ?? null,
         wire?.policy.readerReadBatchSize ?? null,
@@ -438,7 +441,6 @@ function expectedSnapshot(
       configuredCapacityTps: null,
       limitationReason: null,
       rowsRead: wire?.reader.rowsRead ?? null,
-      source: wire?.reader.source ?? null,
       sourceDirectory: wire?.reader.sourceDirectory,
       sourceError: wire?.reader.sourceError ?? null,
       state: runState,
@@ -472,8 +474,13 @@ function expectedSnapshot(
       workers: wire ? { ...control('workers', wire.sender.workers), min: 1, max: 32, step: 1, applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable' } : control('workers'),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
+      idleWorkers: wire?.sender.idleWorkers ?? 0,
+      inFlightWorkers: wire?.sender.inFlightWorkers ?? 0,
+      backoffWorkers: wire?.sender.backoffWorkers ?? 0,
+      drainingIdleWorkers: wire?.sender.drainingIdleWorkers ?? 0,
+      drainingInFlightWorkers: wire?.sender.drainingInFlightWorkers ?? 0,
+      drainingBackoffWorkers: wire?.sender.drainingBackoffWorkers ?? 0,
       timeoutMs: control('ms'),
-      workerSlots: wire?.sender.workerSlots ?? null,
       retryPolicy: null,
       attemptedTps: null,
       retryAttemptedTps: null,
@@ -532,17 +539,10 @@ const malformedCases: ReadonlyArray<{
   readonly result: () => Promise<Response>
 }> = [
   {
-    name: 'unknown Reader activity',
+    name: 'negative Reader aggregate count',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      reader: { ...VALID_WIRE.reader, workerSlots: [{ ...VALID_WIRE.reader.workerSlots[0], activity: 'unknown' }] },
-    }),
-  },
-  {
-    name: 'extra Reader slot key',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      reader: { ...VALID_WIRE.reader, workerSlots: [{ ...VALID_WIRE.reader.workerSlots[0], extra: true }] },
+      reader: { ...VALID_WIRE.reader, readingWorkers: -1 },
     }),
   },
   {
@@ -671,47 +671,11 @@ const malformedCases: ReadonlyArray<{
       })
     },
   },
-  ...(['activity', 'lifecycle', 'terminalError'] as const).flatMap((field) => [
-    {
-      name: `missing sender slot ${field}`,
-      result: async () => {
-        const slot: Record<string, unknown> = {
-          workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
-        }
-        delete slot[field]
-        return mockResponse({
-          ...VALID_WIRE,
-          sender: { ...VALID_WIRE.sender, liveWorkers: 1, workerSlots: [slot] },
-        })
-      },
-    },
-    {
-      name: `wrong-type sender slot ${field}`,
-      result: async () => mockResponse({
-        ...VALID_WIRE,
-        sender: {
-          ...VALID_WIRE.sender,
-          liveWorkers: 1,
-          workerSlots: [{
-            workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
-            [field]: 7,
-          }],
-        },
-      }),
-    },
-  ]),
   {
-    name: 'extra sender slot field',
+    name: 'aggregate sender count has wrong type',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      sender: {
-        ...VALID_WIRE.sender,
-        liveWorkers: 1,
-        workerSlots: [{
-          workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false,
-          extra: true,
-        }],
-      },
+      sender: { ...VALID_WIRE.sender, inFlightWorkers: 'one' },
     }),
   },
   {
@@ -809,11 +773,7 @@ const malformedCases: ReadonlyArray<{
   },
   {
     name: 'empty Reader source error message',
-    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: '', workerId: 0 } } }),
-  },
-  {
-    name: 'invalid Reader source error worker ID',
-    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt', workerId: -1 } } }),
+    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: '' } } }),
   },
   {
     name: 'negative integer',
@@ -855,10 +815,6 @@ const malformedCases: ReadonlyArray<{
       ...VALID_WIRE,
       readerChannel: { ...VALID_WIRE.readerChannel, bufferedTransactions: Number.MAX_SAFE_INTEGER + 1 },
     }),
-  },
-  {
-    name: 'empty reader source',
-    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, source: '' } }),
   },
   {
     name: 'wrong content type',
@@ -946,7 +902,6 @@ describe('HttpAdapter', () => {
       },
       readTps: 3_500.5,
       rowsRead: 14_000,
-      source: 'MBD-mini/trx/part/input.parquet',
     })
     expect(snapshot.sender.workers).toMatchObject({
       applied: 32,
@@ -1038,11 +993,11 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it('maps reset reader metrics as zero values and no source', async () => {
+  it('maps reset reader metrics as zero values', async () => {
     const resetWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'idle' },
-      reader: { ...VALID_WIRE.reader, liveWorkers: 0, drainingWorkers: 0, workerSlots: [], readTps: 0, rowsRead: 0, source: null },
+      reader: { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0, readTps: 0, rowsRead: 0 },
       throttler: { ...VALID_WIRE.throttler, admittedTps: 0 },
       senderChannel: { ...VALID_WIRE.senderChannel, sentBatchesTotal: 0, sentTransactionsTotal: 0, receivedBatchesTotal: 0, receivedTransactionsTotal: 0, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 0, inputBatchesPerSecond: 0, inputTransactionsPerSecond: 0, outputBatchesPerSecond: 0, outputTransactionsPerSecond: 0 },
     }
@@ -1054,7 +1009,6 @@ describe('HttpAdapter', () => {
     expect(adapter.getSnapshot().reader).toMatchObject({
       readTps: 0,
       rowsRead: 0,
-      source: null,
       state: 'idle',
     })
     expect(adapter.getSnapshot().throttler.admittedTps).toBe(0)
@@ -1102,10 +1056,7 @@ describe('HttpAdapter', () => {
     const recoveredWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'paused', elapsedMs: 67_890, totalTransactions: 84_000 },
-      reader: { ...VALID_WIRE.reader, workers: 2, liveWorkers: 2, workerSlots: [
-        { workerId: 0, activity: 'reading', lifecycle: 'active', source: 'MBD-mini/trx/part/recovered.parquet' },
-        { workerId: 1, activity: 'idle', lifecycle: 'active', source: null },
-      ], readTps: 2_000, readBatchSize: 25_000, rowsRead: 28_000, source: 'MBD-mini/trx/part/recovered.parquet' },
+      reader: { ...VALID_WIRE.reader, workers: 2, liveWorkers: 2, idleWorkers: 1, readingWorkers: 1, readTps: 2_000, readBatchSize: 25_000, rowsRead: 28_000 },
       sender: { ...VALID_WIRE.sender, workers: 3 },
       readerChannel: { ...VALID_WIRE.readerChannel, capacity: 16, depthBatches: 4, bufferedTransactions: 100_000, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 2_000 },
     }
@@ -1360,7 +1311,7 @@ describe('HttpAdapter', () => {
     const idleWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'idle' },
-      reader: { ...VALID_WIRE.reader, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] },
+      reader: { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0 },
       readerChannel: { ...VALID_WIRE.readerChannel, capacity: 2 },
     }
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
@@ -1403,7 +1354,7 @@ describe('HttpAdapter', () => {
     const idleWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'idle' },
-      reader: { ...VALID_WIRE.reader, liveWorkers: 0, drainingWorkers: 0, workerSlots: [] },
+      reader: { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0 },
       senderChannel: { ...VALID_WIRE.senderChannel, capacity: 0 },
     }
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
@@ -1512,16 +1463,24 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it.each(['idle', 'reading', 'completed', 'blocked'] as const)(
-    'accepts Reader activity %s with the strict four-key workerId slot shape',
-    async (activity) => {
-      const slot = { ...VALID_WIRE.reader.workerSlots[0]!, activity }
-      const wire = { ...VALID_WIRE, reader: { ...VALID_WIRE.reader, workerSlots: [slot] } }
+  it.each(['idleWorkers', 'readingWorkers', 'blockedWorkers'] as const)(
+    'accepts aggregate Reader count %s',
+    async (field) => {
+      const wire = {
+        ...VALID_WIRE,
+        reader: {
+          ...VALID_WIRE.reader,
+          liveWorkers: 1,
+          idleWorkers: 0,
+          readingWorkers: 0,
+          blockedWorkers: 0,
+          [field]: 1,
+        },
+      }
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
       const adapter = new HttpAdapter()
       await flushPoll()
-      expect(adapter.getSnapshot().reader.workerSlots?.[0]).toEqual(slot)
-      expect(Object.keys(adapter.getSnapshot().reader.workerSlots![0]!)).toHaveLength(4)
+      expect(adapter.getSnapshot().reader[field]).toBe(1)
       adapter.dispose()
     },
   )

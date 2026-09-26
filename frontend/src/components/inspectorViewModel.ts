@@ -99,10 +99,7 @@ export function getInspectorViewModel(
   switch (selectedId) {
     case 'reader':
       {
-        const workerSlots = snapshot.reader.workerSlots ?? []
-        const idleWorkers = workerSlots.filter((slot) => slot.activity === 'idle').length
-        const readingWorkers = workerSlots.filter((slot) => slot.activity === 'reading').length
-        const blockedWorkers = workerSlots.filter((slot) => slot.activity === 'blocked').length
+        const { idleWorkers, readingWorkers, blockedWorkers } = snapshot.reader
         const sourceError = snapshot.reader.sourceError
         const rows: InspectorRow[] = [
 		  {
@@ -134,9 +131,7 @@ export function getInspectorViewModel(
 				label: '',
 				key: 'source-error',
 				kind: 'source-error',
-				value: sourceError.workerId === null
-					? `${sourcePath}: ${sourceError.message}`
-					: `Worker ID ${sourceError.workerId} · ${sourcePath}: ${sourceError.message}`,
+              value: `${sourcePath}: ${sourceError.message}`,
 				layout: 'full-width',
 			})
 		}
@@ -158,13 +153,9 @@ export function getInspectorViewModel(
       }
     case 'sender': {
       const policy = snapshot.policy?.senderRetry ?? snapshot.sender.retryPolicy
-      const workerSlots = snapshot.sender.workerSlots ?? []
-      const hasWorkerStateTelemetry = snapshot.sender.workerSlots !== null
+      const { idleWorkers, inFlightWorkers, backoffWorkers } = snapshot.sender
+      const hasWorkerStateTelemetry = true
       const hasSenderTelemetry = snapshot.adapterKind !== 'http'
-      const idleWorkers = workerSlots.filter((slot) => slot.activity === 'idle').length
-      const inFlightWorkers = workerSlots.filter((slot) => slot.activity === 'in-flight').length
-      const backoffWorkers = workerSlots.filter((slot) => slot.activity === 'backoff').length
-      const terminalErrorWorkers = workerSlots.filter((slot) => slot.terminalError).length
       const policyValue = policy === null
         ? '—'
         : `${formatInteger(policy.maxAttempts)} attempts · ` +
@@ -185,14 +176,12 @@ export function getInspectorViewModel(
               value:
                 `${formatInteger(idleWorkers)} idle · ` +
                 `${formatInteger(inFlightWorkers)} in-flight · ` +
-                `${formatInteger(backoffWorkers)} backoff · ` +
-                `${formatInteger(terminalErrorWorkers)} errors`,
+                `${formatInteger(backoffWorkers)} backoff`,
               layout: 'full-width',
               segments: [
                 { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
                 { value: `${formatInteger(inFlightWorkers)} in-flight`, tone: 'in-flight' },
                 { value: `${formatInteger(backoffWorkers)} backoff`, tone: 'backoff' },
-                { value: `${formatInteger(terminalErrorWorkers)} errors`, tone: 'error' },
               ],
             }
           : unavailableRow('Worker states'),

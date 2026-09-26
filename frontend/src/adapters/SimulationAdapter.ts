@@ -142,6 +142,12 @@ function freezeSnapshot(
   const config = simulation.config
   const readerCapacityTps = Math.round(telemetry.readerCapacityTps)
   const readerReadTps = Math.round(telemetry.readerTransactionsPerSecond)
+  const senderWorkerStates = telemetry.sender.workerStates
+  const drainingSenderWorkerStates = telemetry.sender.drainingWorkerStates
+  const drainingWorkers =
+    drainingSenderWorkerStates.idle +
+    drainingSenderWorkerStates.inFlight +
+    drainingSenderWorkerStates.backoff
   const readerLimitationReason = running &&
       telemetry.readerChannel.blockedSenders > 0 &&
       readerReadTps < readerCapacityTps
@@ -164,18 +170,13 @@ function freezeSnapshot(
         'workers',
       ),
       liveWorkers: readerPoolLive ? config.readerWorkers : 0,
+      idleWorkers: readerPoolLive && readerReadTps === 0 ? config.readerWorkers : 0,
+      readingWorkers: readerPoolLive && readerReadTps > 0 ? config.readerWorkers : 0,
+      blockedWorkers: 0,
       drainingWorkers: 0,
-      workerSlots: Object.freeze(
-        Array.from(
-          { length: readerPoolLive ? config.readerWorkers : 0 },
-          (_, workerId) => Object.freeze({
-            workerId,
-            activity: readerReadTps > 0 ? 'reading' as const : 'idle' as const,
-            lifecycle: 'active' as const,
-            source: readerReadTps > 0 ? 'events.parquet' : null,
-          }),
-        ),
-      ),
+      drainingIdleWorkers: 0,
+      drainingReadingWorkers: 0,
+      drainingBlockedWorkers: 0,
       readBatchSize: numericControl(
         config.readBatchSize,
         CONTROL_RANGES.readBatchSize,
@@ -185,7 +186,6 @@ function freezeSnapshot(
       configuredCapacityTps: readerCapacityTps,
       limitationReason: readerLimitationReason,
       rowsRead: telemetry.readerChannel.sentTransactionsTotal,
-      source: 'events.parquet',
       sourceError: null,
       state: state.runState,
     }),
@@ -226,22 +226,30 @@ function freezeSnapshot(
         CONTROL_RANGES.senderWorkers,
         'workers',
       ),
-      liveWorkers: running ? telemetry.sender.workerSlots.length : 0,
-      drainingWorkers: running
-        ? telemetry.sender.workerSlots.filter((slot) => slot.lifecycle === 'draining').length
+      liveWorkers: running ? telemetry.sender.workers.applied : 0,
+      idleWorkers: running
+        ? senderWorkerStates.idle + drainingSenderWorkerStates.idle
+        : 0,
+      inFlightWorkers: running
+        ? senderWorkerStates.inFlight + drainingSenderWorkerStates.inFlight
+        : 0,
+      backoffWorkers: running
+        ? senderWorkerStates.backoff + drainingSenderWorkerStates.backoff
+        : 0,
+      drainingWorkers: running ? drainingWorkers : 0,
+      drainingIdleWorkers: running
+        ? drainingSenderWorkerStates.idle
+        : 0,
+      drainingInFlightWorkers: running
+        ? drainingSenderWorkerStates.inFlight
+        : 0,
+      drainingBackoffWorkers: running
+        ? drainingSenderWorkerStates.backoff
         : 0,
       timeoutMs: numericControl(
         config.httpTimeoutMs,
         CONTROL_RANGES.httpTimeoutMs,
         'ms',
-      ),
-      workerSlots: Object.freeze(
-        (running ? telemetry.sender.workerSlots : []).map((slot) => Object.freeze({
-          workerId: slot.workerId,
-          activity: slot.state,
-          lifecycle: slot.lifecycle,
-          terminalError: slot.terminalError,
-        })),
       ),
       retryPolicy: RETRY_POLICY,
       attemptedTps: Math.round(telemetry.attemptedTransactionsPerSecond),

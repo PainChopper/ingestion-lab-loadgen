@@ -51,7 +51,7 @@ describe('LabShell', () => {
 		reader: {
 			...simulation.getSnapshot().reader,
 			state: 'faulted',
-			sourceDirectory: 'C:/dataset', sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt parquet', workerId: 2 },
+			sourceDirectory: 'C:/dataset', sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt parquet' },
 		},
     }
     const listeners = new Set<(next: LoadgenTelemetrySnapshot) => void>()
@@ -96,9 +96,12 @@ describe('LabShell', () => {
         ...simulation.getSnapshot().sender,
         state: 'running',
         liveWorkers: 2,
-        workerSlots: [
-          { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-        ],
+        idleWorkers: 1,
+        inFlightWorkers: 1,
+        backoffWorkers: 0,
+        drainingIdleWorkers: 0,
+        drainingInFlightWorkers: 0,
+        drainingBackoffWorkers: 0,
       },
     }
     let snapshot = running
@@ -128,7 +131,12 @@ describe('LabShell', () => {
           state: 'paused',
           workers: { ...running.sender.workers, applied: 7 },
           liveWorkers: 0,
-          workerSlots: [],
+          idleWorkers: 0,
+          inFlightWorkers: 0,
+          backoffWorkers: 0,
+          drainingIdleWorkers: 0,
+          drainingInFlightWorkers: 0,
+          drainingBackoffWorkers: 0,
         },
       }
       listeners.forEach((listener) => listener(snapshot))
@@ -145,7 +153,7 @@ describe('LabShell', () => {
     expect(document.querySelector('#sender-actor')?.textContent)
       .not.toContain('desired ·')
     expect(document.querySelector('#sender-actor')?.textContent)
-      .toContain('0 idle · 1 in-flight · 0 backoff · 0 errors')
+      .toContain('1 idle · 1 in-flight · 0 backoff')
     expect(screen.getByRole('button', { name: 'Resume run' })).not.toBeNull()
     await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect reader' }))
     expect(screen.getByText('Workers desired / frozen live / draining')).not.toBeNull()
@@ -355,7 +363,7 @@ describe('LabShell', () => {
       .toContain('inspector-data__row--full-width')
     const workerSummary = screen.getByText('Worker states').parentElement
     expect(workerSummary?.className).toContain('inspector-data__row--full-width')
-    expect(workerSummary?.querySelectorAll('.worker-state')).toHaveLength(4)
+    expect(workerSummary?.querySelectorAll('.worker-state')).toHaveLength(3)
     expect(screen.getAllByTestId('sender-inspector-section-data'))
       .toHaveLength(3)
   })

@@ -17,9 +17,12 @@ function runningSnapshot(): LoadgenTelemetrySnapshot {
       ...base.reader,
       state: 'running',
       liveWorkers: 2,
-      workerSlots: [
-        { workerId: 1, activity: 'reading', lifecycle: 'active', source: 'rows.csv' },
-      ],
+      idleWorkers: 1,
+      readingWorkers: 1,
+      blockedWorkers: 0,
+      drainingIdleWorkers: 0,
+      drainingReadingWorkers: 0,
+      drainingBlockedWorkers: 0,
       readTps: 75,
       rowsRead: 900,
     },
@@ -30,9 +33,12 @@ function runningSnapshot(): LoadgenTelemetrySnapshot {
       ...base.sender,
       state: 'running',
       liveWorkers: 2,
-      workerSlots: [
-        { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-      ],
+      idleWorkers: 1,
+      inFlightWorkers: 1,
+      backoffWorkers: 0,
+      drainingIdleWorkers: 0,
+      drainingInFlightWorkers: 0,
+      drainingBackoffWorkers: 0,
       attemptedTps: 65,
       successfulResponses: 780,
     },
@@ -53,7 +59,12 @@ function pausedSnapshot(running: LoadgenTelemetrySnapshot): LoadgenTelemetrySnap
       state: 'paused',
       workers: { ...running.reader.workers, applied: 7 },
       liveWorkers: 0,
-      workerSlots: [],
+      idleWorkers: 0,
+      readingWorkers: 0,
+      blockedWorkers: 0,
+      drainingIdleWorkers: 0,
+      drainingReadingWorkers: 0,
+      drainingBlockedWorkers: 0,
       readTps: 0,
       rowsRead: 0,
     },
@@ -70,7 +81,12 @@ function pausedSnapshot(running: LoadgenTelemetrySnapshot): LoadgenTelemetrySnap
       state: 'paused',
       workers: { ...running.sender.workers, applied: 9 },
       liveWorkers: 0,
-      workerSlots: [],
+      idleWorkers: 0,
+      inFlightWorkers: 0,
+      backoffWorkers: 0,
+      drainingIdleWorkers: 0,
+      drainingInFlightWorkers: 0,
+      drainingBackoffWorkers: 0,
       attemptedTps: 0,
       successfulResponses: 0,
     },
@@ -90,17 +106,17 @@ describe('PauseFrozenObservedDeriver', () => {
     const repeatedPaused = deriver.derive({
       ...paused,
       revision: 3,
-      sender: { ...paused.sender, attemptedTps: 1, workerSlots: [] },
+      sender: { ...paused.sender, attemptedTps: 1 },
     })
 
     expect(firstPaused.frozenObserved).toBe(true)
     expect(firstPaused.snapshot.totalTransactions).toBe(900)
-    expect(firstPaused.snapshot.reader.workerSlots).toEqual(running.reader.workerSlots)
+    expect(firstPaused.snapshot.reader.readingWorkers).toBe(1)
     expect(firstPaused.snapshot.sender.attemptedTps).toBe(65)
     expect(firstPaused.snapshot.sender.workers.applied).toBe(9)
     expect(firstPaused.snapshot.throttler.requestedTps.applied).toBe(77)
     expect(repeatedPaused.snapshot.sender.attemptedTps).toBe(65)
-    expect(repeatedPaused.snapshot.sender.workerSlots).toEqual(running.sender.workerSlots)
+    expect(repeatedPaused.snapshot.sender.inFlightWorkers).toBe(1)
   })
 
   it('clears the frozen observation for the first fresh running snapshot and reset idle', () => {
@@ -127,7 +143,7 @@ describe('PauseFrozenObservedDeriver', () => {
     const coldDeriver = new PauseFrozenObservedDeriver()
     const coldPaused = coldDeriver.derive(cold)
     expect(coldPaused.frozenObserved).toBe(false)
-    expect(coldPaused.snapshot.sender.workerSlots).toEqual([])
+    expect(coldPaused.snapshot.sender.inFlightWorkers).toBe(0)
 
     const deriver = new PauseFrozenObservedDeriver()
     deriver.derive(running)

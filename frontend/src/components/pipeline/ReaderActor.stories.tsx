@@ -3,7 +3,6 @@ import type { LiveControls } from '../../hooks/useDesiredControl'
 import type {
   LoadgenSnapshot,
   NumericControlSnapshot,
-  ReaderWorkerSlotSnapshot,
 } from '../../model/loadgen'
 import { PipelineSvg } from './PipelineSvg'
 import './PipelineSvg.css'
@@ -49,32 +48,6 @@ function liveControls(snapshot: LoadgenSnapshot): LiveControls {
 }
 
 type ReaderState = 'idle' | 'reading' | 'backpressured' | 'draining' | 'error'
-
-function readerSlots(state: ReaderState): readonly ReaderWorkerSlotSnapshot[] {
-  if (state === 'idle') return [
-    { workerId: 1, activity: 'idle', lifecycle: 'active', source: 'fixture' },
-    { workerId: 2, activity: 'idle', lifecycle: 'active', source: 'fixture' },
-  ]
-  if (state === 'reading') return [
-    { workerId: 1, activity: 'reading', lifecycle: 'active', source: 'fixture' },
-    { workerId: 2, activity: 'reading', lifecycle: 'active', source: 'fixture' },
-    { workerId: 3, activity: 'reading', lifecycle: 'active', source: 'fixture' },
-  ]
-  if (state === 'backpressured') return [
-    { workerId: 1, activity: 'blocked', lifecycle: 'active', source: 'fixture' },
-    { workerId: 2, activity: 'blocked', lifecycle: 'active', source: 'fixture' },
-    { workerId: 3, activity: 'blocked', lifecycle: 'active', source: 'fixture' },
-  ]
-  if (state === 'draining') return [
-    { workerId: 1, activity: 'completed', lifecycle: 'active', source: 'fixture' },
-    { workerId: 2, activity: 'reading', lifecycle: 'draining', source: 'fixture' },
-    { workerId: 3, activity: 'idle', lifecycle: 'draining', source: 'fixture' },
-  ]
-  return [
-    { workerId: 1, activity: 'idle', lifecycle: 'active', source: null },
-    { workerId: 2, activity: 'idle', lifecycle: 'active', source: null },
-  ]
-}
 
 function snapshotFor(state: ReaderState): LoadgenSnapshot {
   const active = state === 'reading' || state === 'backpressured'
@@ -131,15 +104,20 @@ function snapshotFor(state: ReaderState): LoadgenSnapshot {
     reader: {
       id: 'reader',
       workers: workerControl,
-      liveWorkers: active ? 3 : draining ? 1 : readerWorkers,
+      liveWorkers: active ? 3 : draining ? 2 : readerWorkers,
       drainingWorkers: draining ? 2 : 0,
-      workerSlots: readerSlots(state),
+      idleWorkers: state === 'idle' || state === 'error' ? 2 : draining ? 1 : 0,
+      readingWorkers: state === 'reading' ? 3 : draining ? 1 : 0,
+      blockedWorkers: state === 'backpressured' ? 3 : 0,
+      drainingIdleWorkers: draining ? 1 : 0,
+      drainingReadingWorkers: draining ? 1 : 0,
+      drainingBlockedWorkers: 0,
       readBatchSize: batchControl,
       readTps: active ? 1_200 : null,
       configuredCapacityTps: connectionError ? null : 1_500,
       limitationReason: state === 'backpressured' ? 'downstream-backpressure' : null,
       rowsRead: active ? 12_000 : null,
-      source: connectionError ? null : 'fixture source',
+      sourceDirectory: connectionError ? undefined : 'fixture source',
       sourceError: null,
       state: runState,
     },
@@ -151,8 +129,10 @@ function snapshotFor(state: ReaderState): LoadgenSnapshot {
     readerChannel,
     senderChannel: { ...readerChannel, id: 'throttler-to-sender', from: 'throttler', to: 'sender' },
     sender: {
-      id: 'sender', workers: workerControl, liveWorkers: active ? 3 : 0, drainingWorkers: 0,
-      timeoutMs: numericControl(5_000, 'ms'), workerSlots: null, retryPolicy: null,
+      id: 'sender', workers: workerControl, liveWorkers: active ? 3 : 2, drainingWorkers: 0,
+      idleWorkers: active ? 0 : 2, inFlightWorkers: active ? 3 : 0, backoffWorkers: 0,
+      drainingIdleWorkers: 0, drainingInFlightWorkers: 0, drainingBackoffWorkers: 0,
+      timeoutMs: numericControl(5_000, 'ms'), retryPolicy: null,
       attemptedTps: active ? 1_200 : null, retryAttemptedTps: 0, terminalFailedTps: 0,
       inFlightRequests: active ? 3 : 0, attemptsStartedTotal: active ? 12_000 : 0,
       retryAttemptsStartedTotal: 0, successfulResponses: active ? 11_900 : 0, failedResponses: 0,

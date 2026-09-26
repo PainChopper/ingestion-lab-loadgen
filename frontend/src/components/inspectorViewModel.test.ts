@@ -78,7 +78,7 @@ describe('inspector view model', () => {
     expect(model?.rows.find((row) => row.label === 'Retry attempts')?.value)
       .toBe('0')
     expect(model?.rows.find((row) => row.label === 'Worker states')?.value)
-      .toBe('0 idle · 0 in-flight · 0 backoff · 0 errors')
+      .toBe('0 idle · 0 in-flight · 0 backoff')
     expect(model?.rows.find((row) => row.label === 'Workers desired / live / draining')?.value)
       .toBe('3 / 0 / 0')
     expect(model?.rows.find((row) => row.label === 'Retry policy')?.value)
@@ -100,12 +100,12 @@ describe('inspector view model', () => {
         },
         liveWorkers: 32,
         drainingWorkers: 8,
-        workerSlots: Array.from({ length: 32 }, (_, workerId) => ({
-          workerId,
-          activity: workerId < 2 ? 'idle' as const : workerId < 13 ? 'in-flight' as const : 'backoff' as const,
-          lifecycle: workerId < 24 ? 'active' as const : 'draining' as const,
-          terminalError: false,
-        })),
+        idleWorkers: 2,
+        inFlightWorkers: 11,
+        backoffWorkers: 19,
+        drainingIdleWorkers: 0,
+        drainingInFlightWorkers: 0,
+        drainingBackoffWorkers: 8,
         attemptedTps: 80_000,
         retryAttemptedTps: 30_000,
         terminalFailedTps: 10_000,
@@ -126,7 +126,7 @@ describe('inspector view model', () => {
       { label: 'Workers desired / live / draining', value: '32 / 32 / 8' },
       expect.objectContaining({
         label: 'Worker states',
-        value: '2 idle · 11 in-flight · 19 backoff · 0 errors',
+        value: '2 idle · 11 in-flight · 19 backoff',
       }),
       { label: 'Attempted TPS', value: '80,000 tx/s' },
       { label: 'Retry TPS', value: '30,000 tx/s' },
@@ -222,7 +222,6 @@ describe('inspector view model', () => {
         configuredCapacityTps: 350_000,
         limitationReason: 'downstream-backpressure',
         rowsRead: 14_000,
-        source: 'MBD-mini/trx/part/input.parquet',
       },
     }, 'reader')
 
@@ -260,7 +259,6 @@ describe('inspector view model', () => {
           operation: 'read',
           relativePath: 'broken/very-long-source.parquet',
           message: 'corrupt parquet',
-          workerId: 7,
         },
       },
     }, 'reader')
@@ -269,7 +267,7 @@ describe('inspector view model', () => {
       label: '',
       key: 'source-error',
       kind: 'source-error',
-      value: 'Worker ID 7 · C:/dataset/broken/very-long-source.parquet: corrupt parquet',
+      value: 'C:/dataset/broken/very-long-source.parquet: corrupt parquet',
       layout: 'full-width',
     })
     expect(model?.rows.map((row) => row.label)).not.toEqual(expect.arrayContaining([
