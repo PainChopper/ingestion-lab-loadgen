@@ -19,9 +19,10 @@ type throttlerStarter func(
 ) (<-chan struct{}, chan<- throttlerUpdate)
 
 type readerRun struct {
-	done         <-chan struct{}
-	reconcile    func(int)
-	sourceErrors <-chan readerSourceError
+	done              <-chan struct{}
+	reconcile         func(int)
+	aggregateSnapshot func() readerPoolSnapshot
+	sourceErrors      <-chan readerSourceError
 }
 
 type readerStarter func(context.Context, chan<- []Transaction, int, int) (readerRun, error)
@@ -76,6 +77,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 	var cancelReader context.CancelFunc
 	var readerDone <-chan struct{}
 	var readerReconcile func(int)
+	var readerAggregateSnapshot func() readerPoolSnapshot
 	var readerSourceErrors <-chan readerSourceError
 	var lastRuntimeSnapshot time.Time
 	stopActiveRun := func() {
@@ -104,6 +106,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 		cancelReader = nil
 		readerDone = nil
 		readerReconcile = nil
+		readerAggregateSnapshot = nil
 		readerSourceErrors = nil
 		cancelThrottler = nil
 		throttlerDone = nil
@@ -125,9 +128,16 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			case getSnapshot:
 				runState := state.run.lifecycle.currentState()
 				reader := state.telemetry.reader.snapshot()
+				readerPool := readerPoolSnapshot{}
+				if readerAggregateSnapshot != nil {
+					readerPool = readerAggregateSnapshot()
+				}
 				readerChannel := state.telemetry.readerChannel.snapshot(time.Now())
 				senderChannel := state.telemetry.senderChannel.snapshot(time.Now())
-				sender := state.telemetry.sender.snapshot()
+				senderPool := senderPoolSnapshot{}
+				if pool != nil {
+					senderPool = pool.aggregateSnapshot()
+				}
 				if runState == runStateIdle || runState == runStateFaulted {
 					readerChannel.capacity = state.readerChannelCapacity()
 					senderChannel.capacity = state.senderChannelCapacity()
@@ -139,10 +149,14 @@ func (state *controlState) eventLoopWithThrottlerContext(
 						ElapsedMs:         state.elapsedMs(time.Now()),
 					},
 					Reader: readerSnapshot{
-						Workers: state.readerWorkers(), LiveWorkers: reader.liveWorkers,
-						DrainingWorkers: reader.drainingWorkers, WorkerSlots: reader.workerSlots,
-						ReadBatchSize: state.readBatchSize(), ReadTps: reader.readTPS,
-						RowsRead: reader.rowsRead, Source: reader.source,
+						Workers: state.readerWorkers(), LiveWorkers: readerPool.liveWorkers,
+						IdleWorkers: readerPool.idleWorkers, ReadingWorkers: readerPool.readingWorkers,
+						BlockedWorkers: readerPool.blockedWorkers, DrainingWorkers: readerPool.drainingWorkers,
+						DrainingIdleWorkers:    readerPool.drainingIdleWorkers,
+						DrainingReadingWorkers: readerPool.drainingReadingWorkers,
+						DrainingBlockedWorkers: readerPool.drainingBlockedWorkers,
+						ReadBatchSize:          state.readBatchSize(), ReadTps: reader.readTPS,
+						RowsRead:        reader.rowsRead,
 						SourceDirectory: readerSourceDirectory(state.controls.policy.Source.Path),
 						SourceError:     state.run.sourceError,
 					},
@@ -152,8 +166,12 @@ func (state *controlState) eventLoopWithThrottlerContext(
 						InstallationMode: state.installationMode(),
 					},
 					Sender: senderSnapshot{
-						Workers: state.senderWorkers(), LiveWorkers: sender.liveWorkers,
-						DrainingWorkers: sender.drainingWorkers, WorkerSlots: sender.workerSlots,
+						Workers: state.senderWorkers(), LiveWorkers: senderPool.liveWorkers,
+						IdleWorkers: senderPool.idleWorkers, InFlightWorkers: senderPool.inFlightWorkers,
+						BackoffWorkers: senderPool.backoffWorkers, DrainingWorkers: senderPool.drainingWorkers,
+						DrainingIdleWorkers:     senderPool.drainingIdleWorkers,
+						DrainingInFlightWorkers: senderPool.drainingInFlightWorkers,
+						DrainingBackoffWorkers:  senderPool.drainingBackoffWorkers,
 					},
 					ReaderChannel: channelSnapshot{
 						Capacity:                      readerChannel.capacity,
@@ -229,6 +247,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 					}
 					readerDone = started.done
 					readerReconcile = started.reconcile
+					readerAggregateSnapshot = started.aggregateSnapshot
 					readerSourceErrors = started.sourceErrors
 					cancelReader = cancel
 					throttlerContext, cancel := context.WithCancel(ctx)

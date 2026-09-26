@@ -174,7 +174,7 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 		snapshot := <-snapshotReply
 		sender := snapshot.Sender
 		if snapshot.Run.State != wantState || sender.Workers != 3 || sender.LiveWorkers != wantLive ||
-			sender.DrainingWorkers != 0 || len(sender.WorkerSlots) != wantLive {
+			sender.DrainingWorkers != 0 {
 			t.Fatalf("Sender snapshot = %+v in %s", sender, snapshot.Run.State)
 		}
 	}
@@ -266,7 +266,7 @@ func TestRunFailureFaultsAndResetClearsSourceError(t *testing.T) {
 		}
 		requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 		snapshot := <-snapshotReply
-		if snapshot.Run.State != runStateFaulted || snapshot.Run.ElapsedMs != 0 || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.Message != want || snapshot.Reader.SourceError.WorkerID != nil {
+		if snapshot.Run.State != runStateFaulted || snapshot.Run.ElapsedMs != 0 || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.Message != want {
 			t.Fatalf("failed Run snapshot = %+v, want faulted, zero elapsed, %q", snapshot, want)
 		}
 		assertFaultedChannelSnapshot(t, snapshot, 4, 8)
@@ -332,7 +332,7 @@ func TestRuntimeSourceErrorResetClearsFaultedSnapshot(t *testing.T) {
 	if result := <-reply; result.status != commandAccepted {
 		t.Fatalf("Run = %+v", result)
 	}
-	sourceErrors <- readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt", WorkerID: new(int)}
+	sourceErrors <- readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt"}
 
 	var faulted statusSnapshot
 	deadline := time.After(time.Second)
@@ -406,10 +406,10 @@ func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testi
 		default:
 		}
 	}
-	if snapshot.Reader.SourceDirectory != filepath.ToSlash(fixtureDirectory) || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.WorkerID != nil || snapshot.Reader.SourceError.RelativePath != "broken.parquet" || snapshot.Reader.SourceError.Message == "" {
+	if snapshot.Reader.SourceDirectory != filepath.ToSlash(fixtureDirectory) || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.RelativePath != "broken.parquet" || snapshot.Reader.SourceError.Message == "" {
 		t.Fatalf("corrupt parquet snapshot = %+v", snapshot.Reader)
 	}
-	if snapshot.Reader.LiveWorkers != 0 || len(snapshot.Reader.WorkerSlots) != 0 || snapshot.Sender.LiveWorkers != 0 || len(snapshot.Sender.WorkerSlots) != 0 {
+	if snapshot.Reader.LiveWorkers != 0 || snapshot.Sender.LiveWorkers != 0 {
 		t.Fatalf("faulted workers = reader %+v sender %+v", snapshot.Reader, snapshot.Sender)
 	}
 	assertFaultedChannelSnapshot(t, snapshot, state.readerChannelCapacity(), state.senderChannelCapacity())
@@ -439,10 +439,10 @@ func TestRunEventLoopFaultsBeforeWorkersForUnavailableSourceDirectory(t *testing
 	snapshotReply := make(chan statusSnapshot, 1)
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot := <-snapshotReply
-	if snapshot.Run.State != runStateFaulted || snapshot.Reader.SourceDirectory != filepath.ToSlash(missingDirectory) || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.Operation != "glob" || snapshot.Reader.SourceError.RelativePath != "*.parquet" || snapshot.Reader.SourceError.WorkerID != nil || snapshot.Reader.SourceError.Message != "no files found matching pattern" {
+	if snapshot.Run.State != runStateFaulted || snapshot.Reader.SourceDirectory != filepath.ToSlash(missingDirectory) || snapshot.Reader.SourceError == nil || snapshot.Reader.SourceError.Operation != "glob" || snapshot.Reader.SourceError.RelativePath != "*.parquet" || snapshot.Reader.SourceError.Message != "no files found matching pattern" {
 		t.Fatalf("unavailable source snapshot = %+v", snapshot)
 	}
-	if snapshot.Reader.LiveWorkers != 0 || len(snapshot.Reader.WorkerSlots) != 0 || snapshot.Sender.LiveWorkers != 0 || len(snapshot.Sender.WorkerSlots) != 0 {
+	if snapshot.Reader.LiveWorkers != 0 || snapshot.Sender.LiveWorkers != 0 {
 		t.Fatalf("startup failure workers = reader %+v sender %+v", snapshot.Reader, snapshot.Sender)
 	}
 	assertFaultedChannelSnapshot(t, snapshot, state.readerChannelCapacity(), state.senderChannelCapacity())
@@ -819,17 +819,16 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	if !state.telemetry.readerChannel.send(context.Background(), readerChannel, make([]Transaction, 2)) {
 		t.Fatal("readerChannel send failed")
 	}
-	state.telemetry.reader.recordRead(2, filepath.ToSlash(filepath.Join("data", "first.parquet")))
+	state.telemetry.reader.recordRead(2)
 	requests <- request{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
-	state.telemetry.reader.recordRead(3, filepath.ToSlash(filepath.Join("data", "second.parquet")))
+	state.telemetry.reader.recordRead(3)
 	metrics <- time.Now()
 
 	snapshotReply := make(chan statusSnapshot, 1)
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot := <-snapshotReply
-	if snapshot.Reader.RowsRead != 5 || snapshot.Reader.Source == nil ||
-		*snapshot.Reader.Source != "data/second.parquet" || snapshot.ReaderChannel.Capacity != 2 ||
+	if snapshot.Reader.RowsRead != 5 || snapshot.ReaderChannel.Capacity != 2 ||
 		snapshot.ReaderChannel.DepthBatches != 1 || snapshot.ReaderChannel.BufferedTransactions != 2 ||
 		snapshot.ReaderChannel.SentBatchesTotal != 1 || snapshot.ReaderChannel.SentTransactionsTotal != 2 ||
 		snapshot.ReaderChannel.SentBatchesPerSecond != 1 || snapshot.ReaderChannel.SentTransactionsPerSecond != 2 {
@@ -856,7 +855,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	}
 	requests <- request{kind: getSnapshot, snapshotReply: snapshotReply}
 	snapshot = <-snapshotReply
-	if snapshot.Reader.ReadTps != 0 || snapshot.Reader.RowsRead != 0 || snapshot.Reader.Source != nil ||
+	if snapshot.Reader.ReadTps != 0 || snapshot.Reader.RowsRead != 0 ||
 		snapshot.ReaderChannel.Capacity != state.controls.policy.ReaderChannel.Capacity.Default || snapshot.ReaderChannel.DepthBatches != 0 ||
 		snapshot.ReaderChannel.BufferedTransactions != 0 || snapshot.ReaderChannel.BlockedSenders != 0 ||
 		snapshot.ReaderChannel.OldestBlockedSenderMs != 0 || snapshot.ReaderChannel.BlockedMs != 0 ||

@@ -16,8 +16,6 @@ import (
 
 // readerWorker holds the per-worker cancellation and lifecycle state.
 type readerWorker struct {
-	// Identifies this worker within the pool and its telemetry.
-	workerID int
 	// Is canceled when the pool stops.
 	ctx context.Context
 	// Prevents the worker from claiming another file.
@@ -72,8 +70,6 @@ type readerPool struct {
 	channel *channelTelemetry
 	// Contains live Reader workers in their start order.
 	workers []*readerWorker
-	// Allocates unique worker identities for this pool lifetime.
-	nextWorkerID int
 	// Is the requested number of active Reader workers.
 	desired int
 	// Prevents new work while the pool is shutting down.
@@ -141,11 +137,6 @@ func (p *readerPool) reconcile(desired int) {
 	})
 	for index, worker := range orderedWorkers {
 		worker.draining = index < len(orderedWorkers)-desired
-		lifecycle := "active"
-		if worker.draining {
-			lifecycle = "draining"
-		}
-		p.telemetry.setWorkerLifecycle(worker.workerID, lifecycle)
 	}
 	for len(p.workers) < desired {
 		p.startReplacementLocked()
@@ -164,12 +155,11 @@ func (p *readerPool) stop() <-chan struct{} {
 
 func (p *readerPool) runWorker(worker *readerWorker) {
 	defer p.wg.Done()
-	p.logger.Info("reader worker started", zap.String("event", "reader_worker_started"), zap.Int("worker_id", worker.workerID))
+	p.logger.Info("reader worker started", zap.String("event", "reader_worker_started"))
 	defer func() {
-		p.logger.Info("reader worker stopped", zap.String("event", "reader_worker_stopped"), zap.Int("worker_id", worker.workerID))
+		p.logger.Info("reader worker stopped", zap.String("event", "reader_worker_stopped"))
 		p.mu.Lock()
 		p.removeWorkerLocked(worker)
-		p.telemetry.unregisterWorker(worker.workerID)
 		if !p.stopping && p.ctx.Err() == nil && len(p.workers) < p.desired {
 			p.startReplacementLocked()
 		}
@@ -206,16 +196,12 @@ func (p *readerPool) reportSourceError(sourceError readerSourceError) {
 func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
 	delete(p.active, filePath)
 	worker.busy = false
-	p.telemetry.setWorkerIdle(worker.workerID)
 	p.available.Broadcast()
 }
 
 func (p *readerPool) startReplacementLocked() {
-	workerID := p.nextWorkerID
-	p.nextWorkerID++
-	worker := &readerWorker{workerID: workerID, ctx: p.ctx}
+	worker := &readerWorker{ctx: p.ctx}
 	p.workers = append(p.workers, worker)
-	p.telemetry.registerWorker(workerID)
 	p.wg.Add(1)
 	go p.runWorker(worker)
 }
@@ -253,18 +239,17 @@ func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
 
 func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSourceError {
 	source := filepath.ToSlash(filePath)
-	p.telemetry.setWorkerReading(worker.workerID, source)
 	file, err := os.Open(filePath)
 	if err != nil {
-		return p.newReaderSourceError("open", filePath, worker.workerID, err)
+		return p.newReaderSourceError("open", filePath, err)
 	}
-	p.logger.Info("reader source opened", zap.String("event", "reader_source_opened"), zap.Int("worker_id", worker.workerID))
+	p.logger.Info("reader source opened", zap.String("event", "reader_source_opened"))
 	reader, err := openParquetReader(file)
 	if err != nil {
 		if closeErr := file.Close(); closeErr != nil && worker.ctx.Err() == nil && p.ctx.Err() == nil {
-			return p.newReaderSourceError("close", filePath, worker.workerID, closeErr)
+			return p.newReaderSourceError("close", filePath, closeErr)
 		}
-		return p.newReaderSourceError("open", filePath, worker.workerID, err)
+		return p.newReaderSourceError("open", filePath, err)
 	}
 	rows := make([]Transaction, p.batchSize)
 	batch := make([]Transaction, 0, p.batchSize)
@@ -276,7 +261,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 		}
 		n, err := reader.Read(rows[:p.batchSize-len(batch)])
 		if n > 0 {
-			p.telemetry.recordRead(n, source)
+			p.telemetry.recordRead(n)
 			var sent bool
 			batch, sent = p.appendRowsForWorker(worker, source, batch, rows[:n])
 			if !sent {
@@ -288,7 +273,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 			if err == io.EOF {
 				break
 			}
-			sourceError = p.newReaderSourceError("read", filePath, worker.workerID, err)
+			sourceError = p.newReaderSourceError("read", filePath, err)
 			break
 		}
 	}
@@ -298,8 +283,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 		}
 	}
 	if sourceError == nil && !batchSendStopped && worker.ctx.Err() == nil {
-		p.telemetry.setWorkerCompleted(worker.workerID)
-		p.logger.Info("reader source exhausted", zap.String("event", "reader_source_exhausted"), zap.Int("worker_id", worker.workerID))
+		p.logger.Info("reader source exhausted", zap.String("event", "reader_source_exhausted"))
 	}
 	return p.closeResources(worker, filePath, reader, file, sourceError)
 }
@@ -322,15 +306,15 @@ func (p *readerPool) closeResources(
 ) *readerSourceError {
 	cancelled := worker.ctx.Err() != nil || p.ctx.Err() != nil
 	if err := reader.Close(); sourceError == nil && !cancelled && err != nil {
-		sourceError = p.newReaderSourceError("reader-close", filePath, worker.workerID, err)
+		sourceError = p.newReaderSourceError("reader-close", filePath, err)
 	}
 	if err := file.Close(); sourceError == nil && !cancelled && err != nil {
-		sourceError = p.newReaderSourceError("close", filePath, worker.workerID, err)
+		sourceError = p.newReaderSourceError("close", filePath, err)
 	}
 	return sourceError
 }
 
-func (p *readerPool) newReaderSourceError(operation, sourcePath string, _ int, err error) *readerSourceError {
+func (p *readerPool) newReaderSourceError(operation, sourcePath string, err error) *readerSourceError {
 	return &readerSourceError{
 		Category:     "source",
 		Operation:    operation,
@@ -398,15 +382,11 @@ func (p *readerPool) sendBatch(worker *readerWorker, source string, batch []Tran
 	p.mu.Lock()
 	worker.blocked = true
 	p.mu.Unlock()
-	p.telemetry.setWorkerBlocked(worker.workerID)
 
 	sent := pending.wait(worker.ctx)
 	p.mu.Lock()
 	worker.blocked = false
 	p.mu.Unlock()
-	if sent && worker.ctx.Err() == nil {
-		p.telemetry.setWorkerReading(worker.workerID, source)
-	}
 	return sent
 }
 

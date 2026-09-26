@@ -37,7 +37,7 @@ func TestSenderPoolRetryLogExcludesRequestMarkers(t *testing.T) {
 	policy := testPolicy(t).Sender
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry, logger)
 	var attempts atomic.Int64
-	pool.attempt = func(context.Context, []Transaction, int, int) senderAttemptOutcome {
+	pool.attempt = func(context.Context, []Transaction, int) senderAttemptOutcome {
 		if attempts.Add(1) == 2 {
 			return senderAttemptSuccess
 		}
@@ -81,7 +81,7 @@ func TestSenderPoolRetriesTerminalFailureUntilSuccess(t *testing.T) {
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	var attempts atomic.Int64
 	var backoffs atomic.Int64
-	pool.attempt = func(context.Context, []Transaction, int, int) senderAttemptOutcome {
+	pool.attempt = func(context.Context, []Transaction, int) senderAttemptOutcome {
 		if attempts.Add(1) == 4 {
 			return senderAttemptSuccess
 		}
@@ -125,7 +125,7 @@ func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	entered := make(chan struct{})
 	var attempts atomic.Int64
-	pool.attempt = func(ctx context.Context, _ []Transaction, _, _ int) senderAttemptOutcome {
+	pool.attempt = func(ctx context.Context, _ []Transaction, _ int) senderAttemptOutcome {
 		attempts.Add(1)
 		close(entered)
 		<-ctx.Done()
@@ -152,7 +152,7 @@ func TestSenderPoolBackpressureWhenAllWorkersRetry(t *testing.T) {
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	backoffEntered := make(chan struct{}, 3)
 	release := make(chan struct{}, 3)
-	pool.attempt = func(_ context.Context, _ []Transaction, _, attempt int) senderAttemptOutcome {
+	pool.attempt = func(_ context.Context, _ []Transaction, attempt int) senderAttemptOutcome {
 		if attempt == 1 {
 			return senderAttemptRetryableFailure
 		}
@@ -193,38 +193,33 @@ func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) 
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
-	entered := make(chan int, 3)
-	release := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
-	pool.attempt = func(_ context.Context, _ []Transaction, ordinal, _ int) senderAttemptOutcome {
-		entered <- ordinal
-		<-release[ordinal]
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
+		entered <- struct{}{}
+		<-release
 		return senderAttemptSuccess
 	}
 
 	batches <- []Transaction{{ClientID: "A"}}
 	batches <- []Transaction{{ClientID: "B"}}
-	first, second := <-entered, <-entered
-	if first == second {
-		t.Fatalf("two batches entered one worker: %d, %d", first, second)
-	}
+	<-entered
+	<-entered
 	drainingWorker := pool.workers[1]
 	pool.reconcile(1)
-	if got := telemetry.snapshot(); got.liveWorkers != 2 || got.drainingWorkers != 1 {
+	if got := pool.aggregateSnapshot(); got.liveWorkers != 2 || got.drainingWorkers != 1 {
 		t.Fatalf("after scale down = %+v, want two live and one draining", got)
 	}
 	pool.reconcile(2)
-	if got := telemetry.snapshot(); got.liveWorkers != 2 || got.drainingWorkers != 0 {
+	if got := pool.aggregateSnapshot(); got.liveWorkers != 2 || got.drainingWorkers != 0 {
 		t.Fatalf("after reactivation = %+v, want two live and zero draining", got)
 	}
 	if pool.workers[1] != drainingWorker {
 		t.Fatal("scale up replaced the live draining worker")
 	}
-	close(release[1])
+	close(release)
 	batches <- []Transaction{{ClientID: "C"}}
-	if ordinal := <-entered; ordinal != 1 {
-		t.Fatalf("reactivated batch entered worker %d, want worker 1", ordinal)
-	}
-	close(release[0])
+	<-entered
 	<-pool.stop()
 	if got := channel.snapshot(time.Now()).receivedBatchesTotal; got != 3 {
 		t.Fatalf("received batches = %d, want 3", got)
@@ -232,7 +227,7 @@ func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) 
 	if got := consumed.Load(); got != 3 {
 		t.Fatalf("completed transactions = %d, want 3", got)
 	}
-	if got := telemetry.snapshot().liveWorkers; got != 0 {
+	if got := pool.aggregateSnapshot().liveWorkers; got != 0 {
 		t.Fatalf("live workers after stop = %d, want 0", got)
 	}
 }
@@ -245,12 +240,12 @@ func TestSenderPoolScaleDownJoinsIdleWorkerBeforeNextReceive(t *testing.T) {
 	policy := testPolicy(t).Sender
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	entered := make(chan int, 1)
-	pool.attempt = func(_ context.Context, _ []Transaction, ordinal, _ int) senderAttemptOutcome {
-		entered <- ordinal
+	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
+		entered <- 0
 		return senderAttemptSuccess
 	}
 	pool.reconcile(1)
-	if snapshot := telemetry.snapshot(); snapshot.liveWorkers != 1 || snapshot.drainingWorkers != 0 {
+	if snapshot := pool.aggregateSnapshot(); snapshot.liveWorkers != 1 || snapshot.drainingWorkers != 0 {
 		t.Fatalf("after idle downscale = %+v, want one active worker", snapshot)
 	}
 	batches <- []Transaction{{ClientID: "after-scale-down"}}
@@ -260,7 +255,7 @@ func TestSenderPoolScaleDownJoinsIdleWorkerBeforeNextReceive(t *testing.T) {
 	<-pool.stop()
 }
 
-func TestSenderPoolReplacementGetsNewWorkerID(t *testing.T) {
+func TestSenderPoolReplacementRestoresDesiredWorkerCount(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
 	var telemetry senderTelemetry
@@ -270,9 +265,8 @@ func TestSenderPoolReplacementGetsNewWorkerID(t *testing.T) {
 
 	pool.reconcile(1)
 	pool.reconcile(2)
-	slots := telemetry.snapshot().workerSlots
-	if len(slots) != 2 || slots[0].WorkerID != 0 || slots[1].WorkerID != 2 {
-		t.Fatalf("replacement worker IDs = %+v, want 0 and 2", slots)
+	if snapshot := pool.aggregateSnapshot(); snapshot.liveWorkers != 2 || snapshot.idleWorkers != 2 {
+		t.Fatalf("replacement workers = %+v, want two idle workers", snapshot)
 	}
 	<-pool.stop()
 }
@@ -286,8 +280,8 @@ func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	entered := make(chan int, 2)
 	releaseFirst := make(chan struct{})
-	pool.attempt = func(_ context.Context, batch []Transaction, ordinal, _ int) senderAttemptOutcome {
-		entered <- ordinal
+	pool.attempt = func(_ context.Context, batch []Transaction, _ int) senderAttemptOutcome {
+		entered <- 0
 		if batch[0].ClientID == "first" {
 			<-releaseFirst
 		}
@@ -303,7 +297,6 @@ func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 	draining := pool.workers[1]
 	pool.desired = 1
 	draining.draining = true
-	pool.telemetry.setLifecycle(1, "draining")
 	draining.wake <- struct{}{}
 	batches <- []Transaction{{ClientID: "after-mark"}}
 	pool.mu.Unlock()
@@ -328,7 +321,7 @@ func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	var attempts atomic.Int64
 	var backoffs atomic.Int64
-	pool.attempt = func(_ context.Context, _ []Transaction, _, _ int) senderAttemptOutcome {
+	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
 		if attempts.Add(1) == 7 {
 			return senderAttemptSuccess
 		}
@@ -342,8 +335,8 @@ func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 	}
 	batches <- []Transaction{{ClientID: "failure"}}
 	waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
-	if slot := telemetry.snapshot().workerSlots[0]; slot.TerminalError || slot.Activity != "idle" {
-		t.Fatalf("successful slot = %+v", slot)
+	if snapshot := pool.aggregateSnapshot(); snapshot.idleWorkers != 1 || snapshot.backoffWorkers != 0 {
+		t.Fatalf("successful sender snapshot = %+v", snapshot)
 	}
 	<-pool.stop()
 	if got := attempts.Load(); got != 7 {
@@ -374,7 +367,7 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	pool.attempt = func(_ context.Context, _ []Transaction, _, _ int) senderAttemptOutcome {
+	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
 		close(entered)
 		<-release
 		return senderAttemptSuccess
@@ -389,7 +382,7 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	}
 	close(release)
 	<-done
-	if consumed.Load() != 1 || telemetry.snapshot().liveWorkers != 0 {
+	if consumed.Load() != 1 || pool.aggregateSnapshot().liveWorkers != 0 {
 		t.Fatalf("after join: consumed=%d sender=%+v", consumed.Load(), telemetry.snapshot())
 	}
 }
@@ -408,7 +401,7 @@ func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	pool.attempt = func(_ context.Context, _ []Transaction, _, _ int) senderAttemptOutcome {
+	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
 		close(entered)
 		<-release
 		return senderAttemptSuccess

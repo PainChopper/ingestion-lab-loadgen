@@ -10,21 +10,16 @@ import (
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	requests := make(chan request, 1)
-	workerID := 3
-	source := "data/part/input.parquet"
 	expected := statusSnapshot{
 		Run: runSnapshot{State: runStateRunning, TotalTransactions: 46, ElapsedMs: 1234},
 		Reader: readerSnapshot{
-			Workers: 1, LiveWorkers: 2, DrainingWorkers: 1,
-			WorkerSlots: []readerWorkerSlot{
-				{WorkerID: 0, Activity: "reading", Lifecycle: "active", Source: &source},
-				{WorkerID: 1, Activity: "reading", Lifecycle: "draining", Source: &source},
-			},
-			ReadBatchSize: 50000, ReadTps: 123.5, RowsRead: 47, Source: &source,
-			SourceDirectory: "data/part", SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet", WorkerID: &workerID},
+			Workers: 1, LiveWorkers: 2, ReadingWorkers: 2, DrainingWorkers: 1,
+			DrainingReadingWorkers: 1,
+			ReadBatchSize:          50000, ReadTps: 123.5, RowsRead: 47,
+			SourceDirectory: "data/part", SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"},
 		},
 		Throttler:     throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
-		Sender:        senderSnapshot{Workers: 32, WorkerSlots: []senderWorkerSlot{}},
+		Sender:        senderSnapshot{Workers: 32},
 		ReaderChannel: channelSnapshot{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, SentBatchesTotal: 2, SentTransactionsTotal: 4, ReceivedBatchesTotal: 1, ReceivedTransactionsTotal: 2, SentBatchesPerSecond: 1.5, SentTransactionsPerSecond: 3, ReceivedBatchesPerSecond: 0.5, ReceivedTransactionsPerSecond: 1},
 		SenderChannel: channelSnapshot{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, SentBatchesTotal: 3, SentTransactionsTotal: 6, ReceivedBatchesTotal: 2, ReceivedTransactionsTotal: 3, SentBatchesPerSecond: 2, SentTransactionsPerSecond: 4, ReceivedBatchesPerSecond: 1.5, ReceivedTransactionsPerSecond: 2.5},
 		Policy:        testPolicy(t).snapshot(),
@@ -49,9 +44,9 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	assertExactJSONKeys(t, root, []string{"policy", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"})
 	for name, want := range map[string][]string{
 		"run":           {"elapsedMs", "state", "totalTransactions"},
-		"reader":        {"drainingWorkers", "liveWorkers", "readBatchSize", "readTps", "rowsRead", "source", "sourceDirectory", "sourceError", "workerSlots", "workers"},
+		"reader":        {"blockedWorkers", "drainingBlockedWorkers", "drainingIdleWorkers", "drainingReadingWorkers", "drainingWorkers", "idleWorkers", "liveWorkers", "readBatchSize", "readTps", "readingWorkers", "rowsRead", "sourceDirectory", "sourceError", "workers"},
 		"throttler":     {"admittedTps", "installationMode", "requestedTps"},
-		"sender":        {"drainingWorkers", "liveWorkers", "workerSlots", "workers"},
+		"sender":        {"backoffWorkers", "drainingBackoffWorkers", "drainingIdleWorkers", "drainingInFlightWorkers", "drainingWorkers", "idleWorkers", "inFlightWorkers", "liveWorkers", "workers"},
 		"readerChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
 		"senderChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
 	} {
@@ -80,17 +75,28 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(root["reader"], &reader); err != nil {
 		t.Fatal(err)
 	}
+	var sourceError map[string]json.RawMessage
+	if err := json.Unmarshal(reader["sourceError"], &sourceError); err != nil {
+		t.Fatal(err)
+	}
+	assertExactJSONKeys(t, sourceError, []string{"category", "message", "operation", "relativePath"})
 	if string(reader["liveWorkers"]) != "2" || string(reader["drainingWorkers"]) != "1" {
 		t.Errorf("Reader worker counts = %s / %s", reader["liveWorkers"], reader["drainingWorkers"])
 	}
-	var slots []map[string]json.RawMessage
-	if err := json.Unmarshal(reader["workerSlots"], &slots); err != nil {
+	for _, legacy := range []string{"workerSlots", "workerId", "source", "completed"} {
+		if _, ok := reader[legacy]; ok {
+			t.Fatalf("Reader includes legacy field %q", legacy)
+		}
+	}
+	var sender map[string]json.RawMessage
+	if err := json.Unmarshal(root["sender"], &sender); err != nil {
 		t.Fatal(err)
 	}
-	if len(slots) != 2 {
-		t.Fatalf("Reader slot count = %d, want 2", len(slots))
+	for _, legacy := range []string{"workerSlots", "workerId", "terminalError"} {
+		if _, ok := sender[legacy]; ok {
+			t.Fatalf("Sender includes legacy field %q", legacy)
+		}
 	}
-	assertExactJSONKeys(t, slots[0], []string{"activity", "lifecycle", "source", "workerId"})
 }
 
 func assertExactJSONKeys(t *testing.T, object map[string]json.RawMessage, want []string) {
@@ -135,7 +141,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	if err := json.Unmarshal(root["reader"], &reader); err != nil {
 		t.Fatal(err)
 	}
-	if string(run["elapsedMs"]) != "0" || string(reader["readTps"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["source"]) != "null" || string(reader["sourceDirectory"]) != "\"\"" || string(reader["sourceError"]) != "null" {
+	if string(run["elapsedMs"]) != "0" || string(reader["readTps"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["sourceDirectory"]) != "\"\"" || string(reader["sourceError"]) != "null" {
 		t.Errorf("idle snapshot body = %v", root)
 	}
 }
