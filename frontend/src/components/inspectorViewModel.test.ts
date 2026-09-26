@@ -81,8 +81,7 @@ describe('inspector view model', () => {
       .toBe('0 idle · 0 in-flight · 0 backoff')
     expect(model?.rows.find((row) => row.label === 'Workers desired / live / draining')?.value)
       .toBe('3 / 0 / 0')
-    expect(model?.rows.find((row) => row.label === 'Retry policy')?.value)
-      .toBe('3 attempts · 250/500 ms · ±20% deterministic jitter')
+    expect(model?.rows.some((row) => row.label === 'Retry policy')).toBe(false)
     adapter.dispose()
   })
 
@@ -173,9 +172,9 @@ describe('inspector view model', () => {
     expect(model?.sections?.flatMap((section) => section.rows.map((row) => row.label)))
       .toEqual(model?.rows.map((row) => row.label))
     expect(model?.sections?.[2]?.rows).toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: 'Retry policy', layout: 'full-width' }),
       expect.objectContaining({ label: 'Diagnostic interpretation', layout: 'full-width' }),
     ]))
+    expect(model?.sections?.[2]?.rows.some((row) => row.label === 'Retry policy')).toBe(false)
     adapter.dispose()
   })
 

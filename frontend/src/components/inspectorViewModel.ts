@@ -152,17 +152,9 @@ export function getInspectorViewModel(
         ],
       }
     case 'sender': {
-      const policy = snapshot.policy?.senderRetry ?? snapshot.sender.retryPolicy
       const { idleWorkers, inFlightWorkers, backoffWorkers } = snapshot.sender
       const hasWorkerStateTelemetry = true
       const hasSenderTelemetry = snapshot.adapterKind !== 'http'
-      const policyValue = policy === null
-        ? '—'
-        : `${formatInteger(policy.maxAttempts)} attempts · ` +
-          `${formatInteger(policy.backoffBaseMs)}/` +
-          `${formatInteger(
-            policy.backoffBaseMs * policy.backoffMultiplier,
-          )} ms · ±${formatInteger(policy.jitterPercent)}% deterministic jitter`
       const poolRows: ReadonlyArray<InspectorRow> = [
         {
           label: `Workers desired / ${frozenObserved ? 'frozen live' : 'live'} / draining`,
@@ -230,11 +222,6 @@ export function getInspectorViewModel(
         {
           label: 'Ambiguous terminal transactions',
           value: formatInteger(snapshot.sender.ambiguousTerminalTransactionsTotal),
-        },
-        {
-          label: 'Retry policy',
-          value: policyValue,
-          layout: 'full-width',
         },
         {
           label: 'Diagnostic interpretation',

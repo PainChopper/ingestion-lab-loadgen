@@ -415,7 +415,6 @@ type policySnapshot struct {
 	ThrottlerInstallationMode installationModePolicy `json:"throttlerInstallationMode"`
 	MetricsWindowMS           rangePolicy            `json:"metricsWindowMs"`
 	SenderWorkers             rangePolicy            `json:"senderWorkers"`
-	SenderRetry               senderRetryPolicy      `json:"senderRetry"`
 	Logging                   loggingPolicy          `json:"logging"`
 }
 
@@ -429,7 +428,6 @@ func (p policy) snapshot() policySnapshot {
 		ThrottlerInstallationMode: p.Throttler.InstallationMode,
 		MetricsWindowMS:           p.Metrics.WindowMS,
 		SenderWorkers:             p.Sender.Workers,
-		SenderRetry:               p.Sender.Retry,
 		Logging:                   p.Logging,
 	}
 }

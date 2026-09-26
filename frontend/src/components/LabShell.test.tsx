@@ -352,13 +352,10 @@ describe('LabShell', () => {
       'Ambiguous timeout transactions',
       'Duplicate-risk transactions',
       'Ambiguous terminal transactions',
-      'Retry policy',
       'Diagnostic interpretation',
     ]) {
       expect(screen.getByText(label)).not.toBeNull()
     }
-    expect(screen.getByText('Retry policy').parentElement?.className)
-      .toContain('inspector-data__row--full-width')
     expect(screen.getByText('Diagnostic interpretation').parentElement?.className)
       .toContain('inspector-data__row--full-width')
     const workerSummary = screen.getByText('Worker states').parentElement

@@ -425,7 +425,6 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
     'readerChannelCapacity',
     'readerReadBatchSize', 'readerWorkers',
     'senderChannelCapacity',
-    'senderRetry',
     'senderWorkers',
     'throttlerInstallationMode',
     'throttlerRequestedTps',
@@ -574,13 +573,6 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
       throw new Error('snapshot Sender policy is invalid')
     }
   }
-  const retry = value.senderRetry
-  if (!isExactObject(retry, ['backoffBaseMs', 'backoffMultiplier', 'jitterPercent', 'maxAttempts', 'mutability']) ||
-    retry.maxAttempts !== 3 || retry.backoffBaseMs !== 250 ||
-    retry.backoffMultiplier !== 2 || retry.jitterPercent !== 20 ||
-    retry.mutability !== 'startup-only') {
-    throw new Error('snapshot Sender retry policy is invalid')
-  }
 	const logging = value.logging
 	if (!isExactObject(logging, ['level', 'mutability']) ||
 		(logging.level !== 'debug' && logging.level !== 'info' && logging.level !== 'warn' && logging.level !== 'error') ||
@@ -610,7 +602,6 @@ function decodePolicy(value: unknown): LoadgenPolicySnapshot {
       mutability: installationMode.mutability,
     }),
     senderWorkers: Object.freeze(value.senderWorkers as unknown as LoadgenPolicySnapshot['senderWorkers']),
-    senderRetry: Object.freeze(retry as unknown as LoadgenPolicySnapshot['senderRetry']),
 		logging: Object.freeze(logging as unknown as LoadgenPolicySnapshot['logging']),
   })
 }
