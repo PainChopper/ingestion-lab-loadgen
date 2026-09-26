@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestSenderHTTPAttemptPostsJSONBatch(t *testing.T) {
@@ -66,12 +67,15 @@ func TestSenderHTTPAttemptClassifiesResponseStatuses(t *testing.T) {
 	}
 }
 
-func TestSenderPoolDoesNotRetryHTTPInputErrors(t *testing.T) {
+func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 	for _, status := range []int{http.StatusBadRequest, http.StatusMethodNotAllowed, http.StatusRequestEntityTooLarge} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			var requests atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				requests.Add(1)
+				if requests.Add(1) == 4 {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
 				w.WriteHeader(status)
 			}))
 			defer server.Close()
@@ -83,11 +87,12 @@ func TestSenderPoolDoesNotRetryHTTPInputErrors(t *testing.T) {
 			policy := testPolicy(t).Sender
 			policy.API.URL = server.URL
 			pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+			pool.wait = func(context.Context, time.Duration) bool { return true }
 			batches <- []Transaction{{ClientID: "invalid"}}
-			waitForSenderCondition(t, func() bool { return telemetry.snapshot().terminalBatches == 1 })
+			waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
 			<-pool.stop()
-			if requests.Load() != 1 {
-				t.Fatalf("HTTP requests = %d, want 1", requests.Load())
+			if requests.Load() != 4 {
+				t.Fatalf("HTTP requests = %d, want 4", requests.Load())
 			}
 		})
 	}

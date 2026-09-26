@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestSenderPoolFailureLogExcludesRequestMarkers(t *testing.T) {
+func TestSenderPoolRetryLogExcludesRequestMarkers(t *testing.T) {
 	var output bytes.Buffer
 	logger, err := newApplicationLogger("info", &output)
 	if err != nil {
@@ -34,17 +36,22 @@ func TestSenderPoolFailureLogExcludesRequestMarkers(t *testing.T) {
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry, logger)
+	var attempts atomic.Int64
 	pool.attempt = func(context.Context, []Transaction, int, int) senderAttemptOutcome {
+		if attempts.Add(1) == 2 {
+			return senderAttemptSuccess
+		}
 		return senderAttemptTerminalFailure
 	}
+	pool.wait = func(context.Context, time.Duration) bool { return true }
 
 	batches <- []Transaction{{ClientID: clientMarker}}
-	waitForSenderCondition(t, func() bool { return telemetry.snapshot().terminalBatches == 1 })
+	waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
 	<-pool.stop()
 
 	line := output.String()
-	if !strings.Contains(line, "event=batch_delivery_failed") {
-		t.Fatalf("failure event was not written")
+	if !strings.Contains(line, "event=batch_delivery_retry") {
+		t.Fatalf("retry event was not written")
 	}
 	for _, marker := range []string{urlMarker, headerMarker, bodyMarker, clientMarker} {
 		if strings.Contains(line, marker) {
@@ -65,7 +72,7 @@ func waitForSenderCondition(t *testing.T, condition func() bool) {
 	}
 }
 
-func TestSenderPoolDoesNotRetryTerminalFailure(t *testing.T) {
+func TestSenderPoolRetriesTerminalFailureUntilSuccess(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
 	var telemetry senderTelemetry
@@ -75,7 +82,9 @@ func TestSenderPoolDoesNotRetryTerminalFailure(t *testing.T) {
 	var attempts atomic.Int64
 	var backoffs atomic.Int64
 	pool.attempt = func(context.Context, []Transaction, int, int) senderAttemptOutcome {
-		attempts.Add(1)
+		if attempts.Add(1) == 4 {
+			return senderAttemptSuccess
+		}
 		return senderAttemptTerminalFailure
 	}
 	pool.wait = func(context.Context, time.Duration) bool {
@@ -84,10 +93,10 @@ func TestSenderPoolDoesNotRetryTerminalFailure(t *testing.T) {
 	}
 
 	batches <- []Transaction{{ClientID: "invalid"}}
-	waitForSenderCondition(t, func() bool { return telemetry.snapshot().terminalBatches == 1 })
+	waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
 	<-pool.stop()
-	if attempts.Load() != 1 || backoffs.Load() != 0 {
-		t.Fatalf("terminal failure attempts=%d backoffs=%d, want 1 and 0", attempts.Load(), backoffs.Load())
+	if attempts.Load() != 4 || backoffs.Load() != 3 {
+		t.Fatalf("terminal failure attempts=%d backoffs=%d, want 4 and 3", attempts.Load(), backoffs.Load())
 	}
 }
 
@@ -113,6 +122,52 @@ func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	if attempts.Load() != 1 {
 		t.Fatalf("canceled attempts = %d, want 1", attempts.Load())
 	}
+	if consumed.Load() != 0 || telemetry.snapshot().completedBatches != 0 {
+		t.Fatalf("canceled batch was counted as completed: consumed=%d telemetry=%+v", consumed.Load(), telemetry.snapshot())
+	}
+}
+
+func TestSenderPoolBackpressureWhenAllWorkersRetry(t *testing.T) {
+	batches := make(chan []Transaction, 1)
+	var channel channelTelemetry
+	var telemetry senderTelemetry
+	var consumed atomic.Int64
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
+	backoffEntered := make(chan struct{}, 3)
+	release := make(chan struct{}, 3)
+	pool.attempt = func(_ context.Context, _ []Transaction, _, attempt int) senderAttemptOutcome {
+		if attempt == 1 {
+			return senderAttemptRetryableFailure
+		}
+		return senderAttemptSuccess
+	}
+	pool.wait = func(ctx context.Context, _ time.Duration) bool {
+		backoffEntered <- struct{}{}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-release:
+			return true
+		}
+	}
+
+	batches <- []Transaction{{ClientID: "first"}}
+	batches <- []Transaction{{ClientID: "second"}}
+	<-backoffEntered
+	<-backoffEntered
+	batches <- []Transaction{{ClientID: "third"}}
+	if received := channel.snapshot(time.Now()).receivedBatchesTotal; received != 2 || len(batches) != 1 {
+		t.Fatalf("all-worker backpressure received=%d queued=%d, want 2 and 1", received, len(batches))
+	}
+
+	release <- struct{}{}
+	waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
+	waitForSenderCondition(t, func() bool { return channel.snapshot(time.Now()).receivedBatchesTotal == 3 })
+	release <- struct{}{}
+	release <- struct{}{}
+	waitForSenderCondition(t, func() bool { return consumed.Load() == 3 })
+	<-pool.stop()
 }
 
 func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) {
@@ -247,41 +302,50 @@ func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 	}
 }
 
-func TestSenderPoolRetriesAndClearsStickyTerminalErrorOnSuccess(t *testing.T) {
+func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
+	policy.Retry.JitterPercent = 0
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	var attempts atomic.Int64
 	var backoffs atomic.Int64
 	pool.attempt = func(_ context.Context, _ []Transaction, _, _ int) senderAttemptOutcome {
-		if attempts.Add(1) == 4 {
+		if attempts.Add(1) == 7 {
 			return senderAttemptSuccess
 		}
 		return senderAttemptRetryableFailure
 	}
-	pool.wait = func(context.Context, time.Duration) bool {
+	delays := make(chan time.Duration, 6)
+	pool.wait = func(_ context.Context, delay time.Duration) bool {
+		delays <- delay
 		backoffs.Add(1)
 		return true
 	}
 	batches <- []Transaction{{ClientID: "failure"}}
-	waitForSenderCondition(t, func() bool { return telemetry.snapshot().terminalBatches == 1 })
-	if slot := telemetry.snapshot().workerSlots[0]; !slot.TerminalError || slot.Activity != "idle" {
-		t.Fatalf("terminal slot = %+v", slot)
-	}
-	batches <- []Transaction{{ClientID: "success"}}
-	waitForSenderCondition(t, func() bool { return telemetry.snapshot().terminalBatches == 2 })
-	if slot := telemetry.snapshot().workerSlots[0]; slot.TerminalError {
-		t.Fatalf("success did not clear terminal error: %+v", slot)
+	waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
+	if slot := telemetry.snapshot().workerSlots[0]; slot.TerminalError || slot.Activity != "idle" {
+		t.Fatalf("successful slot = %+v", slot)
 	}
 	<-pool.stop()
-	if got := attempts.Load(); got != 4 {
-		t.Fatalf("attempts = %d, want 4", got)
+	if got := attempts.Load(); got != 7 {
+		t.Fatalf("attempts = %d, want 7", got)
 	}
-	if got := backoffs.Load(); got != 2 {
-		t.Fatalf("backoffs = %d, want 2", got)
+	if got := backoffs.Load(); got != 6 {
+		t.Fatalf("backoffs = %d, want 6", got)
+	}
+	gotDelays := make([]time.Duration, 0, 6)
+	for range 6 {
+		gotDelays = append(gotDelays, <-delays)
+	}
+	wantDelays := []time.Duration{250, 500, 1_000, 2_000, 5_000, 5_000}
+	for index := range wantDelays {
+		wantDelays[index] *= time.Millisecond
+	}
+	if !slices.Equal(gotDelays, wantDelays) {
+		t.Fatalf("retry delays = %v, want %v", gotDelays, wantDelays)
 	}
 }
 
@@ -320,6 +384,11 @@ func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	policy.API.URL = server.URL
 	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	entered := make(chan struct{})
 	release := make(chan struct{})

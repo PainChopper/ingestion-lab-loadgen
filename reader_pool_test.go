@@ -159,7 +159,7 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 	pool := &readerPool{
 		ctx:        context.Background(),
 		desired:    0,
-		workers:    map[int]*readerWorker{0: worker},
+		workers:    []*readerWorker{worker},
 		batches:    batches,
 		telemetry:  &telemetry,
 		channel:    &channel,
@@ -347,7 +347,7 @@ func TestReaderPoolPrioritizesReplayWithoutDoubleClaim(t *testing.T) {
 func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 	pool := &readerPool{
 		files: []string{"a"}, active: map[string]bool{},
-		workers:   map[int]*readerWorker{0: {workerID: 0}, 1: {workerID: 1, draining: true}},
+		workers:   []*readerWorker{{workerID: 0}, {workerID: 1, draining: true}},
 		telemetry: &readerTelemetry{}, done: make(chan struct{}),
 	}
 	pool.ctx, pool.cancel = context.WithCancel(context.Background())
@@ -373,10 +373,10 @@ func TestReaderPoolDownscaleSelectsIdleBeforeBusyRegardlessOfWorkerID(t *testing
 		telemetry.registerWorker(workerID)
 	}
 	pool := &readerPool{
-		workers: map[int]*readerWorker{
-			0: {workerID: 0, busy: true},
-			1: {workerID: 1, busy: true},
-			2: {workerID: 2},
+		workers: []*readerWorker{
+			{workerID: 0, busy: true},
+			{workerID: 1, busy: true},
+			{workerID: 2},
 		},
 		telemetry: &telemetry,
 	}

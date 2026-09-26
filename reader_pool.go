@@ -68,8 +68,8 @@ type readerPool struct {
 	telemetry *readerTelemetry
 	// Records observations for batches.
 	channel *channelTelemetry
-	// Contains live Reader workers keyed by worker ID.
-	workers map[int]*readerWorker
+	// Contains live Reader workers in their start order.
+	workers []*readerWorker
 	// Allocates unique worker identities for this pool lifetime.
 	nextWorkerID int
 	// Is the requested number of active Reader workers.
@@ -111,7 +111,7 @@ func startReaderPool(
 		ctx: poolCtx, cancel: cancel, files: files, sourceDirectory: sourceDirectory, active: make(map[string]bool),
 		replayFiles: make([]string, 0),
 		batchSize:   batchSize, batches: batches, telemetry: telemetry, channel: channel,
-		workers: make(map[int]*readerWorker), done: make(chan struct{}),
+		workers: make([]*readerWorker, 0, workers), done: make(chan struct{}),
 		sourceErrors: make(chan readerSourceError, 1),
 		logger:       loggerOrNop(loggers),
 	}
@@ -140,25 +140,21 @@ func (p *readerPool) reconcile(desired int) {
 		p.forcePending = false
 	}
 	p.desired = desired
-	workerIDs := make([]int, 0, len(p.workers))
-	for workerID := range p.workers {
-		workerIDs = append(workerIDs, workerID)
-	}
-	sort.Slice(workerIDs, func(i, j int) bool {
-		left, right := p.workers[workerIDs[i]], p.workers[workerIDs[j]]
+	orderedWorkers := append([]*readerWorker(nil), p.workers...)
+	sort.SliceStable(orderedWorkers, func(i, j int) bool {
+		left, right := orderedWorkers[i], orderedWorkers[j]
 		if left.busy != right.busy {
 			return !left.busy
 		}
-		return left.workerID < right.workerID
+		return false
 	})
-	for index, workerID := range workerIDs {
-		worker := p.workers[workerID]
-		worker.draining = worker.forced || index < len(workerIDs)-desired
+	for index, worker := range orderedWorkers {
+		worker.draining = worker.forced || index < len(orderedWorkers)-desired
 		lifecycle := "active"
 		if worker.draining {
 			lifecycle = "draining"
 		}
-		p.telemetry.setWorkerLifecycle(workerID, lifecycle)
+		p.telemetry.setWorkerLifecycle(worker.workerID, lifecycle)
 	}
 	for len(p.workers) < desired {
 		p.startReplacementLocked()
@@ -204,8 +200,7 @@ func (p *readerPool) forceBlocked(sequence uint64) {
 	}
 	var victim *readerWorker
 	for _, worker := range p.workers {
-		if worker.draining && worker.blocked && !worker.forced &&
-			(victim == nil || worker.workerID < victim.workerID) {
+		if worker.draining && worker.blocked && !worker.forced && victim == nil {
 			victim = worker
 		}
 	}
@@ -233,7 +228,7 @@ func (p *readerPool) runWorker(worker *readerWorker) {
 	defer func() {
 		p.logger.Info("reader worker stopped", zap.String("event", "reader_worker_stopped"), zap.Int("worker_id", worker.workerID))
 		p.mu.Lock()
-		delete(p.workers, worker.workerID)
+		p.removeWorkerLocked(worker)
 		p.telemetry.unregisterWorker(worker.workerID)
 		if !p.stopping && p.ctx.Err() == nil && len(p.workers) < p.desired {
 			p.startReplacementLocked()
@@ -285,10 +280,19 @@ func (p *readerPool) startReplacementLocked() {
 	p.nextWorkerID++
 	workerCtx, cancel := context.WithCancel(p.ctx)
 	worker := &readerWorker{workerID: workerID, ctx: workerCtx, cancel: cancel}
-	p.workers[workerID] = worker
+	p.workers = append(p.workers, worker)
 	p.telemetry.registerWorker(workerID)
 	p.wg.Add(1)
 	go p.runWorker(worker)
+}
+
+func (p *readerPool) removeWorkerLocked(worker *readerWorker) {
+	for index, candidate := range p.workers {
+		if candidate == worker {
+			p.workers = append(p.workers[:index], p.workers[index+1:]...)
+			return
+		}
+	}
 }
 
 func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
@@ -400,13 +404,12 @@ func (p *readerPool) closeResources(
 	return sourceError
 }
 
-func (p *readerPool) newReaderSourceError(operation, sourcePath string, workerID int, err error) *readerSourceError {
+func (p *readerPool) newReaderSourceError(operation, sourcePath string, _ int, err error) *readerSourceError {
 	return &readerSourceError{
 		Category:     "source",
 		Operation:    operation,
 		RelativePath: relativeSourcePath(p.sourceDirectory, sourcePath),
 		Message:      err.Error(),
-		WorkerID:     &workerID,
 	}
 }
 

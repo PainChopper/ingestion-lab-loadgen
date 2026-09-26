@@ -2,8 +2,12 @@ package main
 
 import (
 	"fmt"
+	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +29,11 @@ func testPolicy(t *testing.T) policy {
 func newTestControlState(t *testing.T) controlState {
 	t.Helper()
 	loaded := testPolicy(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	loaded.Sender.API.URL = server.URL
 	return controlState{
 		metricsWindow: time.Duration(loaded.Metrics.WindowMS.Default) * time.Millisecond,
 		run:           controlRunState{lifecycle: newLifecycle()},
@@ -43,7 +52,7 @@ func testConfigContents() string {
 		"", "[throttler.installation_mode]", "default = \"installed\"", "allowed = [\"installed\", \"bypass\"]", "mutability = \"immediate\"",
 		"", "[sender.workers]", "default = 32", "min = 1", "max = 32", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"",
 		"", "[sender.api]", "url = \"http://127.0.0.1:8080/internal/test/ingest\"", "mutability = \"startup-only\"",
-		"", "[sender.retry]", "max_attempts = 3", "backoff_base_ms = 250", "backoff_multiplier = 2", "jitter_percent = 20", "mutability = \"startup-only\"",
+		"", "[sender.retry]", "delays_ms = [250, 500, 1000, 2000, 5000]", "jitter_percent = 20", "mutability = \"startup-only\"",
 		"", "[metrics.window_ms]", "default = 1000", "min = 100", "max = 10000", "step = 100", "unit = \"milliseconds\"", "mutability = \"startup-only\"",
 		"", "[logging]", "level = \"info\"", "mutability = \"startup-only\"",
 	}, "\n")
@@ -390,6 +399,9 @@ func TestSenderPolicyUsesApprovedProfile(t *testing.T) {
 	if sender.Workers != (rangePolicy{Default: 32, Min: 1, Max: 32, Step: 1, Unit: workersUnit, Mutability: immediate}) {
 		t.Fatalf("workers policy = %+v", sender.Workers)
 	}
+	if got, want := sender.Retry.DelaysMS, []int{250, 500, 1_000, 2_000, 5_000}; !slices.Equal(got, want) {
+		t.Fatalf("retry delays = %v, want %v", got, want)
+	}
 }
 
 func TestReaderWorkersPolicyUsesApprovedProfile(t *testing.T) {
@@ -430,8 +442,10 @@ func TestLoadPolicyRejectsInvalidSenderPolicy(t *testing.T) {
 	tests := []struct{ name, old, replacement string }{
 		{"missing workers", "[sender.workers]\ndefault = 32", "[sender.workers]"},
 		{"wrong workers max", "max = 32", "max = 33"},
-		{"wrong retry attempts", "max_attempts = 3", "max_attempts = 4"},
-		{"missing retry mutability", "[sender.retry]\nmax_attempts = 3\nbackoff_base_ms = 250\nbackoff_multiplier = 2\njitter_percent = 20\nmutability = \"startup-only\"", "[sender.retry]\nmax_attempts = 3\nbackoff_base_ms = 250\nbackoff_multiplier = 2\njitter_percent = 20"},
+		{"empty retry delays", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = []"},
+		{"decreasing retry delays", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [250, 100]"},
+		{"zero retry delay", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [0]"},
+		{"missing retry mutability", "[sender.retry]\ndelays_ms = [250, 500, 1000, 2000, 5000]\njitter_percent = 20\nmutability = \"startup-only\"", "[sender.retry]\ndelays_ms = [250, 500, 1000, 2000, 5000]\njitter_percent = 20"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -447,5 +461,39 @@ func TestLoadPolicyRejectsInvalidSenderPolicy(t *testing.T) {
 				t.Fatal("loadPolicy accepted invalid Sender policy")
 			}
 		})
+	}
+}
+
+func TestSenderRetryPolicyDurationBounds(t *testing.T) {
+	maximumDelayMS := senderRetryMaxDelayMS(20)
+	tests := []struct {
+		name    string
+		delayMS int
+		wantErr bool
+	}{
+		{name: "maximum valid", delayMS: int(maximumDelayMS)},
+		{name: "duration overflow", delayMS: int(maximumDelayMS + 1), wantErr: true},
+		{name: "milliseconds conversion overflow", delayMS: int(math.MaxInt64/int64(time.Millisecond) + 1), wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy := senderRetryPolicy{
+				DelaysMS:      []int{test.delayMS},
+				JitterPercent: 20,
+				Mutability:    startupOnly,
+			}
+			if err := policy.validate(); (err != nil) != test.wantErr {
+				t.Fatalf("validate() error = %v, want error=%t", err, test.wantErr)
+			}
+		})
+	}
+
+	maximumDuration := senderRetryDuration(int(maximumDelayMS), 20)
+	if maximumDuration <= 0 || maximumDuration == time.Duration(math.MaxInt64) {
+		t.Fatalf("maximum safe retry duration = %s", maximumDuration)
+	}
+	if got := senderRetryDuration(int(maximumDelayMS+1), 20); got != time.Duration(math.MaxInt64) {
+		t.Fatalf("overflow retry duration = %s, want saturated maximum", got)
 	}
 }
