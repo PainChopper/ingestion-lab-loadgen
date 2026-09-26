@@ -46,4 +46,4 @@ draining и обновляют Reader worker telemetry.
   Reader worker.
 - Все переходы `readerWorker.blocked` находятся в Reader pool.
 - Наблюдаемая семантика channel и Reader telemetry сохранена для трёх
-  сценариев отправки.
+  сценариев.
