@@ -574,9 +574,9 @@ describe('PipelineSvg rendering', () => {
       { count: 2, reader: { top: 355, height: 120 }, sender: { top: 355, height: 120 } },
       { count: 3, reader: { top: 326, height: 149 }, sender: { top: 326, height: 149 } },
       { count: 7, reader: { top: 170, height: 305 }, sender: { top: 170, height: 305 } },
-      { count: 8, reader: { top: 131, height: 344 }, sender: { top: 170, height: 305 } },
-      { count: 16, reader: { top: -181, height: 656 }, sender: { top: 170, height: 305 } },
-      { count: 32, reader: { top: -805, height: 1280 }, sender: { top: 170, height: 305 } },
+      { count: 8, reader: { top: 170, height: 305 }, sender: { top: 170, height: 305 } },
+      { count: 16, reader: { top: 170, height: 305 }, sender: { top: 170, height: 305 } },
+      { count: 32, reader: { top: 170, height: 305 }, sender: { top: 170, height: 305 } },
     ] as const
     const base = activeSnapshot()
     let snapshot = withWorkerCount(base, cases[0].count)
@@ -598,9 +598,11 @@ describe('PipelineSvg rendering', () => {
             ? { top: 170, height: 305 }
             : testCase.reader,
           ports: [geometry.actors.reader.ports.output],
-          mode: 'detailed',
-          columns: 1,
-          rows: Math.min(testCase.count, 7),
+          mode: testCase.count > 7 ? 'compact' : 'detailed',
+          columns: testCase.count > 7 ? 4 : 1,
+          rows: testCase.count > 7
+            ? Math.ceil(testCase.count / 4)
+            : Math.min(testCase.count, 7),
         },
         {
           actor: 'sender' as const,
@@ -611,9 +613,11 @@ describe('PipelineSvg rendering', () => {
             geometry.actors.sender.ports.input,
             geometry.actors.sender.ports.output,
           ],
-          mode: 'detailed',
-          columns: 1,
-          rows: Math.min(testCase.count, 7),
+          mode: testCase.count > 7 ? 'compact' : 'detailed',
+          columns: testCase.count > 7 ? 4 : 1,
+          rows: testCase.count > 7
+            ? Math.ceil(testCase.count / 4)
+            : Math.min(testCase.count, 7),
         },
       ]
 
@@ -1736,14 +1740,19 @@ describe('PipelineSvg rendering', () => {
     afterSuccess.unmount()
   })
 
-  it.each(['landscape', 'portrait'] as const)(
-    'caps aggregate worker markers and shows the overflow count in %s',
-    (orientation) => {
+  it.each([
+    ['reader', 'landscape'],
+    ['reader', 'portrait'],
+    ['sender', 'landscape'],
+    ['sender', 'portrait'],
+  ] as const)(
+    'shows 32 aggregate worker markers without overflow for %s in %s',
+    (actor, orientation) => {
       const base = activeSnapshot()
       const view = renderPipeline({
         ...base,
-        sender: {
-          ...base.sender,
+        [actor]: {
+          ...base[actor],
           workers: { ...base.sender.workers, applied: 32 },
           liveWorkers: 32,
           idleWorkers: 25,
@@ -1751,12 +1760,43 @@ describe('PipelineSvg rendering', () => {
           backoffWorkers: 3,
         },
       }, orientation)
+      const workerActor = view.container.querySelector(`#${actor}-actor`)!
+
+      expect(workerActor.querySelectorAll('[class*="pipeline-worker--"]'))
+        .toHaveLength(32)
+      expect(workerActor.textContent).not.toContain('+')
+      expect(workerActor.getAttribute('data-worker-columns'))
+        .toBe(orientation === 'portrait' ? '5' : '4')
+      expect(workerActor.getAttribute('data-worker-rows'))
+        .toBe(orientation === 'portrait' ? '7' : '8')
+      view.unmount()
+    },
+  )
+
+  it.each(['landscape', 'portrait'] as const)(
+    'shows overflow only beyond 32 aggregate sender markers in %s',
+    (orientation) => {
+      const base = activeSnapshot()
+      const view = renderPipeline({
+        ...base,
+        sender: {
+          ...base.sender,
+          workers: { ...base.sender.workers, applied: 32 },
+          liveWorkers: 33,
+          idleWorkers: 26,
+          inFlightWorkers: 4,
+          backoffWorkers: 3,
+        },
+      }, orientation)
       const sender = view.container.querySelector('#sender-actor')!
 
       expect(sender.querySelectorAll('[class*="pipeline-worker--"]'))
-        .toHaveLength(7)
-      expect(sender.textContent).toContain('+25 workers')
-      expect(Number(sender.getAttribute('data-worker-rows'))).toBeLessThanOrEqual(7)
+        .toHaveLength(32)
+      expect(sender.textContent).toContain('+1 workers')
+      expect(sender.getAttribute('data-worker-columns'))
+        .toBe(orientation === 'portrait' ? '5' : '4')
+      expect(sender.getAttribute('data-worker-rows'))
+        .toBe(orientation === 'portrait' ? '7' : '8')
       view.unmount()
     },
   )

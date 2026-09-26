@@ -7,6 +7,10 @@ const COMPACT_COLUMNS = 4
 const COMPACT_CHIP_SCALE = 0.43
 const COMPACT_COLUMN_PITCH = 29
 const COMPACT_ROW_PITCH = 22
+const PORTRAIT_COMPACT_COLUMNS = 5
+const PORTRAIT_COMPACT_CHIP_SCALE = 0.34
+const PORTRAIT_COMPACT_COLUMN_PITCH = 26.5
+const PORTRAIT_COMPACT_ROW_PITCH = 15.2
 const WORKER_CHIP_WIDTH = 66.5
 const WORKER_CHIP_HEIGHT = 39
 
@@ -46,20 +50,20 @@ export function normalizedWorkerCount(workers: NumericControlSnapshot): number {
 }
 
 export function getPortraitWorkerGridMetrics(
-  actor: 'reader' | 'sender',
+  _actor: 'reader' | 'sender',
   workerCount: number,
 ): PortraitWorkerGridMetrics {
   const normalizedCount = Math.max(1, Math.round(workerCount))
-  const compact = actor === 'sender' && normalizedCount > DETAILED_WORKER_LIMIT
+  const compact = normalizedCount > DETAILED_WORKER_LIMIT
   const columns = compact
-    ? Math.min(8, normalizedCount)
+    ? Math.min(PORTRAIT_COMPACT_COLUMNS, normalizedCount)
     : Math.min(4, normalizedCount)
   const rows = Math.ceil(normalizedCount / columns)
-  const scale = compact ? COMPACT_CHIP_SCALE : 0.86
+  const scale = compact ? PORTRAIT_COMPACT_CHIP_SCALE : 0.86
   const chipWidth = WORKER_CHIP_WIDTH * scale
   const chipHeight = WORKER_CHIP_HEIGHT * scale
-  const columnPitch = compact ? 43 : 82
-  const rowPitch = compact ? 28 : 45
+  const columnPitch = compact ? PORTRAIT_COMPACT_COLUMN_PITCH : 82
+  const rowPitch = compact ? PORTRAIT_COMPACT_ROW_PITCH : 45
   const gridBottom = 18 + (rows - 1) * rowPitch + chipHeight
 
   return {
@@ -86,7 +90,7 @@ export function getWorkerActorLayout(
   desiredWorkerCount = normalizedWorkerCount(workers),
 ): WorkerActorLayout {
   const workerCount = Math.max(desiredWorkerCount, visibleWorkerCount)
-  const compact = actor === 'sender' && workerCount > DETAILED_WORKER_LIMIT
+  const compact = workerCount > DETAILED_WORKER_LIMIT
   if (orientation === 'portrait') {
     const metrics = getPortraitWorkerGridMetrics(actor, workerCount)
     const gridWidth =

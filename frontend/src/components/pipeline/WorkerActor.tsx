@@ -16,7 +16,7 @@ import {
 
 export type WorkerActorId = 'reader' | 'sender'
 
-const MAX_VISIBLE_WORKER_MARKERS = 7
+const MAX_VISIBLE_WORKER_MARKERS = 32
 
 interface WorkerActorProps {
   actor: WorkerActorId
