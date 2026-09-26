@@ -35,7 +35,7 @@ func TestSenderPoolRetryLogExcludesRequestMarkers(t *testing.T) {
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry, logger)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry, logger)
 	var attempts atomic.Int64
 	pool.attempt = func(context.Context, []Transaction, int) senderAttemptOutcome {
 		if attempts.Add(1) == 2 {
@@ -78,7 +78,7 @@ func TestSenderPoolRetriesTerminalFailureUntilSuccess(t *testing.T) {
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	var attempts atomic.Int64
 	var backoffs atomic.Int64
 	pool.attempt = func(context.Context, []Transaction, int) senderAttemptOutcome {
@@ -122,7 +122,7 @@ func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	entered := make(chan struct{})
 	var attempts atomic.Int64
 	pool.attempt = func(ctx context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -143,13 +143,48 @@ func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	}
 }
 
+func TestSenderPoolParentCancellationStopsRetryBackoff(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	batches := make(chan []Transaction)
+	var channel channelTelemetry
+	var telemetry senderTelemetry
+	var consumed atomic.Int64
+	policy := testPolicy(t).Sender
+	pool := startSenderPool(parent, batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+	backoffStarted := make(chan struct{})
+	backoffStopped := make(chan struct{})
+	pool.attempt = func(context.Context, []Transaction, int) senderAttemptOutcome {
+		return senderAttemptRetryableFailure
+	}
+	pool.wait = func(ctx context.Context, _ time.Duration) bool {
+		close(backoffStarted)
+		<-ctx.Done()
+		close(backoffStopped)
+		return false
+	}
+
+	batches <- []Transaction{{ClientID: "canceled-parent"}}
+	<-backoffStarted
+	cancel()
+	select {
+	case <-backoffStopped:
+	case <-time.After(time.Second):
+		t.Fatal("parent cancellation did not stop Sender backoff")
+	}
+	<-pool.stop()
+	if consumed.Load() != 0 || telemetry.snapshot().completedBatches != 0 {
+		t.Fatalf("parent-canceled batch was counted as completed: consumed=%d telemetry=%+v", consumed.Load(), telemetry.snapshot())
+	}
+}
+
 func TestSenderPoolBackpressureWhenAllWorkersRetry(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	var channel channelTelemetry
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	backoffEntered := make(chan struct{}, 3)
 	release := make(chan struct{}, 3)
 	pool.attempt = func(_ context.Context, _ []Transaction, attempt int) senderAttemptOutcome {
@@ -192,7 +227,7 @@ func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) 
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	entered := make(chan struct{}, 3)
 	release := make(chan struct{})
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -238,7 +273,7 @@ func TestSenderPoolScaleDownJoinsIdleWorkerBeforeNextReceive(t *testing.T) {
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	entered := make(chan int, 1)
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
 		entered <- 0
@@ -261,7 +296,7 @@ func TestSenderPoolReplacementRestoresDesiredWorkerCount(t *testing.T) {
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 
 	pool.reconcile(1)
 	pool.reconcile(2)
@@ -277,7 +312,7 @@ func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, policy.API, policy.Retry)
 	entered := make(chan int, 2)
 	releaseFirst := make(chan struct{})
 	pool.attempt = func(_ context.Context, batch []Transaction, _ int) senderAttemptOutcome {
@@ -318,7 +353,7 @@ func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
 	policy.Retry.JitterPercent = 0
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	var attempts atomic.Int64
 	var backoffs atomic.Int64
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -364,7 +399,7 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	policy := testPolicy(t).Sender
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -398,7 +433,7 @@ func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
 	}))
 	defer server.Close()
 	policy.API.URL = server.URL
-	pool := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -438,7 +473,7 @@ func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
 		t.Fatalf("after stop: completed=%d queued=%d, want one of each", consumed.Load(), len(batches))
 	}
 
-	resumed := startSenderPool(batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
+	resumed := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, policy.API, policy.Retry)
 	waitForSenderCondition(t, func() bool { return consumed.Load() == 2 })
 	<-resumed.stop()
 	if got := channel.snapshot(time.Now()).receivedBatchesTotal; got != 2 {

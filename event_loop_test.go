@@ -58,6 +58,65 @@ func TestRunEventLoopStopsWhenApplicationContextIsCanceled(t *testing.T) {
 	}
 }
 
+func TestPipelineRuntimeSenderInheritsRunContextAcrossPauseResume(t *testing.T) {
+	applicationContext, cancelApplication := context.WithCancel(context.Background())
+	defer cancelApplication()
+	state := newTestControlState(t)
+	read := func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
+		done := make(chan struct{})
+		go func() {
+			<-ctx.Done()
+			close(done)
+		}()
+		return readerRun{done: done, reconcile: func(int) {}}, nil
+	}
+	start := func(
+		ctx context.Context,
+		_ <-chan []Transaction,
+		_ chan<- []Transaction,
+		_ *channelTelemetry,
+		_ *channelTelemetry,
+		_ throttlerSettings,
+	) (<-chan struct{}, chan<- throttlerUpdate) {
+		done := make(chan struct{})
+		go func() {
+			<-ctx.Done()
+			close(done)
+		}()
+		return done, make(chan throttlerUpdate)
+	}
+	runtime := newPipelineRuntime(&state, read, start)
+	if err := runtime.start(applicationContext); err != nil {
+		t.Fatalf("start runtime: %v", err)
+	}
+	runtime.startSender()
+	firstPool := runtime.pool
+	runtime.stopSender()
+	if runtime.runContext.Err() != nil {
+		t.Fatal("Pause canceled the pipeline run context")
+	}
+
+	runtime.startSender()
+	if runtime.pool == firstPool {
+		t.Fatal("Resume reused the stopped Sender pool")
+	}
+	stopped := make(chan struct{})
+	runtime.pool.attempt = func(ctx context.Context, _ []Transaction, _ int) senderAttemptOutcome {
+		close(stopped)
+		<-ctx.Done()
+		return senderAttemptCanceled
+	}
+	runtime.senderBatches <- []Transaction{{ClientID: "application-canceled"}}
+	<-stopped
+	cancelApplication()
+	select {
+	case <-runtime.pool.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("application cancellation did not reach resumed Sender pool")
+	}
+	runtime.stop()
+}
+
 func TestPipelineRuntimeStopIsIdempotentAfterActiveAndSoftResetRuns(t *testing.T) {
 	state := newTestControlState(t)
 	read := func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
