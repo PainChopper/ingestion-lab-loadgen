@@ -238,7 +238,6 @@ func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
 }
 
 func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSourceError {
-	source := filepath.ToSlash(filePath)
 	file, err := os.Open(filePath)
 	if err != nil {
 		return p.newReaderSourceError("open", filePath, err)
@@ -263,7 +262,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 		if n > 0 {
 			p.telemetry.recordRead(n)
 			var sent bool
-			batch, sent = p.appendRowsForWorker(worker, source, batch, rows[:n])
+			batch, sent = p.appendRowsForWorker(worker, batch, rows[:n])
 			if !sent {
 				batchSendStopped = true
 				break
@@ -278,7 +277,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 		}
 	}
 	if sourceError == nil && !batchSendStopped && worker.ctx.Err() == nil && len(batch) > 0 {
-		if !p.sendBatch(worker, source, batch) {
+		if !p.sendBatch(worker, batch) {
 			batchSendStopped = true
 		}
 	}
@@ -342,10 +341,10 @@ func relativeSourcePath(sourceDirectory, sourcePath string) string {
 }
 
 func (p *readerPool) appendRows(batch, rows []Transaction) ([]Transaction, bool) {
-	return p.appendRowsForWorker(nil, "", batch, rows)
+	return p.appendRowsForWorker(nil, batch, rows)
 }
 
-func (p *readerPool) appendRowsForWorker(worker *readerWorker, source string, batch, rows []Transaction) ([]Transaction, bool) {
+func (p *readerPool) appendRowsForWorker(worker *readerWorker, batch, rows []Transaction) ([]Transaction, bool) {
 	for len(rows) > 0 {
 		if worker != nil && worker.ctx.Err() != nil {
 			return nil, false
@@ -358,7 +357,7 @@ func (p *readerPool) appendRowsForWorker(worker *readerWorker, source string, ba
 		if len(batch) < p.batchSize {
 			continue
 		}
-		if !p.sendBatch(worker, source, batch) {
+		if !p.sendBatch(worker, batch) {
 			return nil, false
 		}
 		batch = make([]Transaction, 0, p.batchSize)
@@ -367,7 +366,7 @@ func (p *readerPool) appendRowsForWorker(worker *readerWorker, source string, ba
 	return batch, true
 }
 
-func (p *readerPool) sendBatch(worker *readerWorker, source string, batch []Transaction) bool {
+func (p *readerPool) sendBatch(worker *readerWorker, batch []Transaction) bool {
 	if worker == nil {
 		return p.channel.send(p.ctx, p.batches, batch)
 	}
@@ -410,7 +409,7 @@ func (p *readerPool) aggregateSnapshot() readerPoolSnapshot {
 		}
 		if worker.draining {
 			snapshot.drainingWorkers++
-			(*draining)++
+			*draining++
 		}
 	}
 	return snapshot

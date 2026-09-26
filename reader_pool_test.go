@@ -128,7 +128,7 @@ func TestReaderPoolImmediateSendKeepsWorkerReading(t *testing.T) {
 		workers:   []*readerWorker{worker},
 	}
 
-	if !pool.sendBatch(worker, "data/a.parquet", []Transaction{{ClientID: "a"}}) {
+	if !pool.sendBatch(worker, []Transaction{{ClientID: "a"}}) {
 		t.Fatal("immediate send failed")
 	}
 	if worker.blocked {
@@ -160,7 +160,7 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 	}
 	sent := make(chan bool, 1)
 	go func() {
-		sent <- pool.sendBatch(worker, "data/a.parquet", []Transaction{{ClientID: "a"}})
+		sent <- pool.sendBatch(worker, []Transaction{{ClientID: "a"}})
 	}()
 
 	waitForBlockedSender(t, &channel)
@@ -216,7 +216,7 @@ func TestReaderPoolCanceledBlockedSendDoesNotRestoreReading(t *testing.T) {
 	}
 	sent := make(chan bool, 1)
 	go func() {
-		sent <- pool.sendBatch(worker, "data/a.parquet", []Transaction{{ClientID: "a"}})
+		sent <- pool.sendBatch(worker, []Transaction{{ClientID: "a"}})
 	}()
 
 	waitForBlockedSender(t, &channel)
