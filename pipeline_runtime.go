@@ -35,6 +35,8 @@ type pipelineRuntime struct {
 	batches                                  chan []Transaction
 	senderBatches                            chan []Transaction
 	pool                                     *senderPool
+	runContext                               context.Context
+	cancelRun                                context.CancelFunc
 	cancelThrottler                          context.CancelFunc
 	throttlerDone                            <-chan struct{}
 	throttlerUpdates                         chan<- throttlerUpdate
@@ -51,12 +53,13 @@ func newPipelineRuntime(state *controlState, read readerStarter, throttle thrott
 
 func (runtime *pipelineRuntime) start(ctx context.Context) error {
 	runtime.state.telemetry.reader.startInterval(time.Now())
+	runtime.runContext, runtime.cancelRun = context.WithCancel(ctx)
 	var readerCreated bool
 	runtime.batches, readerCreated = runtime.prepareReaderChannel(runtime.batches)
 	var senderCreated bool
 	runtime.senderBatches, senderCreated = runtime.prepareSenderChannel(runtime.senderBatches)
 
-	readerContext, cancelReader := context.WithCancel(ctx)
+	readerContext, cancelReader := context.WithCancel(runtime.runContext)
 	started, err := runtime.read(
 		readerContext,
 		runtime.batches,
@@ -65,6 +68,9 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 	)
 	if err != nil {
 		cancelReader()
+		runtime.cancelRun()
+		runtime.runContext = nil
+		runtime.cancelRun = nil
 		if readerCreated {
 			closeAndDrain(runtime.batches)
 			runtime.batches = nil
@@ -84,7 +90,7 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 	runtime.readerAggregateSnapshot = started.aggregateSnapshot
 	runtime.readerSourceErrors = started.sourceErrors
 	runtime.cancelReader = cancelReader
-	throttlerContext, cancelThrottler := context.WithCancel(ctx)
+	throttlerContext, cancelThrottler := context.WithCancel(runtime.runContext)
 	runtime.cancelThrottler = cancelThrottler
 	runtime.throttlerDone, runtime.throttlerUpdates = runtime.throttle(
 		throttlerContext,
@@ -99,6 +105,7 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 
 func (runtime *pipelineRuntime) startSender() {
 	runtime.pool = startSenderPool(
+		runtime.runContext,
 		runtime.senderBatches, &runtime.state.telemetry.senderChannel, &runtime.state.telemetry.sender,
 		&runtime.terminallyCompletedTransactionsSinceTick, runtime.state.senderWorkers(), runtime.state.controls.policy.Sender.API,
 		runtime.state.controls.policy.Sender.Retry,
@@ -116,6 +123,9 @@ func (runtime *pipelineRuntime) stopSender() {
 
 func (runtime *pipelineRuntime) stop() {
 	runtime.stopSender()
+	if runtime.cancelRun != nil {
+		runtime.cancelRun()
+	}
 	if runtime.cancelReader != nil {
 		runtime.cancelReader()
 	}
@@ -138,6 +148,9 @@ func (runtime *pipelineRuntime) stop() {
 }
 
 func (runtime *pipelineRuntime) resetPaused() {
+	if runtime.cancelRun != nil {
+		runtime.cancelRun()
+	}
 	if runtime.cancelReader != nil {
 		runtime.cancelReader()
 	}
@@ -156,6 +169,8 @@ func (runtime *pipelineRuntime) resetPaused() {
 }
 
 func (runtime *pipelineRuntime) clearActive() {
+	runtime.runContext = nil
+	runtime.cancelRun = nil
 	runtime.cancelReader = nil
 	runtime.readerDone = nil
 	runtime.readerReconcile = nil

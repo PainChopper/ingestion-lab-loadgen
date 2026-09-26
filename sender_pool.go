@@ -66,6 +66,7 @@ type senderPool struct {
 }
 
 func startSenderPool(
+	parent context.Context,
 	batches <-chan []Transaction,
 	channelTelemetry *channelTelemetry,
 	telemetry *senderTelemetry,
@@ -75,7 +76,7 @@ func startSenderPool(
 	retry senderRetryPolicy,
 	loggers ...*zap.Logger,
 ) *senderPool {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	pool := &senderPool{
 		ctx:                                      ctx,
 		cancel:                                   cancel,
