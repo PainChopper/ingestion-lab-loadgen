@@ -1,7 +1,6 @@
 import type {
   HttpLastOutcome,
   ChannelTrend,
-  SenderWorkerStateCounts,
   ThrottlerInstallationMode,
 } from './loadgen'
 
@@ -85,8 +84,8 @@ export interface HttpTelemetry {
 
 export interface SenderTelemetry {
   readonly workers: CapacityTelemetry
-  readonly workerStates: SenderWorkerStateCounts
-  readonly workerSlots: readonly SenderWorkerSlotTelemetry[]
+  readonly workerStates: WorkerStateCounts
+  readonly drainingWorkerStates: WorkerStateCounts
   readonly retryAttemptsStartedTotal: number
   readonly retryAttemptedTransactionsPerSecond: number
   readonly terminalFailedTransactionsPerSecond: number
@@ -95,13 +94,6 @@ export interface SenderTelemetry {
   readonly ambiguousTimeoutTransactionsTotal: number
   readonly duplicateRiskTransactionsTotal: number
   readonly ambiguousTerminalTransactionsTotal: number
-}
-
-export interface SenderWorkerSlotTelemetry {
-  readonly workerId: number
-  readonly state: SenderWorkerState
-  readonly lifecycle: 'active' | 'draining'
-  readonly terminalError: boolean
 }
 
 export interface SimulationTelemetry {
@@ -183,6 +175,12 @@ interface ReaderProductionResult extends AdmissionResult {
 }
 
 type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
+
+interface WorkerStateCounts {
+  readonly idle: number
+  readonly inFlight: number
+  readonly backoff: number
+}
 
 interface SenderWorker {
   readonly workerId: number
@@ -611,8 +609,8 @@ export class FixedStepSimulation {
     const readerChannel = this.readerChannel.telemetry(aggregate.readerChannel, rateSeconds, running)
     const senderChannel = this.senderChannel.telemetry(aggregate.senderChannel, rateSeconds, running)
     const divisor = rateSeconds === 0 ? 1 : rateSeconds
-    const workerSlots = this.workerSlots
-    const workerStates = this.workerStateCounts(workerSlots)
+    const { active: workerStates, draining: drainingWorkerStates } =
+      this.workerStateCounts()
 
     return {
       elapsedMs: this.elapsedMs,
@@ -641,7 +639,7 @@ export class FixedStepSimulation {
             : this.config.senderWorkers,
         },
         workerStates,
-        workerSlots,
+        drainingWorkerStates,
         retryAttemptsStartedTotal: this.retryAttemptStartedTotal,
         retryAttemptedTransactionsPerSecond: running
           ? aggregate.httpRetryStartedTransactions / divisor
@@ -667,7 +665,8 @@ export class FixedStepSimulation {
         networkErrorsTotal: this.networkErrorTotal,
         successfulTransactionsTotal: this.successfulTransactionsTotal,
         failedAttemptTransactionsTotal: this.failedAttemptTransactionsTotal,
-        inFlightRequests: workerStates.inFlight,
+        inFlightRequests:
+          workerStates.inFlight + drainingWorkerStates.inFlight,
         startedTransactionsPerSecond: running
           ? aggregate.httpStartedTransactions / divisor
           : 0,
@@ -696,28 +695,31 @@ export class FixedStepSimulation {
     return this.config.readerWorkers * READER_TRANSACTIONS_PER_WORKER_SECOND
   }
 
-  private get workerSlots(): readonly SenderWorkerSlotTelemetry[] {
-    return this.workers.map(({ workerId, state, retiring, terminalError }) => ({
-      workerId,
-      state,
-      lifecycle: retiring ? 'draining' : 'active',
-      terminalError,
-    }))
-  }
+  private workerStateCounts(): {
+    readonly active: WorkerStateCounts
+    readonly draining: WorkerStateCounts
+  } {
+    const active = { idle: 0, inFlight: 0, backoff: 0 }
+    const draining = { idle: 0, inFlight: 0, backoff: 0 }
 
-  private workerStateCounts(
-    workerSlots: readonly SenderWorkerSlotTelemetry[],
-  ): SenderWorkerStateCounts {
-    let inFlight = 0
-    let backoff = 0
-    for (const slot of workerSlots) {
-      if (slot.state === 'in-flight') inFlight += 1
-      if (slot.state === 'backoff') backoff += 1
+    for (const worker of this.workers) {
+      const counts = worker.retiring ? draining : active
+      switch (worker.state) {
+        case 'idle':
+          counts.idle += 1
+          break
+        case 'in-flight':
+          counts.inFlight += 1
+          break
+        case 'backoff':
+          counts.backoff += 1
+          break
+      }
     }
+
     return {
-      idle: workerSlots.length - inFlight - backoff,
-      inFlight,
-      backoff,
+      active,
+      draining,
     }
   }
 

@@ -44,16 +44,6 @@ function liveControls(snapshot: LoadgenSnapshot): LiveControls {
   }
 }
 
-function workerSlots(count: number, activity: 'idle' | 'reading' | 'in-flight' | 'backoff' | 'blocked') {
-  return Array.from({ length: count }, (_, index) => ({
-    workerId: index + 1,
-    activity,
-    lifecycle: 'active' as const,
-    source: 'fixture',
-    terminalError: false,
-  }))
-}
-
 function snapshotFor(
   runState: LoadgenSnapshot['runState'],
   flowState: LoadgenSnapshot['readerChannel']['flowState'],
@@ -111,10 +101,13 @@ function snapshotFor(
     policy: null,
     reader: {
       id: 'reader', workers: workerControl, liveWorkers: workers, drainingWorkers: 0,
-      workerSlots: workerSlots(workers, active ? (blocked ? 'blocked' : 'reading') : 'idle') as LoadgenSnapshot['reader']['workerSlots'],
+      idleWorkers: active ? 0 : workers,
+      readingWorkers: active && !blocked ? workers : 0,
+      blockedWorkers: active && blocked ? workers : 0,
+      drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0,
       readBatchSize: batchControl, readTps: active ? 1_200 : 0, configuredCapacityTps: null,
       limitationReason: blocked ? 'downstream-backpressure' : null, rowsRead: active ? 12_000 : 0,
-      source: 'fixture source', sourceError: null, state: runState,
+      sourceDirectory: 'fixture source', sourceError: null, state: runState,
     },
     throttler: {
       id: 'throttler', requestedTps: tpsControl, installationMode: modeControl,
@@ -124,7 +117,11 @@ function snapshotFor(
     senderChannel: channel('throttler-to-sender', 'throttler', 'sender'),
     sender: {
       id: 'sender', workers: workerControl, liveWorkers: workers, drainingWorkers: 0,
-      timeoutMs: numericControl(5_000, 'ms'), workerSlots: workerSlots(workers, active ? (blocked ? 'backoff' : 'in-flight') : 'idle') as LoadgenSnapshot['sender']['workerSlots'],
+      idleWorkers: active ? 0 : workers,
+      inFlightWorkers: active && !blocked ? workers : 0,
+      backoffWorkers: active && blocked ? workers : 0,
+      drainingIdleWorkers: 0, drainingInFlightWorkers: 0, drainingBackoffWorkers: 0,
+      timeoutMs: numericControl(5_000, 'ms'),
       retryPolicy: null, attemptedTps: active ? 1_200 : 0, retryAttemptedTps: 0, terminalFailedTps: 0,
       inFlightRequests: active ? 3 : 0, attemptsStartedTotal: active ? 12_000 : 0, retryAttemptsStartedTotal: 0,
       successfulResponses: active ? 11_900 : 0, failedResponses: 0, retries: 0, timeoutsTotal: 0,

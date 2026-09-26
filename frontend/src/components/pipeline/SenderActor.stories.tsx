@@ -3,7 +3,6 @@ import type { LiveControls } from '../../hooks/useDesiredControl'
 import type {
   LoadgenSnapshot,
   NumericControlSnapshot,
-  SenderWorkerSlotSnapshot,
 } from '../../model/loadgen'
 import { PipelineSvg } from './PipelineSvg'
 import './PipelineSvg.css'
@@ -38,33 +37,6 @@ function liveControls(snapshot: LoadgenSnapshot): LiveControls {
 
 type SenderState = 'idle' | 'sending' | 'retry-backoff' | 'terminal-failure' | 'draining'
 
-function senderSlots(state: SenderState): readonly SenderWorkerSlotSnapshot[] {
-  if (state === 'idle') return [
-    { workerId: 1, activity: 'idle', lifecycle: 'active', terminalError: false },
-    { workerId: 2, activity: 'idle', lifecycle: 'active', terminalError: false },
-  ]
-  if (state === 'sending') return [
-    { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { workerId: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { workerId: 3, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-  ]
-  if (state === 'retry-backoff') return [
-    { workerId: 1, activity: 'backoff', lifecycle: 'active', terminalError: false },
-    { workerId: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { workerId: 3, activity: 'backoff', lifecycle: 'active', terminalError: false },
-  ]
-  if (state === 'terminal-failure') return [
-    { workerId: 1, activity: 'idle', lifecycle: 'active', terminalError: true },
-    { workerId: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { workerId: 3, activity: 'idle', lifecycle: 'active', terminalError: true },
-  ]
-  return [
-    { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-    { workerId: 2, activity: 'idle', lifecycle: 'draining', terminalError: false },
-    { workerId: 3, activity: 'backoff', lifecycle: 'draining', terminalError: false },
-  ]
-}
-
 function snapshotFor(state: SenderState): LoadgenSnapshot {
   const active = state !== 'idle' && state !== 'draining'
   const draining = state === 'draining'
@@ -95,9 +67,15 @@ function snapshotFor(state: SenderState): LoadgenSnapshot {
     retryableStatusCodes: [408, 429, 500, 502, 503, 504], retryTimeouts: true,
   }
   const sender = {
-    id: 'sender' as const, workers: numericControl(workers, 'workers'), liveWorkers: active ? 3 : draining ? 1 : 2,
+    id: 'sender' as const, workers: numericControl(workers, 'workers'), liveWorkers: active ? 3 : draining ? 3 : 2,
     drainingWorkers: draining ? 2 : 0,
-    timeoutMs: numericControl(5_000, 'ms'), workerSlots: senderSlots(state),
+    idleWorkers: state === 'idle' || state === 'terminal-failure' ? 2 : draining ? 1 : 0,
+    inFlightWorkers: state === 'sending' ? 3 : state === 'terminal-failure' ? 1 : draining ? 1 : state === 'retry-backoff' ? 1 : 0,
+    backoffWorkers: state === 'retry-backoff' ? 2 : draining ? 1 : 0,
+    drainingIdleWorkers: draining ? 1 : 0,
+    drainingInFlightWorkers: 0,
+    drainingBackoffWorkers: draining ? 1 : 0,
+    timeoutMs: numericControl(5_000, 'ms'),
     retryPolicy: retrying || terminalFailure ? retryPolicy : null, attemptedTps,
     retryAttemptedTps: retrying ? 240 : terminalFailure ? 120 : 0,
     terminalFailedTps: terminalFailure ? 40 : 0, inFlightRequests: active ? 2 : draining ? 1 : 0,
@@ -119,9 +97,11 @@ function snapshotFor(state: SenderState): LoadgenSnapshot {
     totalTransactions: active || draining ? 12_000 : 0, policy: null,
     reader: {
       id: 'reader', workers: readerWorkers, liveWorkers: 2, drainingWorkers: 0,
-      workerSlots: null, readBatchSize: batchSize, readTps: active || draining ? 1_200 : null,
+      idleWorkers: 2, readingWorkers: 0, blockedWorkers: 0,
+      drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0,
+      readBatchSize: batchSize, readTps: active || draining ? 1_200 : null,
       configuredCapacityTps: 1_500, limitationReason: null, rowsRead: active || draining ? 12_000 : null,
-      source: 'fixture source', sourceError: null, state: runState,
+      sourceDirectory: 'fixture source', sourceError: null, state: runState,
     },
     throttler: { id: 'throttler', requestedTps: tps, installationMode: mode, admittedTps: attemptedTps, limitedMs: null, state: runState },
     readerChannel: channel,

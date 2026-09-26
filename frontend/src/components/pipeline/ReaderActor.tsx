@@ -26,25 +26,21 @@ export function ReaderActor({
   geometry,
   orientation,
 }: ReaderActorProps) {
-  const workerStateSegments = snapshot.workerSlots === null
-    ? [{ value: 'Worker state telemetry unavailable', tone: 'idle' as const }]
-    : [
+  const workerStateSegments = [
         {
-          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'idle').length)} idle`,
+          value: `${formatInteger(snapshot.idleWorkers)} idle`,
           tone: 'idle' as const,
         },
         {
-          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'reading').length)} reading`,
+          value: `${formatInteger(snapshot.readingWorkers)} reading`,
           tone: 'in-flight' as const,
         },
         {
-          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'blocked').length)} blocked`,
+          value: `${formatInteger(snapshot.blockedWorkers)} blocked`,
           tone: 'backoff' as const,
         },
         {
-          value: snapshot.sourceError !== null && snapshot.sourceError.workerId !== null
-            ? '1 error'
-            : '— errors',
+          value: snapshot.sourceError !== null ? '1 error' : '— errors',
           tone: 'error' as const,
         },
       ]
@@ -60,7 +56,8 @@ export function ReaderActor({
       workers={snapshot.workers}
       liveWorkers={snapshot.liveWorkers}
       drainingWorkers={snapshot.drainingWorkers}
-      workerSlots={snapshot.workerSlots}
+      activityCounts={{ idle: snapshot.idleWorkers, reading: snapshot.readingWorkers, blocked: snapshot.blockedWorkers, 'in-flight': 0, backoff: 0 }}
+      drainingActivityCounts={{ idle: snapshot.drainingIdleWorkers, reading: snapshot.drainingReadingWorkers, blocked: snapshot.drainingBlockedWorkers, 'in-flight': 0, backoff: 0 }}
       runState={snapshot.state}
       active={rateDriven
         ? snapshot.readTps !== null && snapshot.readTps > 0

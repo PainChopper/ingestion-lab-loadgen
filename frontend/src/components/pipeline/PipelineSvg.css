@@ -328,8 +328,10 @@
 }
 
 .pipeline-worker--draining .pipeline-worker-chip {
-  fill: color-mix(in srgb, var(--purple) 14%, #0b314a);
+  fill: color-mix(in srgb, var(--purple) 28%, #0b314a);
   stroke: var(--purple);
+  fill-opacity: 0.96;
+  stroke-dasharray: 3 2;
 }
 
 .pipeline-worker--draining .pipeline-worker-chip-pin,

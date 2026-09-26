@@ -20,21 +20,6 @@ export type ThrottlerInstallationMode = 'installed' | 'bypass'
 
 export type ReaderLimitationReason = 'downstream-backpressure'
 
-export type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
-
-export interface SenderWorkerStateCounts {
-  readonly idle: number
-  readonly inFlight: number
-  readonly backoff: number
-}
-
-export interface SenderWorkerSlotSnapshot {
-  readonly workerId: number
-  readonly activity: SenderWorkerState
-  readonly lifecycle: 'active' | 'draining'
-  readonly terminalError: boolean
-}
-
 export interface RetryPolicySnapshot {
   readonly maxAttempts: number
   readonly backoffBaseMs: number
@@ -130,14 +115,18 @@ export interface ReaderSnapshot {
   readonly id: 'reader'
   readonly workers: NumericControlSnapshot
   readonly liveWorkers: number
+  readonly idleWorkers: number
+  readonly readingWorkers: number
+  readonly blockedWorkers: number
   readonly drainingWorkers: number
-  readonly workerSlots: readonly ReaderWorkerSlotSnapshot[] | null
+  readonly drainingIdleWorkers: number
+  readonly drainingReadingWorkers: number
+  readonly drainingBlockedWorkers: number
   readonly readBatchSize: NumericControlSnapshot
   readonly readTps: number | null
   readonly configuredCapacityTps: number | null
   readonly limitationReason: ReaderLimitationReason | null
   readonly rowsRead: number | null
-  readonly source: string | null
   readonly sourceDirectory?: string
   readonly sourceError: ReaderSourceErrorSnapshot | null
   readonly state: RunState
@@ -187,9 +176,14 @@ export interface SenderSnapshot {
   readonly id: 'sender'
   readonly workers: NumericControlSnapshot
   readonly liveWorkers: number
+  readonly idleWorkers: number
+  readonly inFlightWorkers: number
+  readonly backoffWorkers: number
   readonly drainingWorkers: number
+  readonly drainingIdleWorkers: number
+  readonly drainingInFlightWorkers: number
+  readonly drainingBackoffWorkers: number
   readonly timeoutMs: NumericControlSnapshot
-  readonly workerSlots: readonly SenderWorkerSlotSnapshot[] | null
   readonly retryPolicy: RetryPolicySnapshot | null
   readonly attemptedTps: number | null
   readonly retryAttemptedTps: number | null
@@ -209,19 +203,11 @@ export interface SenderSnapshot {
   readonly state: RunState
 }
 
-export interface ReaderWorkerSlotSnapshot {
-  readonly workerId: number
-  readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'
-  readonly lifecycle: 'active' | 'draining'
-  readonly source: string | null
-}
-
 export interface ReaderSourceErrorSnapshot {
   readonly category: 'source'
   readonly operation: 'glob' | 'open' | 'read' | 'close' | 'reader-close'
   readonly relativePath: string
   readonly message: string
-  readonly workerId: number | null
 }
 
 export interface HttpSnapshot {

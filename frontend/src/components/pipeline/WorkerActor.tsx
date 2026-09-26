@@ -1,14 +1,11 @@
 import { Minus, Plus } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { DesiredControl } from '../../hooks/useDesiredControl'
 import type { InspectorRowSegment } from '../inspectorViewModel'
 import type {
   NumericControlSnapshot,
-  ReaderWorkerSlotSnapshot,
   RunState,
   SelectableId,
-  SenderWorkerState,
-  SenderWorkerSlotSnapshot,
 } from '../../model/loadgen'
 import type { Point, TextPlacement, WorkerActorBounds } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
@@ -19,7 +16,7 @@ import {
 
 export type WorkerActorId = 'reader' | 'sender'
 
-const SENDER_SUCCESS_DURATION_MS = 1_000
+const MAX_VISIBLE_WORKER_MARKERS = 7
 
 interface WorkerActorProps {
   actor: WorkerActorId
@@ -36,7 +33,8 @@ interface WorkerActorProps {
   workers: NumericControlSnapshot
   liveWorkers?: number
   drainingWorkers?: number
-  workerSlots?: readonly (SenderWorkerSlotSnapshot | ReaderWorkerSlotSnapshot)[] | null
+  activityCounts: Readonly<Record<'idle' | 'reading' | 'blocked' | 'in-flight' | 'backoff', number>>
+  drainingActivityCounts: Readonly<Record<'idle' | 'reading' | 'blocked' | 'in-flight' | 'backoff', number>>
   runState: RunState
   active?: boolean
   inputPort?: Point
@@ -63,10 +61,10 @@ function WorkerChip({
   y,
   scale,
   state,
-  slot,
+  draining,
 }: WorkerChipLayout & {
-  state: SenderWorkerState | ReaderWorkerSlotSnapshot['activity'] | 'active' | 'inactive' | 'success' | 'draining' | 'terminal-error'
-  slot?: SenderWorkerSlotSnapshot | ReaderWorkerSlotSnapshot
+  state: 'idle' | 'reading' | 'blocked' | 'in-flight' | 'backoff' | 'active' | 'inactive'
+  draining: boolean
 }) {
   const pinOffsets = [6, 13, 20, 27]
   const chipX = 4
@@ -74,12 +72,8 @@ function WorkerChip({
 
   return (
     <g
-      className={`pipeline-worker--${state}`}
+      className={`pipeline-worker--${state}${draining ? ' pipeline-worker--draining' : ''}`}
       transform={`translate(${x} ${y}) scale(${scale})`}
-      data-worker-id={slot?.workerId}
-      data-worker-activity={slot?.activity}
-      data-worker-lifecycle={slot?.lifecycle}
-      data-worker-terminal-error={slot && 'terminalError' in slot ? slot.terminalError : undefined}
     >
       <rect
         x={chipX}
@@ -141,7 +135,8 @@ export function WorkerActor({
   workers,
   liveWorkers,
   drainingWorkers,
-  workerSlots,
+  activityCounts,
+  drainingActivityCounts,
   runState,
   active,
   inputPort,
@@ -158,14 +153,6 @@ export function WorkerActor({
   muted = false,
   sourceErrorOperation,
 }: WorkerActorProps) {
-  const [recentlySuccessfulWorkerIds, setRecentlySuccessfulWorkerIds] = useState<ReadonlySet<number>>(
-    () => new Set(),
-  )
-  const previousWorkerActivity = useRef<ReadonlyMap<number, SenderWorkerState>>(new Map())
-  const successTimeouts = useRef(new Map<number, ReturnType<typeof setTimeout>>())
-  const [completedReaderIds, setCompletedReaderIds] = useState<ReadonlySet<number>>(() => new Set())
-  const previousReaderActivity = useRef<ReadonlyMap<number, ReaderWorkerSlotSnapshot['activity']>>(new Map())
-  const readerTimeouts = useRef(new Map<number, ReturnType<typeof setTimeout>>())
   const holdTimer = useRef<number | null>(null)
   const repeatTimer = useRef<number | null>(null)
   const releaseListeners = useRef<(() => void) | null>(null)
@@ -176,113 +163,6 @@ export function WorkerActor({
   const cancelDesired = desiredControl.cancel
   const previewDesired = desiredControl.preview
 
-  useEffect(() => {
-    if (actor !== 'reader' || workerSlots === null || workerSlots === undefined) {
-      previousReaderActivity.current = new Map()
-      for (const timeout of readerTimeouts.current.values()) clearTimeout(timeout)
-      readerTimeouts.current.clear()
-      setCompletedReaderIds((current) => current.size === 0 ? current : new Set())
-      return
-    }
-
-    const nextActivity = new Map<number, ReaderWorkerSlotSnapshot['activity']>()
-    const completed: number[] = []
-    for (const slot of workerSlots as readonly ReaderWorkerSlotSnapshot[]) {
-      nextActivity.set(slot.workerId, slot.activity)
-      if (
-        (previousReaderActivity.current.get(slot.workerId) === undefined ||
-          previousReaderActivity.current.get(slot.workerId) === 'reading' ||
-          previousReaderActivity.current.get(slot.workerId) === 'blocked') &&
-        slot.activity === 'completed' && slot.lifecycle === 'active'
-      ) completed.push(slot.workerId)
-    }
-    previousReaderActivity.current = nextActivity
-
-    for (const [id, timeout] of readerTimeouts.current) {
-      const slot = workerSlots.find((candidate) => candidate.workerId === id)
-      if (slot && slot.lifecycle === 'active' && (slot.activity === 'completed' || slot.activity === 'idle')) continue
-      clearTimeout(timeout)
-      readerTimeouts.current.delete(id)
-    }
-    setCompletedReaderIds((current) => {
-      const visible = new Set([...current].filter((id) => readerTimeouts.current.has(id)))
-      return visible.size === current.size ? current : visible
-    })
-
-    for (const id of completed) {
-      const timeout = setTimeout(() => {
-        if (readerTimeouts.current.get(id) !== timeout) return
-        readerTimeouts.current.delete(id)
-        setCompletedReaderIds((current) => {
-          if (!current.has(id)) return current
-          const visible = new Set(current)
-          visible.delete(id)
-          return visible
-        })
-      }, SENDER_SUCCESS_DURATION_MS)
-      readerTimeouts.current.set(id, timeout)
-    }
-    if (completed.length > 0) {
-      setCompletedReaderIds((current) => new Set([...current, ...completed]))
-    }
-  }, [actor, workerSlots])
-
-  useEffect(() => {
-    if (actor !== 'sender' || workerSlots === null || workerSlots === undefined) {
-      previousWorkerActivity.current = new Map()
-      for (const timeout of successTimeouts.current.values()) clearTimeout(timeout)
-      successTimeouts.current.clear()
-      setRecentlySuccessfulWorkerIds((current) => current.size === 0 ? current : new Set())
-      return
-    }
-
-    const nextWorkerActivity = new Map<number, SenderWorkerState>()
-    const newlySuccessfulWorkerIds: number[] = []
-    for (const slot of workerSlots as readonly SenderWorkerSlotSnapshot[]) {
-      nextWorkerActivity.set(slot.workerId, slot.activity)
-      if (
-        previousWorkerActivity.current.get(slot.workerId) === 'in-flight' &&
-        slot.activity === 'idle'
-      ) {
-        newlySuccessfulWorkerIds.push(slot.workerId)
-      }
-    }
-    previousWorkerActivity.current = nextWorkerActivity
-
-    for (const [workerId, timeout] of successTimeouts.current) {
-      if (nextWorkerActivity.has(workerId)) continue
-      clearTimeout(timeout)
-      successTimeouts.current.delete(workerId)
-    }
-    setRecentlySuccessfulWorkerIds((current) => {
-      const visibleWorkerIds = new Set(
-        [...current].filter((workerId) => nextWorkerActivity.has(workerId)),
-      )
-      return visibleWorkerIds.size === current.size ? current : visibleWorkerIds
-    })
-
-    for (const workerId of newlySuccessfulWorkerIds) {
-      const previousTimeout = successTimeouts.current.get(workerId)
-      if (previousTimeout !== undefined) clearTimeout(previousTimeout)
-      const timeout = setTimeout(() => {
-        if (successTimeouts.current.get(workerId) !== timeout) return
-        successTimeouts.current.delete(workerId)
-        setRecentlySuccessfulWorkerIds((visible) => {
-          if (!visible.has(workerId)) return visible
-          const withoutExpiredWorker = new Set(visible)
-          withoutExpiredWorker.delete(workerId)
-          return withoutExpiredWorker
-        })
-      }, SENDER_SUCCESS_DURATION_MS)
-      successTimeouts.current.set(workerId, timeout)
-    }
-
-    if (newlySuccessfulWorkerIds.length === 0) return
-    setRecentlySuccessfulWorkerIds((current) => new Set([
-      ...current,
-      ...newlySuccessfulWorkerIds,
-    ]))
-  }, [actor, workerSlots])
 
   const stopHold = useCallback((commit: boolean) => {
     if (holdTimer.current !== null) window.clearTimeout(holdTimer.current)
@@ -299,47 +179,36 @@ export function WorkerActor({
 
   useEffect(() => () => stopHold(false), [stopHold])
 
-  useEffect(() => () => {
-    for (const timeout of successTimeouts.current.values()) clearTimeout(timeout)
-    successTimeouts.current.clear()
-    for (const timeout of readerTimeouts.current.values()) clearTimeout(timeout)
-    readerTimeouts.current.clear()
-  }, [])
 
   const desiredWorkers = Math.min(
     Math.round(workers.max),
     Math.max(Math.round(workers.min), Math.round(desiredControl.desired)),
   )
   desiredRef.current = desiredWorkers
-  const visibleWorkers = workerSlots === undefined ? desiredWorkers : workerSlots?.length ?? 0
+  const visibleWorkers = Math.min(liveWorkers ?? 0, MAX_VISIBLE_WORKER_MARKERS)
+  const overflowWorkers = Math.max(0, (liveWorkers ?? 0) - visibleWorkers)
   const layout = getWorkerActorLayout(
     actor,
     bounds,
     workers,
     orientation,
     visibleWorkers,
-    desiredWorkers,
+    Math.min(desiredWorkers, MAX_VISIBLE_WORKER_MARKERS),
   )
   const workerMin = Math.round(workers.min)
   const workerMax = Math.round(workers.max)
   const workerStep = Math.max(1, Math.round(workers.step))
   const workerControlDisabled = !desiredControl.available || desiredControl.phase === 'pending'
-  const chipState = (index: number): SenderWorkerState | ReaderWorkerSlotSnapshot['activity'] | 'active' | 'inactive' | 'success' | 'draining' | 'terminal-error' => {
-	if (muted) return 'inactive'
-    if (workerSlots === undefined || workerSlots === null) {
-      return (active ?? (runState === 'running')) ? 'active' : 'inactive'
-    }
-    const slot = workerSlots[index]
-    if (slot === undefined) return 'inactive'
-    if ('terminalError' in slot && slot.terminalError) return 'terminal-error'
-    if (slot.activity === 'backoff') return 'backoff'
-    if (slot.activity === 'blocked') return 'blocked'
-    if (slot.lifecycle === 'draining') return 'draining'
-    if (actor === 'reader' && completedReaderIds.has(slot.workerId)) return 'success'
-    if (slot.activity === 'completed') return 'idle'
-    if (slot.activity === 'idle' && recentlySuccessfulWorkerIds.has(slot.workerId)) return 'success'
-    return slot.activity
-  }
+  const states = actor === 'reader'
+    ? ['blocked', 'reading', 'idle'] as const
+    : ['backoff', 'in-flight', 'idle'] as const
+  const visibleStates = states.flatMap((state) => Array.from(
+    { length: activityCounts[state] },
+    (_, index) => ({ state, draining: index < drainingActivityCounts[state] }),
+  ))
+  const chipState = (index: number) => muted
+    ? { state: 'inactive' as const, draining: false }
+    : visibleStates[index] ?? { state: (active ?? (runState === 'running')) ? 'active' as const : 'inactive' as const, draining: false }
   const actorAriaLabel = actor === 'reader' || liveWorkers === undefined
     ? `Inspect ${actor}`
     : `Inspect ${actor}, ${desiredWorkers} desired, ${liveWorkers} live, ${drainingWorkers ?? 0} draining`
@@ -479,14 +348,23 @@ export function WorkerActor({
           rx="5"
           className="pipeline-actor-box"
         />
-        {layout.chips.filter((_, index) => workerSlots === undefined || workerSlots?.length === 0 || (workerSlots !== null && index < workerSlots.length)).map((chip, index) => (
+        {layout.chips.slice(0, visibleWorkers).map((chip, index) => (
           <WorkerChip
-            key={workerSlots?.[index]?.workerId ?? index}
+            key={index}
             {...chip}
-            state={chipState(index)}
-            slot={workerSlots?.[index]}
+            {...chipState(index)}
           />
         ))}
+        {overflowWorkers > 0 && (
+          <text
+            x={bounds.x + bounds.width - 8}
+            y={layout.top + 16}
+            textAnchor="end"
+            className="pipeline-small"
+          >
+            +{overflowWorkers} workers
+          </text>
+        )}
         {sourceErrorOperation !== undefined && (
           <g
             role="alert"

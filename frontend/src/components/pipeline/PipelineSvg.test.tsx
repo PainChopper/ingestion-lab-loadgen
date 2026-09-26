@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { act, fireEvent, render } from '@testing-library/react'
+import { fireEvent, render } from '@testing-library/react'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
@@ -548,7 +548,7 @@ describe('PipelineSvg rendering', () => {
       }, 0)
 
     const simulation = renderPipeline(withReadRate('simulation', 'running', 0))
-    expect(simulation.container.querySelectorAll('#reader-actor [data-worker-id]'))
+    expect(simulation.container.querySelectorAll('#reader-actor .pipeline-worker--reading'))
       .toHaveLength(0)
     simulation.unmount()
 
@@ -558,12 +558,12 @@ describe('PipelineSvg rendering', () => {
     idle.unmount()
 
     const running = renderPipeline(withReadRate('http', 'running', 1))
-    expect(running.container.querySelectorAll('#reader-actor [data-worker-id]'))
+    expect(running.container.querySelectorAll('#reader-actor .pipeline-worker--reading'))
       .toHaveLength(0)
     running.unmount()
 
     const paused = renderPipeline(withReadRate('http', 'paused', 1))
-    expect(paused.container.querySelectorAll('#reader-actor [data-worker-id]'))
+    expect(paused.container.querySelectorAll('#reader-actor .pipeline-worker--reading'))
       .toHaveLength(0)
     paused.unmount()
   })
@@ -594,24 +594,26 @@ describe('PipelineSvg rendering', () => {
       const actorCases = [
         {
           actor: 'reader' as const,
-          expected: testCase.reader,
+          expected: testCase.count > 7
+            ? { top: 170, height: 305 }
+            : testCase.reader,
           ports: [geometry.actors.reader.ports.output],
           mode: 'detailed',
           columns: 1,
-          rows: testCase.count,
+          rows: Math.min(testCase.count, 7),
         },
         {
           actor: 'sender' as const,
-          expected: testCase.sender,
+          expected: testCase.count > 7
+            ? { top: 170, height: 305 }
+            : testCase.sender,
           ports: [
             geometry.actors.sender.ports.input,
             geometry.actors.sender.ports.output,
           ],
-          mode: testCase.count > 7 ? 'compact' : 'detailed',
-          columns: testCase.count > 7 ? 4 : 1,
-          rows: testCase.count > 7
-            ? Math.ceil(testCase.count / 4)
-            : testCase.count,
+          mode: 'detailed',
+          columns: 1,
+          rows: Math.min(testCase.count, 7),
         },
       ]
 
@@ -835,11 +837,13 @@ describe('PipelineSvg rendering', () => {
           readTps: 50_000,
           configuredCapacityTps: 350_000,
           limitationReason: 'downstream-backpressure',
-          workerSlots: [
-            { workerId: 0, activity: 'idle', lifecycle: 'active', source: null },
-            { workerId: 1, activity: 'reading', lifecycle: 'active', source: 'a' },
-            { workerId: 2, activity: 'blocked', lifecycle: 'active', source: 'b' },
-          ],
+          liveWorkers: 3,
+          idleWorkers: 1,
+          readingWorkers: 1,
+          blockedWorkers: 1,
+          drainingIdleWorkers: 0,
+          drainingReadingWorkers: 0,
+          drainingBlockedWorkers: 0,
         },
       }
       const view = renderPipeline(snapshot, orientation)
@@ -873,7 +877,6 @@ describe('PipelineSvg rendering', () => {
             operation: 'read',
             relativePath: 'broken.parquet',
             message: 'corrupt parquet',
-            workerId: 1,
           },
         },
       }, orientation)
@@ -911,16 +914,20 @@ describe('PipelineSvg rendering', () => {
     const base = activeSnapshot()
     const reader = {
       ...base.reader,
-      workerSlots: [
-        { workerId: 0, activity: 'blocked' as const, lifecycle: 'active' as const, source: 'a' },
-      ],
+      liveWorkers: 1,
+      idleWorkers: 0,
+      readingWorkers: 0,
+      blockedWorkers: 1,
+      drainingIdleWorkers: 0,
+      drainingReadingWorkers: 0,
+      drainingBlockedWorkers: 0,
     }
     const runtime = renderPipeline({
       ...base,
       reader: {
         ...reader,
         sourceError: {
-          category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt', workerId: 0,
+          category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt',
         },
       },
     })
@@ -933,12 +940,12 @@ describe('PipelineSvg rendering', () => {
       reader: {
         ...reader,
         sourceError: {
-          category: 'source', operation: 'glob', relativePath: 'missing.parquet', message: 'missing', workerId: null,
+          category: 'source', operation: 'glob', relativePath: 'missing.parquet', message: 'missing',
         },
       },
     })
     expect(startup.container.querySelector('#reader-actor .pipeline-worker-status')?.textContent)
-      .toContain('0 idle · 0 reading · 1 blocked · — errors')
+      .toContain('0 idle · 0 reading · 1 blocked · 1 error')
     startup.unmount()
   })
 
@@ -950,21 +957,22 @@ describe('PipelineSvg rendering', () => {
         ...base,
         sender: {
           ...base.sender,
-          workerSlots: [
-            { workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false },
-            { workerId: 1, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-            { workerId: 2, activity: 'backoff', lifecycle: 'active', terminalError: true },
-          ],
+          liveWorkers: 3,
+          idleWorkers: 1,
+          inFlightWorkers: 1,
+          backoffWorkers: 1,
+          drainingIdleWorkers: 0,
+          drainingInFlightWorkers: 0,
+          drainingBackoffWorkers: 0,
         },
       }, orientation)
       const status = view.container.querySelector('#sender-actor .pipeline-worker-status')!
 
-      expect(status.textContent).toContain('1 idle · 1 in-flight · 1 backoff · 1 errors')
-      expect(status.querySelectorAll('.worker-state')).toHaveLength(4)
+      expect(status.textContent).toContain('1 idle · 1 in-flight · 1 backoff')
+      expect(status.querySelectorAll('.worker-state')).toHaveLength(3)
       expect(status.querySelector('.worker-state--idle')).toHaveProperty('textContent', '1 idle')
       expect(status.querySelector('.worker-state--in-flight')).toHaveProperty('textContent', ' · 1 in-flight')
       expect(status.querySelector('.worker-state--backoff')).toHaveProperty('textContent', ' · 1 backoff')
-      expect(status.querySelector('.worker-state--error')).toHaveProperty('textContent', ' · 1 errors')
       view.unmount()
     },
   )
@@ -1442,11 +1450,12 @@ describe('PipelineSvg rendering', () => {
         sender: {
           ...base.sender,
           liveWorkers: 3,
-          workerSlots: [
-            { workerId: 0, activity: 'backoff', lifecycle: 'active', terminalError: false },
-            { workerId: 1, activity: 'idle', lifecycle: 'active', terminalError: false },
-            { workerId: 2, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-          ],
+          idleWorkers: 1,
+          inFlightWorkers: 1,
+          backoffWorkers: 1,
+          drainingIdleWorkers: 0,
+          drainingInFlightWorkers: 0,
+          drainingBackoffWorkers: 0,
           inFlightRequests: 1,
         },
       }
@@ -1461,29 +1470,12 @@ describe('PipelineSvg rendering', () => {
       expect(sender.querySelectorAll('.pipeline-worker--backoff'))
         .toHaveLength(1)
       expect(sender.querySelectorAll('.pipeline-worker--idle')).toHaveLength(1)
-      expect(
-        [...sender.querySelectorAll('[data-worker-id]')].map((slot) => ({
-          workerId: slot.getAttribute('data-worker-id'),
-          activity: slot.getAttribute('data-worker-activity'),
-          className: slot.getAttribute('class'),
-        })),
-      ).toEqual([
-        {
-          workerId: '0',
-          activity: 'backoff',
-          className: 'pipeline-worker--backoff',
-        },
-        {
-          workerId: '1',
-          activity: 'idle',
-          className: 'pipeline-worker--idle',
-        },
-        {
-          workerId: '2',
-          activity: 'in-flight',
-          className: 'pipeline-worker--in-flight',
-        },
-      ])
+      expect([...sender.querySelectorAll('[class*="pipeline-worker--"]')].map((chip) => chip.getAttribute('class')))
+        .toEqual([
+          'pipeline-worker--backoff',
+          'pipeline-worker--in-flight',
+          'pipeline-worker--idle',
+        ])
       expect(
         getComputedStyle(
           sender.querySelector('.pipeline-worker--backoff .pipeline-worker-led')!,
@@ -1492,19 +1484,25 @@ describe('PipelineSvg rendering', () => {
     },
   )
 
-  it('does not synthesize per-slot states when backend slots are unknown', () => {
+  it('does not synthesize aggregate states when all counts are zero', () => {
     const base = activeSnapshot()
     const snapshot: LoadgenSnapshot = {
       ...base,
       sender: {
         ...base.sender,
-        workerSlots: null,
+        liveWorkers: 0,
+        idleWorkers: 0,
+        inFlightWorkers: 0,
+        backoffWorkers: 0,
+        drainingIdleWorkers: 0,
+        drainingInFlightWorkers: 0,
+        drainingBackoffWorkers: 0,
       },
     }
     const view = renderPipeline(snapshot)
     const sender = view.container.querySelector('#sender-actor')!
 
-    expect(sender.querySelectorAll('[data-worker-id]')).toHaveLength(0)
+    expect(sender.querySelectorAll('[class*="pipeline-worker--"]')).toHaveLength(0)
     expect(sender.querySelectorAll('.pipeline-worker--active')).toHaveLength(0)
     expect(sender.querySelectorAll('.pipeline-worker--backoff')).toHaveLength(0)
   })
@@ -1542,7 +1540,8 @@ describe('PipelineSvg rendering', () => {
           workers: { ...base.reader.workers, applied: 2 },
           liveWorkers: 0,
           drainingWorkers: 0,
-          workerSlots: [],
+          idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0,
+          drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0,
           readBatchSize: zeroBatch(base.reader.readBatchSize),
         },
         sender: {
@@ -1551,7 +1550,8 @@ describe('PipelineSvg rendering', () => {
           workers: { ...base.sender.workers, applied: 3 },
           liveWorkers: 0,
           drainingWorkers: 0,
-          workerSlots: [],
+          idleWorkers: 0, inFlightWorkers: 0, backoffWorkers: 0,
+          drainingIdleWorkers: 0, drainingInFlightWorkers: 0, drainingBackoffWorkers: 0,
         },
         readerChannel: zeroFlowChannel(base.readerChannel),
         senderChannel: zeroFlowChannel(base.senderChannel),
@@ -1566,10 +1566,10 @@ describe('PipelineSvg rendering', () => {
       )).toBe('3')
       expect(view.container.querySelectorAll(
         '#reader-actor .pipeline-worker--inactive',
-      )).toHaveLength(2)
+      )).toHaveLength(0)
       expect(view.container.querySelectorAll(
         '#sender-actor .pipeline-worker--inactive',
-      )).toHaveLength(3)
+      )).toHaveLength(0)
       const batchControls = view.getAllByRole('group', {
         name: 'Batch: Applied 0 tx',
       })
@@ -1579,7 +1579,7 @@ describe('PipelineSvg rendering', () => {
   )
 
   it.each(['landscape', 'portrait'] as const)(
-    'shows the live draining slot beyond desired count in %s',
+    'shows aggregate draining markers beyond desired count in %s',
     (orientation) => {
       const base = activeSnapshot()
       const snapshot: LoadgenSnapshot = {
@@ -1589,10 +1589,12 @@ describe('PipelineSvg rendering', () => {
           workers: { ...base.sender.workers, applied: 1 },
           liveWorkers: 2,
           drainingWorkers: 1,
-          workerSlots: [
-            { workerId: 0, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-            { workerId: 1, activity: 'idle', lifecycle: 'draining', terminalError: false },
-          ],
+          idleWorkers: 1,
+          inFlightWorkers: 1,
+          backoffWorkers: 0,
+          drainingIdleWorkers: 1,
+          drainingInFlightWorkers: 0,
+          drainingBackoffWorkers: 0,
         },
       }
       const view = renderPipeline(snapshot, orientation)
@@ -1600,10 +1602,10 @@ describe('PipelineSvg rendering', () => {
 
       expect(sender.getAttribute('data-worker-count')).toBe('1')
       expect(sender.getAttribute('aria-label')).toBe('Inspect sender, 1 desired, 2 live, 1 draining')
-      expect(sender.querySelectorAll('[data-worker-id]')).toHaveLength(2)
-      expect(sender.querySelector('[data-worker-id="0"]')?.classList)
-        .toContain('pipeline-worker--in-flight')
-      const draining = sender.querySelector('[data-worker-id="1"]')!
+      expect(sender.querySelectorAll('[class*="pipeline-worker--"]')).toHaveLength(2)
+      expect([...sender.querySelectorAll('[class*="pipeline-worker--"]')].map((chip) => chip.getAttribute('class')))
+        .toEqual(['pipeline-worker--in-flight', 'pipeline-worker--idle pipeline-worker--draining'])
+      const draining = sender.querySelector('.pipeline-worker--draining')!
       expect(draining.classList).toContain('pipeline-worker--draining')
       expect(getComputedStyle(draining.querySelector('.pipeline-worker-led')!).fill)
         .toBe('var(--purple)')
@@ -1613,7 +1615,7 @@ describe('PipelineSvg rendering', () => {
   )
 
   it.each(['landscape', 'portrait'] as const)(
-    'renders Reader live slots and state precedence in %s',
+    'renders Reader aggregate state priority and hatch in %s',
     (orientation) => {
       const base = activeSnapshot()
       const view = renderPipeline({
@@ -1623,176 +1625,72 @@ describe('PipelineSvg rendering', () => {
           workers: { ...base.reader.workers, applied: 1 },
           liveWorkers: 5,
           drainingWorkers: 2,
-          workerSlots: [
-            { workerId: 0, activity: 'reading', lifecycle: 'active', source: 'a' },
-            { workerId: 1, activity: 'idle', lifecycle: 'active', source: null },
-            { workerId: 2, activity: 'completed', lifecycle: 'active', source: 'b' },
-            { workerId: 3, activity: 'reading', lifecycle: 'draining', source: 'c' },
-            { workerId: 4, activity: 'blocked', lifecycle: 'draining', source: 'd' },
-          ],
+          idleWorkers: 1,
+          readingWorkers: 2,
+          blockedWorkers: 2,
+          drainingIdleWorkers: 0,
+          drainingReadingWorkers: 1,
+          drainingBlockedWorkers: 1,
         },
       }, orientation)
       const reader = view.container.querySelector('#reader-actor')!
       expect(reader.getAttribute('aria-label')).toBe('Inspect reader')
-      expect(reader.querySelectorAll('[data-worker-id]')).toHaveLength(5)
-      for (const [workerId, state, color] of [
-        [0, 'reading', 'var(--cyan)'],
-        [1, 'idle', 'var(--green)'],
-        [2, 'success', 'var(--green)'],
-        [3, 'draining', 'var(--purple)'],
-        [4, 'blocked', 'var(--red)'],
-      ] as const) {
-        const chip = reader.querySelector(`[data-worker-id="${workerId}"]`)!
-        expect(chip.classList).toContain(`pipeline-worker--${state}`)
-        expect(getComputedStyle(chip.querySelector('.pipeline-worker-led')!).fill).toBe(color)
-      }
+      expect(reader.querySelectorAll('[class*="pipeline-worker--"]')).toHaveLength(5)
+      expect([...reader.querySelectorAll('[class*="pipeline-worker--"]')].map((chip) => chip.getAttribute('class')))
+        .toEqual([
+          'pipeline-worker--blocked pipeline-worker--draining',
+          'pipeline-worker--blocked',
+          'pipeline-worker--reading pipeline-worker--draining',
+          'pipeline-worker--reading',
+          'pipeline-worker--idle',
+        ])
       expect(getComputedStyle(reader.querySelector('.pipeline-worker--idle')!).opacity).toBe('0.34')
       view.unmount()
     },
   )
 
-  it('holds observed Reader completion green for exactly one second and clears it on interruption', () => {
-    vi.useFakeTimers()
-    try {
-      const base = activeSnapshot()
-      const slot = { workerId: 0, activity: 'reading' as const, lifecycle: 'active' as const, source: 'a' }
-      const snapshot = (activity: 'reading' | 'completed' | 'idle' | 'blocked', lifecycle: 'active' | 'draining' = 'active'): LoadgenSnapshot => ({
-        ...base,
-        reader: { ...base.reader, liveWorkers: 1, workerSlots: [{ ...slot, activity, lifecycle }] },
-      })
-      const view = renderPipeline(snapshot('reading'))
-      const rerender = (current: LoadgenSnapshot) => view.rerender(
-        <PipelineSvg
-          snapshot={current}
-          selectedId={null}
-          onSelect={vi.fn()}
-          onChannelCapacityChange={vi.fn()}
-          liveControls={liveControls(current)}
-          geometry={createPipelineGeometry({
-            orientation: 'landscape',
-            readerWorkers: normalizedWorkerCount(current.reader.workers),
-            senderWorkers: normalizedWorkerCount(current.sender.workers),
-          })}
-        />,
-      )
-      const chip = () => view.container.querySelector('[data-worker-id="0"]')!
-      rerender(snapshot('completed'))
-      expect(chip().classList).toContain('pipeline-worker--success')
-      rerender(snapshot('idle'))
-      act(() => { vi.advanceTimersByTime(999) })
-      expect(chip().classList).toContain('pipeline-worker--success')
-      act(() => { vi.advanceTimersByTime(1) })
-      expect(chip().classList).toContain('pipeline-worker--idle')
-
-      rerender(snapshot('reading'))
-      rerender(snapshot('completed'))
-      rerender(snapshot('blocked'))
-      expect(chip().classList).toContain('pipeline-worker--blocked')
-      rerender(snapshot('reading'))
-      rerender(snapshot('completed'))
-      rerender(snapshot('idle', 'draining'))
-      expect(chip().classList).toContain('pipeline-worker--draining')
-      rerender(snapshot('reading'))
-      rerender(snapshot('completed'))
-      rerender({ ...base, reader: { ...base.reader, workerSlots: [], liveWorkers: 0 } })
-      expect(view.container.querySelector('[data-worker-id="0"]')).toBeNull()
-      view.unmount()
-      act(() => { vi.advanceTimersByTime(1_000) })
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('shows an observed Sender success transition for one second', () => {
-    vi.useFakeTimers()
-    try {
-      const base = activeSnapshot()
-      const inFlight: LoadgenSnapshot = {
-        ...base,
-        sender: {
-          ...base.sender,
-          liveWorkers: 1,
-          workerSlots: [
-            { workerId: 0, activity: 'in-flight', lifecycle: 'active', terminalError: false },
-          ],
-        },
-      }
-      const idle: LoadgenSnapshot = {
-        ...inFlight,
-        sender: {
-          ...inFlight.sender,
-          workerSlots: [
-            { workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false },
-          ],
-        },
-      }
-      const view = renderPipeline(inFlight)
-      const rerender = (snapshot: LoadgenSnapshot) => view.rerender(
-        <PipelineSvg
-          snapshot={snapshot}
-          selectedId={null}
-          onSelect={vi.fn()}
-          onChannelCapacityChange={vi.fn()}
-          liveControls={liveControls(snapshot)}
-          geometry={createPipelineGeometry({
-            orientation: 'landscape',
-            readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
-            senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
-          })}
-        />,
-      )
-
-      rerender(idle)
-      const worker = () => view.container.querySelector('[data-worker-id="0"]')!
-      expect(worker().classList).toContain('pipeline-worker--success')
-
-      rerender({
-        ...idle,
-        sender: { ...idle.sender, workerSlots: [{ ...idle.sender.workerSlots![0]!, terminalError: true }] },
-      })
-      expect(worker().classList).toContain('pipeline-worker--terminal-error')
-      rerender({
-        ...idle,
-        sender: { ...idle.sender, workerSlots: [{ ...idle.sender.workerSlots![0]!, activity: 'backoff' }] },
-      })
-      expect(worker().classList).toContain('pipeline-worker--backoff')
-      rerender({
-        ...idle,
-        sender: { ...idle.sender, workerSlots: [{ ...idle.sender.workerSlots![0]!, lifecycle: 'draining' }] },
-      })
-      expect(worker().classList).toContain('pipeline-worker--draining')
-      rerender(idle)
-
-      act(() => { vi.advanceTimersByTime(999) })
-      expect(worker().classList).toContain('pipeline-worker--success')
-      act(() => { vi.advanceTimersByTime(1) })
-      expect(worker().classList).toContain('pipeline-worker--idle')
-
-      rerender(inFlight)
-      rerender(idle)
-      expect(worker().classList).toContain('pipeline-worker--success')
-      rerender({
-        ...idle,
-        sender: { ...idle.sender, workerSlots: null },
-      })
-      rerender(idle)
-      expect(worker().classList).toContain('pipeline-worker--idle')
-      act(() => { vi.advanceTimersByTime(1_000) })
-      expect(worker().classList).toContain('pipeline-worker--idle')
-      view.unmount()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('prioritizes terminal error, retry and draining, then clears red after success', () => {
+  it('renders Reader aggregate states without retaining completion history', () => {
     const base = activeSnapshot()
-    const slots = [
-      { workerId: 0, activity: 'idle' as const, lifecycle: 'active' as const, terminalError: false },
-      { workerId: 1, activity: 'backoff' as const, lifecycle: 'draining' as const, terminalError: true },
-      { workerId: 2, activity: 'backoff' as const, lifecycle: 'draining' as const, terminalError: false },
-      { workerId: 3, activity: 'in-flight' as const, lifecycle: 'draining' as const, terminalError: false },
-    ]
+    const view = renderPipeline({
+      ...base,
+      reader: {
+        ...base.reader,
+        liveWorkers: 2,
+        idleWorkers: 0,
+        readingWorkers: 1,
+        blockedWorkers: 1,
+        drainingIdleWorkers: 0,
+        drainingReadingWorkers: 0,
+        drainingBlockedWorkers: 0,
+      },
+    })
+    expect(view.container.querySelector('.pipeline-worker--success')).toBeNull()
+    expect([...view.container.querySelectorAll('#reader-actor [class*="pipeline-worker--"]')].map((chip) => chip.getAttribute('class')))
+      .toEqual(['pipeline-worker--blocked', 'pipeline-worker--reading'])
+  })
+
+  it('renders Sender aggregate state priority without success history', () => {
+    const base = activeSnapshot()
+    const view = renderPipeline({
+      ...base,
+      sender: {
+        ...base.sender,
+        liveWorkers: 3,
+        idleWorkers: 1,
+        inFlightWorkers: 1,
+        backoffWorkers: 1,
+        drainingIdleWorkers: 0,
+        drainingInFlightWorkers: 0,
+        drainingBackoffWorkers: 0,
+      },
+    })
+    expect(view.container.querySelector('.pipeline-worker--success')).toBeNull()
+    expect([...view.container.querySelectorAll('#sender-actor [class*="pipeline-worker--"]')].map((chip) => chip.getAttribute('class')))
+      .toEqual(['pipeline-worker--backoff', 'pipeline-worker--in-flight', 'pipeline-worker--idle'])
+  })
+
+  it('prioritizes aggregate backoff and preserves draining hatch', () => {
+    const base = activeSnapshot()
     const view = renderPipeline({
       ...base,
       sender: {
@@ -1800,17 +1698,23 @@ describe('PipelineSvg rendering', () => {
         workers: { ...base.sender.workers, applied: 1 },
         liveWorkers: 4,
         drainingWorkers: 3,
-        workerSlots: slots,
+        idleWorkers: 1,
+        inFlightWorkers: 1,
+        backoffWorkers: 2,
+        drainingIdleWorkers: 0,
+        drainingInFlightWorkers: 1,
+        drainingBackoffWorkers: 2,
       },
     })
     const sender = view.container.querySelector('#sender-actor')!
     expect(sender.getAttribute('aria-label')).toBe('Inspect sender, 1 desired, 4 live, 3 draining')
-    expect(sender.querySelector('[data-worker-id="1"]')?.classList)
-      .toContain('pipeline-worker--terminal-error')
-    expect(sender.querySelector('[data-worker-id="2"]')?.classList)
-      .toContain('pipeline-worker--backoff')
-    expect(sender.querySelector('[data-worker-id="3"]')?.classList)
-      .toContain('pipeline-worker--draining')
+    expect([...sender.querySelectorAll('[class*="pipeline-worker--"]')].map((chip) => chip.getAttribute('class')))
+      .toEqual([
+        'pipeline-worker--backoff pipeline-worker--draining',
+        'pipeline-worker--backoff pipeline-worker--draining',
+        'pipeline-worker--in-flight pipeline-worker--draining',
+        'pipeline-worker--idle',
+      ])
 
     view.unmount()
     const afterSuccess = renderPipeline({
@@ -1820,15 +1724,44 @@ describe('PipelineSvg rendering', () => {
         workers: { ...base.sender.workers, applied: 1 },
         liveWorkers: 4,
         drainingWorkers: 3,
-        workerSlots: [slots[0], { ...slots[1], activity: 'idle', terminalError: false }, ...slots.slice(2)],
+        idleWorkers: 2,
+        inFlightWorkers: 1,
+        backoffWorkers: 1,
+        drainingIdleWorkers: 1,
+        drainingInFlightWorkers: 1,
+        drainingBackoffWorkers: 1,
       },
     })
-    expect(afterSuccess.container.querySelector('[data-worker-id="1"]')?.classList)
-      .toContain('pipeline-worker--draining')
+    expect(afterSuccess.container.querySelectorAll('.pipeline-worker--draining')).toHaveLength(3)
     afterSuccess.unmount()
   })
 
-  it('keeps a real backoff slot static amber with reduced motion', () => {
+  it.each(['landscape', 'portrait'] as const)(
+    'caps aggregate worker markers and shows the overflow count in %s',
+    (orientation) => {
+      const base = activeSnapshot()
+      const view = renderPipeline({
+        ...base,
+        sender: {
+          ...base.sender,
+          workers: { ...base.sender.workers, applied: 32 },
+          liveWorkers: 32,
+          idleWorkers: 25,
+          inFlightWorkers: 4,
+          backoffWorkers: 3,
+        },
+      }, orientation)
+      const sender = view.container.querySelector('#sender-actor')!
+
+      expect(sender.querySelectorAll('[class*="pipeline-worker--"]'))
+        .toHaveLength(7)
+      expect(sender.textContent).toContain('+25 workers')
+      expect(Number(sender.getAttribute('data-worker-rows'))).toBeLessThanOrEqual(7)
+      view.unmount()
+    },
+  )
+
+  it('keeps an aggregate backoff marker static amber with reduced motion', () => {
     const matchMedia = vi.mocked(window.matchMedia)
     const mediaQueryList = (query: string, matches: boolean) => ({
       matches,
@@ -1856,17 +1789,16 @@ describe('PipelineSvg rendering', () => {
         sender: {
           ...base.sender,
           liveWorkers: 3,
-          workerSlots: [
-            { workerId: 0, activity: 'idle', lifecycle: 'active', terminalError: false },
-            { workerId: 1, activity: 'backoff', lifecycle: 'active', terminalError: false },
-            { workerId: 2, activity: 'idle', lifecycle: 'active', terminalError: false },
-          ],
+          idleWorkers: 2,
+          inFlightWorkers: 0,
+          backoffWorkers: 1,
+          drainingIdleWorkers: 0,
+          drainingInFlightWorkers: 0,
+          drainingBackoffWorkers: 0,
         },
       }
       const view = renderPipeline(snapshot)
-      const backoff = view.container.querySelector(
-        '[data-worker-id="1"]',
-      )!
+      const backoff = view.container.querySelector('.pipeline-worker--backoff')!
 
       expect(backoff.classList).toContain('pipeline-worker--backoff')
       expect(getComputedStyle(backoff).animationName).toBe('none')

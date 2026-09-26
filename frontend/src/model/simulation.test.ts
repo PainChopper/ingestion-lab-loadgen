@@ -44,4 +44,38 @@ describe('FixedStepSimulation pipeline batch', () => {
       telemetry.readerChannel.receivedTransactionsTotal,
     )
   })
+
+  it('keeps a scale-down worker in the draining aggregate while it is in flight', () => {
+    const simulation = new FixedStepSimulation(
+      {
+        ...CONFIG,
+        senderWorkers: 2,
+        throttlerInstallationMode: 'bypass',
+        readBatchSize: 1_000,
+        targetDelayMs: 100,
+      },
+      4,
+      4,
+    )
+
+    for (let step = 0; step < 50; step += 1) {
+      simulation.advanceStep()
+      if (simulation.telemetry(true).sender.workerStates.inFlight === 2) break
+    }
+
+    expect(simulation.telemetry(true).sender.workerStates.inFlight).toBe(2)
+
+    simulation.updateConfig({ senderWorkers: 1 })
+
+    const telemetry = simulation.telemetry(true).sender
+    expect(telemetry.workers.applied).toBe(2)
+    expect(telemetry.workers.pending).toBe(1)
+    expect(telemetry.workerStates.inFlight).toBe(1)
+    expect(telemetry.drainingWorkerStates).toEqual({
+      idle: 0,
+      inFlight: 1,
+      backoff: 0,
+    })
+    expect(simulation.telemetry(true).http.inFlightRequests).toBe(2)
+  })
 })

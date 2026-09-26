@@ -24,24 +24,18 @@ export function SenderActor({
   geometry,
   orientation,
 }: SenderActorProps) {
-  const workerStateSegments = snapshot.workerSlots === null
-    ? [{ value: 'Worker state telemetry unavailable', tone: 'idle' as const }]
-    : [
+  const workerStateSegments = [
         {
-          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'idle').length)} idle`,
+          value: `${formatInteger(snapshot.idleWorkers)} idle`,
           tone: 'idle' as const,
         },
         {
-          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'in-flight').length)} in-flight`,
+          value: `${formatInteger(snapshot.inFlightWorkers)} in-flight`,
           tone: 'in-flight' as const,
         },
         {
-          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.activity === 'backoff').length)} backoff`,
+          value: `${formatInteger(snapshot.backoffWorkers)} backoff`,
           tone: 'backoff' as const,
-        },
-        {
-          value: `${formatInteger(snapshot.workerSlots.filter((slot) => slot.terminalError).length)} errors`,
-          tone: 'error' as const,
         },
       ]
 
@@ -56,7 +50,8 @@ export function SenderActor({
       workers={snapshot.workers}
       liveWorkers={snapshot.liveWorkers}
       drainingWorkers={snapshot.drainingWorkers}
-      workerSlots={snapshot.workerSlots}
+      activityCounts={{ idle: snapshot.idleWorkers, reading: 0, blocked: 0, 'in-flight': snapshot.inFlightWorkers, backoff: snapshot.backoffWorkers }}
+      drainingActivityCounts={{ idle: snapshot.drainingIdleWorkers, reading: 0, blocked: 0, 'in-flight': snapshot.drainingInFlightWorkers, backoff: snapshot.drainingBackoffWorkers }}
       runState={snapshot.state}
       inputPort={geometry.ports.input}
       outputPort={geometry.ports.output}

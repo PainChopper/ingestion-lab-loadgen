@@ -22,12 +22,10 @@ const WIRE_KEYS = Object.freeze([
   'policy', 'reader', 'readerChannel', 'run', 'sender', 'senderChannel', 'throttler',
 ])
 const RUN_KEYS = Object.freeze(['elapsedMs', 'state', 'totalTransactions'])
-const READER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'readBatchSize', 'readTps', 'rowsRead', 'source', 'sourceDirectory', 'sourceError', 'workerSlots', 'workers'])
-const SOURCE_ERROR_KEYS = Object.freeze(['category', 'message', 'operation', 'relativePath', 'workerId'])
-const READER_SLOT_KEYS = Object.freeze(['activity', 'lifecycle', 'source', 'workerId'])
+const READER_KEYS = Object.freeze(['blockedWorkers', 'drainingBlockedWorkers', 'drainingIdleWorkers', 'drainingReadingWorkers', 'drainingWorkers', 'idleWorkers', 'liveWorkers', 'readBatchSize', 'readTps', 'readingWorkers', 'rowsRead', 'sourceDirectory', 'sourceError', 'workers'])
+const SOURCE_ERROR_KEYS = Object.freeze(['category', 'message', 'operation', 'relativePath'])
 const THROTTLER_KEYS = Object.freeze(['admittedTps', 'installationMode', 'requestedTps'])
-const SENDER_KEYS = Object.freeze(['drainingWorkers', 'liveWorkers', 'workerSlots', 'workers'])
-const SENDER_SLOT_KEYS = Object.freeze(['activity', 'lifecycle', 'terminalError', 'workerId'])
+const SENDER_KEYS = Object.freeze(['backoffWorkers', 'drainingBackoffWorkers', 'drainingIdleWorkers', 'drainingInFlightWorkers', 'drainingWorkers', 'idleWorkers', 'inFlightWorkers', 'liveWorkers', 'workers'])
 const CHANNEL_KEYS = Object.freeze([
   'blockedMs', 'blockedSenders', 'bufferedTransactions', 'capacity', 'depthBatches',
   'inputBatchesPerSecond', 'inputTransactionsPerSecond', 'oldestBlockedSenderMs',
@@ -36,19 +34,9 @@ const CHANNEL_KEYS = Object.freeze([
 ])
 
 interface WireRun { readonly state: RunState; readonly totalTransactions: number; readonly elapsedMs: number }
-interface WireReader { readonly workers: number; readonly liveWorkers: number; readonly drainingWorkers: number; readonly workerSlots: readonly { readonly workerId: number; readonly activity: 'idle' | 'reading' | 'completed' | 'blocked'; readonly lifecycle: 'active' | 'draining'; readonly source: string | null }[]; readonly readBatchSize: number; readonly readTps: number; readonly rowsRead: number; readonly source: string | null; readonly sourceDirectory: string; readonly sourceError: ReaderSourceErrorSnapshot | null }
+interface WireReader { readonly workers: number; readonly liveWorkers: number; readonly idleWorkers: number; readonly readingWorkers: number; readonly blockedWorkers: number; readonly drainingWorkers: number; readonly drainingIdleWorkers: number; readonly drainingReadingWorkers: number; readonly drainingBlockedWorkers: number; readonly readBatchSize: number; readonly readTps: number; readonly rowsRead: number; readonly sourceDirectory: string; readonly sourceError: ReaderSourceErrorSnapshot | null }
 interface WireThrottler { readonly requestedTps: number; readonly admittedTps: number; readonly installationMode: ThrottlerInstallationMode }
-interface WireSender {
-  readonly workers: number
-  readonly liveWorkers: number
-  readonly drainingWorkers: number
-  readonly workerSlots: readonly {
-    readonly workerId: number
-    readonly activity: 'idle' | 'in-flight' | 'backoff'
-    readonly lifecycle: 'active' | 'draining'
-    readonly terminalError: boolean
-  }[]
-}
+interface WireSender { readonly workers: number; readonly liveWorkers: number; readonly idleWorkers: number; readonly inFlightWorkers: number; readonly backoffWorkers: number; readonly drainingWorkers: number; readonly drainingIdleWorkers: number; readonly drainingInFlightWorkers: number; readonly drainingBackoffWorkers: number }
 interface WireChannelSnapshot { readonly capacity: number; readonly depthBatches: number; readonly bufferedTransactions: number; readonly blockedSenders: number; readonly oldestBlockedSenderMs: number; readonly blockedMs: number; readonly sentBatchesTotal: number; readonly sentTransactionsTotal: number; readonly receivedBatchesTotal: number; readonly receivedTransactionsTotal: number; readonly inputBatchesPerSecond: number; readonly inputTransactionsPerSecond: number; readonly outputBatchesPerSecond: number; readonly outputTransactionsPerSecond: number }
 interface WireSnapshot { readonly run: WireRun; readonly reader: WireReader; readonly throttler: WireThrottler; readonly sender: WireSender; readonly readerChannel: WireChannelSnapshot; readonly senderChannel: WireChannelSnapshot; readonly policy: LoadgenPolicySnapshot }
 
@@ -277,7 +265,12 @@ function createSnapshot(
       workers: senderControl(wire?.reader.workers ?? null, wire?.policy.readerWorkers ?? null, connectionState),
       liveWorkers: wire?.reader.liveWorkers ?? 0,
       drainingWorkers: wire?.reader.drainingWorkers ?? 0,
-      workerSlots: wire?.reader.workerSlots ?? null,
+      idleWorkers: wire?.reader.idleWorkers ?? 0,
+      readingWorkers: wire?.reader.readingWorkers ?? 0,
+      blockedWorkers: wire?.reader.blockedWorkers ?? 0,
+      drainingIdleWorkers: wire?.reader.drainingIdleWorkers ?? 0,
+      drainingReadingWorkers: wire?.reader.drainingReadingWorkers ?? 0,
+      drainingBlockedWorkers: wire?.reader.drainingBlockedWorkers ?? 0,
       readBatchSize: readBatchSizeControl(
         wire?.reader.readBatchSize ?? null,
         wire?.policy.readerReadBatchSize ?? null,
@@ -288,7 +281,6 @@ function createSnapshot(
       configuredCapacityTps: null,
       limitationReason: null,
       rowsRead: wire?.reader.rowsRead ?? null,
-      source: wire?.reader.source ?? null,
       sourceDirectory: wire?.reader.sourceDirectory,
       sourceError: wire?.reader.sourceError ?? null,
       state: runState,
@@ -323,7 +315,12 @@ function createSnapshot(
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
       timeoutMs: unavailableControl('ms'),
-      workerSlots: wire?.sender.workerSlots ?? null,
+      idleWorkers: wire?.sender.idleWorkers ?? 0,
+      inFlightWorkers: wire?.sender.inFlightWorkers ?? 0,
+      backoffWorkers: wire?.sender.backoffWorkers ?? 0,
+      drainingIdleWorkers: wire?.sender.drainingIdleWorkers ?? 0,
+      drainingInFlightWorkers: wire?.sender.drainingInFlightWorkers ?? 0,
+      drainingBackoffWorkers: wire?.sender.drainingBackoffWorkers ?? 0,
       retryPolicy: null,
       attemptedTps: null,
       retryAttemptedTps: null,
@@ -649,41 +646,17 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   const sender = value.sender
   if (run.state !== 'idle' && run.state !== 'running' && run.state !== 'paused' && run.state !== 'faulted') throw new Error('snapshot run state is invalid')
   if (!isWireInteger(run.elapsedMs) || !isWireInteger(run.totalTransactions)) throw new Error('snapshot run values are invalid')
-  if (!isRangeValue(reader.workers, policy.readerWorkers!) || !isRangeValue(reader.readBatchSize, policy.readerReadBatchSize) || !isWireNumber(reader.readTps) || !isWireInteger(reader.rowsRead) || !isWireInteger(reader.liveWorkers) || !isWireInteger(reader.drainingWorkers) || !Array.isArray(reader.workerSlots) || reader.workerSlots.length !== reader.liveWorkers || reader.drainingWorkers > reader.liveWorkers) throw new Error('snapshot reader values are invalid')
-  let previousReaderWorkerId = -1
-  let drainingReaders = 0
-  for (const slot of reader.workerSlots) {
-    if (!isExactObject(slot, READER_SLOT_KEYS) || !isWireInteger(slot.workerId) || slot.workerId <= previousReaderWorkerId || (slot.activity !== 'idle' && slot.activity !== 'reading' && slot.activity !== 'completed' && slot.activity !== 'blocked') || (slot.lifecycle !== 'active' && slot.lifecycle !== 'draining') || (slot.source !== null && (typeof slot.source !== 'string' || slot.source.length === 0))) throw new Error('snapshot Reader slot is invalid')
-    previousReaderWorkerId = slot.workerId
-    if (slot.lifecycle === 'draining') drainingReaders++
-  }
-  if (drainingReaders !== reader.drainingWorkers || ((run.state === 'idle' || run.state === 'faulted') && (reader.liveWorkers !== 0 || reader.drainingWorkers !== 0))) throw new Error('snapshot reader workers are invalid')
-  if (reader.source !== null && (typeof reader.source !== 'string' || reader.source.length === 0)) throw new Error('snapshot reader source is invalid')
+  if (!isRangeValue(reader.workers, policy.readerWorkers!) || !isRangeValue(reader.readBatchSize, policy.readerReadBatchSize) || !isWireNumber(reader.readTps) || !isWireInteger(reader.rowsRead) || !isWireInteger(reader.liveWorkers) || !isWireInteger(reader.idleWorkers) || !isWireInteger(reader.readingWorkers) || !isWireInteger(reader.blockedWorkers) || !isWireInteger(reader.drainingWorkers) || !isWireInteger(reader.drainingIdleWorkers) || !isWireInteger(reader.drainingReadingWorkers) || !isWireInteger(reader.drainingBlockedWorkers) || reader.liveWorkers !== reader.idleWorkers + reader.readingWorkers + reader.blockedWorkers || reader.drainingWorkers !== reader.drainingIdleWorkers + reader.drainingReadingWorkers + reader.drainingBlockedWorkers || reader.drainingIdleWorkers > reader.idleWorkers || reader.drainingReadingWorkers > reader.readingWorkers || reader.drainingBlockedWorkers > reader.blockedWorkers || ((run.state === 'idle' || run.state === 'faulted') && (reader.liveWorkers !== 0 || reader.drainingWorkers !== 0))) throw new Error('snapshot reader values are invalid')
   if (typeof reader.sourceDirectory !== 'string' || reader.sourceDirectory.length === 0) throw new Error('snapshot reader sourceDirectory is invalid')
-  if (reader.sourceError !== null && (!isExactObject(reader.sourceError, SOURCE_ERROR_KEYS) || reader.sourceError.category !== 'source' || (reader.sourceError.operation !== 'glob' && reader.sourceError.operation !== 'open' && reader.sourceError.operation !== 'read' && reader.sourceError.operation !== 'close' && reader.sourceError.operation !== 'reader-close') || typeof reader.sourceError.relativePath !== 'string' || reader.sourceError.relativePath.length === 0 || reader.sourceError.relativePath.startsWith('/') || reader.sourceError.relativePath.startsWith('../') || typeof reader.sourceError.message !== 'string' || reader.sourceError.message.length === 0 || (reader.sourceError.workerId !== null && !isWireInteger(reader.sourceError.workerId)))) throw new Error('snapshot reader sourceError is invalid')
+  if (reader.sourceError !== null && (!isExactObject(reader.sourceError, SOURCE_ERROR_KEYS) || reader.sourceError.category !== 'source' || (reader.sourceError.operation !== 'glob' && reader.sourceError.operation !== 'open' && reader.sourceError.operation !== 'read' && reader.sourceError.operation !== 'close' && reader.sourceError.operation !== 'reader-close') || typeof reader.sourceError.relativePath !== 'string' || reader.sourceError.relativePath.length === 0 || reader.sourceError.relativePath.startsWith('/') || reader.sourceError.relativePath.startsWith('../') || typeof reader.sourceError.message !== 'string' || reader.sourceError.message.length === 0)) throw new Error('snapshot reader sourceError is invalid')
   if (!isRangeValue(throttler.requestedTps, policy.throttlerRequestedTps) || !isWireNumber(throttler.admittedTps) || (throttler.installationMode !== 'installed' && throttler.installationMode !== 'bypass') || !policy.throttlerInstallationMode.allowed.includes(throttler.installationMode)) throw new Error('snapshot throttler values are invalid')
   if (!isRangeValue(sender.workers, policy.senderWorkers) ||
-    !isWireInteger(sender.liveWorkers) || !isWireInteger(sender.drainingWorkers) ||
-    !Array.isArray(sender.workerSlots) || sender.workerSlots.length !== sender.liveWorkers ||
-    sender.drainingWorkers > sender.liveWorkers ||
+    !isWireInteger(sender.liveWorkers) || !isWireInteger(sender.idleWorkers) || !isWireInteger(sender.inFlightWorkers) || !isWireInteger(sender.backoffWorkers) || !isWireInteger(sender.drainingWorkers) || !isWireInteger(sender.drainingIdleWorkers) || !isWireInteger(sender.drainingInFlightWorkers) || !isWireInteger(sender.drainingBackoffWorkers) ||
+    sender.liveWorkers !== sender.idleWorkers + sender.inFlightWorkers + sender.backoffWorkers || sender.drainingWorkers !== sender.drainingIdleWorkers + sender.drainingInFlightWorkers + sender.drainingBackoffWorkers || sender.drainingIdleWorkers > sender.idleWorkers || sender.drainingInFlightWorkers > sender.inFlightWorkers || sender.drainingBackoffWorkers > sender.backoffWorkers ||
     ((run.state === 'idle' || run.state === 'paused' || run.state === 'faulted') &&
       (sender.liveWorkers !== 0 || sender.drainingWorkers !== 0))) {
     throw new Error('snapshot sender values are invalid')
   }
-  let previousWorkerId = -1
-  let draining = 0
-  for (const slot of sender.workerSlots) {
-    if (!isExactObject(slot, SENDER_SLOT_KEYS) ||
-      !isWireInteger(slot.workerId) || slot.workerId <= previousWorkerId ||
-      (slot.activity !== 'idle' && slot.activity !== 'in-flight' && slot.activity !== 'backoff') ||
-      (slot.lifecycle !== 'active' && slot.lifecycle !== 'draining') ||
-      typeof slot.terminalError !== 'boolean') {
-      throw new Error('snapshot Sender slot is invalid')
-    }
-    previousWorkerId = slot.workerId
-    if (slot.lifecycle === 'draining') draining++
-  }
-  if (draining !== sender.drainingWorkers) throw new Error('snapshot Sender draining count is invalid')
   return {
     run: run as unknown as WireRun,
     reader: reader as unknown as WireReader,
