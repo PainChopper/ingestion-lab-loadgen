@@ -58,6 +58,40 @@ func TestRunEventLoopStopsWhenApplicationContextIsCanceled(t *testing.T) {
 	}
 }
 
+func TestPipelineRuntimeStopIsIdempotentAfterActiveAndSoftResetRuns(t *testing.T) {
+	state := newTestControlState(t)
+	read := func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
+		done := make(chan struct{})
+		go func() {
+			<-ctx.Done()
+			close(done)
+		}()
+		return readerRun{done: done, reconcile: func(int) {}}, nil
+	}
+	runtime := newPipelineRuntime(&state, read, startThrottler)
+
+	if err := runtime.start(context.Background()); err != nil {
+		t.Fatalf("start active runtime: %v", err)
+	}
+	runtime.startSender()
+	runtime.stop()
+	runtime.stop()
+
+	if err := runtime.start(context.Background()); err != nil {
+		t.Fatalf("start reset runtime: %v", err)
+	}
+	runtime.resetPaused()
+	runtime.stop()
+	runtime.stop()
+
+	if reader := state.telemetry.readerChannel.snapshot(time.Now()); reader.capacity != 0 {
+		t.Fatalf("reader channel capacity after stop = %d, want 0", reader.capacity)
+	}
+	if sender := state.telemetry.senderChannel.snapshot(time.Now()); sender.capacity != 0 {
+		t.Fatalf("sender channel capacity after stop = %d, want 0", sender.capacity)
+	}
+}
+
 func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 	requests := make(chan request)
 	metrics := make(chan time.Time)
