@@ -51,5 +51,5 @@ func (state *controlState) startReaderPool(ctx context.Context, batches chan<- [
 	if err != nil {
 		return readerRun{}, err
 	}
-	return readerRun{done: pool.done, reconcile: pool.reconcile, sourceErrors: pool.sourceErrors}, nil
+	return readerRun{done: pool.done, reconcile: pool.reconcile, aggregateSnapshot: pool.aggregateSnapshot, sourceErrors: pool.sourceErrors}, nil
 }

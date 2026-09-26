@@ -8,23 +8,23 @@ import (
 func TestReaderTelemetryMeasuresElapsedIntervals(t *testing.T) {
 	start := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
 	var telemetry readerTelemetry
-	if got := telemetry.snapshot(); got.readTPS != 0 || got.rowsRead != 0 || got.source != nil {
+	if got := telemetry.snapshot(); got.readTPS != 0 || got.rowsRead != 0 {
 		t.Fatalf("initial measurements = %+v", got)
 	}
 
 	telemetry.startInterval(start)
-	telemetry.recordRead(3, "data/part-1.parquet")
+	telemetry.recordRead(3)
 	telemetry.sample(start.Add(1500 * time.Millisecond))
 	got := telemetry.snapshot()
-	if got.readTPS != 2 || got.rowsRead != 3 || got.source == nil || *got.source != "data/part-1.parquet" {
-		t.Fatalf("first interval = %+v, want 2 rows/s, 3 rows, first source", got)
+	if got.readTPS != 2 || got.rowsRead != 3 {
+		t.Fatalf("first interval = %+v, want 2 rows/s and 3 rows", got)
 	}
 
-	telemetry.recordRead(6, "data/part-2.parquet")
+	telemetry.recordRead(6)
 	telemetry.sample(start.Add(3500 * time.Millisecond))
 	got = telemetry.snapshot()
-	if got.readTPS != 3 || got.rowsRead != 9 || got.source == nil || *got.source != "data/part-2.parquet" {
-		t.Fatalf("second interval = %+v, want 3 rows/s, 9 rows, second source", got)
+	if got.readTPS != 3 || got.rowsRead != 9 {
+		t.Fatalf("second interval = %+v, want 3 rows/s and 9 rows", got)
 	}
 
 	telemetry.sample(start.Add(4500 * time.Millisecond))
@@ -35,37 +35,7 @@ func TestReaderTelemetryMeasuresElapsedIntervals(t *testing.T) {
 
 	telemetry.reset()
 	got = telemetry.snapshot()
-	if got.readTPS != 0 || got.rowsRead != 0 || got.source != nil {
-		t.Fatalf("after Reset = %+v, want zero measurements and null source", got)
-	}
-}
-
-func TestReaderWorkerActivityPreservesSourceUntilIdle(t *testing.T) {
-	var telemetry readerTelemetry
-	telemetry.registerWorker(0)
-	assertSlot := func(activity, lifecycle string, source *string) {
-		t.Helper()
-		slot := telemetry.snapshot().workerSlots[0]
-		if slot.Activity != activity || slot.Lifecycle != lifecycle ||
-			(slot.Source == nil) != (source == nil) || (source != nil && *slot.Source != *source) {
-			t.Fatalf("slot = %+v, want activity=%q lifecycle=%q source=%v", slot, activity, lifecycle, source)
-		}
-	}
-	assertSlot("idle", "active", nil)
-	source := "data/a.parquet"
-	telemetry.setWorkerReading(0, source)
-	assertSlot("reading", "active", &source)
-	telemetry.setWorkerBlocked(0)
-	assertSlot("blocked", "active", &source)
-	telemetry.setWorkerReading(0, source)
-	telemetry.setWorkerCompleted(0)
-	assertSlot("completed", "active", &source)
-	telemetry.setWorkerLifecycle(0, "draining")
-	assertSlot("completed", "draining", &source)
-	telemetry.setWorkerIdle(0)
-	assertSlot("idle", "draining", nil)
-	telemetry.unregisterWorker(0)
-	if got := telemetry.snapshot().workerSlots; len(got) != 0 {
-		t.Fatalf("finished slots = %+v", got)
+	if got.readTPS != 0 || got.rowsRead != 0 {
+		t.Fatalf("after Reset = %+v, want zero measurements", got)
 	}
 }

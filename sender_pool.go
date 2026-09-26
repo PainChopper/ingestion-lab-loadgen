@@ -21,10 +21,9 @@ const (
 	senderAttemptCanceled
 )
 
-type senderAttempt func(context.Context, []Transaction, int, int) senderAttemptOutcome
+type senderAttempt func(context.Context, []Transaction, int) senderAttemptOutcome
 
 type senderWorker struct {
-	workerID int
 	wake     chan struct{}
 	work     chan []Transaction
 	done     chan struct{}
@@ -54,7 +53,6 @@ type senderPool struct {
 	intakeDone                               chan struct{}
 	wg                                       sync.WaitGroup
 	workers                                  []*senderWorker
-	nextWorkerID                             int
 	desired                                  int
 	stopping                                 bool
 	retry                                    senderRetryPolicy
@@ -131,14 +129,11 @@ func (p *senderPool) reconcile(desired int) {
 		}
 	}
 	for _, worker := range p.workers {
-		lifecycle := "active"
 		if worker.draining {
-			lifecycle = "draining"
 			if !worker.busy {
 				idleDraining = append(idleDraining, worker.done)
 			}
 		}
-		p.telemetry.setLifecycle(worker.workerID, lifecycle)
 		select {
 		case worker.wake <- struct{}{}:
 		default:
@@ -179,16 +174,12 @@ func (p *senderPool) stop() <-chan struct{} {
 }
 
 func (p *senderPool) startWorkerLocked() {
-	workerID := p.nextWorkerID
-	p.nextWorkerID++
 	worker := &senderWorker{
-		workerID: workerID,
-		wake:     make(chan struct{}, 1),
-		work:     make(chan []Transaction, 1),
-		done:     make(chan struct{}),
+		wake: make(chan struct{}, 1),
+		work: make(chan []Transaction, 1),
+		done: make(chan struct{}),
 	}
 	p.workers = append(p.workers, worker)
-	p.telemetry.startWorker(workerID)
 	p.wg.Add(1)
 	go p.runWorker(worker)
 }
@@ -251,8 +242,8 @@ func (p *senderPool) runWorker(worker *senderWorker) {
 	defer p.wg.Done()
 	defer close(worker.done)
 	defer p.workerExited(worker)
-	p.logger.Info("sender worker started", zap.String("event", "sender_worker_started"), zap.Int("worker_id", worker.workerID))
-	defer p.logger.Info("sender worker stopped", zap.String("event", "sender_worker_stopped"), zap.Int("worker_id", worker.workerID))
+	p.logger.Info("sender worker started", zap.String("event", "sender_worker_started"))
+	defer p.logger.Info("sender worker stopped", zap.String("event", "sender_worker_stopped"))
 	for {
 		p.mu.Lock()
 		select {
@@ -302,7 +293,6 @@ func (p *senderPool) workerExited(worker *senderWorker) {
 		return
 	}
 	p.workers = append(p.workers[:index], p.workers[index+1:]...)
-	p.telemetry.finishWorker(worker.workerID)
 	if !p.stopping && !worker.draining && p.activeWorkerCountLocked() < p.desired {
 		p.startWorkerLocked()
 	}
@@ -324,10 +314,9 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		p.mu.Lock()
 		worker.backoff = false
 		p.mu.Unlock()
-		p.telemetry.setActivity(worker.workerID, "in-flight")
-		switch p.attempt(p.ctx, batch, worker.workerID, attempt) {
+		switch p.attempt(p.ctx, batch, attempt) {
 		case senderAttemptSuccess:
-			p.telemetry.finishBatch(worker.workerID)
+			p.telemetry.finishBatch()
 			return true
 		case senderAttemptCanceled:
 			return false
@@ -338,7 +327,6 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		p.mu.Lock()
 		worker.backoff = true
 		p.mu.Unlock()
-		p.telemetry.setActivity(worker.workerID, "backoff")
 		delay := p.retry.delay(attempt, batch)
 		if !p.wait(p.ctx, delay) {
 			return false

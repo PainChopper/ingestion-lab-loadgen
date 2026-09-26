@@ -35,7 +35,7 @@ func TestSenderHTTPAttemptPostsJSONBatch(t *testing.T) {
 	defer server.Close()
 
 	attempt := newSenderHTTPAttempt(server.URL+"/internal/test/ingest", server.Client())
-	if got := attempt.deliver(context.Background(), batch, 0, 1); got != senderAttemptSuccess {
+	if got := attempt.deliver(context.Background(), batch, 1); got != senderAttemptSuccess {
 		t.Fatalf("deliver outcome = %d, want success", got)
 	}
 }
@@ -60,7 +60,7 @@ func TestSenderHTTPAttemptClassifiesResponseStatuses(t *testing.T) {
 			defer server.Close()
 
 			attempt := newSenderHTTPAttempt(server.URL, server.Client())
-			if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 0, 1); got != test.want {
+			if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != test.want {
 				t.Fatalf("deliver outcome = %d, want %d", got, test.want)
 			}
 		})
@@ -108,7 +108,7 @@ func TestSenderHTTPAttemptRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 		}, nil
 	})}
 	attempt := newSenderHTTPAttempt("http://example.test/ingest", client)
-	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 0, 1); got != senderAttemptRetryableFailure {
+	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptRetryableFailure {
 		t.Fatalf("response outcome = %d, want retryable failure", got)
 	}
 	if !closed.Load() {
@@ -118,7 +118,7 @@ func TestSenderHTTPAttemptRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 	client.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("network failure")
 	})
-	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 0, 1); got != senderAttemptRetryableFailure {
+	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptRetryableFailure {
 		t.Fatalf("network outcome = %d, want retryable failure", got)
 	}
 }
@@ -130,7 +130,7 @@ func TestSenderHTTPAttemptStopsOnCanceledContext(t *testing.T) {
 		return nil, errors.New("request should be canceled")
 	})}
 	attempt := newSenderHTTPAttempt("http://example.test/ingest", client)
-	if got := attempt.deliver(ctx, []Transaction{{ClientID: "client"}}, 0, 1); got != senderAttemptCanceled {
+	if got := attempt.deliver(ctx, []Transaction{{ClientID: "client"}}, 1); got != senderAttemptCanceled {
 		t.Fatalf("canceled outcome = %d, want canceled", got)
 	}
 }

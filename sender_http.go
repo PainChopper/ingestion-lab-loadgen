@@ -17,7 +17,7 @@ func newSenderHTTPAttempt(url string, client *http.Client) senderHTTPAttempt {
 	return senderHTTPAttempt{url: url, client: client}
 }
 
-func (a senderHTTPAttempt) deliver(ctx context.Context, batch []Transaction, _, _ int) senderAttemptOutcome {
+func (a senderHTTPAttempt) deliver(ctx context.Context, batch []Transaction, _ int) senderAttemptOutcome {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return senderAttemptTerminalFailure

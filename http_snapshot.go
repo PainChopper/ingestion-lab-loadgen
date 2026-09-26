@@ -24,16 +24,20 @@ type runSnapshot struct {
 }
 
 type readerSnapshot struct {
-	Workers         int                `json:"workers"`
-	LiveWorkers     int                `json:"liveWorkers"`
-	DrainingWorkers int                `json:"drainingWorkers"`
-	WorkerSlots     []readerWorkerSlot `json:"workerSlots"`
-	ReadBatchSize   int                `json:"readBatchSize"`
-	ReadTps         float64            `json:"readTps"`
-	RowsRead        int64              `json:"rowsRead"`
-	Source          *string            `json:"source"`
-	SourceDirectory string             `json:"sourceDirectory"`
-	SourceError     *readerSourceError `json:"sourceError"`
+	Workers                int                `json:"workers"`
+	LiveWorkers            int                `json:"liveWorkers"`
+	IdleWorkers            int                `json:"idleWorkers"`
+	ReadingWorkers         int                `json:"readingWorkers"`
+	BlockedWorkers         int                `json:"blockedWorkers"`
+	DrainingWorkers        int                `json:"drainingWorkers"`
+	DrainingIdleWorkers    int                `json:"drainingIdleWorkers"`
+	DrainingReadingWorkers int                `json:"drainingReadingWorkers"`
+	DrainingBlockedWorkers int                `json:"drainingBlockedWorkers"`
+	ReadBatchSize          int                `json:"readBatchSize"`
+	ReadTps                float64            `json:"readTps"`
+	RowsRead               int64              `json:"rowsRead"`
+	SourceDirectory        string             `json:"sourceDirectory"`
+	SourceError            *readerSourceError `json:"sourceError"`
 }
 
 type readerSourceError struct {
@@ -41,7 +45,6 @@ type readerSourceError struct {
 	Operation    string `json:"operation"`
 	RelativePath string `json:"relativePath"`
 	Message      string `json:"message"`
-	WorkerID     *int   `json:"workerId"`
 }
 
 func (error readerSourceError) Error() string {
@@ -55,10 +58,15 @@ type throttlerSnapshot struct {
 }
 
 type senderSnapshot struct {
-	Workers         int                `json:"workers"`
-	LiveWorkers     int                `json:"liveWorkers"`
-	DrainingWorkers int                `json:"drainingWorkers"`
-	WorkerSlots     []senderWorkerSlot `json:"workerSlots"`
+	Workers                 int `json:"workers"`
+	LiveWorkers             int `json:"liveWorkers"`
+	IdleWorkers             int `json:"idleWorkers"`
+	InFlightWorkers         int `json:"inFlightWorkers"`
+	BackoffWorkers          int `json:"backoffWorkers"`
+	DrainingWorkers         int `json:"drainingWorkers"`
+	DrainingIdleWorkers     int `json:"drainingIdleWorkers"`
+	DrainingInFlightWorkers int `json:"drainingInFlightWorkers"`
+	DrainingBackoffWorkers  int `json:"drainingBackoffWorkers"`
 }
 
 type channelSnapshot struct {

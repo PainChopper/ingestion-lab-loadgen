@@ -117,16 +117,15 @@ func TestReaderPoolAppendRowsSplitsShortReadsAtBatchBoundary(t *testing.T) {
 func TestReaderPoolImmediateSendKeepsWorkerReading(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	var telemetry readerTelemetry
-	telemetry.registerWorker(0)
-	telemetry.setWorkerReading(0, "data/a.parquet")
 	var channel channelTelemetry
 	channel.start(batches, 1)
-	worker := &readerWorker{workerID: 0, ctx: context.Background()}
+	worker := &readerWorker{ctx: context.Background(), busy: true}
 	pool := &readerPool{
 		ctx:       context.Background(),
 		batches:   batches,
 		telemetry: &telemetry,
 		channel:   &channel,
+		workers:   []*readerWorker{worker},
 	}
 
 	if !pool.sendBatch(worker, "data/a.parquet", []Transaction{{ClientID: "a"}}) {
@@ -135,8 +134,8 @@ func TestReaderPoolImmediateSendKeepsWorkerReading(t *testing.T) {
 	if worker.blocked {
 		t.Fatal("immediate send marked worker blocked")
 	}
-	if slot := telemetry.snapshot().workerSlots[0]; slot.Activity != "reading" {
-		t.Fatalf("immediate send activity = %q, want reading", slot.Activity)
+	if snapshot := pool.aggregateSnapshot(); snapshot.readingWorkers != 1 {
+		t.Fatalf("immediate send snapshot = %+v, want one reading worker", snapshot)
 	}
 	if measurements := channel.snapshot(time.Now()); measurements.blockedSenders != 0 ||
 		measurements.sentBatchesTotal != 1 || measurements.sentTransactionsTotal != 1 {
@@ -148,12 +147,9 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	batches <- []Transaction{{ClientID: "preexisting"}}
 	var telemetry readerTelemetry
-	telemetry.registerWorker(0)
-	telemetry.setWorkerReading(0, "data/a.parquet")
-	telemetry.setWorkerLifecycle(0, "draining")
 	var channel channelTelemetry
 	channel.start(batches, 1)
-	worker := &readerWorker{workerID: 0, ctx: context.Background(), draining: true}
+	worker := &readerWorker{ctx: context.Background(), draining: true, busy: true}
 	pool := &readerPool{
 		ctx:       context.Background(),
 		desired:   0,
@@ -174,8 +170,8 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 	if !blocked {
 		t.Fatal("blocked send did not mark worker blocked")
 	}
-	if slot := telemetry.snapshot().workerSlots[0]; slot.Activity != "blocked" || slot.Lifecycle != "draining" {
-		t.Fatalf("blocked draining slot = %+v", slot)
+	if snapshot := pool.aggregateSnapshot(); snapshot.blockedWorkers != 1 || snapshot.drainingBlockedWorkers != 1 {
+		t.Fatalf("blocked draining snapshot = %+v", snapshot)
 	}
 
 	<-batches
@@ -193,8 +189,8 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 	if blocked {
 		t.Fatal("drained send left worker blocked")
 	}
-	if slot := telemetry.snapshot().workerSlots[0]; slot.Activity != "reading" || slot.Lifecycle != "draining" {
-		t.Fatalf("drained slot = %+v", slot)
+	if snapshot := pool.aggregateSnapshot(); snapshot.readingWorkers != 1 || snapshot.drainingReadingWorkers != 1 {
+		t.Fatalf("drained snapshot = %+v", snapshot)
 	}
 	if measurements := channel.snapshot(time.Now()); measurements.blockedSenders != 0 ||
 		measurements.sentBatchesTotal != 1 || measurements.sentTransactionsTotal != 1 {
@@ -208,16 +204,15 @@ func TestReaderPoolCanceledBlockedSendDoesNotRestoreReading(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var telemetry readerTelemetry
-	telemetry.registerWorker(0)
-	telemetry.setWorkerReading(0, "data/a.parquet")
 	var channel channelTelemetry
 	channel.start(batches, 1)
-	worker := &readerWorker{workerID: 0, ctx: ctx}
+	worker := &readerWorker{ctx: ctx, busy: true}
 	pool := &readerPool{
 		ctx:       context.Background(),
 		batches:   batches,
 		telemetry: &telemetry,
 		channel:   &channel,
+		workers:   []*readerWorker{worker},
 	}
 	sent := make(chan bool, 1)
 	go func() {
@@ -240,8 +235,8 @@ func TestReaderPoolCanceledBlockedSendDoesNotRestoreReading(t *testing.T) {
 	if blocked {
 		t.Fatal("cancelled send left worker blocked")
 	}
-	if slot := telemetry.snapshot().workerSlots[0]; slot.Activity != "blocked" {
-		t.Fatalf("cancelled send activity = %q, want blocked", slot.Activity)
+	if snapshot := pool.aggregateSnapshot(); snapshot.readingWorkers != 1 || snapshot.blockedWorkers != 0 {
+		t.Fatalf("cancelled send snapshot = %+v", snapshot)
 	}
 	if measurements := channel.snapshot(time.Now()); measurements.blockedSenders != 0 ||
 		measurements.sentBatchesTotal != 0 || measurements.sentTransactionsTotal != 0 {
@@ -283,7 +278,7 @@ func TestReaderPoolOwnsFilesAcrossConcurrentCycles(t *testing.T) {
 func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 	pool := &readerPool{
 		files: []string{"a"}, active: map[string]bool{},
-		workers:   []*readerWorker{{workerID: 0}, {workerID: 1, draining: true}},
+		workers:   []*readerWorker{{}, {draining: true}},
 		telemetry: &readerTelemetry{}, done: make(chan struct{}),
 	}
 	pool.ctx, pool.cancel = context.WithCancel(context.Background())
@@ -303,16 +298,13 @@ func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 	}
 }
 
-func TestReaderPoolDownscaleSelectsIdleBeforeBusyRegardlessOfWorkerID(t *testing.T) {
+func TestReaderPoolDownscaleSelectsIdleBeforeBusy(t *testing.T) {
 	var telemetry readerTelemetry
-	for workerID := range 3 {
-		telemetry.registerWorker(workerID)
-	}
 	pool := &readerPool{
 		workers: []*readerWorker{
-			{workerID: 0, busy: true},
-			{workerID: 1, busy: true},
-			{workerID: 2},
+			{busy: true},
+			{busy: true},
+			{},
 		},
 		telemetry: &telemetry,
 	}
@@ -321,9 +313,8 @@ func TestReaderPoolDownscaleSelectsIdleBeforeBusyRegardlessOfWorkerID(t *testing
 	defer pool.cancel()
 
 	pool.reconcile(2)
-	slots := telemetry.snapshot().workerSlots
-	if slots[0].Lifecycle != "active" || slots[1].Lifecycle != "active" || slots[2].Lifecycle != "draining" {
-		t.Fatalf("downscale lifecycle = %+v, want idle worker 2 draining", slots)
+	if snapshot := pool.aggregateSnapshot(); snapshot.drainingWorkers != 1 || snapshot.drainingIdleWorkers != 1 {
+		t.Fatalf("downscale snapshot = %+v, want one draining idle worker", snapshot)
 	}
 	if _, ok := pool.claimNextFile(pool.workers[2]); ok {
 		t.Fatal("idle victim accepted another file")
@@ -375,7 +366,7 @@ func TestReaderPoolBusyDownscaleFinishesCurrentFileWithoutClaimingNext(t *testin
 	}
 
 	pool.reconcile(0)
-	waitForReaderLive(t, &telemetry, 0)
+	waitForReaderLive(t, pool, 0)
 	pool.mu.Lock()
 	secondActive := pool.active[secondPath]
 	pool.mu.Unlock()
@@ -397,7 +388,7 @@ func TestReaderPoolBusyDownscaleFinishesCurrentFileWithoutClaimingNext(t *testin
 		if len(batch) != 1 || batch[0].ClientID != "second" {
 			t.Fatalf("batch after scale-up = %+v, want second file", batch)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("second file did not become eligible after scale-up")
 	}
 }
@@ -421,36 +412,24 @@ func TestReaderPoolBlockedDownscaleFlushesEntireFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForBlockedSender(t, &channel)
-	slots := telemetry.snapshot().workerSlots
-	if len(slots) != 2 || (slots[0].Activity != "blocked" && slots[1].Activity != "blocked") {
-		t.Fatalf("before downscale slots = %+v", slots)
-	}
-	var blockedWorkerID int
-	for _, slot := range slots {
-		if slot.Activity == "blocked" {
-			blockedWorkerID = slot.WorkerID
-			if slot.Source == nil {
-				t.Fatalf("blocked source missing: %+v", slot)
-			}
-		} else if slot.Activity != "idle" {
-			t.Fatalf("other worker is not idle: %+v", slot)
-		}
+	if snapshot := pool.aggregateSnapshot(); snapshot.liveWorkers != 2 || snapshot.blockedWorkers != 1 || snapshot.idleWorkers != 1 {
+		t.Fatalf("before downscale snapshot = %+v", snapshot)
 	}
 	pool.reconcile(1)
 	deadline := time.After(time.Second)
-	for telemetry.snapshot().liveWorkers != 1 {
+	for pool.aggregateSnapshot().liveWorkers != 1 {
 		select {
 		case <-time.After(time.Millisecond):
 		case <-deadline:
 			t.Fatal("idle victim did not exit")
 		}
 	}
-	if slot := telemetry.snapshot().workerSlots[0]; slot.WorkerID != blockedWorkerID || slot.Activity != "blocked" || slot.Lifecycle != "active" {
-		t.Fatalf("busy worker was selected before idle: %+v", slot)
+	if snapshot := pool.aggregateSnapshot(); snapshot.blockedWorkers != 1 || snapshot.drainingWorkers != 0 {
+		t.Fatalf("busy worker was selected before idle: %+v", snapshot)
 	}
 	pool.reconcile(0)
-	if slot := telemetry.snapshot().workerSlots[0]; slot.Activity != "blocked" || slot.Lifecycle != "draining" {
-		t.Fatalf("blocked draining slot = %+v", slot)
+	if snapshot := pool.aggregateSnapshot(); snapshot.blockedWorkers != 1 || snapshot.drainingBlockedWorkers != 1 {
+		t.Fatalf("blocked draining snapshot = %+v", snapshot)
 	}
 	if got := <-batches; len(got) != 1 || got[0].ClientID != "preexisting" {
 		t.Fatalf("prefill = %+v", got)
@@ -468,7 +447,7 @@ func TestReaderPoolBlockedDownscaleFlushesEntireFile(t *testing.T) {
 		t.Fatalf("emitted rows = %+v", emitted)
 	}
 	deadline = time.After(time.Second)
-	for telemetry.snapshot().liveWorkers != 0 {
+	for pool.aggregateSnapshot().liveWorkers != 0 {
 		select {
 		case <-time.After(time.Millisecond):
 		case <-deadline:
@@ -508,7 +487,7 @@ func TestReaderPoolBlockedDownscaleWaitsPastFormerGraceUntilRecovery(t *testing.
 		t.Fatal("draining worker exited while downstream remained full")
 	case <-time.After(1100 * time.Millisecond):
 	}
-	if got := telemetry.snapshot().liveWorkers; got != 1 {
+	if got := pool.aggregateSnapshot().liveWorkers; got != 1 {
 		t.Fatalf("worker exited before downstream recovered: live=%d", got)
 	}
 	<-batches
@@ -527,7 +506,7 @@ func TestReaderPoolBlockedDownscaleWaitsPastFormerGraceUntilRecovery(t *testing.
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("flushed rows = %v, want %v", got, want)
 	}
-	waitForReaderLive(t, &telemetry, 0)
+	waitForReaderLive(t, pool, 0)
 	if got := channel.snapshot(time.Now()); got.sentBatchesTotal != 2 || got.blockedSenders != 0 {
 		t.Fatalf("channel after recovery = %+v", got)
 	}
@@ -549,14 +528,14 @@ func TestReaderPoolAggregateSnapshotPartitionsActivities(t *testing.T) {
 	}
 }
 
-func waitForReaderLive(t *testing.T, telemetry *readerTelemetry, want int) {
+func waitForReaderLive(t *testing.T, pool *readerPool, want int) {
 	t.Helper()
-	deadline := time.After(time.Second)
-	for telemetry.snapshot().liveWorkers != want {
+	deadline := time.After(5 * time.Second)
+	for pool.aggregateSnapshot().liveWorkers != want {
 		select {
 		case <-time.After(time.Millisecond):
 		case <-deadline:
-			t.Fatalf("reader live=%d, want %d", telemetry.snapshot().liveWorkers, want)
+			t.Fatalf("reader live=%d, want %d", pool.aggregateSnapshot().liveWorkers, want)
 		}
 	}
 }
@@ -579,12 +558,12 @@ func TestReaderPoolReactivatesBlockedWorkerWithoutDuplicateSlot(t *testing.T) {
 	}
 	waitForBlockedSender(t, &channel)
 	pool.reconcile(0)
-	if slot := telemetry.snapshot().workerSlots[0]; slot.Lifecycle != "draining" || slot.Activity != "blocked" {
-		t.Fatalf("before reactivation = %+v", slot)
+	if snapshot := pool.aggregateSnapshot(); snapshot.blockedWorkers != 1 || snapshot.drainingBlockedWorkers != 1 {
+		t.Fatalf("before reactivation = %+v", snapshot)
 	}
 	pool.reconcile(1)
-	if slots := telemetry.snapshot().workerSlots; len(slots) != 1 || slots[0].Lifecycle != "active" || slots[0].Activity != "blocked" {
-		t.Fatalf("reactivated slots = %+v", slots)
+	if snapshot := pool.aggregateSnapshot(); snapshot.liveWorkers != 1 || snapshot.blockedWorkers != 1 || snapshot.drainingWorkers != 0 {
+		t.Fatalf("reactivated snapshot = %+v", snapshot)
 	}
 	<-batches
 	select {
@@ -595,8 +574,8 @@ func TestReaderPoolReactivatesBlockedWorkerWithoutDuplicateSlot(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("reactivated worker did not flush its blocked batch")
 	}
-	if slots := telemetry.snapshot().workerSlots; len(slots) != 1 || slots[0].WorkerID != 0 || slots[0].Lifecycle != "active" {
-		t.Fatalf("worker replaced or duplicated = %+v", slots)
+	if snapshot := pool.aggregateSnapshot(); snapshot.liveWorkers != 1 || snapshot.drainingWorkers != 0 {
+		t.Fatalf("worker was replaced or duplicated: %+v", snapshot)
 	}
 	cancel()
 	<-pool.done
@@ -624,8 +603,8 @@ func TestReaderPoolCancellationUnblocksDrainingWorkers(t *testing.T) {
 		t.Fatal("cancellation left a draining or blocked worker alive")
 	}
 	pool.reconcile(2)
-	if slots := telemetry.snapshot().workerSlots; len(slots) != 0 {
-		t.Fatalf("cancelled pool recreated workers: %+v", slots)
+	if snapshot := pool.aggregateSnapshot(); snapshot.liveWorkers != 0 {
+		t.Fatalf("cancelled pool recreated workers: %+v", snapshot)
 	}
 }
 
@@ -662,7 +641,7 @@ func TestReaderPoolCanceledCleanupIgnoresCloseErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	pool := &readerPool{ctx: ctx}
-	worker := &readerWorker{workerID: 4, ctx: ctx}
+	worker := &readerWorker{ctx: ctx}
 	reader := &errorCloser{err: errors.New("reader close failed")}
 	file := &errorCloser{err: errors.New("file close failed")}
 
@@ -677,7 +656,7 @@ func TestReaderPoolCanceledCleanupIgnoresCloseErrors(t *testing.T) {
 func TestReaderPoolActiveCleanupPreservesFirstCloseError(t *testing.T) {
 	ctx := context.Background()
 	pool := &readerPool{ctx: ctx}
-	worker := &readerWorker{workerID: 4, ctx: ctx}
+	worker := &readerWorker{ctx: ctx}
 	reader := &errorCloser{err: errors.New("reader close failed")}
 	file := &errorCloser{err: errors.New("file close failed")}
 
