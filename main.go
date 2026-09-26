@@ -32,18 +32,18 @@ func main() {
 		controls: configuredControls{policy: loadedPolicy},
 		logger:   logger,
 	}
-	requests := make(chan request, 10)
+	plane := newControlPlane(10)
 	runtime := newRuntimeMetrics(loadedPolicy)
 	defer runtime.stop()
 	state.metricsWindow = runtime.window
 
 	appCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-	server, serverDone := startHTTPServer(requests, runtime.promMetrics, loadedPolicy, logger)
+	server, serverDone := startHTTPServer(plane, runtime.promMetrics, loadedPolicy, logger)
 	eventLoopDone := make(chan struct{})
 	go func() {
 		defer close(eventLoopDone)
-		state.runEventLoop(appCtx, requests, runtime.metrics, runtime.promMetrics)
+		state.runEventLoop(appCtx, plane, runtime.metrics, runtime.promMetrics)
 	}()
 
 	select {

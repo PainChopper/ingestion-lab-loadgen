@@ -47,7 +47,7 @@ func TestRunEventLoopStopsWhenApplicationContextIsCanceled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, make(chan request), make(chan time.Time), NewMetrics())
+		state.runEventLoop(ctx, testControlPlane(make(chan request)), make(chan time.Time), NewMetrics())
 	}()
 
 	cancel()
@@ -69,7 +69,7 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(requests, metrics, promMetrics, func(ctx context.Context, batches chan<- []Transaction, _, _ int) (readerRun, error) {
+		state.eventLoop(testControlPlane(requests), metrics, promMetrics, func(ctx context.Context, batches chan<- []Transaction, _, _ int) (readerRun, error) {
 			output = batches
 			close(started)
 			readerDone := make(chan struct{})
@@ -140,7 +140,7 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(requests, metrics, NewMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
+		state.eventLoop(testControlPlane(requests), metrics, NewMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
 			readerDone := make(chan struct{})
 			go func() {
 				<-ctx.Done()
@@ -383,7 +383,7 @@ func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testi
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, requests, make(chan time.Time), NewMetrics())
+		state.runEventLoop(ctx, testControlPlane(requests), make(chan time.Time), NewMetrics())
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -425,7 +425,7 @@ func TestRunEventLoopFaultsBeforeWorkersForUnavailableSourceDirectory(t *testing
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, requests, make(chan time.Time), NewMetrics())
+		state.runEventLoop(ctx, testControlPlane(requests), make(chan time.Time), NewMetrics())
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -748,7 +748,7 @@ func TestResetFromPausedStopsReaderClearsProgressAndStartsFreshRun(t *testing.T)
 func TestResetDuringRunReturnsConflictAndPreservesPipeline(t *testing.T) {
 	var starts int
 	requests, batches, metrics := startEventLoopForTest(t, func() { starts++ })
-	handler := commandsHandler(requests, testPolicy(t))
+	handler := commandsHandler(testControlPlane(requests), testPolicy(t))
 	runRequest := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"run"}`))
 	handler.ServeHTTP(httptest.NewRecorder(), runRequest)
 	waitForState(t, requests, runStateRunning)
@@ -796,7 +796,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	go func() {
 		defer close(done)
 		state.eventLoopWithThrottler(
-			requests,
+			testControlPlane(requests),
 			metrics,
 			NewMetrics(),
 			read,
@@ -869,7 +869,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	requests, batches, metrics := startEventLoopForTest(t, func() {})
-	commands := commandsHandler(requests, testPolicy(t))
+	commands := commandsHandler(testControlPlane(requests), testPolicy(t))
 	post := func(body string, want int) {
 		t.Helper()
 		recorder := httptest.NewRecorder()
@@ -1071,7 +1071,7 @@ func waitForSenderHandoff(t *testing.T, requests chan<- request, want int64) {
 	}
 }
 
-func startEventLoopForTest(t *testing.T, onReaderStart func()) (chan<- request, chan<- []Transaction, chan<- time.Time) {
+func startEventLoopForTest(t *testing.T, onReaderStart func()) (chan request, chan<- []Transaction, chan<- time.Time) {
 	t.Helper()
 
 	requests := make(chan request, 3)
@@ -1166,7 +1166,7 @@ func startCustomEventLoopForTestWithThrottler(
 	go func() {
 		defer close(done)
 		state.eventLoopWithThrottler(
-			requests,
+			testControlPlane(requests),
 			metrics,
 			NewMetrics(),
 			read,
@@ -1527,7 +1527,7 @@ func startActualChannelEventLoopForTestWithHeldThrottler(t *testing.T, holdThrot
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopWithThrottler(requests, metrics, NewMetrics(), read, start)
+		state.eventLoopWithThrottler(testControlPlane(requests), metrics, NewMetrics(), read, start)
 	}()
 	stopped := false
 	stop := func() {

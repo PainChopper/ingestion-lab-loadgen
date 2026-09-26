@@ -28,36 +28,36 @@ type readerRun struct {
 type readerStarter func(context.Context, chan<- []Transaction, int, int) (readerRun, error)
 
 func (state *controlState) eventLoop(
-	requests <-chan request,
+	plane controlPlane,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
 	read readerStarter,
 ) {
-	state.eventLoopWithThrottlerContext(context.Background(), requests, metrics, promMetrics, read, startThrottler)
+	state.eventLoopWithThrottlerContext(context.Background(), plane, metrics, promMetrics, read, startThrottler)
 }
 
 func (state *controlState) runEventLoop(
 	ctx context.Context,
-	requests <-chan request,
+	plane controlPlane,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
 ) {
-	state.eventLoopWithThrottlerContext(ctx, requests, metrics, promMetrics, state.startReaderPool, startThrottler)
+	state.eventLoopWithThrottlerContext(ctx, plane, metrics, promMetrics, state.startReaderPool, startThrottler)
 }
 
 func (state *controlState) eventLoopWithThrottler(
-	requests <-chan request,
+	plane controlPlane,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
 	read readerStarter,
 	start throttlerStarter,
 ) {
-	state.eventLoopWithThrottlerContext(context.Background(), requests, metrics, promMetrics, read, start)
+	state.eventLoopWithThrottlerContext(context.Background(), plane, metrics, promMetrics, read, start)
 }
 
 func (state *controlState) eventLoopWithThrottlerContext(
 	ctx context.Context,
-	requests <-chan request,
+	plane controlPlane,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
 	read readerStarter,
@@ -120,7 +120,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 		select {
 		case <-ctx.Done():
 			return
-		case cmd, ok := <-requests:
+		case cmd, ok := <-plane.requests:
 			if !ok {
 				return
 			}
