@@ -155,9 +155,9 @@ func (p *readerPool) stop() <-chan struct{} {
 
 func (p *readerPool) runWorker(worker *readerWorker) {
 	defer p.wg.Done()
-	p.logger.Info("reader worker started", zap.String("event", "reader_worker_started"))
+	p.logger.Debug("reader worker started", zap.String("event", "reader_worker_started"))
 	defer func() {
-		p.logger.Info("reader worker stopped", zap.String("event", "reader_worker_stopped"))
+		p.logger.Debug("reader worker stopped", zap.String("event", "reader_worker_stopped"))
 		p.mu.Lock()
 		p.removeWorkerLocked(worker)
 		if !p.stopping && p.ctx.Err() == nil && len(p.workers) < p.desired {
@@ -242,7 +242,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 	if err != nil {
 		return p.newReaderSourceError("open", filePath, err)
 	}
-	p.logger.Info("reader source opened", zap.String("event", "reader_source_opened"))
+	p.logger.Debug("reader source opened", zap.String("event", "reader_source_opened"))
 	reader, err := openParquetReader(file)
 	if err != nil {
 		if closeErr := file.Close(); closeErr != nil && worker.ctx.Err() == nil && p.ctx.Err() == nil {
@@ -282,7 +282,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 		}
 	}
 	if sourceError == nil && !batchSendStopped && worker.ctx.Err() == nil {
-		p.logger.Info("reader source exhausted", zap.String("event", "reader_source_exhausted"))
+		p.logger.Debug("reader source exhausted", zap.String("event", "reader_source_exhausted"))
 	}
 	return p.closeResources(worker, filePath, reader, file, sourceError)
 }

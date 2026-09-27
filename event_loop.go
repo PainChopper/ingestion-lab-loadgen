@@ -50,7 +50,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 		logger = zap.NewNop()
 	}
 	runtime := newPipelineRuntime(state, read, start)
-	var lastRuntimeSnapshot time.Time
+	nextRuntimeSummaryAt := time.Now().Add(runtimeSummaryInterval)
 	defer func() {
 		runtime.stop()
 	}()
@@ -65,81 +65,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			}
 			switch cmd.kind {
 			case getSnapshot:
-				runState := state.run.lifecycle.currentState()
-				reader := state.telemetry.reader.snapshot()
-				readerPool, senderPool := runtime.snapshots()
-				readerChannel := state.telemetry.readerChannel.snapshot(time.Now())
-				senderChannel := state.telemetry.senderChannel.snapshot(time.Now())
-				if runState == runStateIdle || runState == runStateFaulted {
-					readerChannel.capacity = state.readerChannelCapacity()
-					senderChannel.capacity = state.senderChannelCapacity()
-				}
-				snapshot := statusSnapshot{
-					Run: runSnapshot{
-						State:             runState,
-						TotalTransactions: state.run.totalTransactions,
-						ElapsedMs:         state.elapsedMs(time.Now()),
-					},
-					Reader: readerSnapshot{
-						Workers: state.readerWorkers(), LiveWorkers: readerPool.liveWorkers,
-						IdleWorkers: readerPool.idleWorkers, ReadingWorkers: readerPool.readingWorkers,
-						BlockedWorkers: readerPool.blockedWorkers, DrainingWorkers: readerPool.drainingWorkers,
-						DrainingIdleWorkers:    readerPool.drainingIdleWorkers,
-						DrainingReadingWorkers: readerPool.drainingReadingWorkers,
-						DrainingBlockedWorkers: readerPool.drainingBlockedWorkers,
-						ReadBatchSize:          state.readBatchSize(), ReadTps: reader.readTPS,
-						RowsRead:        reader.rowsRead,
-						SourceDirectory: readerSourceDirectory(state.controls.policy.Source.Path),
-						SourceError:     state.run.sourceError,
-					},
-					Throttler: throttlerSnapshot{
-						RequestedTps:     state.requestedTPS(),
-						AdmittedTps:      senderChannel.sentTransactionsPerSecond,
-						InstallationMode: state.installationMode(),
-					},
-					Sender: senderSnapshot{
-						Workers: state.senderWorkers(), LiveWorkers: senderPool.liveWorkers,
-						IdleWorkers: senderPool.idleWorkers, InFlightWorkers: senderPool.inFlightWorkers,
-						BackoffWorkers: senderPool.backoffWorkers, DrainingWorkers: senderPool.drainingWorkers,
-						DrainingIdleWorkers:     senderPool.drainingIdleWorkers,
-						DrainingInFlightWorkers: senderPool.drainingInFlightWorkers,
-						DrainingBackoffWorkers:  senderPool.drainingBackoffWorkers,
-					},
-					ReaderChannel: channelSnapshot{
-						Capacity:                      readerChannel.capacity,
-						DepthBatches:                  readerChannel.depthBatches,
-						BufferedTransactions:          readerChannel.bufferedTransactions,
-						BlockedSenders:                readerChannel.blockedSenders,
-						OldestBlockedSenderMs:         readerChannel.oldestBlockedSenderMs,
-						BlockedMs:                     readerChannel.blockedMs,
-						SentBatchesTotal:              readerChannel.sentBatchesTotal,
-						SentTransactionsTotal:         readerChannel.sentTransactionsTotal,
-						ReceivedBatchesTotal:          readerChannel.receivedBatchesTotal,
-						ReceivedTransactionsTotal:     readerChannel.receivedTransactionsTotal,
-						SentBatchesPerSecond:          readerChannel.sentBatchesPerSecond,
-						SentTransactionsPerSecond:     readerChannel.sentTransactionsPerSecond,
-						ReceivedBatchesPerSecond:      readerChannel.receivedBatchesPerSecond,
-						ReceivedTransactionsPerSecond: readerChannel.receivedTransactionsPerSecond,
-					},
-					SenderChannel: channelSnapshot{
-						Capacity:                      senderChannel.capacity,
-						DepthBatches:                  senderChannel.depthBatches,
-						BufferedTransactions:          senderChannel.bufferedTransactions,
-						BlockedSenders:                senderChannel.blockedSenders,
-						OldestBlockedSenderMs:         senderChannel.oldestBlockedSenderMs,
-						BlockedMs:                     senderChannel.blockedMs,
-						SentBatchesTotal:              senderChannel.sentBatchesTotal,
-						SentTransactionsTotal:         senderChannel.sentTransactionsTotal,
-						ReceivedBatchesTotal:          senderChannel.receivedBatchesTotal,
-						ReceivedTransactionsTotal:     senderChannel.receivedTransactionsTotal,
-						SentBatchesPerSecond:          senderChannel.sentBatchesPerSecond,
-						SentTransactionsPerSecond:     senderChannel.sentTransactionsPerSecond,
-						ReceivedBatchesPerSecond:      senderChannel.receivedBatchesPerSecond,
-						ReceivedTransactionsPerSecond: senderChannel.receivedTransactionsPerSecond,
-					},
-					Policy: state.controls.policy.snapshot(),
-				}
-				cmd.snapshotReply <- snapshot
+				cmd.snapshotReply <- state.snapshotAt(runtime, time.Now())
 			case cmdRun:
 				resuming := state.run.lifecycle.currentState() == runStatePaused
 				if state.run.lifecycle.currentState() == runStateIdle {
@@ -310,19 +236,97 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			runtime.stop()
 			state.resetFaultedMeasurements(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
 
-		case <-metrics:
-			state.telemetry.reader.sample(time.Now())
+		case now := <-metrics:
+			state.telemetry.reader.sample(now)
 			state.telemetry.readerChannel.sample(state.metricsWindow)
 			state.telemetry.senderChannel.sample(state.metricsWindow)
 			delta := runtime.terminallyCompletedTransactionsSinceTick.Swap(0)
 			state.run.totalTransactions += delta
 			promMetrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
 			promMetrics.transactionsTotal.Add(float64(delta))
-			if time.Since(lastRuntimeSnapshot) >= time.Minute {
-				lastRuntimeSnapshot = time.Now()
-				logger.Info("runtime snapshot", zap.String("event", "runtime_snapshot"), zap.String("state", string(state.run.lifecycle.currentState())), zap.Int64("transactions", state.run.totalTransactions))
+			if !now.Before(nextRuntimeSummaryAt) {
+				nextRuntimeSummaryAt = now.Add(runtimeSummaryInterval)
+				logger.Info("runtime summary", runtimeSummaryFields(runtimeSummaryFromSnapshot(state.snapshotAt(runtime, now)))...)
 			}
 		}
+	}
+}
+
+func (state *controlState) snapshotAt(runtime *pipelineRuntime, now time.Time) statusSnapshot {
+	runState := state.run.lifecycle.currentState()
+	reader := state.telemetry.reader.snapshot()
+	readerPool, senderPool := runtime.snapshots()
+	readerChannel := state.telemetry.readerChannel.snapshot(now)
+	senderChannel := state.telemetry.senderChannel.snapshot(now)
+	if runState == runStateIdle || runState == runStateFaulted {
+		readerChannel.capacity = state.readerChannelCapacity()
+		senderChannel.capacity = state.senderChannelCapacity()
+	}
+
+	return statusSnapshot{
+		Run: runSnapshot{
+			State:             runState,
+			TotalTransactions: state.run.totalTransactions,
+			ElapsedMs:         state.elapsedMs(now),
+		},
+		Reader: readerSnapshot{
+			Workers: state.readerWorkers(), LiveWorkers: readerPool.liveWorkers,
+			IdleWorkers: readerPool.idleWorkers, ReadingWorkers: readerPool.readingWorkers,
+			BlockedWorkers: readerPool.blockedWorkers, DrainingWorkers: readerPool.drainingWorkers,
+			DrainingIdleWorkers:    readerPool.drainingIdleWorkers,
+			DrainingReadingWorkers: readerPool.drainingReadingWorkers,
+			DrainingBlockedWorkers: readerPool.drainingBlockedWorkers,
+			ReadBatchSize:          state.readBatchSize(), ReadTps: reader.readTPS,
+			RowsRead:        reader.rowsRead,
+			SourceDirectory: readerSourceDirectory(state.controls.policy.Source.Path),
+			SourceError:     state.run.sourceError,
+		},
+		Throttler: throttlerSnapshot{
+			RequestedTps:     state.requestedTPS(),
+			AdmittedTps:      senderChannel.sentTransactionsPerSecond,
+			InstallationMode: state.installationMode(),
+		},
+		Sender: senderSnapshot{
+			Workers: state.senderWorkers(), LiveWorkers: senderPool.liveWorkers,
+			IdleWorkers: senderPool.idleWorkers, InFlightWorkers: senderPool.inFlightWorkers,
+			BackoffWorkers: senderPool.backoffWorkers, DrainingWorkers: senderPool.drainingWorkers,
+			DrainingIdleWorkers:     senderPool.drainingIdleWorkers,
+			DrainingInFlightWorkers: senderPool.drainingInFlightWorkers,
+			DrainingBackoffWorkers:  senderPool.drainingBackoffWorkers,
+		},
+		ReaderChannel: channelSnapshot{
+			Capacity:                      readerChannel.capacity,
+			DepthBatches:                  readerChannel.depthBatches,
+			BufferedTransactions:          readerChannel.bufferedTransactions,
+			BlockedSenders:                readerChannel.blockedSenders,
+			OldestBlockedSenderMs:         readerChannel.oldestBlockedSenderMs,
+			BlockedMs:                     readerChannel.blockedMs,
+			SentBatchesTotal:              readerChannel.sentBatchesTotal,
+			SentTransactionsTotal:         readerChannel.sentTransactionsTotal,
+			ReceivedBatchesTotal:          readerChannel.receivedBatchesTotal,
+			ReceivedTransactionsTotal:     readerChannel.receivedTransactionsTotal,
+			SentBatchesPerSecond:          readerChannel.sentBatchesPerSecond,
+			SentTransactionsPerSecond:     readerChannel.sentTransactionsPerSecond,
+			ReceivedBatchesPerSecond:      readerChannel.receivedBatchesPerSecond,
+			ReceivedTransactionsPerSecond: readerChannel.receivedTransactionsPerSecond,
+		},
+		SenderChannel: channelSnapshot{
+			Capacity:                      senderChannel.capacity,
+			DepthBatches:                  senderChannel.depthBatches,
+			BufferedTransactions:          senderChannel.bufferedTransactions,
+			BlockedSenders:                senderChannel.blockedSenders,
+			OldestBlockedSenderMs:         senderChannel.oldestBlockedSenderMs,
+			BlockedMs:                     senderChannel.blockedMs,
+			SentBatchesTotal:              senderChannel.sentBatchesTotal,
+			SentTransactionsTotal:         senderChannel.sentTransactionsTotal,
+			ReceivedBatchesTotal:          senderChannel.receivedBatchesTotal,
+			ReceivedTransactionsTotal:     senderChannel.receivedTransactionsTotal,
+			SentBatchesPerSecond:          senderChannel.sentBatchesPerSecond,
+			SentTransactionsPerSecond:     senderChannel.sentTransactionsPerSecond,
+			ReceivedBatchesPerSecond:      senderChannel.receivedBatchesPerSecond,
+			ReceivedTransactionsPerSecond: senderChannel.receivedTransactionsPerSecond,
+		},
+		Policy: state.controls.policy.snapshot(),
 	}
 }
 
