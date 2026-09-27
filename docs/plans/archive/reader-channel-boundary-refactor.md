@@ -8,9 +8,9 @@ backpressure, но не исполняет callbacks, меняющие сост�
 
 ## Наблюдаемая проблема
 
-`readerPool.sendBatch` передаёт в `channelTelemetry.sendWithBlocked` два
-замыкания. Они меняют `readerWorker.blocked`, запускают политику forced
-draining и обновляют Reader worker telemetry.
+`readerPool.sendBatch` передавал в `channelTelemetry.sendWithBlocked` два
+замыкания. Они меняли `readerWorker.blocked` и обновляли Reader worker
+telemetry.
 
 Из-за этого component, который измеряет channel, управляет переходами
 состояния Reader worker. Переходы `reading` → `blocked` → `reading` не видны
@@ -38,7 +38,13 @@ draining и обновляют Reader worker telemetry.
    blocked duration и корректное завершение ожидания при отмене.
 5. Проверить Reader telemetry в трёх сценариях: worker остаётся `reading` при
    немедленной отправке, становится `blocked` только на время ожидания и не
-   возвращается в ошибочное активное состояние после отмены.
+   получает ложный `blocked` после отмены. После отмены снимается только
+   агрегатный `blocked`: worker может оставаться `reading`, пока владеет
+   файлом; дальнейший переход к idle/завершению определяется освобождением
+   файла и выходом worker.
+6. Проверить несколько одновременно ожидающих отправителей: завершение или
+   отмена одного blocked send изменяет только его учёт; остальные ожидающие
+   отправители сохраняют собственное состояние `blocked` и duration.
 
 ## Готовность
 
@@ -47,3 +53,5 @@ draining и обновляют Reader worker telemetry.
 - Все переходы `readerWorker.blocked` находятся в Reader pool.
 - Наблюдаемая семантика channel и Reader telemetry сохранена для трёх
   сценариев.
+- Несколько одновременно blocked senders учитываются независимо; отмена одного
+  не делает остальные senders неблокированными.
