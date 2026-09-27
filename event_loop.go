@@ -10,36 +10,36 @@ import (
 )
 
 func (state *controlState) eventLoop(
-	plane controlPlane,
+	control runtimeControl,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
 	read readerStarter,
 ) {
-	state.eventLoopWithThrottlerContext(context.Background(), plane, metrics, promMetrics, read, startThrottler)
+	state.eventLoopWithThrottlerContext(context.Background(), control, metrics, promMetrics, read, startThrottler)
 }
 
 func (state *controlState) runEventLoop(
 	ctx context.Context,
-	plane controlPlane,
+	control runtimeControl,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
 ) {
-	state.eventLoopWithThrottlerContext(ctx, plane, metrics, promMetrics, state.startReaderPool, startThrottler)
+	state.eventLoopWithThrottlerContext(ctx, control, metrics, promMetrics, state.startReaderPool, startThrottler)
 }
 
 func (state *controlState) eventLoopWithThrottler(
-	plane controlPlane,
+	control runtimeControl,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
 	read readerStarter,
 	start throttlerStarter,
 ) {
-	state.eventLoopWithThrottlerContext(context.Background(), plane, metrics, promMetrics, read, start)
+	state.eventLoopWithThrottlerContext(context.Background(), control, metrics, promMetrics, read, start)
 }
 
 func (state *controlState) eventLoopWithThrottlerContext(
 	ctx context.Context,
-	plane controlPlane,
+	control runtimeControl,
 	metrics <-chan time.Time,
 	promMetrics *Metrics,
 	read readerStarter,
@@ -59,13 +59,13 @@ func (state *controlState) eventLoopWithThrottlerContext(
 		select {
 		case <-ctx.Done():
 			return
-		case cmd, ok := <-plane.requests:
+		case command, ok := <-control.requests:
 			if !ok {
 				return
 			}
-			switch cmd.kind {
-			case getSnapshot:
-				cmd.snapshotReply <- state.snapshotAt(runtime, time.Now())
+			switch command.kind {
+			case getRuntimeStatus:
+				command.respondStatus(state.runtimeStatusAt(runtime, time.Now()))
 			case cmdRun:
 				resuming := state.run.lifecycle.currentState() == runStatePaused
 				if state.run.lifecycle.currentState() == runStateIdle {
@@ -75,16 +75,12 @@ func (state *controlState) eventLoopWithThrottlerContext(
 						logger.Error("run failed to start", zap.String("event", "run_failed"), zap.String("operation", sourceError.Operation))
 						state.run.sourceError = &sourceError
 						state.run.lifecycle.faultStart()
-						if cmd.commandReply != nil {
-							cmd.commandReply <- commandResult{err: err}
-						}
+						command.respond(runtimeCommandReceipt{err: err})
 						continue
 					}
 				}
 				if state.run.lifecycle.currentState() == runStateFaulted {
-					if cmd.commandReply != nil {
-						cmd.commandReply <- commandResult{status: commandConflict}
-					}
+					command.respond(runtimeCommandReceipt{status: commandConflict})
 					continue
 				}
 				if state.run.lifecycle.run() {
@@ -99,9 +95,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 						logger.Info("run started", zap.String("event", "run_started"))
 					}
 				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- commandResult{}
-				}
+				command.respond(runtimeCommandReceipt{})
 			case cmdPause:
 				if state.run.lifecycle.currentState() != runStateRunning {
 					continue
@@ -116,7 +110,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				runtime.updateThrottler(state.throttlerSettings(true))
 				logger.Info("run paused", zap.String("event", "run_paused"))
 			case cmdReset:
-				result := commandResult{status: commandAccepted}
+				result := runtimeCommandReceipt{status: commandAccepted}
 				switch state.run.lifecycle.currentState() {
 				case runStatePaused:
 					state.run.lifecycle.reset()
@@ -136,94 +130,86 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				if result.status == commandAccepted {
 					logger.Info("run stopped", zap.String("event", "run_stopped"))
 				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- result
-				}
+				command.respond(result)
 			case cmdSetReadBatchSize:
-				result := commandResult{status: commandAccepted}
+				result := runtimeCommandReceipt{status: commandAccepted}
 				if state.run.lifecycle.currentState() != runStateIdle {
 					result.status = commandConflict
-				} else if !validReadBatchSize(state.controls.policy, cmd.value) {
+				} else if !validReadBatchSize(state.controls.policy, command.value) {
 					result.status = commandConflict
 				} else {
-					state.controls.configuredReadBatchSize = cmd.value
+					state.controls.configuredReadBatchSize = command.value
 				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- result
-				}
+				command.respond(result)
 			case cmdSetReaderWorkers:
-				result := commandResult{status: commandAccepted}
-				if !state.controls.policy.Reader.Workers.contains(cmd.value) {
+				result := runtimeCommandReceipt{status: commandAccepted}
+				if !state.controls.policy.Reader.Workers.contains(command.value) {
 					result.status = commandConflict
 				} else {
-					state.controls.configuredReaderWorkers = cmd.value
+					state.controls.configuredReaderWorkers = command.value
 					state.controls.readerWorkersConfigured = true
-					runtime.reconcileReader(cmd.value)
+					runtime.reconcileReader(command.value)
 				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- result
-				}
+				command.respond(result)
 			case cmdSetReaderChannelCapacity:
-				result := commandResult{status: commandAccepted}
-				if state.run.lifecycle.currentState() != runStateIdle || !validReaderChannelCapacity(state.controls.policy, cmd.value) {
+				result := runtimeCommandReceipt{status: commandAccepted}
+				if state.run.lifecycle.currentState() != runStateIdle ||
+					!validReaderChannelCapacity(state.controls.policy, command.value) {
 					result.status = commandConflict
 				} else {
-					state.controls.configuredReaderChannelCapacity = cmd.value
+					state.controls.configuredReaderChannelCapacity = command.value
 					state.controls.readerChannelCapacityConfigured = true
 				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- result
-				}
+				command.respond(result)
 			case cmdSetSenderChannelCapacity:
-				result := commandResult{status: commandAccepted}
-				if state.run.lifecycle.currentState() != runStateIdle || !validSenderChannelCapacity(state.controls.policy, cmd.value) {
+				result := runtimeCommandReceipt{status: commandAccepted}
+				if state.run.lifecycle.currentState() != runStateIdle ||
+					!validSenderChannelCapacity(state.controls.policy, command.value) {
 					result.status = commandConflict
 				} else {
-					state.controls.configuredSenderChannelCapacity = cmd.value
+					state.controls.configuredSenderChannelCapacity = command.value
 					state.controls.senderChannelCapacityConfigured = true
 				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- result
-				}
+				command.respond(result)
 			case cmdSetRequestedTPS:
-				result := commandResult{status: commandAccepted}
-				if !state.controls.policy.Throttler.RequestedTPS.contains(cmd.value) {
+				result := runtimeCommandReceipt{status: commandAccepted}
+				if !state.controls.policy.Throttler.RequestedTPS.contains(command.value) {
 					result.status = commandConflict
-				} else if state.requestedTPS() != cmd.value {
-					state.controls.configuredRequestedTPS = cmd.value
+				} else if state.requestedTPS() != command.value {
+					state.controls.configuredRequestedTPS = command.value
 					state.controls.requestedTPSConfigured = true
 					promMetrics.targetTPS.Set(float64(state.requestedTPS()))
 					runtime.updateThrottler(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
-					logger.Info("throttler rate changed", zap.String("event", "throttler_rate_changed"), zap.Int("requested_tps", cmd.value))
+					logger.Info(
+						"throttler rate changed",
+						zap.String("event", "throttler_rate_changed"),
+						zap.Int("requested_tps", command.value),
+					)
 				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- result
-				}
+				command.respond(result)
 			case cmdSetThrottlerInstallationMode:
-				result := commandResult{status: commandAccepted}
-				if !state.controls.policy.Throttler.InstallationMode.contains(cmd.textValue) {
+				result := runtimeCommandReceipt{status: commandAccepted}
+				if !state.controls.policy.Throttler.InstallationMode.contains(command.textValue) {
 					result.status = commandConflict
-				} else if state.installationMode() != cmd.textValue {
-					state.controls.configuredInstallationMode = cmd.textValue
+				} else if state.installationMode() != command.textValue {
+					state.controls.configuredInstallationMode = command.textValue
 					runtime.updateThrottler(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
-					logger.Info("throttler mode changed", zap.String("event", "throttler_mode_changed"), zap.String("mode", cmd.textValue))
+					logger.Info(
+						"throttler mode changed",
+						zap.String("event", "throttler_mode_changed"),
+						zap.String("mode", command.textValue),
+					)
 				}
-				if cmd.commandReply != nil {
-					cmd.commandReply <- result
-				}
+				command.respond(result)
 			case cmdSetSenderWorkers:
-				if !state.controls.policy.Sender.Workers.contains(cmd.value) {
-					if cmd.commandReply != nil {
-						cmd.commandReply <- commandResult{status: commandConflict}
-					}
+				if !state.controls.policy.Sender.Workers.contains(command.value) {
+					command.respond(runtimeCommandReceipt{status: commandConflict})
 					continue
 				}
-				state.controls.configuredSenderWorkers = cmd.value
+				state.controls.configuredSenderWorkers = command.value
 				state.controls.senderWorkersConfigured = true
-				runtime.reconcileSender(cmd.value)
-				if cmd.commandReply != nil {
-					cmd.commandReply <- commandResult{}
-				}
+				runtime.reconcileSender(command.value)
+				command.respond(runtimeCommandReceipt{})
 			}
 
 		case sourceError := <-runtime.sourceErrors():
@@ -246,13 +232,16 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			promMetrics.transactionsTotal.Add(float64(delta))
 			if !now.Before(nextRuntimeSummaryAt) {
 				nextRuntimeSummaryAt = now.Add(runtimeSummaryInterval)
-				logger.Info("runtime summary", runtimeSummaryFields(runtimeSummaryFromSnapshot(state.snapshotAt(runtime, now)))...)
+				logger.Info(
+					"runtime summary",
+					runtimeSummaryFields(runtimeSummaryFromStatus(state.runtimeStatusAt(runtime, now)))...,
+				)
 			}
 		}
 	}
 }
 
-func (state *controlState) snapshotAt(runtime *pipelineRuntime, now time.Time) statusSnapshot {
+func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Time) runtimeStatus {
 	runState := state.run.lifecycle.currentState()
 	reader := state.telemetry.reader.snapshot()
 	readerPool, senderPool := runtime.snapshots()
@@ -263,13 +252,13 @@ func (state *controlState) snapshotAt(runtime *pipelineRuntime, now time.Time) s
 		senderChannel.capacity = state.senderChannelCapacity()
 	}
 
-	return statusSnapshot{
-		Run: runSnapshot{
+	return runtimeStatus{
+		Run: runtimeRunStatus{
 			State:             runState,
 			TotalTransactions: state.run.totalTransactions,
 			ElapsedMs:         state.elapsedMs(now),
 		},
-		Reader: readerSnapshot{
+		Reader: runtimeReaderStatus{
 			Workers: state.readerWorkers(), LiveWorkers: readerPool.liveWorkers,
 			IdleWorkers: readerPool.idleWorkers, ReadingWorkers: readerPool.readingWorkers,
 			BlockedWorkers: readerPool.blockedWorkers, DrainingWorkers: readerPool.drainingWorkers,
@@ -281,12 +270,12 @@ func (state *controlState) snapshotAt(runtime *pipelineRuntime, now time.Time) s
 			SourceDirectory: readerSourceDirectory(state.controls.policy.Source.Path),
 			SourceError:     state.run.sourceError,
 		},
-		Throttler: throttlerSnapshot{
+		Throttler: runtimeThrottlerStatus{
 			RequestedTps:     state.requestedTPS(),
 			AdmittedTps:      senderChannel.sentTransactionsPerSecond,
 			InstallationMode: state.installationMode(),
 		},
-		Sender: senderSnapshot{
+		Sender: runtimeSenderStatus{
 			Workers: state.senderWorkers(), LiveWorkers: senderPool.liveWorkers,
 			IdleWorkers: senderPool.idleWorkers, InFlightWorkers: senderPool.inFlightWorkers,
 			BackoffWorkers: senderPool.backoffWorkers, DrainingWorkers: senderPool.drainingWorkers,
@@ -294,7 +283,7 @@ func (state *controlState) snapshotAt(runtime *pipelineRuntime, now time.Time) s
 			DrainingInFlightWorkers: senderPool.drainingInFlightWorkers,
 			DrainingBackoffWorkers:  senderPool.drainingBackoffWorkers,
 		},
-		ReaderChannel: channelSnapshot{
+		ReaderChannel: runtimeChannelStatus{
 			Capacity:                      readerChannel.capacity,
 			DepthBatches:                  readerChannel.depthBatches,
 			BufferedTransactions:          readerChannel.bufferedTransactions,
@@ -310,7 +299,7 @@ func (state *controlState) snapshotAt(runtime *pipelineRuntime, now time.Time) s
 			ReceivedBatchesPerSecond:      readerChannel.receivedBatchesPerSecond,
 			ReceivedTransactionsPerSecond: readerChannel.receivedTransactionsPerSecond,
 		},
-		SenderChannel: channelSnapshot{
+		SenderChannel: runtimeChannelStatus{
 			Capacity:                      senderChannel.capacity,
 			DepthBatches:                  senderChannel.depthBatches,
 			BufferedTransactions:          senderChannel.bufferedTransactions,
@@ -326,7 +315,7 @@ func (state *controlState) snapshotAt(runtime *pipelineRuntime, now time.Time) s
 			ReceivedBatchesPerSecond:      senderChannel.receivedBatchesPerSecond,
 			ReceivedTransactionsPerSecond: senderChannel.receivedTransactionsPerSecond,
 		},
-		Policy: state.controls.policy.snapshot(),
+		Policy: runtimePolicyStatusFromPolicy(state.controls.policy),
 	}
 }
 

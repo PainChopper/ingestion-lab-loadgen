@@ -405,29 +405,3 @@ func (p allowedPolicy) validateSenderChannelCapacity() error {
 	}
 	return nil
 }
-
-type policySnapshot struct {
-	ReaderReadBatchSize       rangePolicy            `json:"readerReadBatchSize"`
-	ReaderWorkers             rangePolicy            `json:"readerWorkers"`
-	ReaderChannelCapacity     allowedPolicy          `json:"readerChannelCapacity"`
-	SenderChannelCapacity     allowedPolicy          `json:"senderChannelCapacity"`
-	ThrottlerRequestedTPS     rangePolicy            `json:"throttlerRequestedTps"`
-	ThrottlerInstallationMode installationModePolicy `json:"throttlerInstallationMode"`
-	MetricsWindowMS           rangePolicy            `json:"metricsWindowMs"`
-	SenderWorkers             rangePolicy            `json:"senderWorkers"`
-	Logging                   loggingPolicy          `json:"logging"`
-}
-
-func (p policy) snapshot() policySnapshot {
-	return policySnapshot{
-		ReaderReadBatchSize:       p.Reader.ReadBatchSize,
-		ReaderWorkers:             p.Reader.Workers,
-		ReaderChannelCapacity:     p.ReaderChannel.Capacity,
-		SenderChannelCapacity:     p.SenderChannel.Capacity,
-		ThrottlerRequestedTPS:     p.Throttler.RequestedTPS,
-		ThrottlerInstallationMode: p.Throttler.InstallationMode,
-		MetricsWindowMS:           p.Metrics.WindowMS,
-		SenderWorkers:             p.Sender.Workers,
-		Logging:                   p.Logging,
-	}
-}

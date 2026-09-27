@@ -16,25 +16,25 @@ type runtimeSummary struct {
 	elapsedMs         int64
 	totalTransactions int64
 
-	reader        readerSnapshot
-	throttler     throttlerSnapshot
-	sender        senderSnapshot
-	readerChannel channelSnapshot
-	senderChannel channelSnapshot
+	reader        runtimeReaderStatus
+	throttler     runtimeThrottlerStatus
+	sender        runtimeSenderStatus
+	readerChannel runtimeChannelStatus
+	senderChannel runtimeChannelStatus
 	sourceError   *readerSourceError
 }
 
-func runtimeSummaryFromSnapshot(snapshot statusSnapshot) runtimeSummary {
+func runtimeSummaryFromStatus(status runtimeStatus) runtimeSummary {
 	return runtimeSummary{
-		state:             snapshot.Run.State,
-		elapsedMs:         snapshot.Run.ElapsedMs,
-		totalTransactions: snapshot.Run.TotalTransactions,
-		reader:            snapshot.Reader,
-		throttler:         snapshot.Throttler,
-		sender:            snapshot.Sender,
-		readerChannel:     snapshot.ReaderChannel,
-		senderChannel:     snapshot.SenderChannel,
-		sourceError:       snapshot.Reader.SourceError,
+		state:             status.Run.State,
+		elapsedMs:         status.Run.ElapsedMs,
+		totalTransactions: status.Run.TotalTransactions,
+		reader:            status.Reader,
+		throttler:         status.Throttler,
+		sender:            status.Sender,
+		readerChannel:     status.ReaderChannel,
+		senderChannel:     status.SenderChannel,
+		sourceError:       status.Reader.SourceError,
 	}
 }
 
@@ -111,7 +111,7 @@ func sanitizeRuntimeStatusValue(value string) string {
 	return sanitized.String()
 }
 
-func writeRuntimeStatusChannel(card *strings.Builder, title string, channel channelSnapshot) {
+func writeRuntimeStatusChannel(card *strings.Builder, title string, channel runtimeChannelStatus) {
 	fmt.Fprintf(card, "%s\n", title)
 	fmt.Fprintf(
 		card,

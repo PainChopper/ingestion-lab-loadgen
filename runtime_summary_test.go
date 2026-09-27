@@ -15,17 +15,17 @@ import (
 )
 
 func TestFormatRuntimeStatusCard(t *testing.T) {
-	summary := runtimeSummaryFromSnapshot(statusSnapshot{
-		Run: runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
-		Reader: readerSnapshot{
+	summary := runtimeSummaryFromStatus(runtimeStatus{
+		Run: runtimeRunStatus{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
+		Reader: runtimeReaderStatus{
 			Workers: 3, LiveWorkers: 2, ReadingWorkers: 1, IdleWorkers: 1, BlockedWorkers: 0,
 			DrainingWorkers: 1, ReadTps: 12.34, RowsRead: 99,
 			SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt"},
 		},
-		Throttler:     throttlerSnapshot{RequestedTps: 100, AdmittedTps: 9.87, InstallationMode: throttlerInstalled},
-		ReaderChannel: channelSnapshot{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, SentTransactionsPerSecond: 1.25, ReceivedTransactionsPerSecond: 2.5},
-		SenderChannel: channelSnapshot{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, SentTransactionsPerSecond: 3.75, ReceivedTransactionsPerSecond: 4.5},
-		Sender:        senderSnapshot{Workers: 5, LiveWorkers: 4, InFlightWorkers: 2, IdleWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
+		Throttler:     runtimeThrottlerStatus{RequestedTps: 100, AdmittedTps: 9.87, InstallationMode: throttlerInstalled},
+		ReaderChannel: runtimeChannelStatus{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, SentTransactionsPerSecond: 1.25, ReceivedTransactionsPerSecond: 2.5},
+		SenderChannel: runtimeChannelStatus{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, SentTransactionsPerSecond: 3.75, ReceivedTransactionsPerSecond: 4.5},
+		Sender:        runtimeSenderStatus{Workers: 5, LiveWorkers: 4, InFlightWorkers: 2, IdleWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
 	})
 
 	got := formatRuntimeStatusCard(summary)
@@ -62,9 +62,9 @@ func TestFormatRuntimeStatusCard(t *testing.T) {
 }
 
 func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
-	summary := runtimeSummaryFromSnapshot(statusSnapshot{
-		Run: runSnapshot{State: runState("running\n\x1b[2J")},
-		Reader: readerSnapshot{
+	summary := runtimeSummaryFromStatus(runtimeStatus{
+		Run: runtimeRunStatus{State: runState("running\n\x1b[2J")},
+		Reader: runtimeReaderStatus{
 			SourceDirectory: "source\r\n\x1b[31m",
 			SourceError: &readerSourceError{
 				Category:     "category\x00",
@@ -73,7 +73,7 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 				Message:      "message\n\x1b[0m",
 			},
 		},
-		Throttler: throttlerSnapshot{InstallationMode: "mode\n\x1b"},
+		Throttler: runtimeThrottlerStatus{InstallationMode: "mode\n\x1b"},
 	})
 
 	got := formatRuntimeStatusCard(summary)
@@ -82,9 +82,9 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 	}) >= 0 {
 		t.Fatalf("card contains unsafe control byte: %q", got)
 	}
-	if strings.Count(got, "\n") != strings.Count(formatRuntimeStatusCard(runtimeSummaryFromSnapshot(statusSnapshot{
-		Run:       runSnapshot{State: runStateRunning},
-		Throttler: throttlerSnapshot{InstallationMode: throttlerInstalled},
+	if strings.Count(got, "\n") != strings.Count(formatRuntimeStatusCard(runtimeSummaryFromStatus(runtimeStatus{
+		Run:       runtimeRunStatus{State: runStateRunning},
+		Throttler: runtimeThrottlerStatus{InstallationMode: throttlerInstalled},
 	})), "\n") || !strings.HasSuffix(got, "\n") {
 		t.Fatalf("card layout changed or has no final newline: %q", got)
 	}
@@ -101,7 +101,9 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 }
 
 func TestFormatRuntimeStatusCardIdleSourceGolden(t *testing.T) {
-	card := formatRuntimeStatusCard(runtimeSummaryFromSnapshot(statusSnapshot{Run: runSnapshot{State: runStateIdle}}))
+	card := formatRuntimeStatusCard(runtimeSummaryFromStatus(runtimeStatus{
+		Run: runtimeRunStatus{State: runStateIdle},
+	}))
 	if !strings.Contains(card, "Source:                   none\nSource error:             none\n\nReader channel\n") {
 		t.Fatalf("idle source fields are not adjacent golden values: %q", card)
 	}
@@ -198,7 +200,7 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 	}
 	state := newTestControlState(t)
 	state.logger = logger
-	requests := make(chan request)
+	requests := make(chan runtimeCommand)
 	metrics := make(chan time.Time)
 	done := make(chan struct{})
 	go func() {
@@ -221,8 +223,8 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 		}
 	})
 
-	reply := make(chan commandResult, 1)
-	requests <- request{kind: cmdRun, commandReply: reply}
+	reply := make(chan runtimeCommandReceipt, 1)
+	requests <- runtimeCommand{kind: cmdRun, receiptReply: reply}
 	if result := <-reply; result.status != commandAccepted || result.err != nil {
 		t.Fatalf("run = %+v", result)
 	}
@@ -251,10 +253,10 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 	}
 }
 
-func awaitRuntimeSummaryMetric(t *testing.T, requests chan<- request) {
+func awaitRuntimeSummaryMetric(t *testing.T, requests chan<- runtimeCommand) {
 	t.Helper()
-	reply := make(chan statusSnapshot, 1)
-	requests <- request{kind: getSnapshot, snapshotReply: reply}
+	reply := make(chan runtimeStatus, 1)
+	requests <- runtimeCommand{kind: getRuntimeStatus, statusReply: reply}
 	<-reply
 }
 

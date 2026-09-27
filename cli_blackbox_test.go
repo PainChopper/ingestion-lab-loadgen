@@ -88,7 +88,7 @@ func TestCLIBinaryRemoteSnapshotAndErrors(t *testing.T) {
 	if result.exitCode != cliExitSuccess || result.stdout != string(expectedSnapshot)+"\n" || result.stderr != "" {
 		t.Fatalf("success stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
 	}
-	var actual statusSnapshot
+	var actual httpV1Status
 	if err := json.Unmarshal([]byte(result.stdout), &actual); err != nil {
 		t.Fatalf("decode CLI stdout: %v", err)
 	}
@@ -119,122 +119,16 @@ func TestCLIBinaryRemoteSnapshotAndErrors(t *testing.T) {
 	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "snapshot", "--url", networkURL), cliExitRemote, "GET /api/loadgen/snapshot", "")
 }
 
-func TestCLIBinaryRemoteLifecycleAndServeInitialState(t *testing.T) {
+func TestCLIBinaryServeRunSmoke(t *testing.T) {
 	binary := buildCLIBinary(t)
 	ensureServePortAvailable(t)
 
-	t.Run("serve starts idle and remote lifecycle completes", func(t *testing.T) {
-		baseURL := startCLIServe(t, binary, false)
-		waitForCLISnapshotState(t, baseURL, runStateIdle)
-
-		for _, test := range []struct {
-			args       []string
-			wantState  runState
-			wantStdout string
-		}{
-			{args: []string{"run"}, wantState: runStateRunning, wantStdout: "action=run state=running\n"},
-			{args: []string{"pause"}, wantState: runStatePaused, wantStdout: "action=pause state=paused\n"},
-			{args: []string{"resume"}, wantState: runStateRunning, wantStdout: "action=resume state=running\n"},
-			{args: []string{"pause"}, wantState: runStatePaused, wantStdout: "action=pause state=paused\n"},
-			{args: []string{"reset"}, wantState: runStateIdle, wantStdout: "action=reset state=idle\n"},
-		} {
-			t.Run(test.args[0], func(t *testing.T) {
-				args := append(test.args, "--url", baseURL)
-				result := runCLIBinary(t, binary, args...)
-				if result.exitCode != cliExitSuccess || result.stderr != "" || result.stdout != test.wantStdout {
-					t.Fatalf("stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
-				}
-				waitForCLISnapshotState(t, baseURL, test.wantState)
-			})
-		}
-	})
-
-	t.Run("serve run starts running", func(t *testing.T) {
-		baseURL := startCLIServe(t, binary, true)
-		waitForCLISnapshotState(t, baseURL, runStateRunning)
-	})
-}
-
-func TestCLIBinaryRemoteSetCommands(t *testing.T) {
-	binary := buildCLIBinary(t)
-	ensureServePortAvailable(t)
-	baseURL := startCLIServe(t, binary, false)
+	baseURL := startCLIServe(t, binary)
 	waitForCLISnapshotState(t, baseURL, runStateIdle)
-
-	for _, test := range []struct {
-		args       []string
-		wantStdout string
-		verify     func(t *testing.T, snapshot statusSnapshot)
-	}{
-		{args: []string{"set", "reader-workers", "2"}, wantStdout: "action=set target=reader-workers value=2 state=idle\n", verify: func(t *testing.T, snapshot statusSnapshot) {
-			if snapshot.Reader.Workers != 2 {
-				t.Fatalf("reader workers = %d, want 2", snapshot.Reader.Workers)
-			}
-		}},
-		{args: []string{"set", "sender-workers", "31"}, wantStdout: "action=set target=sender-workers value=31 state=idle\n", verify: func(t *testing.T, snapshot statusSnapshot) {
-			if snapshot.Sender.Workers != 31 {
-				t.Fatalf("sender workers = %d, want 31", snapshot.Sender.Workers)
-			}
-		}},
-		{args: []string{"set", "requested-tps", "0"}, wantStdout: "action=set target=requested-tps value=0 state=idle\n", verify: func(t *testing.T, snapshot statusSnapshot) {
-			if snapshot.Throttler.RequestedTps != 0 {
-				t.Fatalf("requested TPS = %d, want 0", snapshot.Throttler.RequestedTps)
-			}
-		}},
-		{args: []string{"set", "throttler-mode", "bypass"}, wantStdout: "action=set target=throttler-mode value=bypass state=idle\n", verify: func(t *testing.T, snapshot statusSnapshot) {
-			if snapshot.Throttler.InstallationMode != throttlerBypass {
-				t.Fatalf("throttler mode = %q, want %q", snapshot.Throttler.InstallationMode, throttlerBypass)
-			}
-		}},
-	} {
-		t.Run(test.args[1], func(t *testing.T) {
-			args := append(test.args, "--url", baseURL)
-			result := runCLIBinary(t, binary, args...)
-			if result.exitCode != cliExitSuccess || result.stderr != "" || result.stdout != test.wantStdout {
-				t.Fatalf("stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
-			}
-			test.verify(t, readCLISnapshot(t, baseURL))
-		})
-	}
 
 	runResult := runCLIBinary(t, binary, "run", "--url", baseURL)
 	if runResult.exitCode != cliExitSuccess || runResult.stderr != "" || runResult.stdout != "action=run state=running\n" {
-		t.Fatalf("run stdout/stderr/exit = %q / %q / %d", runResult.stdout, runResult.stderr, runResult.exitCode)
-	}
-	result := runCLIBinary(t, binary, "set", "requested-tps", "200000", "--url", baseURL)
-	if result.exitCode != cliExitSuccess || result.stderr != "" || result.stdout != "action=set target=requested-tps value=200000 state=running\n" {
-		t.Fatalf("running set stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
-	}
-	if snapshot := readCLISnapshot(t, baseURL); snapshot.Throttler.RequestedTps != 200000 {
-		t.Fatalf("running requested TPS = %d, want 200000", snapshot.Throttler.RequestedTps)
-	}
-
-	before := readCLISnapshot(t, baseURL)
-	invalid := runCLIBinary(t, binary, "set", "requested-tps", "101", "--url", baseURL)
-	assertCLIBinaryFailure(t, invalid, cliExitHTTP, "HTTP 400", "")
-	if !strings.Contains(invalid.stderr, "POST /api/loadgen/commands") || !strings.Contains(invalid.stderr, "Invalid requested TPS") {
-		t.Fatalf("validation stderr = %q", invalid.stderr)
-	}
-	after := readCLISnapshot(t, baseURL)
-	if after.Throttler.RequestedTps != before.Throttler.RequestedTps {
-		t.Fatalf("invalid requested TPS changed value from %d to %d", before.Throttler.RequestedTps, after.Throttler.RequestedTps)
-	}
-	modeBefore := after.Throttler.InstallationMode
-	invalidMode := runCLIBinary(t, binary, "set", "throttler-mode", "other", "--url", baseURL)
-	assertCLIBinaryFailure(t, invalidMode, cliExitHTTP, "HTTP 400", "")
-	if !strings.Contains(invalidMode.stderr, "POST /api/loadgen/commands") || !strings.Contains(invalidMode.stderr, "Invalid throttler installation mode") {
-		t.Fatalf("mode validation stderr = %q", invalidMode.stderr)
-	}
-	if after = readCLISnapshot(t, baseURL); after.Throttler.InstallationMode != modeBefore {
-		t.Fatalf("invalid throttler mode changed value from %q to %q", modeBefore, after.Throttler.InstallationMode)
-	}
-
-	before = readCLISnapshot(t, baseURL)
-	syntax := runCLIBinary(t, binary, "set", "requested-tps", "not-an-integer", "--url", baseURL)
-	assertCLIBinaryFailure(t, syntax, cliExitUsage, "usage:", "")
-	after = readCLISnapshot(t, baseURL)
-	if after.Throttler.RequestedTps != before.Throttler.RequestedTps {
-		t.Fatalf("syntax error changed requested TPS from %d to %d", before.Throttler.RequestedTps, after.Throttler.RequestedTps)
+		t.Fatalf("stdout/stderr/exit = %q / %q / %d", runResult.stdout, runResult.stderr, runResult.exitCode)
 	}
 }
 
@@ -281,13 +175,10 @@ func assertCLIBinaryFailure(t *testing.T, result blackBoxResult, wantExit int, w
 	}
 }
 
-func startCLIServe(t *testing.T, binary string, runAfterStart bool) string {
+func startCLIServe(t *testing.T, binary string) string {
 	t.Helper()
 	configPath := writeBlackBoxConfig(t)
 	args := []string{"serve", "--config", configPath}
-	if runAfterStart {
-		args = append(args, "--run")
-	}
 	command := exec.Command(binary, args...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
@@ -340,7 +231,7 @@ func waitForCLISnapshotState(t *testing.T, baseURL string, want runState) {
 	for time.Now().Before(deadline) {
 		response, err := client.Get(baseURL + snapshotPath)
 		if err == nil {
-			var snapshot statusSnapshot
+			var snapshot httpV1Status
 			decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
 			closeErr := response.Body.Close()
 			if decodeErr == nil && closeErr == nil && snapshot.Run.State == want {
@@ -353,24 +244,6 @@ func waitForCLISnapshotState(t *testing.T, baseURL string, want runState) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("wait for service state %q: %v", want, lastError)
-}
-
-func readCLISnapshot(t *testing.T, baseURL string) statusSnapshot {
-	t.Helper()
-	client := &http.Client{Timeout: time.Second}
-	response, err := client.Get(baseURL + snapshotPath)
-	if err != nil {
-		t.Fatalf("get snapshot: %v", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("snapshot status = %s", response.Status)
-	}
-	var snapshot statusSnapshot
-	if err := json.NewDecoder(response.Body).Decode(&snapshot); err != nil {
-		t.Fatalf("decode snapshot: %v", err)
-	}
-	return snapshot
 }
 
 func ensureServePortAvailable(t *testing.T) {

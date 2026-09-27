@@ -14,7 +14,7 @@ func TestServeMuxRoutes(t *testing.T) {
 	}
 
 	for _, route := range routes {
-		requests := make(chan request, 1)
+		requests := make(chan runtimeCommand, 1)
 		mux := newServeMux(testControlPlane(requests), nil, testPolicy(t))
 
 		req := httptest.NewRequest(http.MethodGet, route, nil)

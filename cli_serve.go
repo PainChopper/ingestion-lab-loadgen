@@ -100,7 +100,7 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	defer func() { _ = logger.Sync() }()
 
 	state := newServeState(loadedPolicy, logger)
-	plane := newControlPlane(10)
+	plane := newRuntimeControl(10)
 	runtime := newRuntimeMetrics(loadedPolicy)
 	defer runtime.stop()
 	state.metricsWindow = runtime.window
@@ -116,7 +116,7 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 		state.runEventLoop(serviceCtx, plane, runtime.metrics, runtime.promMetrics)
 	}()
 	if runAfterStart {
-		if result := plane.dispatch(cmdRun, 0, ""); result.err != nil {
+		if result := plane.execute(runtimeCommand{kind: cmdRun}); result.err != nil {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
 			defer cancel()
 			stopService()
