@@ -14,7 +14,7 @@ type commandRequest struct {
 	Value  json.RawMessage `json:"value"`
 }
 
-func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) http.Handler {
+func commandsHandler(control runtimeControl, policy policy, loggers ...*zap.Logger) http.Handler {
 	logger := loggerOrNop(loggers)
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -53,7 +53,7 @@ func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) 
 
 		switch cr.Action {
 		case "run":
-			if result := plane.dispatch(cmdRun, 0, ""); result.status == commandConflict {
+			if result := control.execute(runtimeCommand{kind: cmdRun}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			} else if result.err != nil {
 				w.Header().Set("Content-Type", "application/json")
@@ -66,9 +66,9 @@ func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) 
 				}
 			}
 		case "pause":
-			plane.dispatchAsync(cmdPause)
+			control.executeAsync(runtimeCommand{kind: cmdPause})
 		case "reset":
-			if result := plane.dispatch(cmdReset, 0, ""); result.status == commandConflict {
+			if result := control.execute(runtimeCommand{kind: cmdReset}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-read-batch-size":
@@ -77,7 +77,10 @@ func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) 
 				http.Error(w, "Invalid read batch size", http.StatusBadRequest)
 				return
 			}
-			if result := plane.dispatch(cmdSetReadBatchSize, value, ""); result.status == commandConflict {
+			if result := control.execute(runtimeCommand{
+				kind:  cmdSetReadBatchSize,
+				value: value,
+			}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-reader-workers":
@@ -86,7 +89,10 @@ func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) 
 				http.Error(w, "Invalid Reader workers", http.StatusBadRequest)
 				return
 			}
-			if result := plane.dispatch(cmdSetReaderWorkers, value, ""); result.status == commandConflict {
+			if result := control.execute(runtimeCommand{
+				kind:  cmdSetReaderWorkers,
+				value: value,
+			}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-reader-channel-capacity":
@@ -99,7 +105,10 @@ func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) 
 				http.Error(w, "Invalid reader channel capacity", http.StatusBadRequest)
 				return
 			}
-			if result := plane.dispatch(cmdSetReaderChannelCapacity, value, ""); result.status == commandConflict {
+			if result := control.execute(runtimeCommand{
+				kind:  cmdSetReaderChannelCapacity,
+				value: value,
+			}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-sender-channel-capacity":
@@ -112,7 +121,10 @@ func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) 
 				http.Error(w, "Invalid sender channel capacity", http.StatusBadRequest)
 				return
 			}
-			if result := plane.dispatch(cmdSetSenderChannelCapacity, value, ""); result.status == commandConflict {
+			if result := control.execute(runtimeCommand{
+				kind:  cmdSetSenderChannelCapacity,
+				value: value,
+			}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-requested-tps":
@@ -125,7 +137,10 @@ func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) 
 				http.Error(w, "Invalid requested TPS", http.StatusBadRequest)
 				return
 			}
-			if result := plane.dispatch(cmdSetRequestedTPS, value, ""); result.status == commandConflict {
+			if result := control.execute(runtimeCommand{
+				kind:  cmdSetRequestedTPS,
+				value: value,
+			}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-throttler-installation-mode":
@@ -134,7 +149,10 @@ func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) 
 				http.Error(w, "Invalid throttler installation mode", http.StatusBadRequest)
 				return
 			}
-			if result := plane.dispatch(cmdSetThrottlerInstallationMode, 0, value); result.status == commandConflict {
+			if result := control.execute(runtimeCommand{
+				kind:      cmdSetThrottlerInstallationMode,
+				textValue: value,
+			}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-sender-workers":
@@ -148,13 +166,13 @@ func commandsHandler(plane controlPlane, policy policy, loggers ...*zap.Logger) 
 				return
 			}
 			var setting rangePolicy
-			var kind requestKind
+			var kind runtimeCommandKind
 			setting, kind = policy.Sender.Workers, cmdSetSenderWorkers
 			if !setting.contains(value) {
 				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
 				return
 			}
-			if result := plane.dispatch(kind, value, ""); result.status == commandConflict {
+			if result := control.execute(runtimeCommand{kind: kind, value: value}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		default:

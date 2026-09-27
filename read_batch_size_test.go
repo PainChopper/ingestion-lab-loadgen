@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,7 +28,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan request, 1)
+			commands := make(chan runtimeCommand, 1)
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
@@ -48,7 +47,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 						if command.kind != cmdSetReadBatchSize {
 							t.Errorf("command kind = %v, want set size", command.kind)
 						}
-						command.commandReply <- commandResult{status: commandAccepted}
+						command.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
 					}
 				case <-time.After(time.Second):
 					t.Fatal("valid command was not dispatched")
@@ -70,7 +69,8 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 }
 
 func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
-	requests := make(chan request, 3)
+	requests := make(chan runtimeCommand, 3)
+	control := testControlPlane(requests)
 	metrics := make(chan time.Time)
 	startedSizes := make(chan int, 2)
 	read := func(ctx context.Context, _ chan<- []Transaction, size, _ int) (readerRun, error) {
@@ -83,59 +83,47 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 		return readerRun{done: done, reconcile: func(int) {}}, nil
 	}
 	startCustomEventLoopForTest(t, requests, metrics, read)
-	commands := commandsHandler(testControlPlane(requests), testPolicy(t))
-	snapshot := func() statusSnapshot {
+	snapshot := func() runtimeStatus {
 		t.Helper()
-		recorder := httptest.NewRecorder()
-		snapshotHandler(testControlPlane(requests)).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
-		var value statusSnapshot
-		if err := json.Unmarshal(recorder.Body.Bytes(), &value); err != nil {
-			t.Fatal(err)
-		}
-		return value
+		return control.status()
 	}
-	post := func(body string, want int) {
+	execute := func(command runtimeCommand, want runtimeCommandStatus) {
 		t.Helper()
-		recorder := httptest.NewRecorder()
-		commands.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(body)))
-		if recorder.Code != want {
-			t.Fatalf("POST %s = %d, want %d", body, recorder.Code, want)
+		if result := control.execute(command); result.status != want {
+			t.Fatalf("command %+v = %+v, want status %d", command, result, want)
 		}
 	}
-	setSize := `{"action":"set-read-batch-size","value":25000}`
 	if got := snapshot().Reader.ReadBatchSize; got != testPolicy(t).Reader.ReadBatchSize.Default {
 		t.Fatalf("default size = %d, want %d", got, testPolicy(t).Reader.ReadBatchSize.Default)
 	}
-	post(setSize, http.StatusOK)
+	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 25_000}, commandAccepted)
 	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
 		t.Fatalf("configured size = %d, want 25000", got)
 	}
-	ownerReply := make(chan commandResult, 1)
-	requests <- request{kind: cmdSetReadBatchSize, value: 25_001, commandReply: ownerReply}
-	if result := <-ownerReply; result.status != commandConflict {
+	if result := control.execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 25_001}); result.status != commandConflict {
 		t.Fatalf("invalid direct command status = %d, want conflict", result.status)
 	}
 	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
 		t.Fatalf("size changed after invalid direct command: %d", got)
 	}
-	post(`{"action":"run"}`, http.StatusOK)
+	execute(runtimeCommand{kind: cmdRun}, commandAccepted)
 	if got := <-startedSizes; got != 25_000 {
 		t.Fatalf("reader size = %d, want 25000", got)
 	}
-	post(`{"action":"set-read-batch-size","value":30000}`, http.StatusConflict)
+	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 30_000}, commandConflict)
 	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
 		t.Fatalf("size changed during Run: %d", got)
 	}
-	post(`{"action":"pause"}`, http.StatusOK)
+	control.executeAsync(runtimeCommand{kind: cmdPause})
 	if got := snapshot().Run.State; got != runStatePaused {
 		t.Fatalf("state after Pause = %s", got)
 	}
-	post(`{"action":"set-read-batch-size","value":30000}`, http.StatusConflict)
-	post(`{"action":"reset"}`, http.StatusOK)
+	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 30_000}, commandConflict)
+	execute(runtimeCommand{kind: cmdReset}, commandAccepted)
 	if got := snapshot(); got.Run.State != runStateIdle || got.Reader.ReadBatchSize != 25_000 {
 		t.Fatalf("snapshot after Reset = %+v", got)
 	}
-	post(`{"action":"run"}`, http.StatusOK)
+	execute(runtimeCommand{kind: cmdRun}, commandAccepted)
 	if got := <-startedSizes; got != 25_000 {
 		t.Fatalf("reader size after Reset = %d, want 25000", got)
 	}

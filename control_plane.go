@@ -1,9 +1,9 @@
 package main
 
-type requestKind int
+type runtimeCommandKind int
 
 const (
-	getSnapshot requestKind = iota
+	getRuntimeStatus runtimeCommandKind = iota
 	cmdRun
 	cmdPause
 	cmdReset
@@ -16,130 +16,224 @@ const (
 	cmdSetSenderWorkers
 )
 
-type request struct {
-	kind          requestKind
-	snapshotReply chan statusSnapshot
-	commandReply  chan commandResult
-	value         int
-	textValue     string
+type runtimeCommand struct {
+	kind         runtimeCommandKind
+	statusReply  chan runtimeStatus
+	receiptReply chan runtimeCommandReceipt
+	value        int
+	textValue    string
 }
 
-type commandStatus int
+type runtimeCommandStatus int
 
 const (
-	commandAccepted commandStatus = iota
+	commandAccepted runtimeCommandStatus = iota
 	commandConflict
 )
 
-type commandResult struct {
-	status commandStatus
+type runtimeCommandReceipt struct {
+	status runtimeCommandStatus
 	err    error
 }
 
-type controlPlane struct {
-	requests chan request
+type runtimeControl struct {
+	requests chan runtimeCommand
 }
 
-func newControlPlane(buffer int) controlPlane {
-	return controlPlane{requests: make(chan request, buffer)}
+func newRuntimeControl(buffer int) runtimeControl {
+	return runtimeControl{requests: make(chan runtimeCommand, buffer)}
 }
 
-func (plane controlPlane) snapshot() statusSnapshot {
-	reply := make(chan statusSnapshot, 1)
-	plane.requests <- request{kind: getSnapshot, snapshotReply: reply}
+func (control runtimeControl) status() runtimeStatus {
+	reply := make(chan runtimeStatus, 1)
+	control.requests <- runtimeCommand{kind: getRuntimeStatus, statusReply: reply}
 	return <-reply
 }
 
-func (plane controlPlane) dispatch(kind requestKind, value int, textValue string) commandResult {
-	reply := make(chan commandResult, 1)
-	plane.requests <- request{
-		kind:         kind,
-		value:        value,
-		textValue:    textValue,
-		commandReply: reply,
+func (control runtimeControl) execute(command runtimeCommand) runtimeCommandReceipt {
+	reply := make(chan runtimeCommandReceipt, 1)
+	command.receiptReply = reply
+	control.requests <- command
+	return <-reply
+}
+
+func (control runtimeControl) executeAsync(command runtimeCommand) {
+	control.requests <- command
+}
+
+func (command runtimeCommand) respond(receipt runtimeCommandReceipt) {
+	if command.receiptReply != nil {
+		command.receiptReply <- receipt
 	}
-	return <-reply
 }
 
-func (plane controlPlane) dispatchAsync(kind requestKind) {
-	plane.requests <- request{kind: kind}
+func (command runtimeCommand) respondStatus(status runtimeStatus) {
+	command.statusReply <- status
 }
 
-type statusSnapshot struct {
-	Run           runSnapshot       `json:"run"`
-	Reader        readerSnapshot    `json:"reader"`
-	Throttler     throttlerSnapshot `json:"throttler"`
-	Sender        senderSnapshot    `json:"sender"`
-	ReaderChannel channelSnapshot   `json:"readerChannel"`
-	SenderChannel channelSnapshot   `json:"senderChannel"`
-	Policy        policySnapshot    `json:"policy"`
+type runtimeStatus struct {
+	Run           runtimeRunStatus
+	Reader        runtimeReaderStatus
+	Throttler     runtimeThrottlerStatus
+	Sender        runtimeSenderStatus
+	ReaderChannel runtimeChannelStatus
+	SenderChannel runtimeChannelStatus
+	Policy        runtimePolicyStatus
 }
 
-type runSnapshot struct {
-	State             runState `json:"state"`
-	TotalTransactions int64    `json:"totalTransactions"`
-	ElapsedMs         int64    `json:"elapsedMs"`
+type runtimePolicyStatus struct {
+	ReaderReadBatchSize       runtimeRangePolicy
+	ReaderWorkers             runtimeRangePolicy
+	ReaderChannelCapacity     runtimeAllowedPolicy
+	SenderChannelCapacity     runtimeAllowedPolicy
+	ThrottlerRequestedTPS     runtimeRangePolicy
+	ThrottlerInstallationMode runtimeInstallationModePolicy
+	MetricsWindowMS           runtimeRangePolicy
+	SenderWorkers             runtimeRangePolicy
+	Logging                   runtimeLoggingPolicy
 }
 
-type readerSnapshot struct {
-	Workers                int                `json:"workers"`
-	LiveWorkers            int                `json:"liveWorkers"`
-	IdleWorkers            int                `json:"idleWorkers"`
-	ReadingWorkers         int                `json:"readingWorkers"`
-	BlockedWorkers         int                `json:"blockedWorkers"`
-	DrainingWorkers        int                `json:"drainingWorkers"`
-	DrainingIdleWorkers    int                `json:"drainingIdleWorkers"`
-	DrainingReadingWorkers int                `json:"drainingReadingWorkers"`
-	DrainingBlockedWorkers int                `json:"drainingBlockedWorkers"`
-	ReadBatchSize          int                `json:"readBatchSize"`
-	ReadTps                float64            `json:"readTps"`
-	RowsRead               int64              `json:"rowsRead"`
-	SourceDirectory        string             `json:"sourceDirectory"`
-	SourceError            *readerSourceError `json:"sourceError"`
+type runtimeRangePolicy struct {
+	Default    int
+	Min        int
+	Max        int
+	Step       int
+	Unit       string
+	Mutability string
+}
+
+type runtimeAllowedPolicy struct {
+	Default    int
+	Allowed    []int
+	Unit       string
+	Mutability string
+}
+
+type runtimeInstallationModePolicy struct {
+	Default    string
+	Allowed    []string
+	Mutability string
+}
+
+type runtimeLoggingPolicy struct {
+	Level      string
+	Mutability string
+}
+
+func runtimePolicyStatusFromPolicy(policy policy) runtimePolicyStatus {
+	return runtimePolicyStatus{
+		ReaderReadBatchSize:       runtimeRangePolicyFromPolicy(policy.Reader.ReadBatchSize),
+		ReaderWorkers:             runtimeRangePolicyFromPolicy(policy.Reader.Workers),
+		ReaderChannelCapacity:     runtimeAllowedPolicyFromPolicy(policy.ReaderChannel.Capacity),
+		SenderChannelCapacity:     runtimeAllowedPolicyFromPolicy(policy.SenderChannel.Capacity),
+		ThrottlerRequestedTPS:     runtimeRangePolicyFromPolicy(policy.Throttler.RequestedTPS),
+		ThrottlerInstallationMode: runtimeInstallationModePolicyFromPolicy(policy.Throttler.InstallationMode),
+		MetricsWindowMS:           runtimeRangePolicyFromPolicy(policy.Metrics.WindowMS),
+		SenderWorkers:             runtimeRangePolicyFromPolicy(policy.Sender.Workers),
+		Logging:                   runtimeLoggingPolicyFromPolicy(policy.Logging),
+	}
+}
+
+func runtimeRangePolicyFromPolicy(policy rangePolicy) runtimeRangePolicy {
+	return runtimeRangePolicy{
+		Default:    policy.Default,
+		Min:        policy.Min,
+		Max:        policy.Max,
+		Step:       policy.Step,
+		Unit:       policy.Unit,
+		Mutability: policy.Mutability,
+	}
+}
+
+func runtimeAllowedPolicyFromPolicy(policy allowedPolicy) runtimeAllowedPolicy {
+	return runtimeAllowedPolicy{
+		Default:    policy.Default,
+		Allowed:    policy.Allowed,
+		Unit:       policy.Unit,
+		Mutability: policy.Mutability,
+	}
+}
+
+func runtimeInstallationModePolicyFromPolicy(policy installationModePolicy) runtimeInstallationModePolicy {
+	return runtimeInstallationModePolicy{
+		Default:    policy.Default,
+		Allowed:    policy.Allowed,
+		Mutability: policy.Mutability,
+	}
+}
+
+func runtimeLoggingPolicyFromPolicy(policy loggingPolicy) runtimeLoggingPolicy {
+	return runtimeLoggingPolicy{
+		Level:      policy.Level,
+		Mutability: policy.Mutability,
+	}
+}
+
+type runtimeRunStatus struct {
+	State             runState
+	TotalTransactions int64
+	ElapsedMs         int64
+}
+
+type runtimeReaderStatus struct {
+	Workers                int
+	LiveWorkers            int
+	IdleWorkers            int
+	ReadingWorkers         int
+	BlockedWorkers         int
+	DrainingWorkers        int
+	DrainingIdleWorkers    int
+	DrainingReadingWorkers int
+	DrainingBlockedWorkers int
+	ReadBatchSize          int
+	ReadTps                float64
+	RowsRead               int64
+	SourceDirectory        string
+	SourceError            *readerSourceError
 }
 
 type readerSourceError struct {
-	Category     string `json:"category"`
-	Operation    string `json:"operation"`
-	RelativePath string `json:"relativePath"`
-	Message      string `json:"message"`
+	Category     string
+	Operation    string
+	RelativePath string
+	Message      string
 }
 
-func (error readerSourceError) Error() string {
-	return error.Message
+func (sourceError readerSourceError) Error() string {
+	return sourceError.Message
 }
 
-type throttlerSnapshot struct {
-	RequestedTps     int     `json:"requestedTps"`
-	AdmittedTps      float64 `json:"admittedTps"`
-	InstallationMode string  `json:"installationMode"`
+type runtimeThrottlerStatus struct {
+	RequestedTps     int
+	AdmittedTps      float64
+	InstallationMode string
 }
 
-type senderSnapshot struct {
-	Workers                 int `json:"workers"`
-	LiveWorkers             int `json:"liveWorkers"`
-	IdleWorkers             int `json:"idleWorkers"`
-	InFlightWorkers         int `json:"inFlightWorkers"`
-	BackoffWorkers          int `json:"backoffWorkers"`
-	DrainingWorkers         int `json:"drainingWorkers"`
-	DrainingIdleWorkers     int `json:"drainingIdleWorkers"`
-	DrainingInFlightWorkers int `json:"drainingInFlightWorkers"`
-	DrainingBackoffWorkers  int `json:"drainingBackoffWorkers"`
+type runtimeSenderStatus struct {
+	Workers                 int
+	LiveWorkers             int
+	IdleWorkers             int
+	InFlightWorkers         int
+	BackoffWorkers          int
+	DrainingWorkers         int
+	DrainingIdleWorkers     int
+	DrainingInFlightWorkers int
+	DrainingBackoffWorkers  int
 }
 
-type channelSnapshot struct {
-	Capacity                      int     `json:"capacity"`
-	DepthBatches                  int     `json:"depthBatches"`
-	BufferedTransactions          int     `json:"bufferedTransactions"`
-	BlockedSenders                int     `json:"blockedSenders"`
-	OldestBlockedSenderMs         int64   `json:"oldestBlockedSenderMs"`
-	BlockedMs                     int64   `json:"blockedMs"`
-	SentBatchesTotal              int64   `json:"sentBatchesTotal"`
-	SentTransactionsTotal         int64   `json:"sentTransactionsTotal"`
-	ReceivedBatchesTotal          int64   `json:"receivedBatchesTotal"`
-	ReceivedTransactionsTotal     int64   `json:"receivedTransactionsTotal"`
-	SentBatchesPerSecond          float64 `json:"inputBatchesPerSecond"`
-	SentTransactionsPerSecond     float64 `json:"inputTransactionsPerSecond"`
-	ReceivedBatchesPerSecond      float64 `json:"outputBatchesPerSecond"`
-	ReceivedTransactionsPerSecond float64 `json:"outputTransactionsPerSecond"`
+type runtimeChannelStatus struct {
+	Capacity                      int
+	DepthBatches                  int
+	BufferedTransactions          int
+	BlockedSenders                int
+	OldestBlockedSenderMs         int64
+	BlockedMs                     int64
+	SentBatchesTotal              int64
+	SentTransactionsTotal         int64
+	ReceivedBatchesTotal          int64
+	ReceivedTransactionsTotal     int64
+	SentBatchesPerSecond          float64
+	SentTransactionsPerSecond     float64
+	ReceivedBatchesPerSecond      float64
+	ReceivedTransactionsPerSecond float64
 }

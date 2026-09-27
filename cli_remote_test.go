@@ -208,12 +208,12 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		target        string
 		requestAction string
 		value         any
-		update        func(*statusSnapshot)
+		update        func(*httpV1Status)
 	}{
-		{target: "reader-workers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *statusSnapshot) { snapshot.Reader.Workers = 3 }},
-		{target: "sender-workers", requestAction: "set-sender-workers", value: 4, update: func(snapshot *statusSnapshot) { snapshot.Sender.Workers = 4 }},
-		{target: "requested-tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *statusSnapshot) { snapshot.Throttler.RequestedTps = 0 }},
-		{target: "throttler-mode", requestAction: "set-throttler-installation-mode", value: "bypass", update: func(snapshot *statusSnapshot) { snapshot.Throttler.InstallationMode = throttlerBypass }},
+		{target: "reader-workers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *httpV1Status) { snapshot.Reader.Workers = 3 }},
+		{target: "sender-workers", requestAction: "set-sender-workers", value: 4, update: func(snapshot *httpV1Status) { snapshot.Sender.Workers = 4 }},
+		{target: "requested-tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *httpV1Status) { snapshot.Throttler.RequestedTps = 0 }},
+		{target: "throttler-mode", requestAction: "set-throttler-installation-mode", value: "bypass", update: func(snapshot *httpV1Status) { snapshot.Throttler.InstallationMode = throttlerBypass }},
 	} {
 		t.Run(test.target, func(t *testing.T) {
 			snapshot := testRemoteSnapshot(t)
@@ -383,7 +383,10 @@ func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
 	}
 }
 
-func testRemoteSnapshot(t *testing.T) statusSnapshot {
+func testRemoteSnapshot(t *testing.T) httpV1Status {
 	t.Helper()
-	return statusSnapshot{Run: runSnapshot{State: runStatePaused}, Policy: testPolicy(t).snapshot()}
+	return httpV1Status{
+		Run:    httpV1RunStatus{State: runStatePaused},
+		Policy: httpV1PolicyStatusFromRuntime(runtimePolicyStatusFromPolicy(testPolicy(t))),
+	}
 }

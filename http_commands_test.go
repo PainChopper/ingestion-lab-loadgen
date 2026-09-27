@@ -12,7 +12,7 @@ import (
 func TestCommandsHandlerDispatches(t *testing.T) {
 	tests := []struct {
 		action       string
-		expectedKind requestKind
+		expectedKind runtimeCommandKind
 	}{
 		{"run", cmdRun},
 		{"pause", cmdPause},
@@ -21,7 +21,7 @@ func TestCommandsHandlerDispatches(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.action, func(t *testing.T) {
-			commands := make(chan request, 1)
+			commands := make(chan runtimeCommand, 1)
 			body := strings.NewReader(`{"action":"` + test.action + `"}`)
 			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
 			rec := httptest.NewRecorder()
@@ -32,14 +32,14 @@ func TestCommandsHandlerDispatches(t *testing.T) {
 				commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(rec, req)
 			}()
 
-			var cmd request
+			var cmd runtimeCommand
 			select {
 			case cmd = <-commands:
 			case <-time.After(time.Second):
 				t.Fatal("command was not dispatched")
 			}
 			if test.expectedKind == cmdRun || test.expectedKind == cmdReset {
-				cmd.commandReply <- commandResult{status: commandAccepted}
+				cmd.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
 			}
 			select {
 			case <-done:
@@ -59,7 +59,7 @@ func TestCommandsHandlerDispatches(t *testing.T) {
 }
 
 func TestCommandsHandlerReportsRunStartError(t *testing.T) {
-	commands := make(chan request, 1)
+	commands := make(chan runtimeCommand, 1)
 	request := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"run"}`))
 	recorder := httptest.NewRecorder()
 	done := make(chan struct{})
@@ -69,7 +69,7 @@ func TestCommandsHandlerReportsRunStartError(t *testing.T) {
 	}()
 
 	command := <-commands
-	command.commandReply <- commandResult{err: errors.New("missing parquet")}
+	command.receiptReply <- runtimeCommandReceipt{err: errors.New("missing parquet")}
 	<-done
 
 	if recorder.Code != http.StatusUnprocessableEntity {
@@ -84,7 +84,7 @@ func TestCommandsHandlerReportsRunStartError(t *testing.T) {
 }
 
 func TestCommandsHandlerRejectsGet(t *testing.T) {
-	commands := make(chan request, 1)
+	commands := make(chan runtimeCommand, 1)
 	req := httptest.NewRequest(http.MethodGet, commandsPath, nil)
 	rec := httptest.NewRecorder()
 
@@ -110,7 +110,7 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan request, 1)
+			commands := make(chan runtimeCommand, 1)
 			body := strings.NewReader(test.body)
 			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
 			rec := httptest.NewRecorder()
@@ -128,7 +128,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		name string
 		body string
 		want int
-		kind requestKind
+		kind runtimeCommandKind
 	}{
 		{name: "TPS missing", body: `{"action":"set-requested-tps"}`, want: http.StatusBadRequest},
 		{name: "TPS null", body: `{"action":"set-requested-tps","value":null}`, want: http.StatusBadRequest},
@@ -152,7 +152,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan request, 1)
+			commands := make(chan runtimeCommand, 1)
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
@@ -167,7 +167,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 					if command.kind != test.kind {
 						t.Errorf("command kind = %v, want %v", command.kind, test.kind)
 					}
-					command.commandReply <- commandResult{status: commandAccepted}
+					command.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
 				case <-time.After(time.Second):
 					t.Fatal("valid command was not dispatched")
 				}
@@ -191,7 +191,7 @@ func TestSenderCommandValidation(t *testing.T) {
 	tests := []struct {
 		name, body string
 		want       int
-		kind       requestKind
+		kind       runtimeCommandKind
 		value      int
 	}{
 		{"workers minimum", `{"action":"set-sender-workers","value":1}`, http.StatusOK, cmdSetSenderWorkers, 1},
@@ -207,7 +207,7 @@ func TestSenderCommandValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan request, 1)
+			commands := make(chan runtimeCommand, 1)
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
@@ -221,7 +221,7 @@ func TestSenderCommandValidation(t *testing.T) {
 					if command.kind != test.kind || command.value != test.value {
 						t.Errorf("command = %+v, want kind %v value %d", command, test.kind, test.value)
 					}
-					command.commandReply <- commandResult{}
+					command.receiptReply <- runtimeCommandReceipt{}
 				case <-time.After(time.Second):
 					t.Fatal("valid command was not dispatched")
 				}
@@ -257,7 +257,7 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan request, 1)
+			commands := make(chan runtimeCommand, 1)
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
@@ -271,7 +271,7 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 					if command.kind != cmdSetReaderWorkers || command.value != test.value {
 						t.Errorf("command = %+v, want Reader workers %d", command, test.value)
 					}
-					command.commandReply <- commandResult{status: commandAccepted}
+					command.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
 				case <-time.After(time.Second):
 					t.Fatal("valid Reader command was not dispatched")
 				}

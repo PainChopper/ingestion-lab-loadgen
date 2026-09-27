@@ -2,64 +2,65 @@ package main
 
 import "testing"
 
-func TestControlPlaneDispatchForwardsCommand(t *testing.T) {
-	plane := newControlPlane(10)
-	if cap(plane.requests) != 10 {
-		t.Fatalf("request capacity = %d, want 10", cap(plane.requests))
+func TestRuntimeControlExecuteForwardsCommandAndReceipt(t *testing.T) {
+	control := newRuntimeControl(10)
+	if cap(control.requests) != 10 {
+		t.Fatalf("request capacity = %d, want 10", cap(control.requests))
 	}
-	result := commandResult{status: commandConflict}
+	want := runtimeCommandReceipt{status: commandConflict}
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
-		request := <-plane.requests
-		if request.kind != cmdSetThrottlerInstallationMode || request.value != 42 || request.textValue != "bypass" {
-			t.Errorf("request = %+v", request)
+		command := <-control.requests
+		if command.kind != cmdSetThrottlerInstallationMode || command.value != 42 || command.textValue != "bypass" {
+			t.Errorf("command = %+v", command)
 		}
-		if cap(request.commandReply) != 1 {
-			t.Errorf("command reply capacity = %d, want 1", cap(request.commandReply))
+		if cap(command.receiptReply) != 1 {
+			t.Errorf("receipt reply capacity = %d, want 1", cap(command.receiptReply))
 		}
-		request.commandReply <- result
+		command.receiptReply <- want
 	}()
 
-	if got := plane.dispatch(cmdSetThrottlerInstallationMode, 42, "bypass"); got != result {
-		t.Errorf("result = %+v, want %+v", got, result)
+	command := runtimeCommand{kind: cmdSetThrottlerInstallationMode, value: 42, textValue: "bypass"}
+	if got := control.execute(command); got != want {
+		t.Errorf("receipt = %+v, want %+v", got, want)
 	}
 	<-done
 }
 
-func TestControlPlaneSnapshotForwardsReply(t *testing.T) {
-	plane := newControlPlane(10)
-	want := statusSnapshot{Run: runSnapshot{State: runStatePaused}}
+func TestRuntimeControlStatusForwardsReply(t *testing.T) {
+	control := newRuntimeControl(10)
+	want := runtimeStatus{Run: runtimeRunStatus{State: runStatePaused}}
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
-		request := <-plane.requests
-		if request.kind != getSnapshot {
-			t.Errorf("request kind = %d, want %d", request.kind, getSnapshot)
+		command := <-control.requests
+		if command.kind != getRuntimeStatus {
+			t.Errorf("command kind = %d, want %d", command.kind, getRuntimeStatus)
 		}
-		if cap(request.snapshotReply) != 1 {
-			t.Errorf("snapshot reply capacity = %d, want 1", cap(request.snapshotReply))
+		if cap(command.statusReply) != 1 {
+			t.Errorf("status reply capacity = %d, want 1", cap(command.statusReply))
 		}
-		request.snapshotReply <- want
+		command.statusReply <- want
 	}()
 
-	if got := plane.snapshot(); got.Run != want.Run {
-		t.Errorf("run snapshot = %+v, want %+v", got.Run, want.Run)
+	if got := control.status(); got.Run != want.Run {
+		t.Errorf("run status = %+v, want %+v", got.Run, want.Run)
 	}
 	<-done
 }
 
-func TestControlPlaneDispatchAsyncForwardsCommand(t *testing.T) {
-	plane := newControlPlane(10)
-	plane.dispatchAsync(cmdPause)
-	request := <-plane.requests
-	if request.kind != cmdPause || request.commandReply != nil {
-		t.Errorf("request = %+v", request)
+func TestRuntimeControlExecuteAsyncForwardsCommandWithoutReceipt(t *testing.T) {
+	control := newRuntimeControl(10)
+	control.executeAsync(runtimeCommand{kind: cmdPause})
+	command := <-control.requests
+	if command.kind != cmdPause || command.receiptReply != nil {
+		t.Errorf("command = %+v", command)
 	}
 }
 
-func testControlPlane(requests chan request) controlPlane {
-	return controlPlane{requests: requests}
+func testControlPlane(requests chan runtimeCommand) runtimeControl {
+	return runtimeControl{requests: requests}
 }

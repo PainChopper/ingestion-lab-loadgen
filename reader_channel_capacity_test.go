@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -28,7 +27,7 @@ func TestReaderChannelCapacityValidation(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan request, 1)
+			commands := make(chan runtimeCommand, 1)
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
@@ -43,7 +42,7 @@ func TestReaderChannelCapacityValidation(t *testing.T) {
 					if command.kind != cmdSetReaderChannelCapacity {
 						t.Errorf("command kind = %v, want reader channel capacity", command.kind)
 					}
-					command.commandReply <- commandResult{status: commandAccepted}
+					command.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
 				case <-time.After(time.Second):
 					t.Fatal("valid command was not dispatched")
 				}
@@ -81,7 +80,8 @@ func TestValidReaderChannelCapacityAcceptsOnlyConfiguredSteps(t *testing.T) {
 func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *testing.T) {
 	for _, capacity := range []int{0, 1, 8_192} {
 		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
-			requests := make(chan request, 3)
+			requests := make(chan runtimeCommand, 3)
+			control := testControlPlane(requests)
 			metrics := make(chan time.Time)
 			startedCapacities := make(chan int, 2)
 			state := newTestControlState(t)
@@ -113,54 +113,46 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 					t.Error("event loop did not stop")
 				}
 			})
-			commands := commandsHandler(testControlPlane(requests), state.controls.policy)
-			snapshot := func() statusSnapshot {
+			snapshot := func() runtimeStatus {
 				t.Helper()
-				recorder := httptest.NewRecorder()
-				snapshotHandler(testControlPlane(requests)).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
-				var value statusSnapshot
-				if err := json.Unmarshal(recorder.Body.Bytes(), &value); err != nil {
-					t.Fatal(err)
-				}
-				return value
+				return control.status()
 			}
-			post := func(body string, want int) {
+			execute := func(command runtimeCommand, want runtimeCommandStatus) {
 				t.Helper()
-				recorder := httptest.NewRecorder()
-				commands.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(body)))
-				if recorder.Code != want {
-					t.Fatalf("POST %s = %d, want %d", body, recorder.Code, want)
+				if result := control.execute(command); result.status != want {
+					t.Fatalf("command %+v = %+v, want status %d", command, result, want)
 				}
 			}
 
 			if got := snapshot().ReaderChannel.Capacity; got != state.controls.policy.ReaderChannel.Capacity.Default {
 				t.Fatalf("default capacity = %d, want %d", got, state.controls.policy.ReaderChannel.Capacity.Default)
 			}
-			post(`{"action":"set-reader-channel-capacity","value":`+strconv.Itoa(capacity)+`}`, http.StatusOK)
+			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: capacity}, commandAccepted)
 			if got := snapshot().ReaderChannel.Capacity; got != capacity {
 				t.Fatalf("idle capacity = %d, want %d", got, capacity)
 			}
 
-			ownerReply := make(chan commandResult, 1)
-			requests <- request{kind: cmdSetReaderChannelCapacity, value: 3, commandReply: ownerReply}
-			if result := <-ownerReply; result.status != commandConflict {
+			if result := control.execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: 3}); result.status != commandConflict {
 				t.Fatalf("invalid direct command status = %d, want conflict", result.status)
 			}
-			post(`{"action":"run"}`, http.StatusOK)
+			execute(runtimeCommand{kind: cmdRun}, commandAccepted)
 			if got := <-startedCapacities; got != capacity {
 				t.Fatalf("reader configured capacity = %d, want %d", got, capacity)
 			}
 			if got := snapshot(); got.ReaderChannel.Capacity != capacity || got.Run.State != runStateRunning {
 				t.Fatalf("running snapshot = %+v", got)
 			}
-			post(`{"action":"set-reader-channel-capacity","value":4}`, http.StatusConflict)
-			post(`{"action":"pause"}`, http.StatusOK)
-			post(`{"action":"set-reader-channel-capacity","value":4}`, http.StatusConflict)
-			post(`{"action":"reset"}`, http.StatusOK)
+			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: 4}, commandConflict)
+			control.executeAsync(runtimeCommand{kind: cmdPause})
+			if got := snapshot().Run.State; got != runStatePaused {
+				t.Fatalf("state after Pause = %s", got)
+			}
+			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: 4}, commandConflict)
+			execute(runtimeCommand{kind: cmdReset}, commandAccepted)
 			if got := snapshot(); got.ReaderChannel.Capacity != capacity || got.Run.State != runStateIdle {
 				t.Fatalf("reset snapshot = %+v", got)
 			}
-			post(`{"action":"run"}`, http.StatusOK)
+			execute(runtimeCommand{kind: cmdRun}, commandAccepted)
 			if got := <-startedCapacities; got != capacity {
 				t.Fatalf("reader capacity after Reset = %d, want %d", got, capacity)
 			}
