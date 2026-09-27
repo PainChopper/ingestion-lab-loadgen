@@ -243,8 +243,8 @@ func (p *senderPool) runWorker(worker *senderWorker) {
 	defer p.wg.Done()
 	defer close(worker.done)
 	defer p.workerExited(worker)
-	p.logger.Info("sender worker started", zap.String("event", "sender_worker_started"))
-	defer p.logger.Info("sender worker stopped", zap.String("event", "sender_worker_stopped"))
+	p.logger.Debug("sender worker started", zap.String("event", "sender_worker_started"))
+	defer p.logger.Debug("sender worker stopped", zap.String("event", "sender_worker_stopped"))
 	for {
 		p.mu.Lock()
 		select {

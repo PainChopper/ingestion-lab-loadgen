@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"time"
@@ -37,7 +39,7 @@ func newServeMux(plane controlPlane, metrics *Metrics, policy policy, loggers ..
 	return mux
 }
 
-func startHTTPServer(plane controlPlane, metrics *Metrics, policy policy, loggers ...*zap.Logger) (*http.Server, <-chan error) {
+func startHTTPServer(plane controlPlane, metrics *Metrics, policy policy, loggers ...*zap.Logger) (*http.Server, <-chan error, error) {
 	logger := loggerOrNop(loggers)
 	mux := newServeMux(plane, metrics, policy, logger)
 
@@ -45,17 +47,21 @@ func startHTTPServer(plane controlPlane, metrics *Metrics, policy policy, logger
 		Addr:    "127.0.0.1:8080",
 		Handler: mux,
 	}
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen HTTP server: %w", err)
+	}
 
 	done := make(chan error, 1)
 	go func() {
-		err := server.ListenAndServe()
+		err := server.Serve(listener)
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
 		}
 		done <- err
 	}()
 	logger.Info("HTTP server starting", zap.String("event", "service_started"), zap.String("http_addr", server.Addr))
-	return server, done
+	return server, done, nil
 }
 
 func shutdownHTTPServer(ctx context.Context, server *http.Server, done <-chan error, loggers ...*zap.Logger) {

@@ -7,11 +7,26 @@ import (
 	"go.uber.org/zap"
 )
 
-const cliUsage = "usage: ingestion-lab-loadgen serve [--config <path>]"
+const cliUsage = `usage:
+  ingestion-lab-loadgen serve [--config <path>] [--run]
+  ingestion-lab-loadgen snapshot [--url <url>]
+  ingestion-lab-loadgen status [--url <url>]
+  ingestion-lab-loadgen run [--url <url>]
+  ingestion-lab-loadgen pause [--url <url>]
+  ingestion-lab-loadgen resume [--url <url>]
+  ingestion-lab-loadgen reset [--url <url>]
+  ingestion-lab-loadgen set reader-workers <N> [--url <url>]
+  ingestion-lab-loadgen set sender-workers <N> [--url <url>]
+  ingestion-lab-loadgen set requested-tps <N> [--url <url>]
+  ingestion-lab-loadgen set throttler-mode <installed|bypass> [--url <url>]`
 
 type cliCommand struct {
-	configPath string
-	showUsage  bool
+	configPath    string
+	showUsage     bool
+	runAfterStart bool
+	remoteAction  string
+	remoteURL     string
+	remoteSet     remoteSetCommand
 }
 
 func parseCLI(args []string) (cliCommand, error) {
@@ -22,6 +37,12 @@ func parseCLI(args []string) (cliCommand, error) {
 		return cliCommand{showUsage: true}, nil
 	}
 
+	if isRemoteCLIAction(args[0]) {
+		return parseRemoteCLI(args)
+	}
+	if args[0] == "set" {
+		return parseSetCLI(args)
+	}
 	if args[0] != "serve" {
 		if len(args) == 1 {
 			return cliCommand{configPath: args[0]}, nil
@@ -29,22 +50,31 @@ func parseCLI(args []string) (cliCommand, error) {
 		return cliCommand{}, fmt.Errorf("unexpected command %q", args[0])
 	}
 
-	switch len(args) {
-	case 1:
-		return cliCommand{}, nil
-	case 2:
-		if args[1] == "--help" {
-			return cliCommand{showUsage: true}, nil
+	command := cliCommand{}
+	for index := 1; index < len(args); index++ {
+		switch args[index] {
+		case "--help":
+			if len(args) == 2 {
+				command.showUsage = true
+				return command, nil
+			}
+			return cliCommand{}, fmt.Errorf("invalid serve arguments")
+		case "--config":
+			if command.configPath != "" || index+1 >= len(args) || args[index+1] == "" {
+				return cliCommand{}, fmt.Errorf("invalid serve arguments: --config requires one non-empty path")
+			}
+			index++
+			command.configPath = args[index]
+		case "--run":
+			if command.runAfterStart {
+				return cliCommand{}, fmt.Errorf("--run may be specified once")
+			}
+			command.runAfterStart = true
+		default:
+			return cliCommand{}, fmt.Errorf("unexpected argument %q", args[index])
 		}
-		return cliCommand{}, fmt.Errorf("invalid serve arguments")
-	case 3:
-		if args[1] != "--config" {
-			return cliCommand{}, fmt.Errorf("unexpected argument %q", args[1])
-		}
-		return cliCommand{configPath: args[2]}, nil
-	default:
-		return cliCommand{}, fmt.Errorf("invalid serve arguments")
 	}
+	return command, nil
 }
 
 func newServeState(loadedPolicy policy, logger *zap.Logger) controlState {
@@ -55,7 +85,10 @@ func newServeState(loadedPolicy policy, logger *zap.Logger) controlState {
 	}
 }
 
-func runServe(appCtx context.Context, configPath string) error {
+func runServe(appCtx context.Context, configPath string, runAfterStart bool) error {
+	serviceCtx, stopService := context.WithCancel(appCtx)
+	defer stopService()
+
 	loadedPolicy, _, err := loadPolicy(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -66,19 +99,39 @@ func runServe(appCtx context.Context, configPath string) error {
 	}
 	defer func() { _ = logger.Sync() }()
 
-	logger.Info("service started", zap.String("event", "service_started"))
 	state := newServeState(loadedPolicy, logger)
 	plane := newControlPlane(10)
 	runtime := newRuntimeMetrics(loadedPolicy)
 	defer runtime.stop()
 	state.metricsWindow = runtime.window
 
-	server, serverDone := startHTTPServer(plane, runtime.promMetrics, loadedPolicy, logger)
+	server, serverDone, err := startHTTPServer(plane, runtime.promMetrics, loadedPolicy, logger)
+	if err != nil {
+		return err
+	}
+	logger.Info("service started", zap.String("event", "service_started"))
 	eventLoopDone := make(chan struct{})
 	go func() {
 		defer close(eventLoopDone)
-		state.runEventLoop(appCtx, plane, runtime.metrics, runtime.promMetrics)
+		state.runEventLoop(serviceCtx, plane, runtime.metrics, runtime.promMetrics)
 	}()
+	if runAfterStart {
+		if result := plane.dispatch(cmdRun, 0, ""); result.err != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+			defer cancel()
+			stopService()
+			shutdownHTTPServer(shutdownCtx, server, serverDone, logger)
+			<-eventLoopDone
+			return fmt.Errorf("start run: %w", result.err)
+		} else if result.status == commandConflict {
+			stopService()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+			defer cancel()
+			shutdownHTTPServer(shutdownCtx, server, serverDone, logger)
+			<-eventLoopDone
+			return fmt.Errorf("start run: lifecycle conflict")
+		}
+	}
 
 	select {
 	case <-appCtx.Done():

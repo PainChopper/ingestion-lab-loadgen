@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,7 +27,7 @@ func TestParseCLI(t *testing.T) {
 		{name: "legacy config", args: []string{"custom.toml"}, wantConfig: "custom.toml"},
 		{name: "missing config value", args: []string{"serve", "--config"}, wantErr: "invalid serve arguments"},
 		{name: "unknown serve argument", args: []string{"serve", "--other", "value"}, wantErr: "unexpected argument \"--other\""},
-		{name: "unexpected command", args: []string{"status", "extra"}, wantErr: "unexpected command \"status\""},
+		{name: "invalid status arguments", args: []string{"status", "extra"}, wantErr: "invalid status arguments"},
 	}
 
 	for _, test := range tests {
@@ -76,5 +79,21 @@ func TestDefaultServeUsesCurrentDefaultConfig(t *testing.T) {
 	}
 	if configPath != wantConfigPath {
 		t.Fatalf("config path = %q, want %q", configPath, wantConfigPath)
+	}
+}
+
+func TestRunServeRunFailsBeforePipelineWhenListenerOccupied(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:8080")
+	if err != nil {
+		t.Skipf("cannot reserve default HTTP listener: %v", err)
+	}
+	defer listener.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(configPath, []byte(testConfigContents()), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := runServe(context.Background(), configPath, true); err == nil || !strings.Contains(err.Error(), "listen HTTP server") {
+		t.Fatalf("runServe error = %v, want listener startup failure", err)
 	}
 }
