@@ -1,7 +1,7 @@
 schema_version = 2
 
 [source]
-path = 'D:\.DEV\ingestion-lab\ingestion-lab-loadgen\data\MBD-mini\trx\fold=*\*.parquet'
+path = 'D:\.DEV\ingestion-lab\ingestion-lab\data\MBD-mini\trx\fold=*\*.parquet'
 unit = "glob-pattern"
 mutability = "startup-only"
 

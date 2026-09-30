@@ -19,7 +19,8 @@ done
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 repo_root=$(cd -- "$script_dir/.." && pwd -P)
-runtime_root=$(cd -- "$repo_root/.." && pwd -P)/ingestion-lab-loadgen-agents-runtime
+module_root=$repo_root/loadgen
+runtime_root=$(cd -- "$repo_root/.." && pwd -P)/ingestion-lab-agents-runtime
 build_root=$runtime_root/BUILD
 
 if [[ ! -d $build_root ]]; then
@@ -27,7 +28,7 @@ if [[ ! -d $build_root ]]; then
 	exit 1
 fi
 
-cd -- "$repo_root"
+cd -- "$module_root"
 
 workdir=$(mktemp -d "$build_root/V0002-cli-wsl-smoke.XXXXXX")
 workdir=$(cd -- "$workdir" && pwd -P)

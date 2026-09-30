@@ -259,8 +259,9 @@ func ensureServePortAvailable(t *testing.T) {
 
 func blackBoxRuntimeDirectory(t *testing.T) string {
 	t.Helper()
-	repoRoot := repositoryRoot(t)
-	runtimeRoot := filepath.Join(filepath.Dir(repoRoot), "ingestion-lab-loadgen-agents-runtime")
+	moduleRoot := repositoryRoot(t)
+	gitRoot := filepath.Dir(moduleRoot)
+	runtimeRoot := filepath.Join(filepath.Dir(gitRoot), "ingestion-lab-agents-runtime")
 	if info, err := os.Stat(runtimeRoot); err != nil || !info.IsDir() {
 		t.Fatalf("runtime root %q is unavailable: %v", runtimeRoot, err)
 	}
