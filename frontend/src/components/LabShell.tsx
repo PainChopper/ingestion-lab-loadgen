@@ -73,7 +73,7 @@ function TopBar({
   const paused = snapshot.runState === 'paused'
   const faulted = snapshot.runState === 'faulted'
   const runUnavailable = snapshot.adapterKind === 'http' &&
-    (snapshot.connectionState !== 'connected' || snapshot.policy === null)
+    (snapshot.connectionState !== 'connected' || snapshot.config === null)
 
   return (
     <header className="topbar">

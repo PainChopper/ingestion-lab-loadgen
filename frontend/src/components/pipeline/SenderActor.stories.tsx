@@ -94,7 +94,7 @@ function snapshotFor(state: SenderState): LoadgenSnapshot {
   return {
     revision: 1, adapterKind: 'simulation', connectionState: 'connected', runState,
     elapsedMs: active || draining ? 12_000 : 0,
-    totalTransactions: active || draining ? 12_000 : 0, policy: null,
+    totalTransactions: active || draining ? 12_000 : 0, config: null,
     reader: {
       id: 'reader', workers: readerWorkers, liveWorkers: 2, drainingWorkers: 0,
       idleWorkers: 2, readingWorkers: 0, blockedWorkers: 0,

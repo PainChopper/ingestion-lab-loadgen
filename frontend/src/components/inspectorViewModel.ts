@@ -275,9 +275,9 @@ export function getInspectorViewModel(
           id: selectedId,
           title: 'HTTP',
           kind: 'Sender to target',
-			rows: snapshot.policy?.logging === undefined
+			rows: snapshot.config?.logging === undefined
 				? [unavailableRow()]
-				: [{ label: 'Logging level', value: snapshot.policy.logging.level }],
+				: [{ label: 'Logging level', value: snapshot.config.logging.level }],
         }
       }
       return {

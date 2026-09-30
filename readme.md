@@ -14,7 +14,7 @@ Reader → Reader Channel → Throttler → Sender Channel → Sender
 - чтение Parquet и сборка Reader batch-ей;
 - две настраиваемые очереди между стадиями;
 - batch-atomic Throttler с настройкой TPS и режимом `installed` / `bypass`;
-- HTTP snapshot с реальными telemetry очередей и policy;
+- HTTP snapshot с реальными telemetry очередей и config;
 - React-лаборатория, которая подключается к backend через HTTP;
 - Prometheus metrics и стандартные `pprof` endpoints.
 
@@ -77,7 +77,7 @@ throttler
 sender
 readerChannel
 senderChannel
-policy
+config
 ```
 
 В нём есть состояние запуска, применённые настройки, скорости, счётчики, заполненность и ожидания обеих очередей. Полный shape фиксируется тестами в [http_snapshot.go](http_snapshot.go).

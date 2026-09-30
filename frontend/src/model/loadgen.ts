@@ -55,7 +55,7 @@ export interface NumericControlSnapshot {
   readonly applyMode: ApplyMode
 }
 
-export interface RangeControlPolicySnapshot {
+export interface RangeControlConfigSnapshot {
   readonly default: number
   readonly min: number
   readonly max: number
@@ -64,31 +64,31 @@ export interface RangeControlPolicySnapshot {
   readonly mutability: string
 }
 
-export interface AllowedControlPolicySnapshot {
+export interface AllowedControlConfigSnapshot {
   readonly default: number
   readonly allowed: readonly number[]
   readonly unit: string
   readonly mutability: string
 }
 
-export interface LoadgenPolicySnapshot {
-  readonly readerReadBatchSize: RangeControlPolicySnapshot
-  readonly readerWorkers?: RangeControlPolicySnapshot
-  readonly readerChannelCapacity: AllowedControlPolicySnapshot
-  readonly senderChannelCapacity: AllowedControlPolicySnapshot
-  readonly metricsWindowMs: RangeControlPolicySnapshot
-  readonly throttlerRequestedTps: RangeControlPolicySnapshot
-  readonly throttlerInstallationMode: InstallationModePolicySnapshot
-  readonly senderWorkers: RangeControlPolicySnapshot
-	readonly logging?: LoggingPolicySnapshot
+export interface LoadgenConfigSnapshot {
+  readonly readerReadBatchSize: RangeControlConfigSnapshot
+  readonly readerWorkers?: RangeControlConfigSnapshot
+  readonly readerChannelCapacity: AllowedControlConfigSnapshot
+  readonly senderChannelCapacity: AllowedControlConfigSnapshot
+  readonly metricsWindowMs: RangeControlConfigSnapshot
+  readonly throttlerRequestedTps: RangeControlConfigSnapshot
+  readonly throttlerInstallationMode: InstallationModeConfigSnapshot
+  readonly senderWorkers: RangeControlConfigSnapshot
+	readonly logging?: LoggingConfigSnapshot
 }
 
-export interface LoggingPolicySnapshot {
+export interface LoggingConfigSnapshot {
 	readonly level: 'debug' | 'info' | 'warn' | 'error'
 	readonly mutability: 'startup-only'
 }
 
-export interface InstallationModePolicySnapshot {
+export interface InstallationModeConfigSnapshot {
   readonly default: ThrottlerInstallationMode
   readonly allowed: readonly ThrottlerInstallationMode[]
   readonly mutability: string
@@ -235,7 +235,7 @@ export interface LoadgenTelemetrySnapshot {
   readonly runState: RunState
   readonly elapsedMs: number
   readonly totalTransactions: number
-  readonly policy: LoadgenPolicySnapshot | null
+  readonly config: LoadgenConfigSnapshot | null
   readonly reader: ReaderSnapshot
   readonly throttler: ThrottlerSnapshot
   readonly readerChannel: ChannelTelemetrySnapshot

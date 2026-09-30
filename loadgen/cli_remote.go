@@ -382,14 +382,14 @@ func decodeStrictSnapshot(body io.Reader) (httpV1Status, error) {
 
 func validateSnapshotKeys(root map[string]json.RawMessage) error {
 	sections := map[string][]string{
-		"":              {"policy", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"},
+		"":              {"config", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"},
 		"run":           {"elapsedMs", "state", "totalTransactions"},
 		"reader":        {"blockedWorkers", "drainingBlockedWorkers", "drainingIdleWorkers", "drainingReadingWorkers", "drainingWorkers", "idleWorkers", "liveWorkers", "readBatchSize", "readTps", "readingWorkers", "rowsRead", "sourceDirectory", "sourceError", "workers"},
 		"throttler":     {"admittedTps", "installationMode", "requestedTps"},
 		"sender":        {"backoffWorkers", "drainingBackoffWorkers", "drainingIdleWorkers", "drainingInFlightWorkers", "drainingWorkers", "idleWorkers", "inFlightWorkers", "liveWorkers", "workers"},
 		"readerChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
 		"senderChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
-		"policy":        {"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstallationMode", "throttlerRequestedTps"},
+		"config":        {"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstallationMode", "throttlerRequestedTps"},
 	}
 	if err := validateExactKeys("snapshot", root, sections[""]); err != nil {
 		return err
@@ -407,8 +407,8 @@ func validateSnapshotKeys(root map[string]json.RawMessage) error {
 		}
 	}
 	var config map[string]json.RawMessage
-	if err := json.Unmarshal(root["policy"], &config); err != nil {
-		return fmt.Errorf("decode snapshot policy: %w", err)
+	if err := json.Unmarshal(root["config"], &config); err != nil {
+		return fmt.Errorf("decode snapshot config: %w", err)
 	}
 	for _, name := range []string{"readerReadBatchSize", "readerWorkers", "metricsWindowMs", "senderWorkers", "throttlerRequestedTps"} {
 		if err := validateSnapshotObjectKeys(config, name, []string{"default", "max", "min", "mutability", "step", "unit"}); err != nil {

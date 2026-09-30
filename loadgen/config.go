@@ -294,7 +294,7 @@ func (p senderAPIConfig) validate() error {
 
 func (p rangeConfig) validateExact(defaultValue, minValue, maxValue, stepValue int, unit, mutability string) error {
 	if p.Default != defaultValue || p.Min != minValue || p.Max != maxValue || p.Step != stepValue || p.Unit != unit || p.Mutability != mutability {
-		return fmt.Errorf("must match approved %s policy", unit)
+		return fmt.Errorf("must match approved %s config", unit)
 	}
 	return nil
 }

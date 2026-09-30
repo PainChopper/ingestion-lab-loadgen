@@ -44,13 +44,13 @@ describe('throttler valve mapping', () => {
     expect(valueToOpeningIndex(250_001, control(), targets)).toBe(11)
   })
 
-  it('keeps the 12-stop current TPS policy mapping', () => {
-    const currentPolicy = control({
+  it('keeps the 12-stop current TPS config mapping', () => {
+    const currentConfig = control({
       applied: 2_000_000,
       max: 4_000_000,
       step: 200_000,
     })
-    const targets = getValveTargets(currentPolicy)!
+    const targets = getValveTargets(currentConfig)!
 
     expect(targets).toEqual([
       0, 400_000, 800_000, 1_000_000, 1_400_000, 1_800_000,
@@ -58,10 +58,10 @@ describe('throttler valve mapping', () => {
     ])
     expect(new Set(targets)).toHaveLength(12)
     expect(targets.every((target) =>
-      target >= currentPolicy.min && target <= currentPolicy.max &&
-      target % currentPolicy.step === 0
+      target >= currentConfig.min && target <= currentConfig.max &&
+      target % currentConfig.step === 0
     )).toBe(true)
-    expect(valueToOpeningIndex(2_000_000, currentPolicy, targets)).toBe(5)
+    expect(valueToOpeningIndex(2_000_000, currentConfig, targets)).toBe(5)
   })
 
   it('keeps visible side targets separate from the installed bypass grip', () => {

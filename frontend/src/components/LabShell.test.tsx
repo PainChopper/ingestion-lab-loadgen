@@ -224,13 +224,13 @@ describe('LabShell', () => {
     })
   })
 
-  it('disables Run when the HTTP policy is unavailable and does not dispatch it', async () => {
+  it('disables Run when the HTTP config is unavailable and does not dispatch it', async () => {
     const simulation = new SimulationAdapter()
     const snapshot: LoadgenTelemetrySnapshot = {
       ...simulation.getSnapshot(),
       adapterKind: 'http',
       connectionState: 'error',
-      policy: null,
+      config: null,
     }
     const dispatch = vi.fn()
     const unavailableAdapter: LoadgenAdapter = {
@@ -319,7 +319,7 @@ describe('LabShell', () => {
     }
   })
 
-  it('renders all Sender sections and keeps long policy rows full width', async () => {
+  it('renders all Sender sections and keeps long config rows full width', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()
     render(<LabShell adapter={adapter} />)

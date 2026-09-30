@@ -14,7 +14,7 @@ type httpV1Status struct {
 	Sender        httpV1SenderStatus    `json:"sender"`
 	ReaderChannel httpV1ChannelStatus   `json:"readerChannel"`
 	SenderChannel httpV1ChannelStatus   `json:"senderChannel"`
-	Config        httpV1ConfigStatus    `json:"policy"`
+	Config        httpV1ConfigStatus    `json:"config"`
 }
 
 type httpV1RunStatus struct {
