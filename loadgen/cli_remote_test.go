@@ -387,6 +387,6 @@ func testRemoteSnapshot(t *testing.T) httpV1Status {
 	t.Helper()
 	return httpV1Status{
 		Run:    httpV1RunStatus{State: runStatePaused},
-		Policy: httpV1PolicyStatusFromRuntime(runtimePolicyStatusFromPolicy(testPolicy(t))),
+		Config: httpV1ConfigStatusFromRuntime(runtimeConfigStatusFromConfig(testConfig(t))),
 	}
 }

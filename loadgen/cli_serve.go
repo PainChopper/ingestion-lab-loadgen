@@ -77,10 +77,10 @@ func parseCLI(args []string) (cliCommand, error) {
 	return command, nil
 }
 
-func newServeState(loadedPolicy policy, logger *zap.Logger) controlState {
+func newServeState(loadedConfig config, logger *zap.Logger) controlState {
 	return controlState{
 		run:      controlRunState{lifecycle: newLifecycle()},
-		controls: configuredControls{policy: loadedPolicy},
+		controls: configuredControls{config: loadedConfig},
 		logger:   logger,
 	}
 }
@@ -89,23 +89,23 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	serviceCtx, stopService := context.WithCancel(appCtx)
 	defer stopService()
 
-	loadedPolicy, _, err := loadPolicy(configPath)
+	config, err := loadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	logger, err := newStdoutApplicationLogger(loadedPolicy.Logging.Level)
+	logger, err := newStdoutApplicationLogger(config.Logging.Level)
 	if err != nil {
 		return fmt.Errorf("create application logger: %w", err)
 	}
 	defer func() { _ = logger.Sync() }()
 
-	state := newServeState(loadedPolicy, logger)
+	state := newServeState(config, logger)
 	plane := newRuntimeControl(10)
-	runtime := newRuntimeMetrics(loadedPolicy)
+	runtime := newRuntimeMetrics(config)
 	defer runtime.stop()
 	state.metricsWindow = runtime.window
 
-	server, serverDone, err := startHTTPServer(plane, runtime.promMetrics, loadedPolicy, logger)
+	server, serverDone, err := startHTTPServer(plane, runtime.promMetrics, config, logger)
 	if err != nil {
 		return err
 	}

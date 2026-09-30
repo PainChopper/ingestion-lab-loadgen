@@ -107,8 +107,8 @@ func (runtime *pipelineRuntime) startSender() {
 	runtime.pool = startSenderPool(
 		runtime.runContext,
 		runtime.senderBatches, &runtime.state.telemetry.senderChannel, &runtime.state.telemetry.sender,
-		&runtime.terminallyCompletedTransactionsSinceTick, runtime.state.senderWorkers(), runtime.state.controls.policy.Sender.API,
-		runtime.state.controls.policy.Sender.Retry,
+		&runtime.terminallyCompletedTransactionsSinceTick, runtime.state.senderWorkers(), runtime.state.controls.config.Sender.API,
+		runtime.state.controls.config.Sender.Retry,
 		runtime.state.logger,
 	)
 }

@@ -14,7 +14,7 @@ type httpV1Status struct {
 	Sender        httpV1SenderStatus    `json:"sender"`
 	ReaderChannel httpV1ChannelStatus   `json:"readerChannel"`
 	SenderChannel httpV1ChannelStatus   `json:"senderChannel"`
-	Policy        httpV1PolicyStatus    `json:"policy"`
+	Config        httpV1ConfigStatus    `json:"policy"`
 }
 
 type httpV1RunStatus struct {
@@ -82,19 +82,19 @@ type httpV1ChannelStatus struct {
 	ReceivedTransactionsPerSecond float64 `json:"outputTransactionsPerSecond"`
 }
 
-type httpV1PolicyStatus struct {
-	ReaderReadBatchSize       httpV1RangePolicy            `json:"readerReadBatchSize"`
-	ReaderWorkers             httpV1RangePolicy            `json:"readerWorkers"`
-	ReaderChannelCapacity     httpV1AllowedPolicy          `json:"readerChannelCapacity"`
-	SenderChannelCapacity     httpV1AllowedPolicy          `json:"senderChannelCapacity"`
-	ThrottlerRequestedTPS     httpV1RangePolicy            `json:"throttlerRequestedTps"`
-	ThrottlerInstallationMode httpV1InstallationModePolicy `json:"throttlerInstallationMode"`
-	MetricsWindowMS           httpV1RangePolicy            `json:"metricsWindowMs"`
-	SenderWorkers             httpV1RangePolicy            `json:"senderWorkers"`
-	Logging                   httpV1LoggingPolicy          `json:"logging"`
+type httpV1ConfigStatus struct {
+	ReaderReadBatchSize       httpV1RangeConfig            `json:"readerReadBatchSize"`
+	ReaderWorkers             httpV1RangeConfig            `json:"readerWorkers"`
+	ReaderChannelCapacity     httpV1AllowedConfig          `json:"readerChannelCapacity"`
+	SenderChannelCapacity     httpV1AllowedConfig          `json:"senderChannelCapacity"`
+	ThrottlerRequestedTPS     httpV1RangeConfig            `json:"throttlerRequestedTps"`
+	ThrottlerInstallationMode httpV1InstallationModeConfig `json:"throttlerInstallationMode"`
+	MetricsWindowMS           httpV1RangeConfig            `json:"metricsWindowMs"`
+	SenderWorkers             httpV1RangeConfig            `json:"senderWorkers"`
+	Logging                   httpV1LoggingConfig          `json:"logging"`
 }
 
-type httpV1RangePolicy struct {
+type httpV1RangeConfig struct {
 	Default    int    `json:"default"`
 	Min        int    `json:"min"`
 	Max        int    `json:"max"`
@@ -103,20 +103,20 @@ type httpV1RangePolicy struct {
 	Mutability string `json:"mutability"`
 }
 
-type httpV1AllowedPolicy struct {
+type httpV1AllowedConfig struct {
 	Default    int    `json:"default"`
 	Allowed    []int  `json:"allowed"`
 	Unit       string `json:"unit"`
 	Mutability string `json:"mutability"`
 }
 
-type httpV1InstallationModePolicy struct {
+type httpV1InstallationModeConfig struct {
 	Default    string   `json:"default"`
 	Allowed    []string `json:"allowed"`
 	Mutability string   `json:"mutability"`
 }
 
-type httpV1LoggingPolicy struct {
+type httpV1LoggingConfig struct {
 	Level      string `json:"level"`
 	Mutability string `json:"mutability"`
 }
@@ -162,7 +162,7 @@ func httpV1StatusFromRuntime(status runtimeStatus) httpV1Status {
 		},
 		ReaderChannel: httpV1ChannelStatusFromRuntime(status.ReaderChannel),
 		SenderChannel: httpV1ChannelStatusFromRuntime(status.SenderChannel),
-		Policy:        httpV1PolicyStatusFromRuntime(status.Policy),
+		Config:        httpV1ConfigStatusFromRuntime(status.Config),
 	}
 }
 
@@ -207,26 +207,26 @@ func (status httpV1Status) runtimeStatus() runtimeStatus {
 		},
 		ReaderChannel: status.ReaderChannel.runtimeStatus(),
 		SenderChannel: status.SenderChannel.runtimeStatus(),
-		Policy:        status.Policy.runtimeStatus(),
+		Config:        status.Config.runtimeStatus(),
 	}
 }
 
-func httpV1PolicyStatusFromRuntime(status runtimePolicyStatus) httpV1PolicyStatus {
-	return httpV1PolicyStatus{
-		ReaderReadBatchSize:       httpV1RangePolicyFromRuntime(status.ReaderReadBatchSize),
-		ReaderWorkers:             httpV1RangePolicyFromRuntime(status.ReaderWorkers),
-		ReaderChannelCapacity:     httpV1AllowedPolicyFromRuntime(status.ReaderChannelCapacity),
-		SenderChannelCapacity:     httpV1AllowedPolicyFromRuntime(status.SenderChannelCapacity),
-		ThrottlerRequestedTPS:     httpV1RangePolicyFromRuntime(status.ThrottlerRequestedTPS),
-		ThrottlerInstallationMode: httpV1InstallationModePolicyFromRuntime(status.ThrottlerInstallationMode),
-		MetricsWindowMS:           httpV1RangePolicyFromRuntime(status.MetricsWindowMS),
-		SenderWorkers:             httpV1RangePolicyFromRuntime(status.SenderWorkers),
-		Logging:                   httpV1LoggingPolicyFromRuntime(status.Logging),
+func httpV1ConfigStatusFromRuntime(status runtimeConfigStatus) httpV1ConfigStatus {
+	return httpV1ConfigStatus{
+		ReaderReadBatchSize:       httpV1RangeConfigFromRuntime(status.ReaderReadBatchSize),
+		ReaderWorkers:             httpV1RangeConfigFromRuntime(status.ReaderWorkers),
+		ReaderChannelCapacity:     httpV1AllowedConfigFromRuntime(status.ReaderChannelCapacity),
+		SenderChannelCapacity:     httpV1AllowedConfigFromRuntime(status.SenderChannelCapacity),
+		ThrottlerRequestedTPS:     httpV1RangeConfigFromRuntime(status.ThrottlerRequestedTPS),
+		ThrottlerInstallationMode: httpV1InstallationModeConfigFromRuntime(status.ThrottlerInstallationMode),
+		MetricsWindowMS:           httpV1RangeConfigFromRuntime(status.MetricsWindowMS),
+		SenderWorkers:             httpV1RangeConfigFromRuntime(status.SenderWorkers),
+		Logging:                   httpV1LoggingConfigFromRuntime(status.Logging),
 	}
 }
 
-func (status httpV1PolicyStatus) runtimeStatus() runtimePolicyStatus {
-	return runtimePolicyStatus{
+func (status httpV1ConfigStatus) runtimeStatus() runtimeConfigStatus {
+	return runtimeConfigStatus{
 		ReaderReadBatchSize:       status.ReaderReadBatchSize.runtimeStatus(),
 		ReaderWorkers:             status.ReaderWorkers.runtimeStatus(),
 		ReaderChannelCapacity:     status.ReaderChannelCapacity.runtimeStatus(),
@@ -239,73 +239,73 @@ func (status httpV1PolicyStatus) runtimeStatus() runtimePolicyStatus {
 	}
 }
 
-func httpV1RangePolicyFromRuntime(policy runtimeRangePolicy) httpV1RangePolicy {
-	return httpV1RangePolicy{
-		Default:    policy.Default,
-		Min:        policy.Min,
-		Max:        policy.Max,
-		Step:       policy.Step,
-		Unit:       policy.Unit,
-		Mutability: policy.Mutability,
+func httpV1RangeConfigFromRuntime(config runtimeRangeConfig) httpV1RangeConfig {
+	return httpV1RangeConfig{
+		Default:    config.Default,
+		Min:        config.Min,
+		Max:        config.Max,
+		Step:       config.Step,
+		Unit:       config.Unit,
+		Mutability: config.Mutability,
 	}
 }
 
-func (policy httpV1RangePolicy) runtimeStatus() runtimeRangePolicy {
-	return runtimeRangePolicy{
-		Default:    policy.Default,
-		Min:        policy.Min,
-		Max:        policy.Max,
-		Step:       policy.Step,
-		Unit:       policy.Unit,
-		Mutability: policy.Mutability,
+func (config httpV1RangeConfig) runtimeStatus() runtimeRangeConfig {
+	return runtimeRangeConfig{
+		Default:    config.Default,
+		Min:        config.Min,
+		Max:        config.Max,
+		Step:       config.Step,
+		Unit:       config.Unit,
+		Mutability: config.Mutability,
 	}
 }
 
-func httpV1AllowedPolicyFromRuntime(policy runtimeAllowedPolicy) httpV1AllowedPolicy {
-	return httpV1AllowedPolicy{
-		Default:    policy.Default,
-		Allowed:    policy.Allowed,
-		Unit:       policy.Unit,
-		Mutability: policy.Mutability,
+func httpV1AllowedConfigFromRuntime(config runtimeAllowedConfig) httpV1AllowedConfig {
+	return httpV1AllowedConfig{
+		Default:    config.Default,
+		Allowed:    config.Allowed,
+		Unit:       config.Unit,
+		Mutability: config.Mutability,
 	}
 }
 
-func (policy httpV1AllowedPolicy) runtimeStatus() runtimeAllowedPolicy {
-	return runtimeAllowedPolicy{
-		Default:    policy.Default,
-		Allowed:    policy.Allowed,
-		Unit:       policy.Unit,
-		Mutability: policy.Mutability,
+func (config httpV1AllowedConfig) runtimeStatus() runtimeAllowedConfig {
+	return runtimeAllowedConfig{
+		Default:    config.Default,
+		Allowed:    config.Allowed,
+		Unit:       config.Unit,
+		Mutability: config.Mutability,
 	}
 }
 
-func httpV1InstallationModePolicyFromRuntime(policy runtimeInstallationModePolicy) httpV1InstallationModePolicy {
-	return httpV1InstallationModePolicy{
-		Default:    policy.Default,
-		Allowed:    policy.Allowed,
-		Mutability: policy.Mutability,
+func httpV1InstallationModeConfigFromRuntime(config runtimeInstallationModeConfig) httpV1InstallationModeConfig {
+	return httpV1InstallationModeConfig{
+		Default:    config.Default,
+		Allowed:    config.Allowed,
+		Mutability: config.Mutability,
 	}
 }
 
-func (policy httpV1InstallationModePolicy) runtimeStatus() runtimeInstallationModePolicy {
-	return runtimeInstallationModePolicy{
-		Default:    policy.Default,
-		Allowed:    policy.Allowed,
-		Mutability: policy.Mutability,
+func (config httpV1InstallationModeConfig) runtimeStatus() runtimeInstallationModeConfig {
+	return runtimeInstallationModeConfig{
+		Default:    config.Default,
+		Allowed:    config.Allowed,
+		Mutability: config.Mutability,
 	}
 }
 
-func httpV1LoggingPolicyFromRuntime(policy runtimeLoggingPolicy) httpV1LoggingPolicy {
-	return httpV1LoggingPolicy{
-		Level:      policy.Level,
-		Mutability: policy.Mutability,
+func httpV1LoggingConfigFromRuntime(config runtimeLoggingConfig) httpV1LoggingConfig {
+	return httpV1LoggingConfig{
+		Level:      config.Level,
+		Mutability: config.Mutability,
 	}
 }
 
-func (policy httpV1LoggingPolicy) runtimeStatus() runtimeLoggingPolicy {
-	return runtimeLoggingPolicy{
-		Level:      policy.Level,
-		Mutability: policy.Mutability,
+func (config httpV1LoggingConfig) runtimeStatus() runtimeLoggingConfig {
+	return runtimeLoggingConfig{
+		Level:      config.Level,
+		Mutability: config.Mutability,
 	}
 }
 

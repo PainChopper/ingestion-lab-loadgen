@@ -78,22 +78,22 @@ type runtimeStatus struct {
 	Sender        runtimeSenderStatus
 	ReaderChannel runtimeChannelStatus
 	SenderChannel runtimeChannelStatus
-	Policy        runtimePolicyStatus
+	Config        runtimeConfigStatus
 }
 
-type runtimePolicyStatus struct {
-	ReaderReadBatchSize       runtimeRangePolicy
-	ReaderWorkers             runtimeRangePolicy
-	ReaderChannelCapacity     runtimeAllowedPolicy
-	SenderChannelCapacity     runtimeAllowedPolicy
-	ThrottlerRequestedTPS     runtimeRangePolicy
-	ThrottlerInstallationMode runtimeInstallationModePolicy
-	MetricsWindowMS           runtimeRangePolicy
-	SenderWorkers             runtimeRangePolicy
-	Logging                   runtimeLoggingPolicy
+type runtimeConfigStatus struct {
+	ReaderReadBatchSize       runtimeRangeConfig
+	ReaderWorkers             runtimeRangeConfig
+	ReaderChannelCapacity     runtimeAllowedConfig
+	SenderChannelCapacity     runtimeAllowedConfig
+	ThrottlerRequestedTPS     runtimeRangeConfig
+	ThrottlerInstallationMode runtimeInstallationModeConfig
+	MetricsWindowMS           runtimeRangeConfig
+	SenderWorkers             runtimeRangeConfig
+	Logging                   runtimeLoggingConfig
 }
 
-type runtimeRangePolicy struct {
+type runtimeRangeConfig struct {
 	Default    int
 	Min        int
 	Max        int
@@ -102,70 +102,70 @@ type runtimeRangePolicy struct {
 	Mutability string
 }
 
-type runtimeAllowedPolicy struct {
+type runtimeAllowedConfig struct {
 	Default    int
 	Allowed    []int
 	Unit       string
 	Mutability string
 }
 
-type runtimeInstallationModePolicy struct {
+type runtimeInstallationModeConfig struct {
 	Default    string
 	Allowed    []string
 	Mutability string
 }
 
-type runtimeLoggingPolicy struct {
+type runtimeLoggingConfig struct {
 	Level      string
 	Mutability string
 }
 
-func runtimePolicyStatusFromPolicy(policy policy) runtimePolicyStatus {
-	return runtimePolicyStatus{
-		ReaderReadBatchSize:       runtimeRangePolicyFromPolicy(policy.Reader.ReadBatchSize),
-		ReaderWorkers:             runtimeRangePolicyFromPolicy(policy.Reader.Workers),
-		ReaderChannelCapacity:     runtimeAllowedPolicyFromPolicy(policy.ReaderChannel.Capacity),
-		SenderChannelCapacity:     runtimeAllowedPolicyFromPolicy(policy.SenderChannel.Capacity),
-		ThrottlerRequestedTPS:     runtimeRangePolicyFromPolicy(policy.Throttler.RequestedTPS),
-		ThrottlerInstallationMode: runtimeInstallationModePolicyFromPolicy(policy.Throttler.InstallationMode),
-		MetricsWindowMS:           runtimeRangePolicyFromPolicy(policy.Metrics.WindowMS),
-		SenderWorkers:             runtimeRangePolicyFromPolicy(policy.Sender.Workers),
-		Logging:                   runtimeLoggingPolicyFromPolicy(policy.Logging),
+func runtimeConfigStatusFromConfig(config config) runtimeConfigStatus {
+	return runtimeConfigStatus{
+		ReaderReadBatchSize:       runtimeRangeConfigFromConfig(config.Reader.ReadBatchSize),
+		ReaderWorkers:             runtimeRangeConfigFromConfig(config.Reader.Workers),
+		ReaderChannelCapacity:     runtimeAllowedConfigFromConfig(config.ReaderChannel.Capacity),
+		SenderChannelCapacity:     runtimeAllowedConfigFromConfig(config.SenderChannel.Capacity),
+		ThrottlerRequestedTPS:     runtimeRangeConfigFromConfig(config.Throttler.RequestedTPS),
+		ThrottlerInstallationMode: runtimeInstallationModeConfigFromConfig(config.Throttler.InstallationMode),
+		MetricsWindowMS:           runtimeRangeConfigFromConfig(config.Metrics.WindowMS),
+		SenderWorkers:             runtimeRangeConfigFromConfig(config.Sender.Workers),
+		Logging:                   runtimeLoggingConfigFromConfig(config.Logging),
 	}
 }
 
-func runtimeRangePolicyFromPolicy(policy rangePolicy) runtimeRangePolicy {
-	return runtimeRangePolicy{
-		Default:    policy.Default,
-		Min:        policy.Min,
-		Max:        policy.Max,
-		Step:       policy.Step,
-		Unit:       policy.Unit,
-		Mutability: policy.Mutability,
+func runtimeRangeConfigFromConfig(config rangeConfig) runtimeRangeConfig {
+	return runtimeRangeConfig{
+		Default:    config.Default,
+		Min:        config.Min,
+		Max:        config.Max,
+		Step:       config.Step,
+		Unit:       config.Unit,
+		Mutability: config.Mutability,
 	}
 }
 
-func runtimeAllowedPolicyFromPolicy(policy allowedPolicy) runtimeAllowedPolicy {
-	return runtimeAllowedPolicy{
-		Default:    policy.Default,
-		Allowed:    policy.Allowed,
-		Unit:       policy.Unit,
-		Mutability: policy.Mutability,
+func runtimeAllowedConfigFromConfig(config allowedConfig) runtimeAllowedConfig {
+	return runtimeAllowedConfig{
+		Default:    config.Default,
+		Allowed:    config.Allowed,
+		Unit:       config.Unit,
+		Mutability: config.Mutability,
 	}
 }
 
-func runtimeInstallationModePolicyFromPolicy(policy installationModePolicy) runtimeInstallationModePolicy {
-	return runtimeInstallationModePolicy{
-		Default:    policy.Default,
-		Allowed:    policy.Allowed,
-		Mutability: policy.Mutability,
+func runtimeInstallationModeConfigFromConfig(config installationModeConfig) runtimeInstallationModeConfig {
+	return runtimeInstallationModeConfig{
+		Default:    config.Default,
+		Allowed:    config.Allowed,
+		Mutability: config.Mutability,
 	}
 }
 
-func runtimeLoggingPolicyFromPolicy(policy loggingPolicy) runtimeLoggingPolicy {
-	return runtimeLoggingPolicy{
-		Level:      policy.Level,
-		Mutability: policy.Mutability,
+func runtimeLoggingConfigFromConfig(config loggingConfig) runtimeLoggingConfig {
+	return runtimeLoggingConfig{
+		Level:      config.Level,
+		Mutability: config.Mutability,
 	}
 }
 

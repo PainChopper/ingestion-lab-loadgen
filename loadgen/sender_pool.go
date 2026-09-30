@@ -55,7 +55,7 @@ type senderPool struct {
 	workers                                  []*senderWorker
 	desired                                  int
 	stopping                                 bool
-	retry                                    senderRetryPolicy
+	retry                                    senderRetryConfig
 	batches                                  <-chan []Transaction
 	channelTelemetry                         *channelTelemetry
 	telemetry                                *senderTelemetry
@@ -72,8 +72,8 @@ func startSenderPool(
 	telemetry *senderTelemetry,
 	terminallyCompletedTransactionsSinceTick *atomic.Int64,
 	workers int,
-	api senderAPIPolicy,
-	retry senderRetryPolicy,
+	api senderAPIConfig,
+	retry senderRetryConfig,
 	loggers ...*zap.Logger,
 ) *senderPool {
 	ctx, cancel := context.WithCancel(parent)

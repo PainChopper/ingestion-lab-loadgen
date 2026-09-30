@@ -14,7 +14,7 @@ type commandRequest struct {
 	Value  json.RawMessage `json:"value"`
 }
 
-func commandsHandler(control runtimeControl, policy policy, loggers ...*zap.Logger) http.Handler {
+func commandsHandler(control runtimeControl, config config, loggers ...*zap.Logger) http.Handler {
 	logger := loggerOrNop(loggers)
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -73,7 +73,7 @@ func commandsHandler(control runtimeControl, policy policy, loggers ...*zap.Logg
 			}
 		case "set-read-batch-size":
 			var value int
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReadBatchSize(policy, value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReadBatchSize(config, value) {
 				http.Error(w, "Invalid read batch size", http.StatusBadRequest)
 				return
 			}
@@ -85,7 +85,7 @@ func commandsHandler(control runtimeControl, policy policy, loggers ...*zap.Logg
 			}
 		case "set-reader-workers":
 			var value int
-			if len(cr.Value) == 0 || string(cr.Value) == "null" || json.Unmarshal(cr.Value, &value) != nil || !policy.Reader.Workers.contains(value) {
+			if len(cr.Value) == 0 || string(cr.Value) == "null" || json.Unmarshal(cr.Value, &value) != nil || !config.Reader.Workers.contains(value) {
 				http.Error(w, "Invalid Reader workers", http.StatusBadRequest)
 				return
 			}
@@ -101,7 +101,7 @@ func commandsHandler(control runtimeControl, policy policy, loggers ...*zap.Logg
 				http.Error(w, "Invalid reader channel capacity", http.StatusBadRequest)
 				return
 			}
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReaderChannelCapacity(policy, value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReaderChannelCapacity(config, value) {
 				http.Error(w, "Invalid reader channel capacity", http.StatusBadRequest)
 				return
 			}
@@ -117,7 +117,7 @@ func commandsHandler(control runtimeControl, policy policy, loggers ...*zap.Logg
 				http.Error(w, "Invalid sender channel capacity", http.StatusBadRequest)
 				return
 			}
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !validSenderChannelCapacity(policy, value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !validSenderChannelCapacity(config, value) {
 				http.Error(w, "Invalid sender channel capacity", http.StatusBadRequest)
 				return
 			}
@@ -133,7 +133,7 @@ func commandsHandler(control runtimeControl, policy policy, loggers ...*zap.Logg
 				http.Error(w, "Invalid requested TPS", http.StatusBadRequest)
 				return
 			}
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !policy.Throttler.RequestedTPS.contains(value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !config.Throttler.RequestedTPS.contains(value) {
 				http.Error(w, "Invalid requested TPS", http.StatusBadRequest)
 				return
 			}
@@ -145,7 +145,7 @@ func commandsHandler(control runtimeControl, policy policy, loggers ...*zap.Logg
 			}
 		case "set-throttler-installation-mode":
 			var value string
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !policy.Throttler.InstallationMode.contains(value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !config.Throttler.InstallationMode.contains(value) {
 				http.Error(w, "Invalid throttler installation mode", http.StatusBadRequest)
 				return
 			}
@@ -165,9 +165,9 @@ func commandsHandler(control runtimeControl, policy policy, loggers ...*zap.Logg
 				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
 				return
 			}
-			var setting rangePolicy
+			var setting rangeConfig
 			var kind runtimeCommandKind
-			setting, kind = policy.Sender.Workers, cmdSetSenderWorkers
+			setting, kind = config.Sender.Workers, cmdSetSenderWorkers
 			if !setting.contains(value) {
 				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
 				return

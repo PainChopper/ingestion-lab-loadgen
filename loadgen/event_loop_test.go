@@ -467,7 +467,7 @@ func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testi
 		t.Fatal(err)
 	}
 	state := newTestControlState(t)
-	state.controls.policy.Source.Path = filepath.Join(fixtureDirectory, "*.parquet")
+	state.controls.config.Source.Path = filepath.Join(fixtureDirectory, "*.parquet")
 	requests := make(chan runtimeCommand)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -509,7 +509,7 @@ func TestRunEventLoopFaultsBeforeWorkersForUnavailableSourceDirectory(t *testing
 	fixtureRoot := t.TempDir()
 	missingDirectory := filepath.Join(fixtureRoot, "unavailable")
 	state := newTestControlState(t)
-	state.controls.policy.Source.Path = filepath.Join(missingDirectory, "*.parquet")
+	state.controls.config.Source.Path = filepath.Join(missingDirectory, "*.parquet")
 	requests := make(chan runtimeCommand)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -902,7 +902,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 	requests <- runtimeCommand{kind: cmdRun}
 	waitForState(t, requests, runStateRunning)
-	readerChannel := make(chan []Transaction, state.controls.policy.ReaderChannel.Capacity.Default)
+	readerChannel := make(chan []Transaction, state.controls.config.ReaderChannel.Capacity.Default)
 	state.telemetry.readerChannel.start(readerChannel, 2)
 	if !state.telemetry.readerChannel.send(context.Background(), readerChannel, make([]Transaction, 2)) {
 		t.Fatal("readerChannel send failed")
@@ -944,7 +944,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- runtimeCommand{kind: getRuntimeStatus, statusReply: statusReply}
 	snapshot = <-statusReply
 	if snapshot.Reader.ReadTps != 0 || snapshot.Reader.RowsRead != 0 ||
-		snapshot.ReaderChannel.Capacity != state.controls.policy.ReaderChannel.Capacity.Default || snapshot.ReaderChannel.DepthBatches != 0 ||
+		snapshot.ReaderChannel.Capacity != state.controls.config.ReaderChannel.Capacity.Default || snapshot.ReaderChannel.DepthBatches != 0 ||
 		snapshot.ReaderChannel.BufferedTransactions != 0 || snapshot.ReaderChannel.BlockedSenders != 0 ||
 		snapshot.ReaderChannel.OldestBlockedSenderMs != 0 || snapshot.ReaderChannel.BlockedMs != 0 ||
 		snapshot.ReaderChannel.SentBatchesTotal != 0 || snapshot.ReaderChannel.SentTransactionsTotal != 0 ||

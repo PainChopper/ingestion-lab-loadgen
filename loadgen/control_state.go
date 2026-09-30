@@ -36,7 +36,7 @@ type configuredControls struct {
 	configuredInstallationMode      string
 	configuredSenderWorkers         int
 	senderWorkersConfigured         bool
-	policy                          policy
+	config                          config
 }
 
 type controlTelemetry struct {
@@ -47,7 +47,7 @@ type controlTelemetry struct {
 }
 
 func (state *controlState) startReaderPool(ctx context.Context, batches chan<- []Transaction, batchSize, workers int) (readerRun, error) {
-	pool, err := startReaderPool(ctx, state.controls.policy.Source.Path, batchSize, workers, batches, &state.telemetry.reader, &state.telemetry.readerChannel, state.logger)
+	pool, err := startReaderPool(ctx, state.controls.config.Source.Path, batchSize, workers, batches, &state.telemetry.reader, &state.telemetry.readerChannel, state.logger)
 	if err != nil {
 		return readerRun{}, err
 	}

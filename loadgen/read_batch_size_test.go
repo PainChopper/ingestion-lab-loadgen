@@ -34,7 +34,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(recorder, request)
+				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, request)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -93,8 +93,8 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 			t.Fatalf("command %+v = %+v, want status %d", command, result, want)
 		}
 	}
-	if got := snapshot().Reader.ReadBatchSize; got != testPolicy(t).Reader.ReadBatchSize.Default {
-		t.Fatalf("default size = %d, want %d", got, testPolicy(t).Reader.ReadBatchSize.Default)
+	if got := snapshot().Reader.ReadBatchSize; got != testConfig(t).Reader.ReadBatchSize.Default {
+		t.Fatalf("default size = %d, want %d", got, testConfig(t).Reader.ReadBatchSize.Default)
 	}
 	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 25_000}, commandAccepted)
 	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {

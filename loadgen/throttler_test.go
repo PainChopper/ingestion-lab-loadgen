@@ -291,7 +291,7 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 	}
 }
 
-func TestThrottlerPolicyWholeBatchPacingInterval(t *testing.T) {
+func TestThrottlerConfigWholeBatchPacingInterval(t *testing.T) {
 	const (
 		batchSize    = 1_000
 		requestedTPS = 2_000

@@ -9,10 +9,10 @@ type runtimeMetrics struct {
 	ticker      *time.Ticker
 }
 
-func newRuntimeMetrics(policy policy) runtimeMetrics {
-	window := time.Duration(policy.Metrics.WindowMS.Default) * time.Millisecond
+func newRuntimeMetrics(config config) runtimeMetrics {
+	window := time.Duration(config.Metrics.WindowMS.Default) * time.Millisecond
 	metrics := NewMetrics()
-	metrics.targetTPS.Set(float64(policy.Throttler.RequestedTPS.Default))
+	metrics.targetTPS.Set(float64(config.Throttler.RequestedTPS.Default))
 	ticker := time.NewTicker(window)
 	return runtimeMetrics{window: window, metrics: ticker.C, promMetrics: metrics, ticker: ticker}
 }

@@ -33,7 +33,7 @@ func TestReaderChannelCapacityValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(recorder, request)
+				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, request)
 			}()
 
 			if test.want == http.StatusOK {
@@ -65,13 +65,13 @@ func TestReaderChannelCapacityValidation(t *testing.T) {
 func TestValidReaderChannelCapacityAcceptsOnlyConfiguredSteps(t *testing.T) {
 	validValues := []int{0, 1, 2, 4, 1_024, 8_192}
 	for _, value := range validValues {
-		if !validReaderChannelCapacity(testPolicy(t), value) {
+		if !validReaderChannelCapacity(testConfig(t), value) {
 			t.Errorf("value %d is rejected", value)
 		}
 	}
 
 	for _, value := range []int{-1, 3, 8_193, 16_384} {
-		if validReaderChannelCapacity(testPolicy(t), value) {
+		if validReaderChannelCapacity(testConfig(t), value) {
 			t.Errorf("value %d is accepted", value)
 		}
 	}
@@ -124,8 +124,8 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 				}
 			}
 
-			if got := snapshot().ReaderChannel.Capacity; got != state.controls.policy.ReaderChannel.Capacity.Default {
-				t.Fatalf("default capacity = %d, want %d", got, state.controls.policy.ReaderChannel.Capacity.Default)
+			if got := snapshot().ReaderChannel.Capacity; got != state.controls.config.ReaderChannel.Capacity.Default {
+				t.Fatalf("default capacity = %d, want %d", got, state.controls.config.ReaderChannel.Capacity.Default)
 			}
 			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: capacity}, commandAccepted)
 			if got := snapshot().ReaderChannel.Capacity; got != capacity {

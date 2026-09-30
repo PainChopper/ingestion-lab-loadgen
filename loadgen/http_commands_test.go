@@ -29,7 +29,7 @@ func TestCommandsHandlerDispatches(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(rec, req)
+				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(rec, req)
 			}()
 
 			var cmd runtimeCommand
@@ -65,7 +65,7 @@ func TestCommandsHandlerReportsRunStartError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(recorder, request)
+		commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, request)
 	}()
 
 	command := <-commands
@@ -88,7 +88,7 @@ func TestCommandsHandlerRejectsGet(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, commandsPath, nil)
 	rec := httptest.NewRecorder()
 
-	commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(rec, req)
+	commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(rec, req)
 	response := rec.Result()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %v, want %v", rec.Code, http.StatusMethodNotAllowed)
@@ -114,7 +114,7 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 			body := strings.NewReader(test.body)
 			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
 			rec := httptest.NewRecorder()
-			commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(rec, req)
+			commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(rec, req)
 			response := rec.Result()
 			if response.StatusCode != http.StatusBadRequest {
 				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusBadRequest)
@@ -156,10 +156,10 @@ func TestThrottlerCommandValidation(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
-			policy := testPolicy(t)
+			config := testConfig(t)
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), policy).ServeHTTP(recorder, req)
+				commandsHandler(testControlPlane(commands), config).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -213,7 +213,7 @@ func TestSenderCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(recorder, req)
+				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -263,7 +263,7 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(recorder, req)
+				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {

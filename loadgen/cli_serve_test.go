@@ -52,15 +52,15 @@ func TestParseCLI(t *testing.T) {
 	}
 }
 
-func TestNewServeStateStartsIdleWithLoadedPolicy(t *testing.T) {
-	loadedPolicy := testPolicy(t)
-	state := newServeState(loadedPolicy, zap.NewNop())
+func TestNewServeStateStartsIdleWithLoadedConfig(t *testing.T) {
+	loadedConfig := testConfig(t)
+	state := newServeState(loadedConfig, zap.NewNop())
 
 	if got := state.run.lifecycle.currentState(); got != runStateIdle {
 		t.Fatalf("initial lifecycle state = %q, want %q", got, runStateIdle)
 	}
-	if state.controls.policy.Source.Path != loadedPolicy.Source.Path {
-		t.Fatal("serve state did not retain loaded policy")
+	if state.controls.config.Source.Path != loadedConfig.Source.Path {
+		t.Fatal("serve state did not retain loaded config")
 	}
 }
 
@@ -69,16 +69,9 @@ func TestDefaultServeUsesCurrentDefaultConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse default CLI: %v", err)
 	}
-	_, configPath, err := loadPolicy(command.configPath)
+	_, err = loadConfig(command.configPath)
 	if err != nil {
-		t.Fatalf("load default serve policy: %v", err)
-	}
-	wantConfigPath, err := filepath.Abs(defaultConfigPath)
-	if err != nil {
-		t.Fatalf("make default config path absolute: %v", err)
-	}
-	if configPath != wantConfigPath {
-		t.Fatalf("config path = %q, want %q", configPath, wantConfigPath)
+		t.Fatalf("load default serve config: %v", err)
 	}
 }
 
