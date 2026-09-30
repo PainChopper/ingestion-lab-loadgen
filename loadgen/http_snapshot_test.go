@@ -41,7 +41,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
 	}
-	assertExactJSONKeys(t, root, []string{"policy", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"})
+	assertExactJSONKeys(t, root, []string{"config", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"})
 	for name, want := range map[string][]string{
 		"run":           {"elapsedMs", "state", "totalTransactions"},
 		"reader":        {"blockedWorkers", "drainingBlockedWorkers", "drainingIdleWorkers", "drainingReadingWorkers", "drainingWorkers", "idleWorkers", "liveWorkers", "readBatchSize", "readTps", "readingWorkers", "rowsRead", "sourceDirectory", "sourceError", "workers"},
@@ -56,12 +56,12 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		}
 		assertExactJSONKeys(t, section, want)
 	}
-	if string(root["policy"]) == "null" {
-		t.Error("policy must be a JSON object")
+	if string(root["config"]) == "null" {
+		t.Error("config must be a JSON object")
 	}
 	var config map[string]json.RawMessage
-	if err := json.Unmarshal(root["policy"], &config); err != nil {
-		t.Fatalf("decode policy: %v", err)
+	if err := json.Unmarshal(root["config"], &config); err != nil {
+		t.Fatalf("decode config: %v", err)
 	}
 	assertExactJSONKeys(t, config, []string{"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstallationMode", "throttlerRequestedTps"})
 	var workers rangeConfig
@@ -69,7 +69,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if want := (rangeConfig{Default: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}); workers != want {
-		t.Errorf("Reader workers policy = %+v, want %+v", workers, want)
+		t.Errorf("Reader workers config = %+v, want %+v", workers, want)
 	}
 	var reader map[string]json.RawMessage
 	if err := json.Unmarshal(root["reader"], &reader); err != nil {

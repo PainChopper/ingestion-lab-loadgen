@@ -28,7 +28,7 @@
       "post": {
         "operationId": "executeCommand",
         "summary": "Execute a lifecycle or configuration command",
-        "description": "Choose one action in the request body. Allowed setting values come from GET /api/loadgen/snapshot under policy. The server does not check Content-Type or Accept request headers. Run starts from idle, resumes from paused and is a no-op while running. Pause is asynchronous and may be a no-op outside running. Reset conflicts while running or resetting. Strict setting actions reject unknown fields and trailing JSON; other actions ignore unknown fields and trailing JSON after the first object.",
+        "description": "Choose one action in the request body. Allowed setting values come from GET /api/loadgen/snapshot under config. The server does not check Content-Type or Accept request headers. Run starts from idle, resumes from paused and is a no-op while running. Pause is asynchronous and may be a no-op outside running. Reset conflicts while running or resetting. Strict setting actions reject unknown fields and trailing JSON; other actions ignore unknown fields and trailing JSON after the first object.",
         "requestBody": {
           "required": true,
           "content": {
@@ -124,61 +124,61 @@
       },
       "ReadBatchSizeCommand": {
         "type": "object",
-        "x-policy-key": "readerReadBatchSize",
+        "x-config-key": "readerReadBatchSize",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-read-batch-size"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.policy.readerReadBatchSize." }
+          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.readerReadBatchSize." }
         }
       },
       "ReaderWorkersCommand": {
         "type": "object", "additionalProperties": false,
-        "x-policy-key": "readerWorkers",
+        "x-config-key": "readerWorkers",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-reader-workers"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.policy.readerWorkers." }
+          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.readerWorkers." }
         }
       },
       "ReaderChannelCapacityCommand": {
         "type": "object",
-        "x-policy-key": "readerChannelCapacity",
+        "x-config-key": "readerChannelCapacity",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-reader-channel-capacity"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.policy.readerChannelCapacity.allowed." }
+          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.readerChannelCapacity.allowed." }
         }
       },
       "SenderChannelCapacityCommand": {
         "type": "object", "additionalProperties": false,
-        "x-policy-key": "senderChannelCapacity",
+        "x-config-key": "senderChannelCapacity",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-sender-channel-capacity"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.policy.senderChannelCapacity.allowed." }
+          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.senderChannelCapacity.allowed." }
         }
       },
       "RequestedTPSCommand": {
         "type": "object", "additionalProperties": false,
-        "x-policy-key": "throttlerRequestedTps",
+        "x-config-key": "throttlerRequestedTps",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-requested-tps"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.policy.throttlerRequestedTps." }
+          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.throttlerRequestedTps." }
         }
       },
       "SenderWorkersCommand": {
         "type": "object", "additionalProperties": false,
-        "x-policy-key": "senderWorkers",
+        "x-config-key": "senderWorkers",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-sender-workers"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.policy.senderWorkers." }
+          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.senderWorkers." }
         }
       },
       "InstallationModeCommand": {
         "type": "object", "additionalProperties": false,
-        "x-policy-key": "throttlerInstallationMode",
+        "x-config-key": "throttlerInstallationMode",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-throttler-installation-mode"] },
@@ -192,7 +192,7 @@
       },
       "Snapshot": {
         "type": "object", "additionalProperties": false,
-        "required": ["run", "reader", "throttler", "sender", "readerChannel", "senderChannel", "policy"],
+        "required": ["run", "reader", "throttler", "sender", "readerChannel", "senderChannel", "config"],
         "properties": {
           "run": { "$ref": "#/components/schemas/RunStatus" },
           "reader": { "$ref": "#/components/schemas/ReaderStatus" },
@@ -200,7 +200,7 @@
           "sender": { "$ref": "#/components/schemas/SenderStatus" },
           "readerChannel": { "$ref": "#/components/schemas/ChannelStatus" },
           "senderChannel": { "$ref": "#/components/schemas/ChannelStatus" },
-          "policy": { "$ref": "#/components/schemas/PolicyStatus" }
+          "config": { "$ref": "#/components/schemas/ConfigStatus" }
         }
       },
       "RunStatus": {
@@ -249,29 +249,29 @@
           "inputBatchesPerSecond": { "type": "number", "format": "double" }, "inputTransactionsPerSecond": { "type": "number", "format": "double" }, "outputBatchesPerSecond": { "type": "number", "format": "double" }, "outputTransactionsPerSecond": { "type": "number", "format": "double" }
         }
       },
-      "PolicyStatus": {
+      "ConfigStatus": {
         "type": "object", "additionalProperties": false,
         "required": ["readerReadBatchSize", "readerWorkers", "readerChannelCapacity", "senderChannelCapacity", "throttlerRequestedTps", "throttlerInstallationMode", "metricsWindowMs", "senderWorkers", "logging"],
         "properties": {
-          "readerReadBatchSize": { "$ref": "#/components/schemas/RangePolicy" }, "readerWorkers": { "$ref": "#/components/schemas/RangePolicy" }, "readerChannelCapacity": { "$ref": "#/components/schemas/AllowedPolicy" }, "senderChannelCapacity": { "$ref": "#/components/schemas/AllowedPolicy" }, "throttlerRequestedTps": { "$ref": "#/components/schemas/RangePolicy" }, "throttlerInstallationMode": { "$ref": "#/components/schemas/InstallationModePolicy" }, "metricsWindowMs": { "$ref": "#/components/schemas/RangePolicy" }, "senderWorkers": { "$ref": "#/components/schemas/RangePolicy" }, "logging": { "$ref": "#/components/schemas/LoggingPolicy" }
+          "readerReadBatchSize": { "$ref": "#/components/schemas/RangeConfig" }, "readerWorkers": { "$ref": "#/components/schemas/RangeConfig" }, "readerChannelCapacity": { "$ref": "#/components/schemas/AllowedConfig" }, "senderChannelCapacity": { "$ref": "#/components/schemas/AllowedConfig" }, "throttlerRequestedTps": { "$ref": "#/components/schemas/RangeConfig" }, "throttlerInstallationMode": { "$ref": "#/components/schemas/InstallationModeConfig" }, "metricsWindowMs": { "$ref": "#/components/schemas/RangeConfig" }, "senderWorkers": { "$ref": "#/components/schemas/RangeConfig" }, "logging": { "$ref": "#/components/schemas/LoggingConfig" }
         }
       },
-      "RangePolicy": {
+      "RangeConfig": {
         "type": "object", "additionalProperties": false,
         "required": ["default", "min", "max", "step", "unit", "mutability"],
         "properties": { "default": { "type": "integer" }, "min": { "type": "integer" }, "max": { "type": "integer" }, "step": { "type": "integer" }, "unit": { "type": "string" }, "mutability": { "type": "string" } }
       },
-      "AllowedPolicy": {
+      "AllowedConfig": {
         "type": "object", "additionalProperties": false,
         "required": ["default", "allowed", "unit", "mutability"],
         "properties": { "default": { "type": "integer" }, "allowed": { "type": "array", "nullable": true, "items": { "type": "integer" } }, "unit": { "type": "string" }, "mutability": { "type": "string" } }
       },
-      "InstallationModePolicy": {
+      "InstallationModeConfig": {
         "type": "object", "additionalProperties": false,
         "required": ["default", "allowed", "mutability"],
         "properties": { "default": { "type": "string" }, "allowed": { "type": "array", "nullable": true, "items": { "type": "string", "enum": ["installed", "bypass"] } }, "mutability": { "type": "string" } }
       },
-      "LoggingPolicy": {
+      "LoggingConfig": {
         "type": "object", "additionalProperties": false,
         "required": ["level", "mutability"],
         "properties": { "level": { "type": "string" }, "mutability": { "type": "string" } }

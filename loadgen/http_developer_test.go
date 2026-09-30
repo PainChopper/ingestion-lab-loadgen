@@ -200,11 +200,11 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 				t.Errorf("%s strict envelope = %v, want %t", name, schema["additionalProperties"], strict)
 			}
 			if requiresValue {
-				key, ok := schema["x-policy-key"].(string)
+				key, ok := schema["x-config-key"].(string)
 				if !ok || key == "" {
-					t.Errorf("%s has no policy key for console", name)
-				} else if _, ok := schemas["PolicyStatus"].(map[string]any)["properties"].(map[string]any)[key]; !ok {
-					t.Errorf("%s references absent policy field %q", name, key)
+					t.Errorf("%s has no config key for console", name)
+				} else if _, ok := schemas["ConfigStatus"].(map[string]any)["properties"].(map[string]any)[key]; !ok {
+					t.Errorf("%s references absent config field %q", name, key)
 				}
 				valueType := properties["value"].(map[string]any)["type"]
 				switch valueType {
@@ -371,7 +371,7 @@ func checkSchemaKeywords(schema map[string]any) error {
 	keywords := map[string]bool{
 		"$ref": true, "type": true, "enum": true, "format": true, "description": true,
 		"nullable": true, "additionalProperties": true, "properties": true, "required": true,
-		"items": true, "oneOf": true, "discriminator": true, "x-policy-key": true,
+		"items": true, "oneOf": true, "discriminator": true, "x-config-key": true,
 	}
 	for keyword := range schema {
 		if !keywords[keyword] {
@@ -422,11 +422,11 @@ func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 		"ThrottlerStatus":        reflect.TypeOf(httpV1ThrottlerStatus{}),
 		"SenderStatus":           reflect.TypeOf(httpV1SenderStatus{}),
 		"ChannelStatus":          reflect.TypeOf(httpV1ChannelStatus{}),
-		"PolicyStatus":           reflect.TypeOf(httpV1ConfigStatus{}),
-		"RangePolicy":            reflect.TypeOf(httpV1RangeConfig{}),
-		"AllowedPolicy":          reflect.TypeOf(httpV1AllowedConfig{}),
-		"InstallationModePolicy": reflect.TypeOf(httpV1InstallationModeConfig{}),
-		"LoggingPolicy":          reflect.TypeOf(httpV1LoggingConfig{}),
+		"ConfigStatus":           reflect.TypeOf(httpV1ConfigStatus{}),
+		"RangeConfig":            reflect.TypeOf(httpV1RangeConfig{}),
+		"AllowedConfig":          reflect.TypeOf(httpV1AllowedConfig{}),
+		"InstallationModeConfig": reflect.TypeOf(httpV1InstallationModeConfig{}),
+		"LoggingConfig":          reflect.TypeOf(httpV1LoggingConfig{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)

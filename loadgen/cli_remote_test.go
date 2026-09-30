@@ -303,6 +303,61 @@ func TestRunRemoteCLISnapshotStrictlyValidatesSchema(t *testing.T) {
 	}
 }
 
+func TestDecodeStrictSnapshotConfigContract(t *testing.T) {
+	snapshot := testRemoteSnapshot(t)
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &root); err != nil {
+		t.Fatal(err)
+	}
+	delete(root, "policy")
+	config, err := json.Marshal(snapshot.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root["config"] = config
+	for _, test := range []struct {
+		name    string
+		change  func(map[string]json.RawMessage)
+		wantErr bool
+	}{
+		{name: "config accepted", change: func(map[string]json.RawMessage) {}},
+		{name: "only legacy field rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["policy"] = root["config"]; delete(root, "config") }},
+		{name: "both fields rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["policy"] = root["config"] }},
+		{name: "missing config rejected", wantErr: true, change: func(root map[string]json.RawMessage) { delete(root, "config") }},
+		{name: "null config rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["config"] = json.RawMessage(`null`) }},
+		{name: "invalid config rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["config"] = json.RawMessage(`[]`) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := make(map[string]json.RawMessage, len(root))
+			for key, value := range root {
+				input[key] = value
+			}
+			test.change(input)
+			data, err := json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := decodeStrictSnapshot(bytes.NewReader(data))
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("invalid snapshot accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("config snapshot rejected: %v", err)
+			}
+			if got.Config.ReaderReadBatchSize != snapshot.Config.ReaderReadBatchSize {
+				t.Fatalf("decoded config = %+v", got.Config)
+			}
+		})
+	}
+}
+
 func TestRunCLIExitCodes(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if got := runCLI([]string{"run", "--url", "ftp://example.test"}, &stdout, &stderr); got != cliExitUsage {

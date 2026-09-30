@@ -78,7 +78,7 @@ export function PipelineSvg({
         onCapacityChange={onChannelCapacityChange}
         orientation={orientation}
         capacityValues={snapshot.adapterKind === 'http'
-          ? snapshot.policy?.readerChannelCapacity.allowed
+          ? snapshot.config?.readerChannelCapacity.allowed
           : undefined}
         hoseForbiddenBoxes={orientation === 'portrait'
           ? [resolvedGeometry.batchControl.guard]
@@ -93,7 +93,7 @@ export function PipelineSvg({
         onCapacityChange={onChannelCapacityChange}
         orientation={orientation}
         capacityValues={snapshot.adapterKind === 'http'
-          ? snapshot.policy?.senderChannelCapacity.allowed
+          ? snapshot.config?.senderChannelCapacity.allowed
           : undefined}
       />
       <ellipse

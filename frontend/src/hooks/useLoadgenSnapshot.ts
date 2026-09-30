@@ -64,7 +64,7 @@ function freezeObservedTelemetry(
     adapterKind: live.adapterKind,
     connectionState: live.connectionState,
     runState: live.runState,
-    policy: live.policy,
+    config: live.config,
     reader: Object.freeze({
       ...observed.reader,
       workers: live.reader.workers,

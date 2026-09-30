@@ -98,7 +98,7 @@ function snapshotFor(
     runState,
     elapsedMs: active ? 12_000 : 0,
     totalTransactions: active ? 12_000 : 0,
-    policy: null,
+    config: null,
     reader: {
       id: 'reader', workers: workerControl, liveWorkers: workers, drainingWorkers: 0,
       idleWorkers: active ? 0 : workers,

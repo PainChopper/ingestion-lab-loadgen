@@ -186,7 +186,7 @@ describe('ThrottlerActor valve control', () => {
     expect(onSelect).toHaveBeenCalledWith('throttler')
   })
 
-  it('uses visible sides for the current policy without issuing bypass commands', async () => {
+  it('uses visible sides for the current config without issuing bypass commands', async () => {
     const onCommand = vi.fn()
     const onModeCommand = vi.fn()
     const view = render(

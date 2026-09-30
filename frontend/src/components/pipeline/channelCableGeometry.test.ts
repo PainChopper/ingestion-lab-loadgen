@@ -19,7 +19,7 @@ import {
 const smallRange = { min: 0, max: 12, step: 1 }
 const largeRange = { min: 0, max: 160, step: 10 }
 const readerChannelRange = { min: 0, max: 8_192, step: 1 }
-const policyAllowed = [0, 1, 2, 8, 64, 512, 8_192] as const
+const configAllowed = [0, 1, 2, 8, 64, 512, 8_192] as const
 
 function capacityControl(
   applied: number,
@@ -50,8 +50,8 @@ describe('channel cable capacity geometry', () => {
       applyMode: 'immediate' as const,
     })
 
-    expect(policyAllowed.map((value) =>
-      getCapacityLegCount(capacity(value), policyAllowed),
+    expect(configAllowed.map((value) =>
+      getCapacityLegCount(capacity(value), configAllowed),
     )).toEqual([0, 2, 2, 4, 6, 10, 14])
   })
 
@@ -79,7 +79,7 @@ describe('channel cable capacity geometry', () => {
         start,
         end,
         orientation,
-        policyAllowed,
+        configAllowed,
       )
 
       expect(geometry.legCount).toBe(14)
@@ -111,7 +111,7 @@ describe('channel cable capacity geometry', () => {
       { x: 0, y: 415 },
       { x: width, y: 415 },
       'landscape',
-      policyAllowed,
+      configAllowed,
     ).legCount
 
     expect([
@@ -126,7 +126,7 @@ describe('channel cable capacity geometry', () => {
       { x: 150, y: 415 },
       { x: 355, y: 415 },
       'landscape',
-      policyAllowed,
+      configAllowed,
     )
 
     expect(geometry.legCount).toBe(6)
@@ -232,10 +232,10 @@ describe('channel cable capacity geometry', () => {
       readerChannelRange,
       415,
       240,
-      policyAllowed,
+      configAllowed,
     )
 
-    expect(ticks.map((tick) => tick.value)).toEqual(policyAllowed)
+    expect(ticks.map((tick) => tick.value)).toEqual(configAllowed)
     ticks.forEach((tick, index) => {
       expect(tick.y).toBeCloseTo(415 - index * 240 / 6, 12)
     })
@@ -244,28 +244,28 @@ describe('channel cable capacity geometry', () => {
       readerChannelRange,
       415,
       240,
-      policyAllowed,
+      configAllowed,
     )).toBe(175)
     expect(cableYToCapacity(
       415 - 3 * 240 / 6,
       readerChannelRange,
       415,
       240,
-      policyAllowed,
+      configAllowed,
     )).toBe(8)
     expect(capacityFromVerticalDrag(
       2,
       -2 * 240 / 6,
       readerChannelRange,
       240,
-      policyAllowed,
+      configAllowed,
     )).toBe(64)
     expect(['ArrowUp', 'PageUp', 'PageDown', 'Home', 'End'].map((key) =>
       capacityFromKeyboard(
         key,
         2,
         readerChannelRange,
-        policyAllowed,
+        configAllowed,
       ),
     )).toEqual([8, 8_192, 0, 0, 8_192])
   })

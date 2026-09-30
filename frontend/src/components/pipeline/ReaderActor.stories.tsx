@@ -100,7 +100,7 @@ function snapshotFor(state: ReaderState): LoadgenSnapshot {
     runState,
     elapsedMs: active ? 12_000 : 0,
     totalTransactions: active ? 12_000 : 0,
-    policy: null,
+    config: null,
     reader: {
       id: 'reader',
       workers: workerControl,

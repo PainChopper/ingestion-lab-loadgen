@@ -4,7 +4,7 @@ import type {
   LoadgenCommand,
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
-  LoadgenPolicySnapshot,
+  LoadgenConfigSnapshot,
   ChannelTelemetrySnapshot,
   RunState,
 } from '../model/loadgen'
@@ -55,7 +55,7 @@ interface TestWireSnapshot {
   }
   readonly readerChannel: TestWireChannel
   readonly senderChannel: TestWireChannel
-  readonly policy: LoadgenPolicySnapshot
+  readonly config: LoadgenConfigSnapshot
 }
 
 interface TestWireChannel {
@@ -96,7 +96,7 @@ const VALID_WIRE: TestWireSnapshot = {
     depthBatches: 0, bufferedTransactions: 0, blockedSenders: 1, oldestBlockedSenderMs: 450, blockedMs: 1_600,
     inputBatchesPerSecond: 1.5, inputTransactionsPerSecond: 75_000.5, outputBatchesPerSecond: 1.25, outputTransactionsPerSecond: 62_500.25,
   },
-  policy: {
+  config: {
     readerReadBatchSize: {
       default: 50_000,
       min: 1_000,
@@ -258,20 +258,20 @@ function control(
 
 function readBatchSizeControl(
   value: number | null,
-  policy: LoadgenPolicySnapshot['readerReadBatchSize'] | null,
+  config: LoadgenConfigSnapshot['readerReadBatchSize'] | null,
   connectionState: ConnectionState,
   runState: RunState,
 ): NumericControlSnapshot {
-  if (policy === null) return control('transactions')
+  if (config === null) return control('transactions')
 
   return {
     applied: value,
     preview: null,
     pending: null,
-    min: policy.min,
-    max: policy.max,
-    step: policy.step,
-    unit: policy.unit,
+    min: config.min,
+    max: config.max,
+    step: config.step,
+    unit: config.unit,
     applyMode: connectionState === 'connected' && runState === 'idle'
       ? 'immediate'
       : 'unavailable',
@@ -280,19 +280,19 @@ function readBatchSizeControl(
 
 function requestedTpsControl(
   value: number | null,
-  policy: LoadgenPolicySnapshot['throttlerRequestedTps'] | null,
+  config: LoadgenConfigSnapshot['throttlerRequestedTps'] | null,
   connectionState: ConnectionState,
 ): NumericControlSnapshot {
-  if (policy === null) return control('transactions/s')
+  if (config === null) return control('transactions/s')
 
   return {
     applied: value,
     preview: null,
     pending: null,
-    min: policy.min,
-    max: policy.max,
-    step: policy.step,
-    unit: policy.unit,
+    min: config.min,
+    max: config.max,
+    step: config.step,
+    unit: config.unit,
     applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
   }
 }
@@ -344,8 +344,8 @@ function readerChannel(
     ...channel,
     capacity: {
       ...control('batches', wire.readerChannel.capacity),
-      min: wire.policy.readerChannelCapacity.allowed[0]!,
-      max: wire.policy.readerChannelCapacity.allowed.at(-1)!,
+      min: wire.config.readerChannelCapacity.allowed[0]!,
+      max: wire.config.readerChannelCapacity.allowed.at(-1)!,
       applyMode: connectionState === 'connected' && wire.run.state === 'idle'
         ? 'immediate'
         : 'unavailable',
@@ -376,8 +376,8 @@ function senderChannel(
     ...channel,
     capacity: {
       ...control('batches', wire.senderChannel.capacity),
-      min: wire.policy.senderChannelCapacity.allowed[0]!,
-      max: wire.policy.senderChannelCapacity.allowed.at(-1)!,
+      min: wire.config.senderChannelCapacity.allowed[0]!,
+      max: wire.config.senderChannelCapacity.allowed.at(-1)!,
       applyMode: connectionState === 'connected' && wire.run.state === 'idle'
         ? 'immediate'
         : 'unavailable',
@@ -407,7 +407,7 @@ function expectedSnapshot(
     runState,
     elapsedMs: wire?.run.elapsedMs ?? 0,
     totalTransactions: wire?.run.totalTransactions ?? 0,
-    policy: wire?.policy ?? null,
+    config: wire?.config ?? null,
     reader: {
       id: 'reader',
       workers: wire === null
@@ -416,10 +416,10 @@ function expectedSnapshot(
             applied: wire.reader.workers,
             preview: null,
             pending: null,
-            min: wire.policy.readerWorkers!.min,
-            max: wire.policy.readerWorkers!.max,
-            step: wire.policy.readerWorkers!.step,
-            unit: wire.policy.readerWorkers!.unit,
+            min: wire.config.readerWorkers!.min,
+            max: wire.config.readerWorkers!.max,
+            step: wire.config.readerWorkers!.step,
+            unit: wire.config.readerWorkers!.unit,
             applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
           },
       liveWorkers: wire?.reader.liveWorkers ?? 0,
@@ -432,7 +432,7 @@ function expectedSnapshot(
       drainingBlockedWorkers: wire?.reader.drainingBlockedWorkers ?? 0,
       readBatchSize: readBatchSizeControl(
         wire?.reader.readBatchSize ?? null,
-        wire?.policy.readerReadBatchSize ?? null,
+        wire?.config.readerReadBatchSize ?? null,
         connectionState,
         runState,
       ),
@@ -448,7 +448,7 @@ function expectedSnapshot(
       id: 'throttler',
       requestedTps: requestedTpsControl(
         wire?.throttler.requestedTps ?? null,
-        wire?.policy.throttlerRequestedTps ?? null,
+        wire?.config.throttlerRequestedTps ?? null,
         connectionState,
       ),
       installationMode: {
@@ -572,55 +572,55 @@ const malformedCases: ReadonlyArray<{
     },
   ]),
   {
-    name: 'missing policy',
+    name: 'missing config',
     result: async () => {
-      const { policy: _policy, ...withoutPolicy } = VALID_WIRE
-      return mockResponse(withoutPolicy)
+      const { config: _config, ...withoutConfig } = VALID_WIRE
+      return mockResponse(withoutConfig)
     },
   },
   {
-    name: 'malformed readerChannel policy',
+    name: 'malformed readerChannel config',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      policy: {
-        ...VALID_WIRE.policy,
+      config: {
+        ...VALID_WIRE.config,
         readerChannelCapacity: {
-          ...VALID_WIRE.policy.readerChannelCapacity,
+          ...VALID_WIRE.config.readerChannelCapacity,
           allowed: [0, 2, 2],
         },
       },
     }),
   },
   {
-    name: 'missing senderChannel policy',
+    name: 'missing senderChannel config',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      policy: (() => {
-        const { senderChannelCapacity: _senderChannel, ...policy } = VALID_WIRE.policy
-        return policy
+      config: (() => {
+        const { senderChannelCapacity: _senderChannel, ...config } = VALID_WIRE.config
+        return config
       })(),
     }),
   },
   {
-    name: 'malformed senderChannel policy',
+    name: 'malformed senderChannel config',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      policy: {
-        ...VALID_WIRE.policy,
+      config: {
+        ...VALID_WIRE.config,
         senderChannelCapacity: {
-          ...VALID_WIRE.policy.senderChannelCapacity,
+          ...VALID_WIRE.config.senderChannelCapacity,
           allowed: [0, 2, 2],
         },
       },
     }),
   },
   {
-    name: 'missing throttler requested TPS policy',
+    name: 'missing throttler requested TPS config',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      policy: (() => {
-        const { throttlerRequestedTps: _requestedTps, ...policy } = VALID_WIRE.policy
-        return policy
+      config: (() => {
+        const { throttlerRequestedTps: _requestedTps, ...config } = VALID_WIRE.config
+        return config
       })(),
     }),
   },
@@ -633,25 +633,25 @@ const malformedCases: ReadonlyArray<{
   },
   ...(['senderWorkers'] as const).flatMap((field) => [
     {
-      name: `missing policy ${field}`,
+      name: `missing config ${field}`,
       result: async () => {
-        const policy = { ...VALID_WIRE.policy } as Record<string, unknown>
-        delete policy[field]
-        return mockResponse({ ...VALID_WIRE, policy })
+        const config = { ...VALID_WIRE.config } as Record<string, unknown>
+        delete config[field]
+        return mockResponse({ ...VALID_WIRE, config })
       },
     },
     {
-      name: `extra policy ${field}`,
+      name: `extra config ${field}`,
       result: async () => mockResponse({
         ...VALID_WIRE,
-        policy: { ...VALID_WIRE.policy, [field]: { ...VALID_WIRE.policy[field], extra: true } },
+        config: { ...VALID_WIRE.config, [field]: { ...VALID_WIRE.config[field], extra: true } },
       }),
     },
     {
-      name: `wrong-type policy ${field}`,
+      name: `wrong-type config ${field}`,
       result: async () => mockResponse({
         ...VALID_WIRE,
-        policy: { ...VALID_WIRE.policy, [field]: null },
+        config: { ...VALID_WIRE.config, [field]: null },
       }),
     },
   ]),
@@ -659,21 +659,21 @@ const malformedCases: ReadonlyArray<{
     name: 'unexpected sender retry policy',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      policy: {
-        ...VALID_WIRE.policy,
+      config: {
+        ...VALID_WIRE.config,
         senderRetry: { maxAttempts: 3, backoffBaseMs: 250, backoffMultiplier: 2, jitterPercent: 20, mutability: 'startup-only' },
       },
     }),
   },
   {
-    name: 'extra obsolete Sender simulation policy fields',
+    name: 'extra obsolete Sender simulation config fields',
     result: async () => {
       const obsoleteDelayKey = ['sender', 'Simulated', 'DelayMs'].join('')
       const obsoleteErrorRateKey = ['sender', 'Simulated', 'ErrorRatePercent'].join('')
       return mockResponse({
         ...VALID_WIRE,
-        policy: {
-          ...VALID_WIRE.policy,
+        config: {
+          ...VALID_WIRE.config,
           [obsoleteDelayKey]: { default: 10, min: 0, max: 2000, step: 10, unit: 'milliseconds', mutability: 'immediate' },
           [obsoleteErrorRateKey]: { default: 2, min: 0, max: 100, step: 1, unit: 'percent', mutability: 'immediate' },
         },
@@ -688,36 +688,36 @@ const malformedCases: ReadonlyArray<{
     }),
   },
   {
-    name: 'missing metrics window policy',
+    name: 'missing metrics window config',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      policy: (() => {
-        const { metricsWindowMs: _metricsWindow, ...policy } = VALID_WIRE.policy
-        return policy
+      config: (() => {
+        const { metricsWindowMs: _metricsWindow, ...config } = VALID_WIRE.config
+        return config
       })(),
     }),
   },
   {
-    name: 'malformed metrics window policy',
+    name: 'malformed metrics window config',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      policy: {
-        ...VALID_WIRE.policy,
+      config: {
+        ...VALID_WIRE.config,
         metricsWindowMs: {
-          ...VALID_WIRE.policy.metricsWindowMs,
+          ...VALID_WIRE.config.metricsWindowMs,
           mutability: 'immediate',
         },
       },
     }),
   },
   {
-    name: 'unknown throttler installation mode policy field',
+    name: 'unknown throttler installation mode config field',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      policy: {
-        ...VALID_WIRE.policy,
+      config: {
+        ...VALID_WIRE.config,
         throttlerInstallationMode: {
-          ...VALID_WIRE.policy.throttlerInstallationMode,
+          ...VALID_WIRE.config.throttlerInstallationMode,
           unknown: true,
         },
       },
@@ -742,7 +742,7 @@ const malformedCases: ReadonlyArray<{
     }),
   },
   {
-    name: 'sender channel capacity outside policy',
+    name: 'sender channel capacity outside config',
     result: async () => mockResponse({ ...VALID_WIRE, senderChannel: { ...VALID_WIRE.senderChannel, capacity: 3 } }),
   },
   {
@@ -859,6 +859,39 @@ describe('HttpAdapter', () => {
     vi.unstubAllGlobals()
     vi.useRealTimers()
   })
+
+  it('accepts the config public contract', async () => {
+    const { config: settings, ...telemetry } = VALID_WIRE
+    fetchMock.mockResolvedValueOnce(mockResponse({ ...telemetry, config: settings }))
+    const adapter = new HttpAdapter()
+    await flushPoll()
+    expect(adapter.getSnapshot().connectionState).toBe('connected')
+    expect(adapter.getSnapshot()).toMatchObject({ config: settings })
+    adapter.dispose()
+  })
+
+  it.each(['legacy-only', 'both', 'missing', 'null', 'invalid'] as const)(
+    'rejects %s config contract and blocks stale dispatch',
+    async (shape) => {
+      const { config: settings, ...telemetry } = VALID_WIRE
+      const valid = { ...telemetry, config: settings }
+      const invalid = shape === 'legacy-only' ? { ...telemetry, ['policy']: settings }
+        : shape === 'both' ? { ...valid, ['policy']: settings }
+        : shape === 'missing' ? telemetry
+        : { ...telemetry, config: shape === 'null' ? null : [] }
+      fetchMock.mockResolvedValueOnce(mockResponse(valid)).mockResolvedValueOnce(mockResponse(invalid))
+      const adapter = new HttpAdapter()
+      await flushPoll()
+      expect(adapter.getSnapshot().connectionState).toBe('connected')
+      await vi.advanceTimersByTimeAsync(1_000)
+      await flushPoll()
+      expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'error', config: null })
+      const receipt = await adapter.dispatch({ type: 'set-requested-tps', value: 200 })
+      expect(receipt).toMatchObject({ accepted: false, error: { code: 'unavailable' } })
+      expect(commandFetchCalls()).toHaveLength(0)
+      adapter.dispose()
+    },
+  )
 
   it('starts immediately with the exact deep-frozen neutral snapshot', () => {
     const adapter = new HttpAdapter()
@@ -1248,21 +1281,21 @@ describe('HttpAdapter', () => {
   })
 
   it.each([{ type: 'run' }, { type: 'pause' }] as const)(
-    'does not dispatch $type from a stale snapshot after policy decoding fails',
+    'does not dispatch $type from a stale snapshot after config decoding fails',
     async (command) => {
-      const invalidPolicyWire = {
+      const invalidConfigWire = {
         ...VALID_WIRE,
-        policy: {
-          ...VALID_WIRE.policy,
+        config: {
+          ...VALID_WIRE.config,
           readerReadBatchSize: {
-            ...VALID_WIRE.policy.readerReadBatchSize,
+            ...VALID_WIRE.config.readerReadBatchSize,
             step: 0,
           },
         },
       }
       fetchMock
         .mockResolvedValueOnce(mockResponse(VALID_WIRE))
-        .mockResolvedValueOnce(mockResponse(invalidPolicyWire))
+        .mockResolvedValueOnce(mockResponse(invalidConfigWire))
       const adapter = new HttpAdapter()
 
       await flushPoll()
@@ -1271,7 +1304,7 @@ describe('HttpAdapter', () => {
 
       expect(adapter.getSnapshot()).toMatchObject({
         connectionState: 'error',
-        policy: null,
+        config: null,
       })
       const receipt = await adapter.dispatch(command)
       expect(receipt).toMatchObject({
@@ -1651,9 +1684,9 @@ describe('HttpAdapter', () => {
   it('rejects senderChannel capacity while the adapter has no connected snapshot', async () => {
     fetchMock.mockResolvedValueOnce(mockResponse({
       ...VALID_WIRE,
-      policy: (() => {
-        const { senderChannelCapacity: _senderChannel, ...policy } = VALID_WIRE.policy
-        return policy
+      config: (() => {
+        const { senderChannelCapacity: _senderChannel, ...config } = VALID_WIRE.config
+        return config
       })(),
     }))
     const adapter = new HttpAdapter()
