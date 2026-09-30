@@ -3,6 +3,7 @@ module loadgen
 go 1.27.0
 
 require (
+	github.com/alexliesenfeld/go-swagger-ui v0.0.1-beta.5
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/jsternberg/zap-logfmt v1.3.0
 	github.com/parquet-go/parquet-go v0.32.0
@@ -38,4 +39,5 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

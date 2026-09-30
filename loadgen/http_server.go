@@ -25,6 +25,7 @@ func newServeMux(plane runtimeControl, metrics *Metrics, policy policy, loggers 
 	mux.Handle(snapshotPath, snapshotHandler(plane, logger))
 	mux.Handle(commandsPath, commandsHandler(plane, policy, logger))
 	mux.Handle(internalTestIngestPath, internalTestIngestHandler())
+	registerDeveloperRoutes(mux)
 
 	if metrics != nil {
 		mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))
