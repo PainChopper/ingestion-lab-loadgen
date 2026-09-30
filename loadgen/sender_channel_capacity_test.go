@@ -47,7 +47,7 @@ func TestSenderChannelCapacityValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testPolicy(t)).ServeHTTP(recorder, request)
+				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, request)
 			}()
 
 			if test.want == http.StatusOK {
@@ -137,12 +137,12 @@ func TestSenderChannelCapacityIdleOnlyAppliesToThrottlerAndPersistsAfterReset(t 
 
 func TestValidSenderChannelCapacityAcceptsOnlyConfiguredSteps(t *testing.T) {
 	for _, value := range []int{0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1_024, 2_048, 4_096, 8_192} {
-		if !validSenderChannelCapacity(testPolicy(t), value) {
+		if !validSenderChannelCapacity(testConfig(t), value) {
 			t.Errorf("value %d is rejected", value)
 		}
 	}
 	for _, value := range []int{math.MinInt, -1, 3, 8_193, 16_384} {
-		if validSenderChannelCapacity(testPolicy(t), value) {
+		if validSenderChannelCapacity(testConfig(t), value) {
 			t.Errorf("value %d is accepted", value)
 		}
 	}

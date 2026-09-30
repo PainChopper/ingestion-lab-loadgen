@@ -15,10 +15,10 @@ import (
 // Configuration location and supported schema version.
 const (
 	defaultConfigPath   = "config.toml"
-	policySchemaVersion = 2
+	configSchemaVersion = 2
 )
 
-// Units accepted by policy fields.
+// Units accepted by config fields.
 const (
 	sourceUnit        = "glob-pattern"
 	batchSizeUnit     = "transactions"
@@ -29,7 +29,7 @@ const (
 	percentUnit       = "percent"
 )
 
-// Mutability values accepted by policy fields.
+// Mutability values accepted by config fields.
 const (
 	startupOnly = "startup-only"
 	idleOnly    = "idle-only"
@@ -42,71 +42,71 @@ const (
 	throttlerBypass    = "bypass"
 )
 
-type policy struct {
+type config struct {
 	SchemaVersion int                 `mapstructure:"schema_version"`
-	Source        sourcePolicy        `mapstructure:"source"`
-	Reader        readerPolicy        `mapstructure:"reader"`
-	ReaderChannel readerChannelPolicy `mapstructure:"readerChannel"`
-	SenderChannel readerChannelPolicy `mapstructure:"senderChannel"`
-	Throttler     throttlerPolicy     `mapstructure:"throttler"`
-	Sender        senderPolicy        `mapstructure:"sender"`
-	Metrics       metricsPolicy       `mapstructure:"metrics"`
-	Logging       loggingPolicy       `mapstructure:"logging"`
+	Source        sourceConfig        `mapstructure:"source"`
+	Reader        readerConfig        `mapstructure:"reader"`
+	ReaderChannel readerChannelConfig `mapstructure:"readerChannel"`
+	SenderChannel readerChannelConfig `mapstructure:"senderChannel"`
+	Throttler     throttlerConfig     `mapstructure:"throttler"`
+	Sender        senderConfig        `mapstructure:"sender"`
+	Metrics       metricsConfig       `mapstructure:"metrics"`
+	Logging       loggingConfig       `mapstructure:"logging"`
 }
 
-type sourcePolicy struct {
+type sourceConfig struct {
 	Path       string `mapstructure:"path" json:"path"`
 	Unit       string `mapstructure:"unit" json:"unit"`
 	Mutability string `mapstructure:"mutability" json:"mutability"`
 }
 
-type readerPolicy struct {
-	ReadBatchSize rangePolicy `mapstructure:"read_batch_size"`
-	Workers       rangePolicy `mapstructure:"workers"`
+type readerConfig struct {
+	ReadBatchSize rangeConfig `mapstructure:"read_batch_size"`
+	Workers       rangeConfig `mapstructure:"workers"`
 }
 
-type readerChannelPolicy struct {
-	Capacity allowedPolicy `mapstructure:"capacity"`
+type readerChannelConfig struct {
+	Capacity allowedConfig `mapstructure:"capacity"`
 }
 
-type throttlerPolicy struct {
-	RequestedTPS     rangePolicy            `mapstructure:"requested_tps"`
-	InstallationMode installationModePolicy `mapstructure:"installation_mode"`
+type throttlerConfig struct {
+	RequestedTPS     rangeConfig            `mapstructure:"requested_tps"`
+	InstallationMode installationModeConfig `mapstructure:"installation_mode"`
 }
 
-type metricsPolicy struct {
-	WindowMS rangePolicy `mapstructure:"window_ms"`
+type metricsConfig struct {
+	WindowMS rangeConfig `mapstructure:"window_ms"`
 }
 
-type loggingPolicy struct {
+type loggingConfig struct {
 	Level      string `mapstructure:"level" json:"level"`
 	Mutability string `mapstructure:"mutability" json:"mutability"`
 }
 
-type senderPolicy struct {
-	Workers rangePolicy       `mapstructure:"workers"`
-	API     senderAPIPolicy   `mapstructure:"api"`
-	Retry   senderRetryPolicy `mapstructure:"retry"`
+type senderConfig struct {
+	Workers rangeConfig       `mapstructure:"workers"`
+	API     senderAPIConfig   `mapstructure:"api"`
+	Retry   senderRetryConfig `mapstructure:"retry"`
 }
 
-type senderAPIPolicy struct {
+type senderAPIConfig struct {
 	URL        string `mapstructure:"url"`
 	Mutability string `mapstructure:"mutability"`
 }
 
-type senderRetryPolicy struct {
+type senderRetryConfig struct {
 	DelaysMS      []int  `mapstructure:"delays_ms" json:"delaysMs"`
 	JitterPercent int    `mapstructure:"jitter_percent" json:"jitterPercent"`
 	Mutability    string `mapstructure:"mutability" json:"mutability"`
 }
 
-type installationModePolicy struct {
+type installationModeConfig struct {
 	Default    string   `mapstructure:"default" json:"default"`
 	Allowed    []string `mapstructure:"allowed" json:"allowed"`
 	Mutability string   `mapstructure:"mutability" json:"mutability"`
 }
 
-type rangePolicy struct {
+type rangeConfig struct {
 	Default    int    `mapstructure:"default" json:"default"`
 	Min        int    `mapstructure:"min" json:"min"`
 	Max        int    `mapstructure:"max" json:"max"`
@@ -115,14 +115,14 @@ type rangePolicy struct {
 	Mutability string `mapstructure:"mutability" json:"mutability"`
 }
 
-type allowedPolicy struct {
+type allowedConfig struct {
 	Default    int    `mapstructure:"default" json:"default"`
 	Allowed    []int  `mapstructure:"allowed" json:"allowed"`
 	Unit       string `mapstructure:"unit" json:"unit"`
 	Mutability string `mapstructure:"mutability" json:"mutability"`
 }
 
-func loadPolicy(configArgument string) (policy, string, error) {
+func loadConfig(configArgument string) (config, error) {
 	configPath := defaultConfigPath
 	if configArgument != "" {
 		configPath = configArgument
@@ -130,30 +130,30 @@ func loadPolicy(configArgument string) (policy, string, error) {
 
 	absConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
-		return policy{}, "", fmt.Errorf("make config path absolute: %w", err)
+		return config{}, fmt.Errorf("make config path absolute: %w", err)
 	}
 
-	config := viper.New()
-	config.SetConfigFile(absConfigPath)
-	if err := config.ReadInConfig(); err != nil {
-		return policy{}, "", fmt.Errorf("read config %q: %w", absConfigPath, err)
+	viperConfig := viper.New()
+	viperConfig.SetConfigFile(absConfigPath)
+	if err := viperConfig.ReadInConfig(); err != nil {
+		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
 	}
-	var loaded policy
-	if err := config.UnmarshalExact(&loaded, func(decoderConfig *mapstructure.DecoderConfig) {
+	var loaded config
+	if err := viperConfig.UnmarshalExact(&loaded, func(decoderConfig *mapstructure.DecoderConfig) {
 		decoderConfig.ErrorUnset = true
 	}); err != nil {
-		return policy{}, "", fmt.Errorf("decode config %q: %w", absConfigPath, err)
+		return config{}, fmt.Errorf("decode config %q: %w", absConfigPath, err)
 	}
 	if err := loaded.validate(); err != nil {
-		return policy{}, "", fmt.Errorf("validate config %q: %w", absConfigPath, err)
+		return config{}, fmt.Errorf("validate config %q: %w", absConfigPath, err)
 	}
 
-	return loaded, absConfigPath, nil
+	return loaded, nil
 }
 
-func (p policy) validate() error {
-	if p.SchemaVersion != policySchemaVersion {
-		return fmt.Errorf("schema_version must be %d", policySchemaVersion)
+func (p config) validate() error {
+	if p.SchemaVersion != configSchemaVersion {
+		return fmt.Errorf("schema_version must be %d", configSchemaVersion)
 	}
 	if p.Source.Path == "" || !filepath.IsAbs(p.Source.Path) {
 		return fmt.Errorf("source.path must be an absolute path")
@@ -194,7 +194,7 @@ func (p policy) validate() error {
 	return nil
 }
 
-func (p loggingPolicy) validate() error {
+func (p loggingConfig) validate() error {
 	if p.Mutability != startupOnly {
 		return fmt.Errorf("mutability must be %q", startupOnly)
 	}
@@ -204,7 +204,7 @@ func (p loggingPolicy) validate() error {
 	return nil
 }
 
-func (p senderPolicy) validate() error {
+func (p senderConfig) validate() error {
 	if err := p.Workers.validateExact(32, 1, 32, 1, workersUnit, immediate); err != nil {
 		return fmt.Errorf("workers: %w", err)
 	}
@@ -214,7 +214,7 @@ func (p senderPolicy) validate() error {
 	return p.Retry.validate()
 }
 
-func (p senderRetryPolicy) validate() error {
+func (p senderRetryConfig) validate() error {
 	if p.Mutability != startupOnly {
 		return fmt.Errorf("mutability must be %q", startupOnly)
 	}
@@ -238,7 +238,7 @@ func (p senderRetryPolicy) validate() error {
 	return nil
 }
 
-func (p senderRetryPolicy) delay(attempt int, batch []Transaction) time.Duration {
+func (p senderRetryConfig) delay(attempt int, batch []Transaction) time.Duration {
 	index := min(attempt-1, len(p.DelaysMS)-1)
 	jitter := deterministicSenderValue(batch, attempt, uint64(2*p.JitterPercent+1)) - p.JitterPercent
 	return senderRetryDuration(p.DelaysMS[index], jitter)
@@ -268,7 +268,7 @@ func senderRetryDuration(delayMS, jitterPercent int) time.Duration {
 	return delay
 }
 
-func (p senderAPIPolicy) validate() error {
+func (p senderAPIConfig) validate() error {
 	if p.URL == "" {
 		return fmt.Errorf("url must not be empty")
 	}
@@ -292,18 +292,18 @@ func (p senderAPIPolicy) validate() error {
 	return nil
 }
 
-func (p rangePolicy) validateExact(defaultValue, minValue, maxValue, stepValue int, unit, mutability string) error {
+func (p rangeConfig) validateExact(defaultValue, minValue, maxValue, stepValue int, unit, mutability string) error {
 	if p.Default != defaultValue || p.Min != minValue || p.Max != maxValue || p.Step != stepValue || p.Unit != unit || p.Mutability != mutability {
 		return fmt.Errorf("must match approved %s policy", unit)
 	}
 	return nil
 }
 
-func (p rangePolicy) validateWorkers() error {
+func (p rangeConfig) validateWorkers() error {
 	return p.validateExact(1, 1, 7, 1, workersUnit, immediate)
 }
 
-func (p rangePolicy) validateMetricsWindow() error {
+func (p rangeConfig) validateMetricsWindow() error {
 	if p.Unit != metricsWindowUnit || p.Mutability != startupOnly {
 		return fmt.Errorf("must use unit %q and mutability %q", metricsWindowUnit, startupOnly)
 	}
@@ -316,7 +316,7 @@ func (p rangePolicy) validateMetricsWindow() error {
 	return nil
 }
 
-func (p rangePolicy) validateRequestedTPS() error {
+func (p rangeConfig) validateRequestedTPS() error {
 	if p.Unit != requestedTPSUnit || p.Mutability != immediate {
 		return fmt.Errorf("must use unit %q and mutability %q", requestedTPSUnit, immediate)
 	}
@@ -344,7 +344,7 @@ func (p rangePolicy) validateRequestedTPS() error {
 	return nil
 }
 
-func (p installationModePolicy) validate() error {
+func (p installationModeConfig) validate() error {
 	if p.Mutability != immediate || len(p.Allowed) != 2 ||
 		!p.contains(throttlerInstalled) || !p.contains(throttlerBypass) ||
 		!p.contains(p.Default) {
@@ -353,11 +353,11 @@ func (p installationModePolicy) validate() error {
 	return nil
 }
 
-func (p installationModePolicy) contains(value string) bool {
+func (p installationModeConfig) contains(value string) bool {
 	return slices.Contains(p.Allowed, value)
 }
 
-func (p rangePolicy) validate() error {
+func (p rangeConfig) validate() error {
 	if p.Unit != batchSizeUnit || p.Mutability != idleOnly {
 		return fmt.Errorf("must use unit %q and mutability %q", batchSizeUnit, idleOnly)
 	}
@@ -370,11 +370,11 @@ func (p rangePolicy) validate() error {
 	return nil
 }
 
-func (p rangePolicy) contains(value int) bool {
+func (p rangeConfig) contains(value int) bool {
 	return value >= p.Min && value <= p.Max && (value-p.Min)%p.Step == 0
 }
 
-func (p allowedPolicy) validate() error {
+func (p allowedConfig) validate() error {
 	if p.Unit != unitBatches || p.Mutability != idleOnly {
 		return fmt.Errorf("must use unit %q and mutability %q", unitBatches, idleOnly)
 	}
@@ -395,11 +395,11 @@ func (p allowedPolicy) validate() error {
 	return nil
 }
 
-func (p allowedPolicy) contains(value int) bool {
+func (p allowedConfig) contains(value int) bool {
 	return slices.Contains(p.Allowed, value)
 }
 
-func (p allowedPolicy) validateSenderChannelCapacity() error {
+func (p allowedConfig) validateSenderChannelCapacity() error {
 	if err := p.validate(); err != nil {
 		return err
 	}

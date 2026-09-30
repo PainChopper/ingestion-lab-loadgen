@@ -19,11 +19,11 @@ const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
 const internalTestIngestPath = "/internal/test/ingest"
 
-func newServeMux(plane runtimeControl, metrics *Metrics, policy policy, loggers ...*zap.Logger) *http.ServeMux {
+func newServeMux(plane runtimeControl, metrics *Metrics, config config, loggers ...*zap.Logger) *http.ServeMux {
 	logger := loggerOrNop(loggers)
 	mux := http.NewServeMux()
 	mux.Handle(snapshotPath, snapshotHandler(plane, logger))
-	mux.Handle(commandsPath, commandsHandler(plane, policy, logger))
+	mux.Handle(commandsPath, commandsHandler(plane, config, logger))
 	mux.Handle(internalTestIngestPath, internalTestIngestHandler())
 	registerDeveloperRoutes(mux)
 
@@ -40,9 +40,9 @@ func newServeMux(plane runtimeControl, metrics *Metrics, policy policy, loggers 
 	return mux
 }
 
-func startHTTPServer(plane runtimeControl, metrics *Metrics, policy policy, loggers ...*zap.Logger) (*http.Server, <-chan error, error) {
+func startHTTPServer(plane runtimeControl, metrics *Metrics, config config, loggers ...*zap.Logger) (*http.Server, <-chan error, error) {
 	logger := loggerOrNop(loggers)
-	mux := newServeMux(plane, metrics, policy, logger)
+	mux := newServeMux(plane, metrics, config, logger)
 
 	server := &http.Server{
 		Addr:    "127.0.0.1:8080",

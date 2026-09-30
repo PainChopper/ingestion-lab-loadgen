@@ -15,7 +15,7 @@ import (
 
 func TestDeveloperRoutes(t *testing.T) {
 	requests := make(chan runtimeCommand, 1)
-	mux := newServeMux(testControlPlane(requests), nil, testPolicy(t))
+	mux := newServeMux(testControlPlane(requests), nil, testConfig(t))
 	tests := []struct {
 		name        string
 		path        string
@@ -243,13 +243,13 @@ func assertExampleDispatches(t *testing.T, body map[string]any, want runtimeComm
 		t.Fatal(err)
 	}
 	requests := make(chan runtimeCommand, 1)
-	commandPolicy := testPolicy(t)
+	commandConfig := testConfig(t)
 	request := httptest.NewRequest(http.MethodPost, commandsPath, bytes.NewReader(encoded))
 	recorder := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		commandsHandler(testControlPlane(requests), commandPolicy).ServeHTTP(recorder, request)
+		commandsHandler(testControlPlane(requests), commandConfig).ServeHTTP(recorder, request)
 	}()
 	var got runtimeCommand
 	select {
@@ -422,11 +422,11 @@ func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 		"ThrottlerStatus":        reflect.TypeOf(httpV1ThrottlerStatus{}),
 		"SenderStatus":           reflect.TypeOf(httpV1SenderStatus{}),
 		"ChannelStatus":          reflect.TypeOf(httpV1ChannelStatus{}),
-		"PolicyStatus":           reflect.TypeOf(httpV1PolicyStatus{}),
-		"RangePolicy":            reflect.TypeOf(httpV1RangePolicy{}),
-		"AllowedPolicy":          reflect.TypeOf(httpV1AllowedPolicy{}),
-		"InstallationModePolicy": reflect.TypeOf(httpV1InstallationModePolicy{}),
-		"LoggingPolicy":          reflect.TypeOf(httpV1LoggingPolicy{}),
+		"PolicyStatus":           reflect.TypeOf(httpV1ConfigStatus{}),
+		"RangePolicy":            reflect.TypeOf(httpV1RangeConfig{}),
+		"AllowedPolicy":          reflect.TypeOf(httpV1AllowedConfig{}),
+		"InstallationModePolicy": reflect.TypeOf(httpV1InstallationModeConfig{}),
+		"LoggingPolicy":          reflect.TypeOf(httpV1LoggingConfig{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
@@ -519,7 +519,7 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 				Reader:    httpV1ReaderStatus{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
 				Throttler: httpV1ThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
 				Sender:    httpV1SenderStatus{Workers: 32},
-				Policy:    httpV1PolicyStatusFromRuntime(runtimePolicyStatusFromPolicy(testPolicy(t))),
+				Config:    httpV1ConfigStatusFromRuntime(runtimeConfigStatusFromConfig(testConfig(t))),
 			},
 			"source error": {
 				Run:    httpV1RunStatus{State: runStateIdle},

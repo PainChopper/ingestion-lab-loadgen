@@ -13,22 +13,22 @@ import (
 	"time"
 )
 
-func testPolicy(t *testing.T) policy {
+func testConfig(t *testing.T) config {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(testConfigContents()), 0o600); err != nil {
 		t.Fatalf("write test config: %v", err)
 	}
-	loaded, _, err := loadPolicy(path)
+	loaded, err := loadConfig(path)
 	if err != nil {
-		t.Fatalf("load test policy: %v", err)
+		t.Fatalf("load test config: %v", err)
 	}
 	return loaded
 }
 
 func newTestControlState(t *testing.T) controlState {
 	t.Helper()
-	loaded := testPolicy(t)
+	loaded := testConfig(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -37,7 +37,7 @@ func newTestControlState(t *testing.T) controlState {
 	return controlState{
 		metricsWindow: time.Duration(loaded.Metrics.WindowMS.Default) * time.Millisecond,
 		run:           controlRunState{lifecycle: newLifecycle()},
-		controls:      configuredControls{policy: loaded},
+		controls:      configuredControls{config: loaded},
 	}
 }
 
@@ -58,7 +58,7 @@ func testConfigContents() string {
 	}, "\n")
 }
 
-func TestLoadPolicyValidatesSenderAPI(t *testing.T) {
+func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 	tests := []struct {
 		name     string
 		contents string
@@ -80,15 +80,15 @@ func TestLoadPolicyValidatesSenderAPI(t *testing.T) {
 			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			loaded, _, err := loadPolicy(path)
+			loaded, err := loadConfig(path)
 			if test.wantErr {
 				if err == nil {
-					t.Fatal("loadPolicy error = nil")
+					t.Fatal("loadConfig error = nil")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("loadPolicy: %v", err)
+				t.Fatalf("loadConfig: %v", err)
 			}
 			if loaded.Sender.API.URL == "" {
 				t.Fatal("loaded sender API URL is empty")
@@ -97,7 +97,7 @@ func TestLoadPolicyValidatesSenderAPI(t *testing.T) {
 	}
 }
 
-func TestLoadPolicyRejectsInvalidConfiguration(t *testing.T) {
+func TestLoadConfigRejectsInvalidConfiguration(t *testing.T) {
 	tests := []struct{ name, contents string }{
 		{name: "unknown top-level key", contents: testConfigContents() + "\nunknown = true\n"},
 		{name: "incomplete", contents: "[source]\npath = 'C:\\dataset\\*.parquet'"},
@@ -111,14 +111,14 @@ func TestLoadPolicyRejectsInvalidConfiguration(t *testing.T) {
 			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadPolicy(path); err == nil {
-				t.Fatal("loadPolicy error = nil")
+			if _, err := loadConfig(path); err == nil {
+				t.Fatal("loadConfig error = nil")
 			}
 		})
 	}
 }
 
-func TestLoadPolicyRequiresExplicitPolicyFields(t *testing.T) {
+func TestLoadConfigRequiresExplicitConfigFields(t *testing.T) {
 	tests := []struct {
 		name string
 		old  string
@@ -163,14 +163,14 @@ func TestLoadPolicyRequiresExplicitPolicyFields(t *testing.T) {
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadPolicy(path); err == nil {
-				t.Fatal("loadPolicy accepted config with a missing policy field")
+			if _, err := loadConfig(path); err == nil {
+				t.Fatal("loadConfig accepted config with a missing configuration field")
 			}
 		})
 	}
 }
 
-func TestLoadPolicyAllowsExplicitZeroValues(t *testing.T) {
+func TestLoadConfigAllowsExplicitZeroValues(t *testing.T) {
 	tests := []struct {
 		name        string
 		contents    string
@@ -202,14 +202,14 @@ func TestLoadPolicyAllowsExplicitZeroValues(t *testing.T) {
 			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadPolicy(path); err != nil {
-				t.Fatalf("loadPolicy explicit zero: %v", err)
+			if _, err := loadConfig(path); err != nil {
+				t.Fatalf("loadConfig explicit zero: %v", err)
 			}
 		})
 	}
 }
 
-func TestLoadPolicyAllowsSenderChannelCapacityPolicy(t *testing.T) {
+func TestLoadConfigAllowsSenderChannelCapacityConfig(t *testing.T) {
 	contents := strings.Replace(
 		testConfigContents(),
 		"[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]",
@@ -217,19 +217,19 @@ func TestLoadPolicyAllowsSenderChannelCapacityPolicy(t *testing.T) {
 		1,
 	)
 	if contents == testConfigContents() {
-		t.Fatal("sender channel capacity policy replacement did not apply")
+		t.Fatal("sender channel capacity setting replacement did not apply")
 	}
 
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadPolicy(path); err != nil {
-		t.Fatalf("loadPolicy sender channel capacity policy: %v", err)
+	if _, err := loadConfig(path); err != nil {
+		t.Fatalf("loadConfig sender channel capacity config: %v", err)
 	}
 }
 
-func TestLoadPolicyRejectsInvalidSenderChannelCapacityPolicy(t *testing.T) {
+func TestLoadConfigRejectsInvalidSenderChannelCapacityConfig(t *testing.T) {
 	tests := []struct {
 		name string
 		old  string
@@ -252,24 +252,24 @@ func TestLoadPolicyRejectsInvalidSenderChannelCapacityPolicy(t *testing.T) {
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadPolicy(path); err == nil {
-				t.Fatal("loadPolicy accepted invalid sender channel capacity policy")
+			if _, err := loadConfig(path); err == nil {
+				t.Fatal("loadConfig accepted invalid sender channel capacity config")
 			}
 		})
 	}
 }
 
-func TestThrottlerPolicyUsesApprovedProfile(t *testing.T) {
-	loaded := testPolicy(t)
+func TestThrottlerConfigUsesApprovedProfile(t *testing.T) {
+	loaded := testConfig(t)
 	reader := loaded.Reader.ReadBatchSize
 	if reader.Default != 1_000 || reader.Min != 1_000 || reader.Max != 100_000 ||
 		reader.Step != 1_000 || reader.Unit != batchSizeUnit || reader.Mutability != idleOnly {
-		t.Fatalf("reader batch size policy = %+v", reader)
+		t.Fatalf("reader batch size config = %+v", reader)
 	}
 	requested := loaded.Throttler.RequestedTPS
 	if requested.Default != 2_000_000 || requested.Min != 0 || requested.Max != 4_000_000 ||
 		requested.Step != 200_000 || requested.Unit != requestedTPSUnit || requested.Mutability != immediate {
-		t.Fatalf("requested TPS policy = %+v", requested)
+		t.Fatalf("requested TPS config = %+v", requested)
 	}
 	values := make(map[int]struct{})
 	for value := requested.Min; value <= requested.Max; value += requested.Step {
@@ -281,19 +281,19 @@ func TestThrottlerPolicyUsesApprovedProfile(t *testing.T) {
 	mode := loaded.Throttler.InstallationMode
 	if mode.Default != throttlerInstalled || !mode.contains(throttlerInstalled) ||
 		!mode.contains(throttlerBypass) || mode.Mutability != immediate {
-		t.Fatalf("installation mode policy = %+v", mode)
+		t.Fatalf("installation mode config = %+v", mode)
 	}
 }
 
-func TestMetricsWindowPolicyUsesApprovedProfile(t *testing.T) {
-	window := testPolicy(t).Metrics.WindowMS
+func TestMetricsWindowConfigUsesApprovedProfile(t *testing.T) {
+	window := testConfig(t).Metrics.WindowMS
 	if window.Default != 1_000 || window.Min != 100 || window.Max != 10_000 ||
 		window.Step != 100 || window.Unit != metricsWindowUnit || window.Mutability != startupOnly {
-		t.Fatalf("metrics window policy = %+v", window)
+		t.Fatalf("metrics window config = %+v", window)
 	}
 }
 
-func TestLoadPolicyRejectsInvalidMetricsWindowPolicy(t *testing.T) {
+func TestLoadConfigRejectsInvalidMetricsWindowConfig(t *testing.T) {
 	tests := []struct {
 		name string
 		old  string
@@ -317,14 +317,14 @@ func TestLoadPolicyRejectsInvalidMetricsWindowPolicy(t *testing.T) {
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadPolicy(path); err == nil {
-				t.Fatal("loadPolicy accepted invalid metrics window policy")
+			if _, err := loadConfig(path); err == nil {
+				t.Fatal("loadConfig accepted invalid metrics window config")
 			}
 		})
 	}
 }
 
-func TestLoadPolicyAllowsSafeMetricsWindowDefaults(t *testing.T) {
+func TestLoadConfigAllowsSafeMetricsWindowDefaults(t *testing.T) {
 	for _, value := range []int{100, 300, 1_000, 10_000} {
 		t.Run(fmt.Sprintf("%d milliseconds", value), func(t *testing.T) {
 			contents := strings.Replace(
@@ -337,27 +337,27 @@ func TestLoadPolicyAllowsSafeMetricsWindowDefaults(t *testing.T) {
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadPolicy(path); err != nil {
-				t.Fatalf("loadPolicy metrics window %d: %v", value, err)
+			if _, err := loadConfig(path); err != nil {
+				t.Fatalf("loadConfig metrics window %d: %v", value, err)
 			}
 		})
 	}
 }
 
-func TestCheckedInPolicyLoadsApprovedThrottlerProfile(t *testing.T) {
-	loaded, _, err := loadPolicy(defaultConfigPath)
+func TestCheckedInConfigLoadsApprovedThrottlerProfile(t *testing.T) {
+	loaded, err := loadConfig(defaultConfigPath)
 	if err != nil {
-		t.Fatalf("load checked-in policy: %v", err)
+		t.Fatalf("load checked-in config: %v", err)
 	}
 	if loaded.Reader.ReadBatchSize.Default != 1_000 ||
 		loaded.Throttler.RequestedTPS.Default != 2_000_000 || loaded.Throttler.RequestedTPS.Min != 0 ||
 		loaded.Throttler.RequestedTPS.Max != 4_000_000 || loaded.Throttler.RequestedTPS.Step != 200_000 ||
 		loaded.Throttler.InstallationMode.Default != throttlerInstalled {
-		t.Fatalf("checked-in throttler policy = %+v", loaded.Throttler)
+		t.Fatalf("checked-in throttler config = %+v", loaded.Throttler)
 	}
 }
 
-func TestLoadPolicyRejectsInvalidThrottlerPolicy(t *testing.T) {
+func TestLoadConfigRejectsInvalidThrottlerConfig(t *testing.T) {
 	tests := []struct {
 		name      string
 		old       string
@@ -385,34 +385,34 @@ func TestLoadPolicyRejectsInvalidThrottlerPolicy(t *testing.T) {
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadPolicy(path); err == nil {
-				t.Fatal("loadPolicy accepted invalid throttler policy")
+			if _, err := loadConfig(path); err == nil {
+				t.Fatal("loadConfig accepted invalid throttler config")
 			} else if test.wantError != "" && !strings.Contains(err.Error(), test.wantError) {
-				t.Fatalf("loadPolicy error = %q, want detail %q", err, test.wantError)
+				t.Fatalf("loadConfig error = %q, want detail %q", err, test.wantError)
 			}
 		})
 	}
 }
 
-func TestSenderPolicyUsesApprovedProfile(t *testing.T) {
-	sender := testPolicy(t).Sender
-	if sender.Workers != (rangePolicy{Default: 32, Min: 1, Max: 32, Step: 1, Unit: workersUnit, Mutability: immediate}) {
-		t.Fatalf("workers policy = %+v", sender.Workers)
+func TestSenderConfigUsesApprovedProfile(t *testing.T) {
+	sender := testConfig(t).Sender
+	if sender.Workers != (rangeConfig{Default: 32, Min: 1, Max: 32, Step: 1, Unit: workersUnit, Mutability: immediate}) {
+		t.Fatalf("workers config = %+v", sender.Workers)
 	}
 	if got, want := sender.Retry.DelaysMS, []int{250, 500, 1_000, 2_000, 5_000}; !slices.Equal(got, want) {
 		t.Fatalf("retry delays = %v, want %v", got, want)
 	}
 }
 
-func TestReaderWorkersPolicyUsesApprovedProfile(t *testing.T) {
-	workers := testPolicy(t).Reader.Workers
-	want := rangePolicy{Default: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}
+func TestReaderWorkersConfigUsesApprovedProfile(t *testing.T) {
+	workers := testConfig(t).Reader.Workers
+	want := rangeConfig{Default: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}
 	if workers != want || !workers.contains(1) || !workers.contains(7) || workers.contains(0) || workers.contains(8) {
-		t.Fatalf("Reader workers policy = %+v, want %+v", workers, want)
+		t.Fatalf("Reader workers config = %+v, want %+v", workers, want)
 	}
 }
 
-func TestLoadPolicyRejectsReaderWorkersProfileDrift(t *testing.T) {
+func TestLoadConfigRejectsReaderWorkersProfileDrift(t *testing.T) {
 	tests := []struct{ name, old, replacement string }{
 		{"missing workers", "[reader.workers]\ndefault = 1", "[reader.workers]"},
 		{"default zero", "[reader.workers]\ndefault = 1", "[reader.workers]\ndefault = 0"},
@@ -431,14 +431,14 @@ func TestLoadPolicyRejectsReaderWorkersProfileDrift(t *testing.T) {
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadPolicy(path); err == nil {
-				t.Fatal("loadPolicy accepted invalid Reader workers policy")
+			if _, err := loadConfig(path); err == nil {
+				t.Fatal("loadConfig accepted invalid Reader workers config")
 			}
 		})
 	}
 }
 
-func TestLoadPolicyRejectsInvalidSenderPolicy(t *testing.T) {
+func TestLoadConfigRejectsInvalidSenderConfig(t *testing.T) {
 	tests := []struct{ name, old, replacement string }{
 		{"missing workers", "[sender.workers]\ndefault = 32", "[sender.workers]"},
 		{"wrong workers max", "max = 32", "max = 33"},
@@ -457,14 +457,14 @@ func TestLoadPolicyRejectsInvalidSenderPolicy(t *testing.T) {
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, _, err := loadPolicy(path); err == nil {
-				t.Fatal("loadPolicy accepted invalid Sender policy")
+			if _, err := loadConfig(path); err == nil {
+				t.Fatal("loadConfig accepted invalid Sender config")
 			}
 		})
 	}
 }
 
-func TestSenderRetryPolicyDurationBounds(t *testing.T) {
+func TestSenderRetryConfigDurationBounds(t *testing.T) {
 	maximumDelayMS := senderRetryMaxDelayMS(20)
 	tests := []struct {
 		name    string
@@ -478,12 +478,12 @@ func TestSenderRetryPolicyDurationBounds(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			policy := senderRetryPolicy{
+			config := senderRetryConfig{
 				DelaysMS:      []int{test.delayMS},
 				JitterPercent: 20,
 				Mutability:    startupOnly,
 			}
-			if err := policy.validate(); (err != nil) != test.wantErr {
+			if err := config.validate(); (err != nil) != test.wantErr {
 				t.Fatalf("validate() error = %v, want error=%t", err, test.wantErr)
 			}
 		})

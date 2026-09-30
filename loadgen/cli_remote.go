@@ -406,24 +406,24 @@ func validateSnapshotKeys(root map[string]json.RawMessage) error {
 			return err
 		}
 	}
-	var policy map[string]json.RawMessage
-	if err := json.Unmarshal(root["policy"], &policy); err != nil {
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(root["policy"], &config); err != nil {
 		return fmt.Errorf("decode snapshot policy: %w", err)
 	}
 	for _, name := range []string{"readerReadBatchSize", "readerWorkers", "metricsWindowMs", "senderWorkers", "throttlerRequestedTps"} {
-		if err := validateSnapshotObjectKeys(policy, name, []string{"default", "max", "min", "mutability", "step", "unit"}); err != nil {
+		if err := validateSnapshotObjectKeys(config, name, []string{"default", "max", "min", "mutability", "step", "unit"}); err != nil {
 			return err
 		}
 	}
 	for _, name := range []string{"readerChannelCapacity", "senderChannelCapacity"} {
-		if err := validateSnapshotObjectKeys(policy, name, []string{"allowed", "default", "mutability", "unit"}); err != nil {
+		if err := validateSnapshotObjectKeys(config, name, []string{"allowed", "default", "mutability", "unit"}); err != nil {
 			return err
 		}
 	}
-	if err := validateSnapshotObjectKeys(policy, "throttlerInstallationMode", []string{"allowed", "default", "mutability"}); err != nil {
+	if err := validateSnapshotObjectKeys(config, "throttlerInstallationMode", []string{"allowed", "default", "mutability"}); err != nil {
 		return err
 	}
-	if err := validateSnapshotObjectKeys(policy, "logging", []string{"level", "mutability"}); err != nil {
+	if err := validateSnapshotObjectKeys(config, "logging", []string{"level", "mutability"}); err != nil {
 		return err
 	}
 	var reader map[string]json.RawMessage

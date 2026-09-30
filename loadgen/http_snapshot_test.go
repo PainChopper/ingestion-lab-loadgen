@@ -22,7 +22,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		Sender:        runtimeSenderStatus{Workers: 32},
 		ReaderChannel: runtimeChannelStatus{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, SentBatchesTotal: 2, SentTransactionsTotal: 4, ReceivedBatchesTotal: 1, ReceivedTransactionsTotal: 2, SentBatchesPerSecond: 1.5, SentTransactionsPerSecond: 3, ReceivedBatchesPerSecond: 0.5, ReceivedTransactionsPerSecond: 1},
 		SenderChannel: runtimeChannelStatus{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, SentBatchesTotal: 3, SentTransactionsTotal: 6, ReceivedBatchesTotal: 2, ReceivedTransactionsTotal: 3, SentBatchesPerSecond: 2, SentTransactionsPerSecond: 4, ReceivedBatchesPerSecond: 1.5, ReceivedTransactionsPerSecond: 2.5},
-		Policy:        runtimePolicyStatusFromPolicy(testPolicy(t)),
+		Config:        runtimeConfigStatusFromConfig(testConfig(t)),
 	}
 	rec := httptest.NewRecorder()
 	go func() { (<-requests).statusReply <- expected }()
@@ -59,16 +59,16 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if string(root["policy"]) == "null" {
 		t.Error("policy must be a JSON object")
 	}
-	var policy map[string]json.RawMessage
-	if err := json.Unmarshal(root["policy"], &policy); err != nil {
+	var config map[string]json.RawMessage
+	if err := json.Unmarshal(root["policy"], &config); err != nil {
 		t.Fatalf("decode policy: %v", err)
 	}
-	assertExactJSONKeys(t, policy, []string{"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstallationMode", "throttlerRequestedTps"})
-	var workers rangePolicy
-	if err := json.Unmarshal(policy["readerWorkers"], &workers); err != nil {
+	assertExactJSONKeys(t, config, []string{"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstallationMode", "throttlerRequestedTps"})
+	var workers rangeConfig
+	if err := json.Unmarshal(config["readerWorkers"], &workers); err != nil {
 		t.Fatal(err)
 	}
-	if want := (rangePolicy{Default: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}); workers != want {
+	if want := (rangeConfig{Default: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}); workers != want {
 		t.Errorf("Reader workers policy = %+v, want %+v", workers, want)
 	}
 	var reader map[string]json.RawMessage
@@ -125,7 +125,7 @@ func TestHTTPV1StatusProjectionPreservesDistinctRuntimeValues(t *testing.T) {
 			ReceivedTransactionsTotal: 80, SentBatchesPerSecond: 81.5, SentTransactionsPerSecond: 82.5,
 			ReceivedBatchesPerSecond: 83.5, ReceivedTransactionsPerSecond: 84.5,
 		},
-		Policy: runtimePolicyStatusFromPolicy(testPolicy(t)),
+		Config: runtimeConfigStatusFromConfig(testConfig(t)),
 	}
 
 	actual := httpV1StatusFromRuntime(want)

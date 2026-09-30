@@ -62,7 +62,7 @@ Vite проксирует `/api` на backend. Интерфейс доступе
 
 `0` для capacity означает небуферизованный Go channel. `0 TPS` в режиме `installed` удерживает batch; `bypass` пропускает ограничение. Throttler работает целыми batch-ами: перед отправкой batch ожидает расчётный интервал `размер batch / TPS`.
 
-Актуальный пример находится в [loadgen/config.toml](loadgen/config.toml). Подробности формата и validation описаны в [docs/configuration.md](docs/configuration.md); этот документ пока требует синхронизации с полным набором текущих policy-разделов.
+Актуальный пример находится в [loadgen/config.toml](loadgen/config.toml). Подробности формата и validation описаны в [docs/configuration.md](docs/configuration.md); этот документ пока требует синхронизации с полным набором текущих разделов конфигурации.
 
 ## HTTP API
 
