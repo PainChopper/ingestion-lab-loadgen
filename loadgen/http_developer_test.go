@@ -15,7 +15,7 @@ import (
 
 func TestDeveloperRoutes(t *testing.T) {
 	requests := make(chan runtimeCommand, 1)
-	mux := newServeMux(testControlPlane(requests), nil, testConfig(t))
+	mux := newServeMux(testControlPlane(requests), nil, testConfig(t), nil)
 	tests := []struct {
 		name        string
 		path        string
@@ -249,7 +249,7 @@ func assertExampleDispatches(t *testing.T, body map[string]any, want runtimeComm
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		commandsHandler(testControlPlane(requests), commandConfig).ServeHTTP(recorder, request)
+		commandsHandler(testControlPlane(requests), commandConfig, nil).ServeHTTP(recorder, request)
 	}()
 	var got runtimeCommand
 	select {

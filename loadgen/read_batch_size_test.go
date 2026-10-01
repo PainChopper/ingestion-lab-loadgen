@@ -34,7 +34,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, request)
+				commandsHandler(testControlPlane(commands), testConfig(t), nil).ServeHTTP(recorder, request)
 			}()
 			if test.want == http.StatusOK {
 				select {

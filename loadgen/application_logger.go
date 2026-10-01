@@ -28,10 +28,3 @@ func newApplicationLogger(level string, output io.Writer) (*zap.Logger, error) {
 	)
 	return zap.New(core), nil
 }
-
-func loggerOrNop(loggers []*zap.Logger) *zap.Logger {
-	if len(loggers) == 1 && loggers[0] != nil {
-		return loggers[0]
-	}
-	return zap.NewNop()
-}

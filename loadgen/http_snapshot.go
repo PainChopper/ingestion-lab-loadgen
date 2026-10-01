@@ -371,8 +371,10 @@ func (status httpV1ChannelStatus) runtimeStatus() runtimeChannelStatus {
 	}
 }
 
-func snapshotHandler(control runtimeControl, loggers ...*zap.Logger) http.Handler {
-	logger := loggerOrNop(loggers)
+func snapshotHandler(control runtimeControl, logger *zap.Logger) http.Handler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)

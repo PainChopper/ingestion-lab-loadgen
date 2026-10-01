@@ -74,8 +74,11 @@ func startSenderPool(
 	workers int,
 	api senderAPIConfig,
 	retry senderRetryConfig,
-	loggers ...*zap.Logger,
+	logger *zap.Logger,
 ) *senderPool {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	ctx, cancel := context.WithCancel(parent)
 	pool := &senderPool{
 		ctx:                                      ctx,
@@ -89,7 +92,7 @@ func startSenderPool(
 		terminallyCompletedTransactionsSinceTick: terminallyCompletedTransactionsSinceTick,
 		attempt:                                  newSenderHTTPAttempt(api.URL, http.DefaultClient).deliver,
 		wait:                                     waitSenderBackoff,
-		logger:                                   loggerOrNop(loggers),
+		logger:                                   logger,
 	}
 	pool.available = sync.NewCond(&pool.mu)
 	pool.reconcile(workers)

@@ -14,8 +14,10 @@ type commandRequest struct {
 	Value  json.RawMessage `json:"value"`
 }
 
-func commandsHandler(control runtimeControl, config config, loggers ...*zap.Logger) http.Handler {
-	logger := loggerOrNop(loggers)
+func commandsHandler(control runtimeControl, config config, logger *zap.Logger) http.Handler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
