@@ -208,12 +208,12 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		target        string
 		requestAction string
 		value         any
-		update        func(*httpV1Status)
+		update        func(*httpStatus)
 	}{
-		{target: "reader-workers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *httpV1Status) { snapshot.Reader.Workers = 3 }},
-		{target: "sender-workers", requestAction: "set-sender-workers", value: 4, update: func(snapshot *httpV1Status) { snapshot.Sender.Workers = 4 }},
-		{target: "requested-tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *httpV1Status) { snapshot.Throttler.RequestedTps = 0 }},
-		{target: "throttler-mode", requestAction: "set-throttler-installation-mode", value: "bypass", update: func(snapshot *httpV1Status) { snapshot.Throttler.InstallationMode = throttlerBypass }},
+		{target: "reader-workers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *httpStatus) { snapshot.Reader.Workers = 3 }},
+		{target: "sender-workers", requestAction: "set-sender-workers", value: 4, update: func(snapshot *httpStatus) { snapshot.Sender.Workers = 4 }},
+		{target: "requested-tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *httpStatus) { snapshot.Throttler.RequestedTps = 0 }},
+		{target: "throttler-mode", requestAction: "set-throttler-installation-mode", value: "bypass", update: func(snapshot *httpStatus) { snapshot.Throttler.InstallationMode = throttlerBypass }},
 	} {
 		t.Run(test.target, func(t *testing.T) {
 			snapshot := testRemoteSnapshot(t)
@@ -438,10 +438,10 @@ func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
 	}
 }
 
-func testRemoteSnapshot(t *testing.T) httpV1Status {
+func testRemoteSnapshot(t *testing.T) httpStatus {
 	t.Helper()
-	return httpV1Status{
-		Run:    httpV1RunStatus{State: runStatePaused},
-		Config: httpV1ConfigStatusFromRuntime(runtimeConfigStatusFromConfig(testConfig(t))),
+	return httpStatus{
+		Run:    httpRunStatus{State: runStatePaused},
+		Config: httpConfigStatusFromRuntime(runtimeConfigStatusFromConfig(testConfig(t))),
 	}
 }

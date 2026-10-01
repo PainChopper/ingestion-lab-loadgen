@@ -30,7 +30,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reply code = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var actual httpV1Status
+	var actual httpStatus
 	if err := json.Unmarshal(rec.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	}
 }
 
-func TestHTTPV1StatusProjectionPreservesDistinctRuntimeValues(t *testing.T) {
+func TestHTTPStatusProjectionPreservesDistinctRuntimeValues(t *testing.T) {
 	want := runtimeStatus{
 		Run: runtimeRunStatus{State: runStatePaused, TotalTransactions: 101, ElapsedMs: 102},
 		Reader: runtimeReaderStatus{
@@ -128,13 +128,13 @@ func TestHTTPV1StatusProjectionPreservesDistinctRuntimeValues(t *testing.T) {
 		Config: runtimeConfigStatusFromConfig(testConfig(t)),
 	}
 
-	actual := httpV1StatusFromRuntime(want)
+	actual := httpStatusFromRuntime(want)
 	if actual.Reader.DrainingBlockedWorkers != 19 || actual.Sender.DrainingBackoffWorkers != 49 {
-		t.Fatalf("V1 worker projection = Reader %+v, Sender %+v", actual.Reader, actual.Sender)
+		t.Fatalf("HTTP worker projection = Reader %+v, Sender %+v", actual.Reader, actual.Sender)
 	}
 	if actual.ReaderChannel.ReceivedTransactionsPerSecond != 64.5 ||
 		actual.SenderChannel.ReceivedTransactionsPerSecond != 84.5 {
-		t.Fatalf("V1 channel projection = Reader %+v, Sender %+v", actual.ReaderChannel, actual.SenderChannel)
+		t.Fatalf("HTTP channel projection = Reader %+v, Sender %+v", actual.ReaderChannel, actual.SenderChannel)
 	}
 	if got := actual.runtimeStatus(); !reflect.DeepEqual(got, want) {
 		t.Errorf("round-trip runtime status = %+v, want %+v", got, want)
@@ -171,7 +171,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
 	}
-	var actual httpV1Status
+	var actual httpStatus
 	if err := json.Unmarshal(recorder.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}

@@ -88,7 +88,7 @@ func TestCLIBinaryRemoteSnapshotAndErrors(t *testing.T) {
 	if result.exitCode != cliExitSuccess || result.stdout != string(expectedSnapshot)+"\n" || result.stderr != "" {
 		t.Fatalf("success stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
 	}
-	var actual httpV1Status
+	var actual httpStatus
 	if err := json.Unmarshal([]byte(result.stdout), &actual); err != nil {
 		t.Fatalf("decode CLI stdout: %v", err)
 	}
@@ -136,9 +136,9 @@ func buildCLIBinary(t *testing.T) string {
 	t.Helper()
 	buildDirectory := blackBoxRuntimeDirectory(t)
 	binary := filepath.Join(buildDirectory, "ingestion-lab-loadgen.exe")
-	context, cancel := context.WithTimeout(context.Background(), blackBoxTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), blackBoxTimeout)
 	defer cancel()
-	command := exec.CommandContext(context, "go", "build", "-o", binary, ".")
+	command := exec.CommandContext(ctx, "go", "build", "-o", binary, ".")
 	command.Dir = repositoryRoot(t)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -149,9 +149,9 @@ func buildCLIBinary(t *testing.T) string {
 
 func runCLIBinary(t *testing.T, binary string, args ...string) blackBoxResult {
 	t.Helper()
-	context, cancel := context.WithTimeout(context.Background(), blackBoxTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), blackBoxTimeout)
 	defer cancel()
-	command := exec.CommandContext(context, binary, args...)
+	command := exec.CommandContext(ctx, binary, args...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -231,7 +231,7 @@ func waitForCLISnapshotState(t *testing.T, baseURL string, want runState) {
 	for time.Now().Before(deadline) {
 		response, err := client.Get(baseURL + snapshotPath)
 		if err == nil {
-			var snapshot httpV1Status
+			var snapshot httpStatus
 			decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
 			closeErr := response.Body.Close()
 			if decodeErr == nil && closeErr == nil && snapshot.Run.State == want {
