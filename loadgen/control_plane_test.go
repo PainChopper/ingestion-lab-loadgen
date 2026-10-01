@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestRuntimeControlExecuteForwardsCommandAndReceipt(t *testing.T) {
-	control := newRuntimeControl(10)
+	control := newControlPlane(10)
 	if cap(control.requests) != 10 {
 		t.Fatalf("request capacity = %d, want 10", cap(control.requests))
 	}
@@ -30,7 +30,7 @@ func TestRuntimeControlExecuteForwardsCommandAndReceipt(t *testing.T) {
 }
 
 func TestRuntimeControlStatusForwardsReply(t *testing.T) {
-	control := newRuntimeControl(10)
+	control := newControlPlane(10)
 	want := runtimeStatus{Run: runtimeRunStatus{State: runStatePaused}}
 	done := make(chan struct{})
 
@@ -53,7 +53,7 @@ func TestRuntimeControlStatusForwardsReply(t *testing.T) {
 }
 
 func TestRuntimeControlExecuteAsyncForwardsCommandWithoutReceipt(t *testing.T) {
-	control := newRuntimeControl(10)
+	control := newControlPlane(10)
 	control.executeAsync(runtimeCommand{kind: cmdPause})
 	command := <-control.requests
 	if command.kind != cmdPause || command.receiptReply != nil {
@@ -61,6 +61,6 @@ func TestRuntimeControlExecuteAsyncForwardsCommandWithoutReceipt(t *testing.T) {
 	}
 }
 
-func testControlPlane(requests chan runtimeCommand) runtimeControl {
-	return runtimeControl{requests: requests}
+func testControlPlane(requests chan runtimeCommand) controlPlane {
+	return controlPlane{requests: requests}
 }

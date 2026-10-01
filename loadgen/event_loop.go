@@ -10,9 +10,9 @@ import (
 )
 
 func (state *controlState) eventLoop(
-	control runtimeControl,
+	control controlPlane,
 	metrics <-chan time.Time,
-	promMetrics *Metrics,
+	promMetrics *PrometheusMetrics,
 	read readerStarter,
 ) {
 	state.eventLoopWithThrottlerContext(context.Background(), control, metrics, promMetrics, read, startThrottler)
@@ -20,17 +20,17 @@ func (state *controlState) eventLoop(
 
 func (state *controlState) runEventLoop(
 	ctx context.Context,
-	control runtimeControl,
+	control controlPlane,
 	metrics <-chan time.Time,
-	promMetrics *Metrics,
+	promMetrics *PrometheusMetrics,
 ) {
 	state.eventLoopWithThrottlerContext(ctx, control, metrics, promMetrics, state.startReaderPool, startThrottler)
 }
 
 func (state *controlState) eventLoopWithThrottler(
-	control runtimeControl,
+	control controlPlane,
 	metrics <-chan time.Time,
-	promMetrics *Metrics,
+	promMetrics *PrometheusMetrics,
 	read readerStarter,
 	start throttlerStarter,
 ) {
@@ -39,9 +39,9 @@ func (state *controlState) eventLoopWithThrottler(
 
 func (state *controlState) eventLoopWithThrottlerContext(
 	ctx context.Context,
-	control runtimeControl,
+	control controlPlane,
 	metrics <-chan time.Time,
-	promMetrics *Metrics,
+	promMetrics *PrometheusMetrics,
 	read readerStarter,
 	start throttlerStarter,
 ) {
@@ -355,7 +355,7 @@ func (state *controlState) throttlerSettings(paused bool) throttlerSettings {
 	}
 }
 
-func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTick *atomic.Int64, promMetrics *Metrics) {
+func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTick *atomic.Int64, promMetrics *PrometheusMetrics) {
 	state.telemetry.reader.reset()
 	state.telemetry.sender.reset()
 	state.telemetry.readerChannel.clearMeasurements()
@@ -370,7 +370,7 @@ func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTic
 
 func (state *controlState) resetFaultedMeasurements(
 	terminallyCompletedTransactionsSinceTick *atomic.Int64,
-	promMetrics *Metrics,
+	promMetrics *PrometheusMetrics,
 ) {
 	state.telemetry.reader.reset()
 	state.telemetry.sender.reset()

@@ -14,7 +14,7 @@ type commandRequest struct {
 	Value  json.RawMessage `json:"value"`
 }
 
-func commandsHandler(control runtimeControl, config config, logger *zap.Logger) http.Handler {
+func commandsHandler(control controlPlane, config config, logger *zap.Logger) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
