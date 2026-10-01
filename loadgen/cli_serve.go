@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"go.uber.org/zap"
 )
@@ -93,7 +94,7 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	logger, err := newStdoutApplicationLogger(config.Logging.Level)
+	logger, err := newApplicationLogger(config.Logging.Level, os.Stdout)
 	if err != nil {
 		return fmt.Errorf("create application logger: %w", err)
 	}

@@ -40,8 +40,7 @@ func newServeMux(plane runtimeControl, metrics *Metrics, config config, loggers 
 	return mux
 }
 
-func startHTTPServer(plane runtimeControl, metrics *Metrics, config config, loggers ...*zap.Logger) (*http.Server, <-chan error, error) {
-	logger := loggerOrNop(loggers)
+func startHTTPServer(plane runtimeControl, metrics *Metrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
 	mux := newServeMux(plane, metrics, config, logger)
 
 	server := &http.Server{

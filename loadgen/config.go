@@ -18,7 +18,6 @@ const (
 	configSchemaVersion = 2
 )
 
-// Units accepted by config fields.
 const (
 	sourceUnit        = "glob-pattern"
 	batchSizeUnit     = "transactions"
@@ -26,7 +25,6 @@ const (
 	requestedTPSUnit  = "transactions/s"
 	metricsWindowUnit = "milliseconds"
 	workersUnit       = "workers"
-	percentUnit       = "percent"
 )
 
 // Mutability values accepted by config fields.
@@ -122,13 +120,13 @@ type allowedConfig struct {
 	Mutability string `mapstructure:"mutability" json:"mutability"`
 }
 
-func loadConfig(configArgument string) (config, error) {
-	configPath := defaultConfigPath
-	if configArgument != "" {
-		configPath = configArgument
+func loadConfig(configPath string) (config, error) {
+	path := defaultConfigPath
+	if configPath != "" {
+		path = configPath
 	}
 
-	absConfigPath, err := filepath.Abs(configPath)
+	absConfigPath, err := filepath.Abs(path)
 	if err != nil {
 		return config{}, fmt.Errorf("make config path absolute: %w", err)
 	}
@@ -138,17 +136,17 @@ func loadConfig(configArgument string) (config, error) {
 	if err := viperConfig.ReadInConfig(); err != nil {
 		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
 	}
-	var loaded config
-	if err := viperConfig.UnmarshalExact(&loaded, func(decoderConfig *mapstructure.DecoderConfig) {
+	var cfg config
+	if err := viperConfig.UnmarshalExact(&cfg, func(decoderConfig *mapstructure.DecoderConfig) {
 		decoderConfig.ErrorUnset = true
 	}); err != nil {
 		return config{}, fmt.Errorf("decode config %q: %w", absConfigPath, err)
 	}
-	if err := loaded.validate(); err != nil {
+	if err := cfg.validate(); err != nil {
 		return config{}, fmt.Errorf("validate config %q: %w", absConfigPath, err)
 	}
 
-	return loaded, nil
+	return cfg, nil
 }
 
 func (p config) validate() error {
