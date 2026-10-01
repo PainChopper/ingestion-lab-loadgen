@@ -2,7 +2,6 @@ package main
 
 import (
 	"io"
-	"os"
 
 	zaplogfmt "github.com/jsternberg/zap-logfmt"
 	"go.uber.org/zap"
@@ -28,10 +27,6 @@ func newApplicationLogger(level string, output io.Writer) (*zap.Logger, error) {
 		atomicLevel,
 	)
 	return zap.New(core), nil
-}
-
-func newStdoutApplicationLogger(level string) (*zap.Logger, error) {
-	return newApplicationLogger(level, os.Stdout)
 }
 
 func loggerOrNop(loggers []*zap.Logger) *zap.Logger {
