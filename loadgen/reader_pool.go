@@ -87,8 +87,11 @@ func startReaderPool(
 	batches chan<- []Transaction,
 	telemetry *readerTelemetry,
 	channel *channelTelemetry,
-	loggers ...*zap.Logger,
+	logger *zap.Logger,
 ) (*readerPool, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	sourceDirectory := readerSourceDirectory(dataPath)
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
@@ -104,7 +107,7 @@ func startReaderPool(
 		batchSize: batchSize, batches: batches, telemetry: telemetry, channel: channel,
 		workers: make([]*readerWorker, 0, workers), done: make(chan struct{}),
 		sourceErrors: make(chan readerSourceError, 1),
-		logger:       loggerOrNop(loggers),
+		logger:       logger,
 	}
 	pool.available = sync.NewCond(&pool.mu)
 	pool.reconcile(workers)

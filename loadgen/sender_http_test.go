@@ -86,7 +86,7 @@ func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 			var consumed atomic.Int64
 			config := testConfig(t).Sender
 			config.API.URL = server.URL
-			pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry)
+			pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry, nil)
 			pool.wait = func(context.Context, time.Duration) bool { return true }
 			batches <- []Transaction{{ClientID: "invalid"}}
 			waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })

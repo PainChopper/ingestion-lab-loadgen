@@ -29,7 +29,7 @@ func TestCommandsHandlerDispatches(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(rec, req)
+				commandsHandler(testControlPlane(commands), testConfig(t), nil).ServeHTTP(rec, req)
 			}()
 
 			var cmd runtimeCommand
@@ -65,7 +65,7 @@ func TestCommandsHandlerReportsRunStartError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, request)
+		commandsHandler(testControlPlane(commands), testConfig(t), nil).ServeHTTP(recorder, request)
 	}()
 
 	command := <-commands
@@ -83,12 +83,34 @@ func TestCommandsHandlerReportsRunStartError(t *testing.T) {
 	}
 }
 
+func TestCommandsHandlerNilLoggerHandlesResponseWriteError(t *testing.T) {
+	commands := make(chan runtimeCommand, 1)
+	request := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"run"}`))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		commandsHandler(testControlPlane(commands), testConfig(t), nil).ServeHTTP(&errorResponseWriter{}, request)
+	}()
+
+	command := <-commands
+	command.receiptReply <- runtimeCommandReceipt{err: errors.New("missing parquet")}
+	<-done
+}
+
+type errorResponseWriter struct{}
+
+func (errorResponseWriter) Header() http.Header { return make(http.Header) }
+
+func (errorResponseWriter) WriteHeader(int) {}
+
+func (errorResponseWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
+
 func TestCommandsHandlerRejectsGet(t *testing.T) {
 	commands := make(chan runtimeCommand, 1)
 	req := httptest.NewRequest(http.MethodGet, commandsPath, nil)
 	rec := httptest.NewRecorder()
 
-	commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(rec, req)
+	commandsHandler(testControlPlane(commands), testConfig(t), nil).ServeHTTP(rec, req)
 	response := rec.Result()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %v, want %v", rec.Code, http.StatusMethodNotAllowed)
@@ -114,7 +136,7 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 			body := strings.NewReader(test.body)
 			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
 			rec := httptest.NewRecorder()
-			commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(rec, req)
+			commandsHandler(testControlPlane(commands), testConfig(t), nil).ServeHTTP(rec, req)
 			response := rec.Result()
 			if response.StatusCode != http.StatusBadRequest {
 				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusBadRequest)
@@ -159,7 +181,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 			config := testConfig(t)
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), config).ServeHTTP(recorder, req)
+				commandsHandler(testControlPlane(commands), config, nil).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -213,7 +235,7 @@ func TestSenderCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, req)
+				commandsHandler(testControlPlane(commands), testConfig(t), nil).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -263,7 +285,7 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testConfig(t)).ServeHTTP(recorder, req)
+				commandsHandler(testControlPlane(commands), testConfig(t), nil).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {

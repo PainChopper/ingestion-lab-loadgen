@@ -19,8 +19,10 @@ const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
 const internalTestIngestPath = "/internal/test/ingest"
 
-func newServeMux(plane runtimeControl, metrics *Metrics, config config, loggers ...*zap.Logger) *http.ServeMux {
-	logger := loggerOrNop(loggers)
+func newServeMux(plane runtimeControl, metrics *Metrics, config config, logger *zap.Logger) *http.ServeMux {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	mux := http.NewServeMux()
 	mux.Handle(snapshotPath, snapshotHandler(plane, logger))
 	mux.Handle(commandsPath, commandsHandler(plane, config, logger))
@@ -41,6 +43,9 @@ func newServeMux(plane runtimeControl, metrics *Metrics, config config, loggers 
 }
 
 func startHTTPServer(plane runtimeControl, metrics *Metrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	mux := newServeMux(plane, metrics, config, logger)
 
 	server := &http.Server{
@@ -64,8 +69,10 @@ func startHTTPServer(plane runtimeControl, metrics *Metrics, config config, logg
 	return server, done, nil
 }
 
-func shutdownHTTPServer(ctx context.Context, server *http.Server, done <-chan error, loggers ...*zap.Logger) {
-	logger := loggerOrNop(loggers)
+func shutdownHTTPServer(ctx context.Context, server *http.Server, done <-chan error, logger *zap.Logger) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("graceful HTTP shutdown failed", zap.String("event", "run_failed"))
 		if closeErr := server.Close(); closeErr != nil {
