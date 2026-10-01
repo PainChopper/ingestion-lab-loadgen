@@ -415,18 +415,18 @@ func anyStringsOrEmpty(value any) []string {
 func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 	t.Helper()
 	models := map[string]reflect.Type{
-		"Snapshot":               reflect.TypeOf(httpV1Status{}),
-		"RunStatus":              reflect.TypeOf(httpV1RunStatus{}),
-		"ReaderStatus":           reflect.TypeOf(httpV1ReaderStatus{}),
-		"ReaderSourceError":      reflect.TypeOf(httpV1ReaderSourceError{}),
-		"ThrottlerStatus":        reflect.TypeOf(httpV1ThrottlerStatus{}),
-		"SenderStatus":           reflect.TypeOf(httpV1SenderStatus{}),
-		"ChannelStatus":          reflect.TypeOf(httpV1ChannelStatus{}),
-		"ConfigStatus":           reflect.TypeOf(httpV1ConfigStatus{}),
-		"RangeConfig":            reflect.TypeOf(httpV1RangeConfig{}),
-		"AllowedConfig":          reflect.TypeOf(httpV1AllowedConfig{}),
-		"InstallationModeConfig": reflect.TypeOf(httpV1InstallationModeConfig{}),
-		"LoggingConfig":          reflect.TypeOf(httpV1LoggingConfig{}),
+		"Snapshot":               reflect.TypeOf(httpStatus{}),
+		"RunStatus":              reflect.TypeOf(httpRunStatus{}),
+		"ReaderStatus":           reflect.TypeOf(httpReaderStatus{}),
+		"ReaderSourceError":      reflect.TypeOf(httpReaderSourceError{}),
+		"ThrottlerStatus":        reflect.TypeOf(httpThrottlerStatus{}),
+		"SenderStatus":           reflect.TypeOf(httpSenderStatus{}),
+		"ChannelStatus":          reflect.TypeOf(httpChannelStatus{}),
+		"ConfigStatus":           reflect.TypeOf(httpConfigStatus{}),
+		"RangeConfig":            reflect.TypeOf(httpRangeConfig{}),
+		"AllowedConfig":          reflect.TypeOf(httpAllowedConfig{}),
+		"InstallationModeConfig": reflect.TypeOf(httpInstallationModeConfig{}),
+		"LoggingConfig":          reflect.TypeOf(httpLoggingConfig{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
@@ -512,18 +512,18 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 	if !ok || snapshotContent["schema"].(map[string]any)["$ref"] != "#/components/schemas/Snapshot" {
 		t.Error("snapshot 200 must reference the handler's Snapshot DTO")
 	} else {
-		fixtures := map[string]httpV1Status{
-			"zero": {Run: httpV1RunStatus{State: runStateIdle}},
+		fixtures := map[string]httpStatus{
+			"zero": {Run: httpRunStatus{State: runStateIdle}},
 			"populated": {
-				Run:       httpV1RunStatus{State: runStatePaused, TotalTransactions: 46, ElapsedMs: 1234},
-				Reader:    httpV1ReaderStatus{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
-				Throttler: httpV1ThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
-				Sender:    httpV1SenderStatus{Workers: 32},
-				Config:    httpV1ConfigStatusFromRuntime(runtimeConfigStatusFromConfig(testConfig(t))),
+				Run:       httpRunStatus{State: runStatePaused, TotalTransactions: 46, ElapsedMs: 1234},
+				Reader:    httpReaderStatus{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
+				Throttler: httpThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
+				Sender:    httpSenderStatus{Workers: 32},
+				Config:    httpConfigStatusFromRuntime(runtimeConfigStatusFromConfig(testConfig(t))),
 			},
 			"source error": {
-				Run:    httpV1RunStatus{State: runStateIdle},
-				Reader: httpV1ReaderStatus{SourceError: &httpV1ReaderSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
+				Run:    httpRunStatus{State: runStateIdle},
+				Reader: httpReaderStatus{SourceError: &httpReaderSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}
 		for name, fixture := range fixtures {
