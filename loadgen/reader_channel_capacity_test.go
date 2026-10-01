@@ -100,7 +100,7 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 				state.eventLoopWithThrottler(
 					testControlPlane(requests),
 					metrics,
-					NewMetrics(),
+					NewPrometheusMetrics(),
 					read,
 					startThrottler,
 				)

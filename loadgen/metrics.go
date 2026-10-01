@@ -1,26 +1,22 @@
 package main
 
-import (
-	"github.com/prometheus/client_golang/prometheus"
-)
+import "time"
 
-type Metrics struct {
-	registry *prometheus.Registry
-
-	targetTPS prometheus.Gauge
-	actualTPS prometheus.Gauge
-
-	transactionsTotal prometheus.Counter
-	errorsTotal       prometheus.Counter
-
-	parquetReadSeconds prometheus.Histogram
+type metrics struct {
+	window            time.Duration
+	ticks             <-chan time.Time
+	prometheusMetrics *PrometheusMetrics
+	ticker            *time.Ticker
 }
 
-func NewMetrics() *Metrics {
-	reg := prometheus.NewRegistry()
-	target := prometheus.NewGauge(prometheus.GaugeOpts{Name: "loadgen_target_tps"})
-	actual := prometheus.NewGauge(prometheus.GaugeOpts{Name: "loadgen_actual_tps"})
-	total := prometheus.NewCounter(prometheus.CounterOpts{Name: "loadgen_transactions_total"})
-	reg.MustRegister(target, actual, total)
-	return &Metrics{registry: reg, targetTPS: target, actualTPS: actual, transactionsTotal: total}
+func newMetrics(config config) metrics {
+	window := time.Duration(config.Metrics.WindowMS.Default) * time.Millisecond
+	prometheusMetrics := NewPrometheusMetrics()
+	prometheusMetrics.targetTPS.Set(float64(config.Throttler.RequestedTPS.Default))
+	ticker := time.NewTicker(window)
+	return metrics{window: window, ticks: ticker.C, prometheusMetrics: prometheusMetrics, ticker: ticker}
+}
+
+func (m metrics) stop() {
+	m.ticker.Stop()
 }

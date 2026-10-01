@@ -371,7 +371,7 @@ func (status httpChannelStatus) runtimeStatus() runtimeChannelStatus {
 	}
 }
 
-func snapshotHandler(control runtimeControl, logger *zap.Logger) http.Handler {
+func snapshotHandler(control controlPlane, logger *zap.Logger) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}

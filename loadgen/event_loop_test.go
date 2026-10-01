@@ -44,7 +44,7 @@ func TestRunEventLoopStopsWhenApplicationContextIsCanceled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, testControlPlane(make(chan runtimeCommand)), make(chan time.Time), NewMetrics())
+		state.runEventLoop(ctx, testControlPlane(make(chan runtimeCommand)), make(chan time.Time), NewPrometheusMetrics())
 	}()
 
 	cancel()
@@ -153,7 +153,7 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 	metrics := make(chan time.Time)
 	state := newTestControlState(t)
 	state.metricsWindow = 300 * time.Millisecond
-	promMetrics := NewMetrics()
+	promMetrics := NewPrometheusMetrics()
 	started := make(chan struct{})
 	var output chan<- []Transaction
 	done := make(chan struct{})
@@ -230,7 +230,7 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(testControlPlane(requests), metrics, NewMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
+		state.eventLoop(testControlPlane(requests), metrics, NewPrometheusMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
 			readerDone := make(chan struct{})
 			go func() {
 				<-ctx.Done()
@@ -473,7 +473,7 @@ func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testi
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, testControlPlane(requests), make(chan time.Time), NewMetrics())
+		state.runEventLoop(ctx, testControlPlane(requests), make(chan time.Time), NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -515,7 +515,7 @@ func TestRunEventLoopFaultsBeforeWorkersForUnavailableSourceDirectory(t *testing
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, testControlPlane(requests), make(chan time.Time), NewMetrics())
+		state.runEventLoop(ctx, testControlPlane(requests), make(chan time.Time), NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -886,7 +886,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 		state.eventLoopWithThrottler(
 			testControlPlane(requests),
 			metrics,
-			NewMetrics(),
+			NewPrometheusMetrics(),
 			read,
 			startThrottler,
 		)
@@ -1252,7 +1252,7 @@ func startCustomEventLoopForTestWithThrottler(
 		state.eventLoopWithThrottler(
 			testControlPlane(requests),
 			metrics,
-			NewMetrics(),
+			NewPrometheusMetrics(),
 			read,
 			start,
 		)
@@ -1611,7 +1611,7 @@ func startActualChannelEventLoopForTestWithHeldThrottler(t *testing.T, holdThrot
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopWithThrottler(testControlPlane(requests), metrics, NewMetrics(), read, start)
+		state.eventLoopWithThrottler(testControlPlane(requests), metrics, NewPrometheusMetrics(), read, start)
 	}()
 	stopped := false
 	stop := func() {

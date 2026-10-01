@@ -20,23 +20,23 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	serviceCtx, stopService := context.WithCancel(appCtx)
 	defer stopService()
 
-	config, err := loadConfig(configPath)
+	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	logger, err := newApplicationLogger(config.Logging.Level, os.Stdout)
+	logger, err := newApplicationLogger(cfg.Logging.Level, os.Stdout)
 	if err != nil {
 		return fmt.Errorf("create application logger: %w", err)
 	}
 	defer func() { _ = logger.Sync() }()
 
-	state := newServeState(config, logger)
-	plane := newRuntimeControl(10)
-	runtime := newRuntimeMetrics(config)
-	defer runtime.stop()
-	state.metricsWindow = runtime.window
+	state := newServeState(cfg, logger)
+	plane := newControlPlane(10)
+	m := newMetrics(cfg)
+	defer m.stop()
+	state.metricsWindow = m.window
 
-	server, serverDone, err := startHTTPServer(plane, runtime.promMetrics, config, logger)
+	server, serverDone, err := startHTTPServer(plane, m.prometheusMetrics, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -44,7 +44,7 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	eventLoopDone := make(chan struct{})
 	go func() {
 		defer close(eventLoopDone)
-		state.runEventLoop(serviceCtx, plane, runtime.metrics, runtime.promMetrics)
+		state.runEventLoop(serviceCtx, plane, m.ticks, m.prometheusMetrics)
 	}()
 	if runAfterStart {
 		if result := plane.execute(runtimeCommand{kind: cmdRun}); result.err != nil {

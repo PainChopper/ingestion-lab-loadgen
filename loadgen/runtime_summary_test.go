@@ -205,7 +205,7 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(testControlPlane(requests), metrics, NewMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
+		state.eventLoop(testControlPlane(requests), metrics, NewPrometheusMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
 			readerDone := make(chan struct{})
 			go func() {
 				<-ctx.Done()

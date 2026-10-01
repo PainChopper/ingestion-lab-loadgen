@@ -36,28 +36,28 @@ type runtimeCommandReceipt struct {
 	err    error
 }
 
-type runtimeControl struct {
+type controlPlane struct {
 	requests chan runtimeCommand
 }
 
-func newRuntimeControl(buffer int) runtimeControl {
-	return runtimeControl{requests: make(chan runtimeCommand, buffer)}
+func newControlPlane(buffer int) controlPlane {
+	return controlPlane{requests: make(chan runtimeCommand, buffer)}
 }
 
-func (control runtimeControl) status() runtimeStatus {
+func (control controlPlane) status() runtimeStatus {
 	reply := make(chan runtimeStatus, 1)
 	control.requests <- runtimeCommand{kind: getRuntimeStatus, statusReply: reply}
 	return <-reply
 }
 
-func (control runtimeControl) execute(command runtimeCommand) runtimeCommandReceipt {
+func (control controlPlane) execute(command runtimeCommand) runtimeCommandReceipt {
 	reply := make(chan runtimeCommandReceipt, 1)
 	command.receiptReply = reply
 	control.requests <- command
 	return <-reply
 }
 
-func (control runtimeControl) executeAsync(command runtimeCommand) {
+func (control controlPlane) executeAsync(command runtimeCommand) {
 	control.requests <- command
 }
 
