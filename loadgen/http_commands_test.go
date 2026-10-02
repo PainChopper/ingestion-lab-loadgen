@@ -167,7 +167,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "mode unknown", body: `{"action":"set-throttler-installation-mode","value":"other"}`, want: http.StatusBadRequest},
 		{name: "mode extra field", body: `{"action":"set-throttler-installation-mode","value":"bypass","other":1}`, want: http.StatusBadRequest},
 		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
-		{name: "TPS default", body: `{"action":"set-requested-tps","value":2000000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
+		{name: "TPS initial", body: `{"action":"set-requested-tps","value":2000000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
 		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
 		{name: "mode installed", body: `{"action":"set-throttler-installation-mode","value":"installed"}`, want: http.StatusOK, kind: cmdSetThrottlerInstallationMode},
 		{name: "mode bypass", body: `{"action":"set-throttler-installation-mode","value":"bypass"}`, want: http.StatusOK, kind: cmdSetThrottlerInstallationMode},
@@ -217,7 +217,7 @@ func TestSenderCommandValidation(t *testing.T) {
 		value      int
 	}{
 		{"workers minimum", `{"action":"set-sender-workers","value":1}`, http.StatusOK, cmdSetSenderWorkers, 1},
-		{"workers default", `{"action":"set-sender-workers","value":32}`, http.StatusOK, cmdSetSenderWorkers, 32},
+		{"workers initial", `{"action":"set-sender-workers","value":32}`, http.StatusOK, cmdSetSenderWorkers, 32},
 		{"missing", `{"action":"set-sender-workers"}`, http.StatusBadRequest, 0, 0},
 		{"null", `{"action":"set-sender-workers","value":null}`, http.StatusBadRequest, 0, 0},
 		{"fractional", `{"action":"set-sender-workers","value":1.5}`, http.StatusBadRequest, 0, 0},

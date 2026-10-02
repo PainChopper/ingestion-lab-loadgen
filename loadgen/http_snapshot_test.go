@@ -64,11 +64,27 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		t.Fatalf("decode config: %v", err)
 	}
 	assertExactJSONKeys(t, config, []string{"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstallationMode", "throttlerRequestedTps"})
+	for name, want := range map[string][]string{
+		"readerReadBatchSize":       {"initial", "max", "min", "mutability", "step", "unit"},
+		"readerWorkers":             {"initial", "max", "min", "mutability", "step", "unit"},
+		"readerChannelCapacity":     {"allowed", "initial", "mutability", "unit"},
+		"senderChannelCapacity":     {"allowed", "initial", "mutability", "unit"},
+		"throttlerRequestedTps":     {"initial", "max", "min", "mutability", "step", "unit"},
+		"throttlerInstallationMode": {"allowed", "initial", "mutability"},
+		"senderWorkers":             {"initial", "max", "min", "mutability", "step", "unit"},
+		"metricsWindowMs":           {"initial", "max", "min", "mutability", "step", "unit"},
+	} {
+		section := map[string]json.RawMessage{}
+		if err := json.Unmarshal(config[name], &section); err != nil {
+			t.Fatalf("decode %s: %v", name, err)
+		}
+		assertExactJSONKeys(t, section, want)
+	}
 	var workers rangeConfig
 	if err := json.Unmarshal(config["readerWorkers"], &workers); err != nil {
 		t.Fatal(err)
 	}
-	if want := (rangeConfig{Default: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}); workers != want {
+	if want := (rangeConfig{Initial: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}); workers != want {
 		t.Errorf("Reader workers config = %+v, want %+v", workers, want)
 	}
 	var reader map[string]json.RawMessage

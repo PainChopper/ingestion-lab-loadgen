@@ -9,9 +9,9 @@ type metrics struct {
 }
 
 func newMetrics(config config) metrics {
-	window := time.Duration(config.Metrics.WindowMS.Default) * time.Millisecond
+	window := time.Duration(config.Metrics.WindowMS.Initial) * time.Millisecond
 	prometheusMetrics := NewPrometheusMetrics()
-	prometheusMetrics.targetTPS.Set(float64(config.Throttler.RequestedTPS.Default))
+	prometheusMetrics.targetTPS.Set(float64(config.Throttler.RequestedTPS.Initial))
 	ticker := time.NewTicker(window)
 	return metrics{ticks: ticker.C, prometheusMetrics: prometheusMetrics, ticker: ticker}
 }

@@ -124,8 +124,8 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 				}
 			}
 
-			if got := snapshot().ReaderChannel.Capacity; got != state.controls.config.ReaderChannel.Capacity.Default {
-				t.Fatalf("default capacity = %d, want %d", got, state.controls.config.ReaderChannel.Capacity.Default)
+			if got := snapshot().ReaderChannel.Capacity; got != state.controls.config.ReaderChannel.Capacity.Initial {
+				t.Fatalf("initial capacity = %d, want %d", got, state.controls.config.ReaderChannel.Capacity.Initial)
 			}
 			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: capacity}, commandAccepted)
 			if got := snapshot().ReaderChannel.Capacity; got != capacity {

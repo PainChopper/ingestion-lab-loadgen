@@ -99,13 +99,13 @@ type senderRetryConfig struct {
 }
 
 type installationModeConfig struct {
-	Default    string   `mapstructure:"default" json:"default"`
+	Initial    string   `mapstructure:"initial" json:"initial"`
 	Allowed    []string `mapstructure:"allowed" json:"allowed"`
 	Mutability string   `mapstructure:"mutability" json:"mutability"`
 }
 
 type rangeConfig struct {
-	Default    int    `mapstructure:"default" json:"default"`
+	Initial    int    `mapstructure:"initial" json:"initial"`
 	Min        int    `mapstructure:"min" json:"min"`
 	Max        int    `mapstructure:"max" json:"max"`
 	Step       int    `mapstructure:"step" json:"step"`
@@ -114,7 +114,7 @@ type rangeConfig struct {
 }
 
 type allowedConfig struct {
-	Default    int    `mapstructure:"default" json:"default"`
+	Initial    int    `mapstructure:"initial" json:"initial"`
 	Allowed    []int  `mapstructure:"allowed" json:"allowed"`
 	Unit       string `mapstructure:"unit" json:"unit"`
 	Mutability string `mapstructure:"mutability" json:"mutability"`
@@ -290,8 +290,8 @@ func (p senderAPIConfig) validate() error {
 	return nil
 }
 
-func (p rangeConfig) validateExact(defaultValue, minValue, maxValue, stepValue int, unit, mutability string) error {
-	if p.Default != defaultValue || p.Min != minValue || p.Max != maxValue || p.Step != stepValue || p.Unit != unit || p.Mutability != mutability {
+func (p rangeConfig) validateExact(initialValue, minValue, maxValue, stepValue int, unit, mutability string) error {
+	if p.Initial != initialValue || p.Min != minValue || p.Max != maxValue || p.Step != stepValue || p.Unit != unit || p.Mutability != mutability {
 		return fmt.Errorf("must match approved %s config", unit)
 	}
 	return nil
@@ -308,8 +308,8 @@ func (p rangeConfig) validateMetricsWindow() error {
 	if p.Min < 100 || p.Max > 10_000 || p.Max < p.Min || p.Step <= 0 {
 		return fmt.Errorf("must stay within 100..10000 milliseconds with a positive step")
 	}
-	if !p.contains(p.Default) {
-		return fmt.Errorf("default must be within the range and aligned to step")
+	if !p.contains(p.Initial) {
+		return fmt.Errorf("initial must be within the range and aligned to step")
 	}
 	return nil
 }
@@ -321,19 +321,19 @@ func (p rangeConfig) validateRequestedTPS() error {
 	if p.Min < 0 || p.Max <= p.Min || p.Step <= 0 {
 		return fmt.Errorf("min, max, and step must form a non-negative range")
 	}
-	if p.Default < p.Min || p.Default > p.Max {
+	if p.Initial < p.Min || p.Initial > p.Max {
 		return fmt.Errorf(
-			"default=%d is outside range min=%d max=%d (step=%d)",
-			p.Default,
+			"initial=%d is outside range min=%d max=%d (step=%d)",
+			p.Initial,
 			p.Min,
 			p.Max,
 			p.Step,
 		)
 	}
-	if (p.Default-p.Min)%p.Step != 0 {
+	if (p.Initial-p.Min)%p.Step != 0 {
 		return fmt.Errorf(
-			"default=%d is not aligned to step=%d from min=%d (max=%d)",
-			p.Default,
+			"initial=%d is not aligned to step=%d from min=%d (max=%d)",
+			p.Initial,
 			p.Step,
 			p.Min,
 			p.Max,
@@ -345,8 +345,8 @@ func (p rangeConfig) validateRequestedTPS() error {
 func (p installationModeConfig) validate() error {
 	if p.Mutability != immediate || len(p.Allowed) != 2 ||
 		!p.contains(throttlerInstalled) || !p.contains(throttlerBypass) ||
-		!p.contains(p.Default) {
-		return fmt.Errorf("allowed must be [%q, %q], default must be allowed, and mutability must be %q", throttlerInstalled, throttlerBypass, immediate)
+		!p.contains(p.Initial) {
+		return fmt.Errorf("allowed must be [%q, %q], initial must be allowed, and mutability must be %q", throttlerInstalled, throttlerBypass, immediate)
 	}
 	return nil
 }
@@ -362,8 +362,8 @@ func (p rangeConfig) validate() error {
 	if p.Min <= 0 || p.Max < p.Min || p.Step <= 0 {
 		return fmt.Errorf("min, max, and step must form a positive range")
 	}
-	if !p.contains(p.Default) {
-		return fmt.Errorf("default must be within the range and aligned to step")
+	if !p.contains(p.Initial) {
+		return fmt.Errorf("initial must be within the range and aligned to step")
 	}
 	return nil
 }
@@ -387,8 +387,8 @@ func (p allowedConfig) validate() error {
 			return fmt.Errorf("allowed must be strictly increasing")
 		}
 	}
-	if !p.contains(p.Default) {
-		return fmt.Errorf("default must be one of allowed")
+	if !p.contains(p.Initial) {
+		return fmt.Errorf("initial must be one of allowed")
 	}
 	return nil
 }

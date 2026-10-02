@@ -92,7 +92,7 @@ type runtimeConfigStatus struct {
 }
 
 type runtimeRangeConfig struct {
-	Default    int    `json:"default"`
+	Initial    int    `json:"initial"`
 	Min        int    `json:"min"`
 	Max        int    `json:"max"`
 	Step       int    `json:"step"`
@@ -101,14 +101,14 @@ type runtimeRangeConfig struct {
 }
 
 type runtimeAllowedConfig struct {
-	Default    int    `json:"default"`
+	Initial    int    `json:"initial"`
 	Allowed    []int  `json:"allowed"`
 	Unit       string `json:"unit"`
 	Mutability string `json:"mutability"`
 }
 
 type runtimeInstallationModeConfig struct {
-	Default    string   `json:"default"`
+	Initial    string   `json:"initial"`
 	Allowed    []string `json:"allowed"`
 	Mutability string   `json:"mutability"`
 }
@@ -134,7 +134,7 @@ func runtimeConfigStatusFromConfig(config config) runtimeConfigStatus {
 
 func runtimeRangeConfigFromConfig(config rangeConfig) runtimeRangeConfig {
 	return runtimeRangeConfig{
-		Default:    config.Default,
+		Initial:    config.Initial,
 		Min:        config.Min,
 		Max:        config.Max,
 		Step:       config.Step,
@@ -145,7 +145,7 @@ func runtimeRangeConfigFromConfig(config rangeConfig) runtimeRangeConfig {
 
 func runtimeAllowedConfigFromConfig(config allowedConfig) runtimeAllowedConfig {
 	return runtimeAllowedConfig{
-		Default:    config.Default,
+		Initial:    config.Initial,
 		Allowed:    config.Allowed,
 		Unit:       config.Unit,
 		Mutability: config.Mutability,
@@ -154,7 +154,7 @@ func runtimeAllowedConfigFromConfig(config allowedConfig) runtimeAllowedConfig {
 
 func runtimeInstallationModeConfigFromConfig(config installationModeConfig) runtimeInstallationModeConfig {
 	return runtimeInstallationModeConfig{
-		Default:    config.Default,
+		Initial:    config.Initial,
 		Allowed:    config.Allowed,
 		Mutability: config.Mutability,
 	}
