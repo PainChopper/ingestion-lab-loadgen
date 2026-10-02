@@ -208,12 +208,12 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		target        string
 		requestAction string
 		value         any
-		update        func(*httpStatus)
+		update        func(*runtimeStatus)
 	}{
-		{target: "reader-workers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *httpStatus) { snapshot.Reader.Workers = 3 }},
-		{target: "sender-workers", requestAction: "set-sender-workers", value: 4, update: func(snapshot *httpStatus) { snapshot.Sender.Workers = 4 }},
-		{target: "requested-tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *httpStatus) { snapshot.Throttler.RequestedTps = 0 }},
-		{target: "throttler-mode", requestAction: "set-throttler-installation-mode", value: "bypass", update: func(snapshot *httpStatus) { snapshot.Throttler.InstallationMode = throttlerBypass }},
+		{target: "reader-workers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *runtimeStatus) { snapshot.Reader.Workers = 3 }},
+		{target: "sender-workers", requestAction: "set-sender-workers", value: 4, update: func(snapshot *runtimeStatus) { snapshot.Sender.Workers = 4 }},
+		{target: "requested-tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *runtimeStatus) { snapshot.Throttler.RequestedTps = 0 }},
+		{target: "throttler-mode", requestAction: "set-throttler-installation-mode", value: "bypass", update: func(snapshot *runtimeStatus) { snapshot.Throttler.InstallationMode = throttlerBypass }},
 	} {
 		t.Run(test.target, func(t *testing.T) {
 			snapshot := testRemoteSnapshot(t)
@@ -438,10 +438,10 @@ func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
 	}
 }
 
-func testRemoteSnapshot(t *testing.T) httpStatus {
+func testRemoteSnapshot(t *testing.T) runtimeStatus {
 	t.Helper()
-	return httpStatus{
-		Run:    httpRunStatus{State: runStatePaused},
-		Config: httpConfigStatusFromRuntime(runtimeConfigStatusFromConfig(testConfig(t))),
+	return runtimeStatus{
+		Run:    runtimeRunStatus{State: runStatePaused},
+		Config: runtimeConfigStatusFromConfig(testConfig(t)),
 	}
 }

@@ -15,7 +15,7 @@ import (
 
 func TestDeveloperRoutes(t *testing.T) {
 	requests := make(chan runtimeCommand, 1)
-	mux := newServeMux(testControlPlane(requests), nil, testConfig(t), nil)
+	mux := newServeMux(requests, nil, testConfig(t), nil)
 	tests := []struct {
 		name        string
 		path        string
@@ -249,7 +249,7 @@ func assertExampleDispatches(t *testing.T, body map[string]any, want runtimeComm
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		commandsHandler(testControlPlane(requests), commandConfig, nil).ServeHTTP(recorder, request)
+		commandsHandler(requests, commandConfig, nil).ServeHTTP(recorder, request)
 	}()
 	var got runtimeCommand
 	select {
@@ -415,18 +415,18 @@ func anyStringsOrEmpty(value any) []string {
 func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 	t.Helper()
 	models := map[string]reflect.Type{
-		"Snapshot":               reflect.TypeOf(httpStatus{}),
-		"RunStatus":              reflect.TypeOf(httpRunStatus{}),
-		"ReaderStatus":           reflect.TypeOf(httpReaderStatus{}),
-		"ReaderSourceError":      reflect.TypeOf(httpReaderSourceError{}),
-		"ThrottlerStatus":        reflect.TypeOf(httpThrottlerStatus{}),
-		"SenderStatus":           reflect.TypeOf(httpSenderStatus{}),
-		"ChannelStatus":          reflect.TypeOf(httpChannelStatus{}),
-		"ConfigStatus":           reflect.TypeOf(httpConfigStatus{}),
-		"RangeConfig":            reflect.TypeOf(httpRangeConfig{}),
-		"AllowedConfig":          reflect.TypeOf(httpAllowedConfig{}),
-		"InstallationModeConfig": reflect.TypeOf(httpInstallationModeConfig{}),
-		"LoggingConfig":          reflect.TypeOf(httpLoggingConfig{}),
+		"Snapshot":               reflect.TypeOf(runtimeStatus{}),
+		"RunStatus":              reflect.TypeOf(runtimeRunStatus{}),
+		"ReaderStatus":           reflect.TypeOf(runtimeReaderStatus{}),
+		"ReaderSourceError":      reflect.TypeOf(readerSourceError{}),
+		"ThrottlerStatus":        reflect.TypeOf(runtimeThrottlerStatus{}),
+		"SenderStatus":           reflect.TypeOf(runtimeSenderStatus{}),
+		"ChannelStatus":          reflect.TypeOf(runtimeChannelStatus{}),
+		"ConfigStatus":           reflect.TypeOf(runtimeConfigStatus{}),
+		"RangeConfig":            reflect.TypeOf(runtimeRangeConfig{}),
+		"AllowedConfig":          reflect.TypeOf(runtimeAllowedConfig{}),
+		"InstallationModeConfig": reflect.TypeOf(runtimeInstallationModeConfig{}),
+		"LoggingConfig":          reflect.TypeOf(runtimeLoggingConfig{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
@@ -512,18 +512,18 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 	if !ok || snapshotContent["schema"].(map[string]any)["$ref"] != "#/components/schemas/Snapshot" {
 		t.Error("snapshot 200 must reference the handler's Snapshot DTO")
 	} else {
-		fixtures := map[string]httpStatus{
-			"zero": {Run: httpRunStatus{State: runStateIdle}},
+		fixtures := map[string]runtimeStatus{
+			"zero": {Run: runtimeRunStatus{State: runStateIdle}},
 			"populated": {
-				Run:       httpRunStatus{State: runStatePaused, TotalTransactions: 46, ElapsedMs: 1234},
-				Reader:    httpReaderStatus{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
-				Throttler: httpThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
-				Sender:    httpSenderStatus{Workers: 32},
-				Config:    httpConfigStatusFromRuntime(runtimeConfigStatusFromConfig(testConfig(t))),
+				Run:       runtimeRunStatus{State: runStatePaused, TotalTransactions: 46, ElapsedMs: 1234},
+				Reader:    runtimeReaderStatus{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
+				Throttler: runtimeThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
+				Sender:    runtimeSenderStatus{Workers: 32},
+				Config:    runtimeConfigStatusFromConfig(testConfig(t)),
 			},
 			"source error": {
-				Run:    httpRunStatus{State: runStateIdle},
-				Reader: httpReaderStatus{SourceError: &httpReaderSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
+				Run:    runtimeRunStatus{State: runStateIdle},
+				Reader: runtimeReaderStatus{SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}
 		for name, fixture := range fixtures {

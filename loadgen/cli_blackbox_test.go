@@ -88,7 +88,7 @@ func TestCLIBinaryRemoteSnapshotAndErrors(t *testing.T) {
 	if result.exitCode != cliExitSuccess || result.stdout != string(expectedSnapshot)+"\n" || result.stderr != "" {
 		t.Fatalf("success stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
 	}
-	var actual httpStatus
+	var actual runtimeStatus
 	if err := json.Unmarshal([]byte(result.stdout), &actual); err != nil {
 		t.Fatalf("decode CLI stdout: %v", err)
 	}
@@ -231,7 +231,7 @@ func waitForCLISnapshotState(t *testing.T, baseURL string, want runState) {
 	for time.Now().Before(deadline) {
 		response, err := client.Get(baseURL + snapshotPath)
 		if err == nil {
-			var snapshot httpStatus
+			var snapshot runtimeStatus
 			decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
 			closeErr := response.Body.Close()
 			if decodeErr == nil && closeErr == nil && snapshot.Run.State == want {

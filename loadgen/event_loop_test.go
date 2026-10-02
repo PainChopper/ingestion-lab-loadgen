@@ -44,7 +44,7 @@ func TestRunEventLoopStopsWhenApplicationContextIsCanceled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, testControlPlane(make(chan runtimeCommand)), make(chan time.Time), NewPrometheusMetrics())
+		state.runEventLoop(ctx, make(chan runtimeCommand), make(chan time.Time), NewPrometheusMetrics())
 	}()
 
 	cancel()
@@ -159,7 +159,7 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(testControlPlane(requests), metrics, promMetrics, func(ctx context.Context, batches chan<- []Transaction, _, _ int) (readerRun, error) {
+		state.eventLoop(requests, metrics, promMetrics, func(ctx context.Context, batches chan<- []Transaction, _, _ int) (readerRun, error) {
 			output = batches
 			close(started)
 			readerDone := make(chan struct{})
@@ -230,7 +230,7 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(testControlPlane(requests), metrics, NewPrometheusMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
+		state.eventLoop(requests, metrics, NewPrometheusMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
 			readerDone := make(chan struct{})
 			go func() {
 				<-ctx.Done()
@@ -473,7 +473,7 @@ func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testi
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, testControlPlane(requests), make(chan time.Time), NewPrometheusMetrics())
+		state.runEventLoop(ctx, requests, make(chan time.Time), NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -515,7 +515,7 @@ func TestRunEventLoopFaultsBeforeWorkersForUnavailableSourceDirectory(t *testing
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, testControlPlane(requests), make(chan time.Time), NewPrometheusMetrics())
+		state.runEventLoop(ctx, requests, make(chan time.Time), NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -838,8 +838,8 @@ func TestResetFromPausedStopsReaderClearsProgressAndStartsFreshRun(t *testing.T)
 func TestResetDuringRunReturnsConflictAndPreservesPipeline(t *testing.T) {
 	var starts int
 	requests, batches, metrics := startEventLoopForTest(t, func() { starts++ })
-	control := testControlPlane(requests)
-	if result := control.execute(runtimeCommand{kind: cmdRun}); result.status != commandAccepted {
+	control := requests
+	if result := executeRuntimeCommand(control, runtimeCommand{kind: cmdRun}); result.status != commandAccepted {
 		t.Fatalf("Run = %+v, want accepted", result)
 	}
 	waitForState(t, requests, runStateRunning)
@@ -851,7 +851,7 @@ func TestResetDuringRunReturnsConflictAndPreservesPipeline(t *testing.T) {
 	}
 	waitForTransactions(t, requests, metrics, 1)
 
-	if result := control.execute(runtimeCommand{kind: cmdReset}); result.status != commandConflict {
+	if result := executeRuntimeCommand(control, runtimeCommand{kind: cmdReset}); result.status != commandConflict {
 		t.Fatalf("Reset = %+v, want conflict", result)
 	}
 	waitForState(t, requests, runStateRunning)
@@ -884,7 +884,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	go func() {
 		defer close(done)
 		state.eventLoopWithThrottler(
-			testControlPlane(requests),
+			requests,
 			metrics,
 			NewPrometheusMetrics(),
 			read,
@@ -957,16 +957,16 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	requests, batches, metrics := startEventLoopForTest(t, func() {})
-	control := testControlPlane(requests)
+	control := requests
 	execute := func(command runtimeCommand, want runtimeCommandStatus) {
 		t.Helper()
-		if result := control.execute(command); result.status != want {
+		if result := executeRuntimeCommand(control, command); result.status != want {
 			t.Fatalf("command %+v = %+v, want status %d", command, result, want)
 		}
 	}
 	snapshot := func() runtimeStatus {
 		t.Helper()
-		return control.status()
+		return requestRuntimeStatus(control)
 	}
 	if got := snapshot(); got.Reader.ReadBatchSize != 1_000 || got.Throttler.RequestedTps != 2_000_000 ||
 		got.Throttler.InstallationMode != throttlerInstalled {
@@ -989,7 +989,7 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	if got := snapshot(); got.Throttler.RequestedTps != 0 || got.Throttler.InstallationMode != throttlerBypass {
 		t.Fatalf("bypass snapshot = %+v", got)
 	}
-	control.executeAsync(runtimeCommand{kind: cmdPause})
+	control <- runtimeCommand{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
 	execute(runtimeCommand{kind: cmdSetRequestedTPS, value: 4_000_000}, commandAccepted)
 	execute(runtimeCommand{kind: cmdSetThrottlerInstallationMode, textValue: throttlerInstalled}, commandAccepted)
@@ -1010,7 +1010,7 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	if got := snapshot().Throttler.RequestedTps; got != 400_000 {
 		t.Fatalf("running TPS = %d, want 100", got)
 	}
-	control.executeAsync(runtimeCommand{kind: cmdPause})
+	control <- runtimeCommand{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
 	execute(runtimeCommand{kind: cmdReset}, commandAccepted)
 	if got := snapshot(); got.Run.State != runStateIdle || got.Run.TotalTransactions != 0 ||
@@ -1250,7 +1250,7 @@ func startCustomEventLoopForTestWithThrottler(
 	go func() {
 		defer close(done)
 		state.eventLoopWithThrottler(
-			testControlPlane(requests),
+			requests,
 			metrics,
 			NewPrometheusMetrics(),
 			read,
@@ -1611,7 +1611,7 @@ func startActualChannelEventLoopForTestWithHeldThrottler(t *testing.T, holdThrot
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopWithThrottler(testControlPlane(requests), metrics, NewPrometheusMetrics(), read, start)
+		state.eventLoopWithThrottler(requests, metrics, NewPrometheusMetrics(), read, start)
 	}()
 	stopped := false
 	stop := func() {

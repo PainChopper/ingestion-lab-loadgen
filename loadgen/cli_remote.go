@@ -212,8 +212,7 @@ func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) err
 		if err != nil {
 			return err
 		}
-		status := snapshot.runtimeStatus()
-		_, err = io.WriteString(stdout, formatRuntimeStatusCard(runtimeSummaryFromStatus(status)))
+		_, err = io.WriteString(stdout, formatRuntimeStatusCard(runtimeSummaryFromStatus(snapshot)))
 		return err
 	}
 	if command.remoteAction == "set" {
@@ -252,14 +251,14 @@ type remoteCLIClient struct {
 	httpClient *http.Client
 }
 
-func (client remoteCLIClient) snapshot(ctx context.Context) (httpStatus, error) {
+func (client remoteCLIClient) snapshot(ctx context.Context) (runtimeStatus, error) {
 	response, err := client.do(ctx, http.MethodGet, snapshotPath, nil)
 	if err != nil {
-		return httpStatus{}, err
+		return runtimeStatus{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return httpStatus{}, newRemoteHTTPError(response, http.MethodGet, snapshotPath)
+		return runtimeStatus{}, newRemoteHTTPError(response, http.MethodGet, snapshotPath)
 	}
 	return decodeStrictSnapshot(response.Body)
 }
@@ -287,7 +286,7 @@ func (client remoteCLIClient) commandWithValue(ctx context.Context, action strin
 	return nil
 }
 
-func (command remoteSetCommand) confirm(snapshot httpStatus) error {
+func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 	switch command.target {
 	case "reader-workers":
 		expected, err := command.numericValue()
@@ -356,26 +355,26 @@ func newRemoteHTTPError(response *http.Response, method, endpoint string) remote
 	return remoteHTTPError{status: response.Status, method: method, endpoint: endpoint, detail: detail}
 }
 
-func decodeStrictSnapshot(body io.Reader) (httpStatus, error) {
+func decodeStrictSnapshot(body io.Reader) (runtimeStatus, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
-		return httpStatus{}, fmt.Errorf("read snapshot: %w", err)
+		return runtimeStatus{}, fmt.Errorf("read snapshot: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	var snapshot httpStatus
+	var snapshot runtimeStatus
 	if err := decoder.Decode(&snapshot); err != nil {
-		return httpStatus{}, fmt.Errorf("decode snapshot: %w", err)
+		return runtimeStatus{}, fmt.Errorf("decode snapshot: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return httpStatus{}, fmt.Errorf("decode snapshot: trailing JSON")
+		return runtimeStatus{}, fmt.Errorf("decode snapshot: trailing JSON")
 	}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
-		return httpStatus{}, fmt.Errorf("decode snapshot shape: %w", err)
+		return runtimeStatus{}, fmt.Errorf("decode snapshot shape: %w", err)
 	}
 	if err := validateSnapshotKeys(root); err != nil {
-		return httpStatus{}, err
+		return runtimeStatus{}, err
 	}
 	return snapshot, nil
 }

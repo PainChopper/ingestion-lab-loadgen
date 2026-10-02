@@ -10,36 +10,36 @@ import (
 )
 
 func (state *controlState) eventLoop(
-	control controlPlane,
+	requests <-chan runtimeCommand,
 	metrics <-chan time.Time,
 	promMetrics *PrometheusMetrics,
 	read readerStarter,
 ) {
-	state.eventLoopWithThrottlerContext(context.Background(), control, metrics, promMetrics, read, startThrottler)
+	state.eventLoopWithThrottlerContext(context.Background(), requests, metrics, promMetrics, read, startThrottler)
 }
 
 func (state *controlState) runEventLoop(
 	ctx context.Context,
-	control controlPlane,
+	requests <-chan runtimeCommand,
 	metrics <-chan time.Time,
 	promMetrics *PrometheusMetrics,
 ) {
-	state.eventLoopWithThrottlerContext(ctx, control, metrics, promMetrics, state.startReaderPool, startThrottler)
+	state.eventLoopWithThrottlerContext(ctx, requests, metrics, promMetrics, state.startReaderPool, startThrottler)
 }
 
 func (state *controlState) eventLoopWithThrottler(
-	control controlPlane,
+	requests <-chan runtimeCommand,
 	metrics <-chan time.Time,
 	promMetrics *PrometheusMetrics,
 	read readerStarter,
 	start throttlerStarter,
 ) {
-	state.eventLoopWithThrottlerContext(context.Background(), control, metrics, promMetrics, read, start)
+	state.eventLoopWithThrottlerContext(context.Background(), requests, metrics, promMetrics, read, start)
 }
 
 func (state *controlState) eventLoopWithThrottlerContext(
 	ctx context.Context,
-	control controlPlane,
+	requests <-chan runtimeCommand,
 	metrics <-chan time.Time,
 	promMetrics *PrometheusMetrics,
 	read readerStarter,
@@ -59,7 +59,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 		select {
 		case <-ctx.Done():
 			return
-		case command, ok := <-control.requests:
+		case command, ok := <-requests:
 			if !ok {
 				return
 			}

@@ -19,13 +19,13 @@ const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
 const internalTestIngestPath = "/internal/test/ingest"
 
-func newServeMux(control controlPlane, metrics *PrometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
+func newServeMux(requests chan<- runtimeCommand, metrics *PrometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	mux := http.NewServeMux()
-	mux.Handle(snapshotPath, snapshotHandler(control, logger))
-	mux.Handle(commandsPath, commandsHandler(control, config, logger))
+	mux.Handle(snapshotPath, snapshotHandler(requests, logger))
+	mux.Handle(commandsPath, commandsHandler(requests, config, logger))
 	mux.Handle(internalTestIngestPath, internalTestIngestHandler())
 	registerDeveloperRoutes(mux)
 
@@ -42,11 +42,11 @@ func newServeMux(control controlPlane, metrics *PrometheusMetrics, config config
 	return mux
 }
 
-func startHTTPServer(control controlPlane, metrics *PrometheusMetrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
+func startHTTPServer(requests chan<- runtimeCommand, metrics *PrometheusMetrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	mux := newServeMux(control, metrics, config, logger)
+	mux := newServeMux(requests, metrics, config, logger)
 
 	server := &http.Server{
 		Addr:    "127.0.0.1:8080",

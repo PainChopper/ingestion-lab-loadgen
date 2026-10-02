@@ -26,15 +26,15 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	go func() { (<-requests).statusReply <- expected }()
-	snapshotHandler(testControlPlane(requests), nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	snapshotHandler(requests, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reply code = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var actual httpStatus
+	var actual runtimeStatus
 	if err := json.Unmarshal(rec.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}
-	if got := actual.runtimeStatus(); !reflect.DeepEqual(got, expected) {
+	if got := actual; !reflect.DeepEqual(got, expected) {
 		t.Errorf("actual = %+v, want %+v", got, expected)
 	}
 	var root map[string]json.RawMessage
@@ -99,7 +99,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	}
 }
 
-func TestHTTPStatusProjectionPreservesDistinctRuntimeValues(t *testing.T) {
+func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 	want := runtimeStatus{
 		Run: runtimeRunStatus{State: runStatePaused, TotalTransactions: 101, ElapsedMs: 102},
 		Reader: runtimeReaderStatus{
@@ -128,16 +128,40 @@ func TestHTTPStatusProjectionPreservesDistinctRuntimeValues(t *testing.T) {
 		Config: runtimeConfigStatusFromConfig(testConfig(t)),
 	}
 
-	actual := httpStatusFromRuntime(want)
-	if actual.Reader.DrainingBlockedWorkers != 19 || actual.Sender.DrainingBackoffWorkers != 49 {
-		t.Fatalf("HTTP worker projection = Reader %+v, Sender %+v", actual.Reader, actual.Sender)
+	encoded, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if actual.ReaderChannel.ReceivedTransactionsPerSecond != 64.5 ||
-		actual.SenderChannel.ReceivedTransactionsPerSecond != 84.5 {
-		t.Fatalf("HTTP channel projection = Reader %+v, Sender %+v", actual.ReaderChannel, actual.SenderChannel)
+	var actual map[string]any
+	if err := json.Unmarshal(encoded, &actual); err != nil {
+		t.Fatal(err)
 	}
-	if got := actual.runtimeStatus(); !reflect.DeepEqual(got, want) {
-		t.Errorf("round-trip runtime status = %+v, want %+v", got, want)
+	const expectedJSON = `{
+		"run":{"state":"paused","totalTransactions":101,"elapsedMs":102},
+		"reader":{"workers":11,"liveWorkers":12,"idleWorkers":13,"readingWorkers":14,"blockedWorkers":15,
+		"drainingWorkers":16,"drainingIdleWorkers":17,"drainingReadingWorkers":18,"drainingBlockedWorkers":19,
+		"readBatchSize":20,"readTps":21.5,"rowsRead":22,"sourceDirectory":"reader-source",
+		"sourceError":{"category":"reader-category","operation":"reader-operation","relativePath":"reader-path","message":"reader-message"}},
+		"throttler":{"requestedTps":31,"admittedTps":32.5,"installationMode":"bypass"},
+		"sender":{"workers":41,"liveWorkers":42,"idleWorkers":43,"inFlightWorkers":44,"backoffWorkers":45,
+		"drainingWorkers":46,"drainingIdleWorkers":47,"drainingInFlightWorkers":48,"drainingBackoffWorkers":49},
+		"readerChannel":{"capacity":51,"depthBatches":52,"bufferedTransactions":53,"blockedSenders":54,
+		"oldestBlockedSenderMs":55,"blockedMs":56,"sentBatchesTotal":57,"sentTransactionsTotal":58,
+		"receivedBatchesTotal":59,"receivedTransactionsTotal":60,"inputBatchesPerSecond":61.5,
+		"inputTransactionsPerSecond":62.5,"outputBatchesPerSecond":63.5,"outputTransactionsPerSecond":64.5},
+		"senderChannel":{"capacity":71,"depthBatches":72,"bufferedTransactions":73,"blockedSenders":74,
+		"oldestBlockedSenderMs":75,"blockedMs":76,"sentBatchesTotal":77,"sentTransactionsTotal":78,
+		"receivedBatchesTotal":79,"receivedTransactionsTotal":80,"inputBatchesPerSecond":81.5,
+		"inputTransactionsPerSecond":82.5,"outputBatchesPerSecond":83.5,"outputTransactionsPerSecond":84.5}
+	}`
+	var expected map[string]any
+	if err := json.Unmarshal([]byte(expectedJSON), &expected); err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range expected {
+		if !reflect.DeepEqual(actual[name], value) {
+			t.Errorf("wire %s = %+v, want %+v", name, actual[name], value)
+		}
 	}
 }
 
@@ -166,16 +190,16 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 		(<-requests).statusReply <- runtimeStatus{Run: runtimeRunStatus{State: runStateIdle}}
 	}()
 	recorder := httptest.NewRecorder()
-	snapshotHandler(testControlPlane(requests), nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	snapshotHandler(requests, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
 	}
-	var actual httpStatus
+	var actual runtimeStatus
 	if err := json.Unmarshal(recorder.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}
-	if want := (runtimeStatus{Run: runtimeRunStatus{State: runStateIdle}}); !reflect.DeepEqual(actual.runtimeStatus(), want) {
+	if want := (runtimeStatus{Run: runtimeRunStatus{State: runStateIdle}}); !reflect.DeepEqual(actual, want) {
 		t.Errorf("zero snapshot = %+v, want %+v", actual, want)
 	}
 	var run, reader map[string]json.RawMessage
@@ -193,7 +217,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 func TestSnapshotHandlerRejectsPost(t *testing.T) {
 	requests := make(chan runtimeCommand, 1)
 	rec := httptest.NewRecorder()
-	snapshotHandler(testControlPlane(requests), nil).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
+	snapshotHandler(requests, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
