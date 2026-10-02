@@ -112,12 +112,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			case cmdReset:
 				result := runtimeCommandReceipt{status: commandAccepted}
 				switch state.run.lifecycle.currentState() {
-				case runStatePaused:
-					state.run.lifecycle.reset()
-					runtime.resetPaused()
-					state.resetProgress(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
-					state.run.lifecycle.completeReset()
-				case runStateFaulted:
+				case runStatePaused, runStateFaulted:
 					state.run.lifecycle.reset()
 					runtime.stop()
 					state.resetProgress(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
