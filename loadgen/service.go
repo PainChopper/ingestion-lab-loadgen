@@ -26,7 +26,6 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	requests := make(chan runtimeCommand, 10)
 	m := newMetrics(cfg)
 	defer m.stop()
-	state.metricsWindow = m.window
 
 	server, serverDone, err := startHTTPServer(requests, m.prometheusMetrics, cfg, logger)
 	if err != nil {
