@@ -20,8 +20,17 @@ func newControlState(loadedConfig config, logger *zap.Logger) controlState {
 	return controlState{
 		metricsWindow: metricsWindow,
 		run:           controlRunState{lifecycle: newLifecycle()},
-		controls:      configuredControls{config: loadedConfig},
-		logger:        logger,
+		controls: configuredControls{
+			readBatchSize:         loadedConfig.Reader.ReadBatchSize.Initial,
+			readerWorkers:         loadedConfig.Reader.Workers.Initial,
+			readerChannelCapacity: loadedConfig.ReaderChannel.Capacity.Initial,
+			senderChannelCapacity: loadedConfig.SenderChannel.Capacity.Initial,
+			requestedTPS:          loadedConfig.Throttler.RequestedTPS.Initial,
+			installationMode:      loadedConfig.Throttler.InstallationMode.Initial,
+			senderWorkers:         loadedConfig.Sender.Workers.Initial,
+			config:                loadedConfig,
+		},
+		logger: logger,
 	}
 }
 
@@ -34,19 +43,14 @@ type controlRunState struct {
 }
 
 type configuredControls struct {
-	configuredReadBatchSize         int
-	configuredReaderWorkers         int
-	readerWorkersConfigured         bool
-	configuredReaderChannelCapacity int
-	readerChannelCapacityConfigured bool
-	configuredSenderChannelCapacity int
-	senderChannelCapacityConfigured bool
-	configuredRequestedTPS          int
-	requestedTPSConfigured          bool
-	configuredInstallationMode      string
-	configuredSenderWorkers         int
-	senderWorkersConfigured         bool
-	config                          config
+	readBatchSize         int
+	readerWorkers         int
+	readerChannelCapacity int
+	senderChannelCapacity int
+	requestedTPS          int
+	installationMode      string
+	senderWorkers         int
+	config                config
 }
 
 type controlTelemetry struct {

@@ -34,11 +34,7 @@ func newTestControlState(t *testing.T) controlState {
 	}))
 	t.Cleanup(server.Close)
 	loaded.Sender.API.URL = server.URL
-	return controlState{
-		metricsWindow: time.Duration(loaded.Metrics.WindowMS.Initial) * time.Millisecond,
-		run:           controlRunState{lifecycle: newLifecycle()},
-		controls:      configuredControls{config: loaded},
-	}
+	return newControlState(loaded, nil)
 }
 
 func testConfigContents() string {
