@@ -13,7 +13,7 @@ type throttlerStarter func(
 	readerChannelTelemetry *channelTelemetry,
 	senderChannelTelemetry *channelTelemetry,
 	initial throttlerSettings,
-) (<-chan struct{}, chan<- throttlerUpdate)
+) (<-chan struct{}, chan<- throttlerSettings)
 
 type readerRun struct {
 	done              <-chan struct{}
@@ -39,12 +39,9 @@ type pipelineRuntime struct {
 	cancelRun                                context.CancelFunc
 	cancelThrottler                          context.CancelFunc
 	throttlerDone                            <-chan struct{}
-	throttlerUpdates                         chan<- throttlerUpdate
+	throttlerUpdates                         chan<- throttlerSettings
 	cancelReader                             context.CancelFunc
-	readerDone                               <-chan struct{}
-	readerReconcile                          func(int)
-	readerAggregateSnapshot                  func() readerPoolSnapshot
-	readerSourceErrors                       <-chan readerSourceError
+	reader                                   readerRun
 }
 
 func newPipelineRuntime(state *controlState, read readerStarter, throttle throttlerStarter) *pipelineRuntime {
@@ -85,10 +82,7 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 		return err
 	}
 
-	runtime.readerDone = started.done
-	runtime.readerReconcile = started.reconcile
-	runtime.readerAggregateSnapshot = started.aggregateSnapshot
-	runtime.readerSourceErrors = started.sourceErrors
+	runtime.reader = started
 	runtime.cancelReader = cancelReader
 	throttlerContext, cancelThrottler := context.WithCancel(runtime.runContext)
 	runtime.cancelThrottler = cancelThrottler
@@ -132,8 +126,8 @@ func (runtime *pipelineRuntime) stop() {
 	if runtime.cancelThrottler != nil {
 		runtime.cancelThrottler()
 	}
-	if runtime.readerDone != nil {
-		<-runtime.readerDone
+	if runtime.reader.done != nil {
+		<-runtime.reader.done
 	}
 	if runtime.throttlerDone != nil {
 		<-runtime.throttlerDone
@@ -157,8 +151,8 @@ func (runtime *pipelineRuntime) resetPaused() {
 	if runtime.cancelThrottler != nil {
 		runtime.cancelThrottler()
 	}
-	if runtime.readerDone != nil {
-		<-runtime.readerDone
+	if runtime.reader.done != nil {
+		<-runtime.reader.done
 	}
 	if runtime.throttlerDone != nil {
 		<-runtime.throttlerDone
@@ -172,18 +166,15 @@ func (runtime *pipelineRuntime) clearActive() {
 	runtime.runContext = nil
 	runtime.cancelRun = nil
 	runtime.cancelReader = nil
-	runtime.readerDone = nil
-	runtime.readerReconcile = nil
-	runtime.readerAggregateSnapshot = nil
-	runtime.readerSourceErrors = nil
+	runtime.reader = readerRun{}
 	runtime.cancelThrottler = nil
 	runtime.throttlerDone = nil
 	runtime.throttlerUpdates = nil
 }
 
 func (runtime *pipelineRuntime) reconcileReader(workers int) {
-	if runtime.readerReconcile != nil {
-		runtime.readerReconcile(workers)
+	if runtime.reader.reconcile != nil {
+		runtime.reader.reconcile(workers)
 	}
 }
 
@@ -197,18 +188,16 @@ func (runtime *pipelineRuntime) updateThrottler(settings throttlerSettings) {
 	if runtime.throttlerUpdates == nil {
 		return
 	}
-	update := throttlerUpdate{settings: settings, acknowledged: make(chan struct{})}
 	select {
-	case runtime.throttlerUpdates <- update:
-		<-update.acknowledged
+	case runtime.throttlerUpdates <- settings:
 	case <-runtime.throttlerDone:
 	}
 }
 
 func (runtime *pipelineRuntime) snapshots() (readerPoolSnapshot, senderPoolSnapshot) {
 	reader := readerPoolSnapshot{}
-	if runtime.readerAggregateSnapshot != nil {
-		reader = runtime.readerAggregateSnapshot()
+	if runtime.reader.aggregateSnapshot != nil {
+		reader = runtime.reader.aggregateSnapshot()
 	}
 	sender := senderPoolSnapshot{}
 	if runtime.pool != nil {
@@ -218,7 +207,7 @@ func (runtime *pipelineRuntime) snapshots() (readerPoolSnapshot, senderPoolSnaps
 }
 
 func (runtime *pipelineRuntime) sourceErrors() <-chan readerSourceError {
-	return runtime.readerSourceErrors
+	return runtime.reader.sourceErrors
 }
 
 func (runtime *pipelineRuntime) prepareReaderChannel(batches chan []Transaction) (chan []Transaction, bool) {
