@@ -52,9 +52,9 @@ func TestParseCLI(t *testing.T) {
 	}
 }
 
-func TestNewServeStateStartsIdleWithLoadedConfig(t *testing.T) {
+func TestNewControlStateStartsIdleWithLoadedConfig(t *testing.T) {
 	loadedConfig := testConfig(t)
-	state := newServeState(loadedConfig, zap.NewNop())
+	state := newControlState(loadedConfig, zap.NewNop())
 
 	if got := state.run.lifecycle.currentState(); got != runStateIdle {
 		t.Fatalf("initial lifecycle state = %q, want %q", got, runStateIdle)

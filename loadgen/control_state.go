@@ -15,6 +15,14 @@ type controlState struct {
 	logger        *zap.Logger
 }
 
+func newControlState(loadedConfig config, logger *zap.Logger) controlState {
+	return controlState{
+		run:      controlRunState{lifecycle: newLifecycle()},
+		controls: configuredControls{config: loadedConfig},
+		logger:   logger,
+	}
+}
+
 type controlRunState struct {
 	totalTransactions int64
 	elapsedBeforeRun  time.Duration

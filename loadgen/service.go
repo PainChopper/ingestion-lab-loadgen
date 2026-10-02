@@ -8,14 +8,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func newServeState(loadedConfig config, logger *zap.Logger) controlState {
-	return controlState{
-		run:      controlRunState{lifecycle: newLifecycle()},
-		controls: configuredControls{config: loadedConfig},
-		logger:   logger,
-	}
-}
-
 func runServe(appCtx context.Context, configPath string, runAfterStart bool) error {
 	serviceCtx, stopService := context.WithCancel(appCtx)
 	defer stopService()
@@ -30,7 +22,7 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	}
 	defer func() { _ = logger.Sync() }()
 
-	state := newServeState(cfg, logger)
+	state := newControlState(cfg, logger)
 	requests := make(chan runtimeCommand, 10)
 	m := newMetrics(cfg)
 	defer m.stop()
