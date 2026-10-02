@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -54,6 +55,7 @@ func TestParseCLI(t *testing.T) {
 
 func TestNewControlStateStartsIdleWithLoadedConfig(t *testing.T) {
 	loadedConfig := testConfig(t)
+	loadedConfig.Metrics.WindowMS.Default = 300
 	state := newControlState(loadedConfig, zap.NewNop())
 
 	if got := state.run.lifecycle.currentState(); got != runStateIdle {
@@ -61,6 +63,10 @@ func TestNewControlStateStartsIdleWithLoadedConfig(t *testing.T) {
 	}
 	if state.controls.config.Source.Path != loadedConfig.Source.Path {
 		t.Fatal("serve state did not retain loaded config")
+	}
+	wantMetricsWindow := time.Duration(loadedConfig.Metrics.WindowMS.Default) * time.Millisecond
+	if state.metricsWindow != wantMetricsWindow {
+		t.Fatalf("metrics window = %s, want %s", state.metricsWindow, wantMetricsWindow)
 	}
 }
 

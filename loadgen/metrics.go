@@ -3,7 +3,6 @@ package main
 import "time"
 
 type metrics struct {
-	window            time.Duration
 	ticks             <-chan time.Time
 	prometheusMetrics *PrometheusMetrics
 	ticker            *time.Ticker
@@ -14,7 +13,7 @@ func newMetrics(config config) metrics {
 	prometheusMetrics := NewPrometheusMetrics()
 	prometheusMetrics.targetTPS.Set(float64(config.Throttler.RequestedTPS.Default))
 	ticker := time.NewTicker(window)
-	return metrics{window: window, ticks: ticker.C, prometheusMetrics: prometheusMetrics, ticker: ticker}
+	return metrics{ticks: ticker.C, prometheusMetrics: prometheusMetrics, ticker: ticker}
 }
 
 func (m metrics) stop() {
