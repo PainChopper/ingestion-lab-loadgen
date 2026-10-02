@@ -138,7 +138,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				} else if !validReadBatchSize(state.controls.config, command.value) {
 					result.status = commandConflict
 				} else {
-					state.controls.configuredReadBatchSize = command.value
+					state.controls.readBatchSize = command.value
 				}
 				command.respond(result)
 			case cmdSetReaderWorkers:
@@ -146,8 +146,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				if !state.controls.config.Reader.Workers.contains(command.value) {
 					result.status = commandConflict
 				} else {
-					state.controls.configuredReaderWorkers = command.value
-					state.controls.readerWorkersConfigured = true
+					state.controls.readerWorkers = command.value
 					runtime.reconcileReader(command.value)
 				}
 				command.respond(result)
@@ -157,8 +156,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 					!validReaderChannelCapacity(state.controls.config, command.value) {
 					result.status = commandConflict
 				} else {
-					state.controls.configuredReaderChannelCapacity = command.value
-					state.controls.readerChannelCapacityConfigured = true
+					state.controls.readerChannelCapacity = command.value
 				}
 				command.respond(result)
 			case cmdSetSenderChannelCapacity:
@@ -167,8 +165,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 					!validSenderChannelCapacity(state.controls.config, command.value) {
 					result.status = commandConflict
 				} else {
-					state.controls.configuredSenderChannelCapacity = command.value
-					state.controls.senderChannelCapacityConfigured = true
+					state.controls.senderChannelCapacity = command.value
 				}
 				command.respond(result)
 			case cmdSetRequestedTPS:
@@ -176,8 +173,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				if !state.controls.config.Throttler.RequestedTPS.contains(command.value) {
 					result.status = commandConflict
 				} else if state.requestedTPS() != command.value {
-					state.controls.configuredRequestedTPS = command.value
-					state.controls.requestedTPSConfigured = true
+					state.controls.requestedTPS = command.value
 					promMetrics.targetTPS.Set(float64(state.requestedTPS()))
 					runtime.updateThrottler(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
 					logger.Info(
@@ -192,7 +188,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				if !state.controls.config.Throttler.InstallationMode.contains(command.textValue) {
 					result.status = commandConflict
 				} else if state.installationMode() != command.textValue {
-					state.controls.configuredInstallationMode = command.textValue
+					state.controls.installationMode = command.textValue
 					runtime.updateThrottler(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
 					logger.Info(
 						"throttler mode changed",
@@ -206,8 +202,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 					command.respond(runtimeCommandReceipt{status: commandConflict})
 					continue
 				}
-				state.controls.configuredSenderWorkers = command.value
-				state.controls.senderWorkersConfigured = true
+				state.controls.senderWorkers = command.value
 				runtime.reconcileSender(command.value)
 				command.respond(runtimeCommandReceipt{})
 			}
@@ -320,31 +315,19 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 }
 
 func (state *controlState) readerWorkers() int {
-	if state.controls.readerWorkersConfigured {
-		return state.controls.configuredReaderWorkers
-	}
-	return state.controls.config.Reader.Workers.Initial
+	return state.controls.readerWorkers
 }
 
 func (state *controlState) senderWorkers() int {
-	if state.controls.senderWorkersConfigured {
-		return state.controls.configuredSenderWorkers
-	}
-	return state.controls.config.Sender.Workers.Initial
+	return state.controls.senderWorkers
 }
 
 func (state *controlState) requestedTPS() int {
-	if state.controls.requestedTPSConfigured {
-		return state.controls.configuredRequestedTPS
-	}
-	return state.controls.config.Throttler.RequestedTPS.Initial
+	return state.controls.requestedTPS
 }
 
 func (state *controlState) installationMode() string {
-	if state.controls.configuredInstallationMode != "" {
-		return state.controls.configuredInstallationMode
-	}
-	return state.controls.config.Throttler.InstallationMode.Initial
+	return state.controls.installationMode
 }
 
 func (state *controlState) throttlerSettings(paused bool) throttlerSettings {
