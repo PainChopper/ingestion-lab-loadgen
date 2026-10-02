@@ -902,7 +902,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 	requests <- runtimeCommand{kind: cmdRun}
 	waitForState(t, requests, runStateRunning)
-	readerChannel := make(chan []Transaction, state.controls.config.ReaderChannel.Capacity.Default)
+	readerChannel := make(chan []Transaction, state.controls.config.ReaderChannel.Capacity.Initial)
 	state.telemetry.readerChannel.start(readerChannel, 2)
 	if !state.telemetry.readerChannel.send(context.Background(), readerChannel, make([]Transaction, 2)) {
 		t.Fatal("readerChannel send failed")
@@ -944,7 +944,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	requests <- runtimeCommand{kind: getRuntimeStatus, statusReply: statusReply}
 	snapshot = <-statusReply
 	if snapshot.Reader.ReadTps != 0 || snapshot.Reader.RowsRead != 0 ||
-		snapshot.ReaderChannel.Capacity != state.controls.config.ReaderChannel.Capacity.Default || snapshot.ReaderChannel.DepthBatches != 0 ||
+		snapshot.ReaderChannel.Capacity != state.controls.config.ReaderChannel.Capacity.Initial || snapshot.ReaderChannel.DepthBatches != 0 ||
 		snapshot.ReaderChannel.BufferedTransactions != 0 || snapshot.ReaderChannel.BlockedSenders != 0 ||
 		snapshot.ReaderChannel.OldestBlockedSenderMs != 0 || snapshot.ReaderChannel.BlockedMs != 0 ||
 		snapshot.ReaderChannel.SentBatchesTotal != 0 || snapshot.ReaderChannel.SentTransactionsTotal != 0 ||
@@ -973,6 +973,9 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 		t.Fatalf("initial throttler snapshot = %+v", got)
 	}
 	execute(runtimeCommand{kind: cmdSetRequestedTPS, value: 0}, commandAccepted)
+	if got := snapshot(); got.Throttler.RequestedTps != 0 || got.Config.ThrottlerRequestedTPS.Initial != 2_000_000 {
+		t.Fatalf("runtime override changed initial config: %+v", got)
+	}
 	execute(runtimeCommand{kind: cmdRun}, commandAccepted)
 	select {
 	case batches <- []Transaction{{ClientID: "held"}}:

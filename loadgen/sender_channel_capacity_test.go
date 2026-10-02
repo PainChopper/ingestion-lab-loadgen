@@ -103,7 +103,7 @@ func TestSenderChannelCapacityIdleOnlyAppliesToThrottlerAndPersistsAfterReset(t 
 			}
 
 			if got := snapshot().SenderChannel.Capacity; got != 0 {
-				t.Fatalf("default capacity = %d, want 0", got)
+				t.Fatalf("initial capacity = %d, want 0", got)
 			}
 			execute(runtimeCommand{kind: cmdSetSenderChannelCapacity, value: capacity}, commandAccepted)
 			if got := snapshot().SenderChannel.Capacity; got != capacity {

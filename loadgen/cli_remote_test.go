@@ -358,6 +358,69 @@ func TestDecodeStrictSnapshotConfigContract(t *testing.T) {
 	}
 }
 
+func TestDecodeStrictSnapshotInitialContract(t *testing.T) {
+	encoded, err := json.Marshal(testRemoteSnapshot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := []string{
+		"readerReadBatchSize", "readerWorkers", "readerChannelCapacity", "senderChannelCapacity",
+		"throttlerRequestedTps", "throttlerInstallationMode", "senderWorkers", "metricsWindowMs",
+	}
+	for _, field := range fields {
+		for _, shape := range []string{"initial-only", "legacy-only", "both", "missing"} {
+			t.Run(field+"/"+shape, func(t *testing.T) {
+				root := map[string]json.RawMessage{}
+				if err := json.Unmarshal(encoded, &root); err != nil {
+					t.Fatal(err)
+				}
+				settings := map[string]json.RawMessage{}
+				if err := json.Unmarshal(root["config"], &settings); err != nil {
+					t.Fatal(err)
+				}
+				value := map[string]json.RawMessage{}
+				if err := json.Unmarshal(settings[field], &value); err != nil {
+					t.Fatal(err)
+				}
+				if _, ok := value["initial"]; !ok {
+					t.Fatal("fixture lacks initial")
+				}
+				if field == "readerChannelCapacity" || field == "senderChannelCapacity" {
+					value["initial"] = json.RawMessage(`0`)
+				}
+				switch shape {
+				case "legacy-only":
+					value["default"] = value["initial"]
+					delete(value, "initial")
+				case "both":
+					value["default"] = value["initial"]
+				case "missing":
+					delete(value, "initial")
+				}
+				settings[field], err = json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				root["config"], err = json.Marshal(settings)
+				if err != nil {
+					t.Fatal(err)
+				}
+				input, err := json.Marshal(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = decodeStrictSnapshot(bytes.NewReader(input))
+				if shape == "initial-only" && err != nil {
+					t.Fatalf("initial snapshot rejected: %v", err)
+				}
+				if shape != "initial-only" && err == nil {
+					t.Fatal("legacy or incomplete snapshot accepted")
+				}
+			})
+		}
+	}
+}
+
 func TestRunCLIExitCodes(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if got := runCLI([]string{"run", "--url", "ftp://example.test"}, &stdout, &stderr); got != cliExitUsage {

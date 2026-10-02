@@ -16,7 +16,7 @@ type controlState struct {
 }
 
 func newControlState(loadedConfig config, logger *zap.Logger) controlState {
-	metricsWindow := time.Duration(loadedConfig.Metrics.WindowMS.Default) * time.Millisecond
+	metricsWindow := time.Duration(loadedConfig.Metrics.WindowMS.Initial) * time.Millisecond
 	return controlState{
 		metricsWindow: metricsWindow,
 		run:           controlRunState{lifecycle: newLifecycle()},

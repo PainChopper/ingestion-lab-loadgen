@@ -323,28 +323,28 @@ func (state *controlState) readerWorkers() int {
 	if state.controls.readerWorkersConfigured {
 		return state.controls.configuredReaderWorkers
 	}
-	return state.controls.config.Reader.Workers.Default
+	return state.controls.config.Reader.Workers.Initial
 }
 
 func (state *controlState) senderWorkers() int {
 	if state.controls.senderWorkersConfigured {
 		return state.controls.configuredSenderWorkers
 	}
-	return state.controls.config.Sender.Workers.Default
+	return state.controls.config.Sender.Workers.Initial
 }
 
 func (state *controlState) requestedTPS() int {
 	if state.controls.requestedTPSConfigured {
 		return state.controls.configuredRequestedTPS
 	}
-	return state.controls.config.Throttler.RequestedTPS.Default
+	return state.controls.config.Throttler.RequestedTPS.Initial
 }
 
 func (state *controlState) installationMode() string {
 	if state.controls.configuredInstallationMode != "" {
 		return state.controls.configuredInstallationMode
 	}
-	return state.controls.config.Throttler.InstallationMode.Default
+	return state.controls.config.Throttler.InstallationMode.Initial
 }
 
 func (state *controlState) throttlerSettings(paused bool) throttlerSettings {

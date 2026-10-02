@@ -93,8 +93,8 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 			t.Fatalf("command %+v = %+v, want status %d", command, result, want)
 		}
 	}
-	if got := snapshot().Reader.ReadBatchSize; got != testConfig(t).Reader.ReadBatchSize.Default {
-		t.Fatalf("default size = %d, want %d", got, testConfig(t).Reader.ReadBatchSize.Default)
+	if got := snapshot().Reader.ReadBatchSize; got != testConfig(t).Reader.ReadBatchSize.Initial {
+		t.Fatalf("initial size = %d, want %d", got, testConfig(t).Reader.ReadBatchSize.Initial)
 	}
 	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 25_000}, commandAccepted)
 	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {

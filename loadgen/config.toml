@@ -6,7 +6,7 @@ unit = "glob-pattern"
 mutability = "startup-only"
 
 [reader.read_batch_size]
-default = 1_000
+initial = 1_000
 min = 1_000
 max = 100_000
 step = 1_000
@@ -14,7 +14,7 @@ unit = "transactions"
 mutability = "idle-only"
 
 [reader.workers]
-default = 1
+initial = 1
 min = 1
 max = 7
 step = 1
@@ -22,19 +22,19 @@ unit = "workers"
 mutability = "immediate"
 
 [readerChannel.capacity]
-default = 2
+initial = 2
 allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 unit = "batches"
 mutability = "idle-only"
 
 [senderChannel.capacity]
-default = 0
+initial = 0
 allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
 unit = "batches"
 mutability = "idle-only"
 
 [throttler.requested_tps]
-default = 2_000_000
+initial = 2_000_000
 min = 0
 max = 4_000_000
 step = 200_000
@@ -42,12 +42,12 @@ unit = "transactions/s"
 mutability = "immediate"
 
 [throttler.installation_mode]
-default = "installed"
+initial = "installed"
 allowed = ["installed", "bypass"]
 mutability = "immediate"
 
 [sender.workers]
-default = 32
+initial = 32
 min = 1
 max = 32
 step = 1
@@ -66,7 +66,7 @@ jitter_percent = 20
 mutability = "startup-only"
 
 [metrics.window_ms]
-default = 1_000
+initial = 1_000
 min = 100
 max = 10_000
 step = 100

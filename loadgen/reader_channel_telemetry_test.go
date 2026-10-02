@@ -8,14 +8,14 @@ import (
 
 func TestReaderChannelTelemetryReportsBufferedBatchesAndTransactions(t *testing.T) {
 	config := testConfig(t)
-	batches := make(chan []Transaction, config.ReaderChannel.Capacity.Default)
+	batches := make(chan []Transaction, config.ReaderChannel.Capacity.Initial)
 	batches <- make([]Transaction, 3)
 	batches <- make([]Transaction, 3)
 
 	var telemetry channelTelemetry
 	telemetry.start(batches, 3)
 	measurements := telemetry.snapshot(time.Now())
-	if measurements.capacity != config.ReaderChannel.Capacity.Default || measurements.depthBatches != 2 ||
+	if measurements.capacity != config.ReaderChannel.Capacity.Initial || measurements.depthBatches != 2 ||
 		measurements.bufferedTransactions != 6 || measurements.blockedSenders != 0 ||
 		measurements.oldestBlockedSenderMs != 0 || measurements.blockedMs != 0 {
 		t.Fatalf("readerChannel measurements = %+v", measurements)

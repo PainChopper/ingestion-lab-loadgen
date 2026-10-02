@@ -432,11 +432,11 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
     throw new Error('snapshot config must contain exactly reader, readerChannel, senderChannel, throttler, and metrics controls')
   }
   const reader = value.readerReadBatchSize
-  if (!isExactObject(reader, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
+  if (!isExactObject(reader, ['initial', 'max', 'min', 'mutability', 'step', 'unit'])) {
     throw new Error('snapshot reader config is invalid')
   }
   if (
-    !isWireInteger(reader.default) || !isWireInteger(reader.min) ||
+    !isWireInteger(reader.initial) || !isWireInteger(reader.min) ||
     !isWireInteger(reader.max) || !isWireInteger(reader.step) ||
     reader.min <= 0 || reader.max < reader.min || reader.step <= 0 ||
     reader.unit !== 'transactions' || reader.mutability !== 'idle-only'
@@ -444,28 +444,28 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
     throw new Error('snapshot reader config is invalid')
   }
   const readerConfig = {
-    default: reader.default,
+    initial: reader.initial,
     min: reader.min,
     max: reader.max,
     step: reader.step,
     unit: reader.unit,
     mutability: reader.mutability,
   }
-  if (!isRangeValue(readerConfig.default, readerConfig)) {
-    throw new Error('snapshot reader config default is invalid')
+  if (!isRangeValue(readerConfig.initial, readerConfig)) {
+    throw new Error('snapshot reader config initial is invalid')
   }
   const readerWorkers = value.readerWorkers
-  if (!isExactObject(readerWorkers, ['default', 'max', 'min', 'mutability', 'step', 'unit']) ||
-    !isWireInteger(readerWorkers.default) || !isWireInteger(readerWorkers.min) || !isWireInteger(readerWorkers.max) || !isWireInteger(readerWorkers.step) ||
+  if (!isExactObject(readerWorkers, ['initial', 'max', 'min', 'mutability', 'step', 'unit']) ||
+    !isWireInteger(readerWorkers.initial) || !isWireInteger(readerWorkers.min) || !isWireInteger(readerWorkers.max) || !isWireInteger(readerWorkers.step) ||
     readerWorkers.min <= 0 || readerWorkers.max < readerWorkers.min || readerWorkers.step <= 0 || readerWorkers.unit !== 'workers' || readerWorkers.mutability !== 'immediate' ||
-    !isRangeValue(readerWorkers.default, readerWorkers as unknown as NonNullable<LoadgenConfigSnapshot['readerWorkers']>)) throw new Error('snapshot reader workers config is invalid')
+    !isRangeValue(readerWorkers.initial, readerWorkers as unknown as NonNullable<LoadgenConfigSnapshot['readerWorkers']>)) throw new Error('snapshot reader workers config is invalid')
 
   const metricsWindow = value.metricsWindowMs
-  if (!isExactObject(metricsWindow, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
+  if (!isExactObject(metricsWindow, ['initial', 'max', 'min', 'mutability', 'step', 'unit'])) {
     throw new Error('snapshot metrics window config is invalid')
   }
   if (
-    !isWireInteger(metricsWindow.default) || !isWireInteger(metricsWindow.min) ||
+    !isWireInteger(metricsWindow.initial) || !isWireInteger(metricsWindow.min) ||
     !isWireInteger(metricsWindow.max) || !isWireInteger(metricsWindow.step) ||
     metricsWindow.min < 100 || metricsWindow.max > 10_000 ||
     metricsWindow.max < metricsWindow.min || metricsWindow.step <= 0 ||
@@ -474,19 +474,19 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
     throw new Error('snapshot metrics window config is invalid')
   }
   const metricsWindowConfig = {
-    default: metricsWindow.default,
+    initial: metricsWindow.initial,
     min: metricsWindow.min,
     max: metricsWindow.max,
     step: metricsWindow.step,
     unit: metricsWindow.unit,
     mutability: metricsWindow.mutability,
   }
-  if (!isRangeValue(metricsWindowConfig.default, metricsWindowConfig)) {
-    throw new Error('snapshot metrics window config default is invalid')
+  if (!isRangeValue(metricsWindowConfig.initial, metricsWindowConfig)) {
+    throw new Error('snapshot metrics window config initial is invalid')
   }
 
   const readerChannel = value.readerChannelCapacity
-  if (!isExactObject(readerChannel, ['allowed', 'default', 'mutability', 'unit'])) {
+  if (!isExactObject(readerChannel, ['allowed', 'initial', 'mutability', 'unit'])) {
     throw new Error('snapshot readerChannel config is invalid')
   }
   if (
@@ -499,12 +499,12 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
   const allowed = Object.freeze([...readerChannel.allowed])
   if (
     allowed.some((entry, index) => index > 0 && entry <= allowed[index - 1]!) ||
-    !isWireInteger(readerChannel.default) || !allowed.includes(readerChannel.default)
+    !isWireInteger(readerChannel.initial) || !allowed.includes(readerChannel.initial)
   ) {
     throw new Error('snapshot readerChannel config values are invalid')
   }
   const senderChannel = value.senderChannelCapacity
-  if (!isExactObject(senderChannel, ['allowed', 'default', 'mutability', 'unit'])) {
+  if (!isExactObject(senderChannel, ['allowed', 'initial', 'mutability', 'unit'])) {
     throw new Error('snapshot senderChannel config is invalid')
   }
   if (
@@ -517,18 +517,18 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
   const senderAllowed = Object.freeze([...senderChannel.allowed])
   if (
     senderAllowed.some((entry, index) => index > 0 && entry <= senderAllowed[index - 1]!) ||
-    !isWireInteger(senderChannel.default) ||
-    !senderAllowed.includes(senderChannel.default)
+    !isWireInteger(senderChannel.initial) ||
+    !senderAllowed.includes(senderChannel.initial)
   ) {
     throw new Error('snapshot senderChannel config values are invalid')
   }
 
   const requestedTps = value.throttlerRequestedTps
-  if (!isExactObject(requestedTps, ['default', 'max', 'min', 'mutability', 'step', 'unit'])) {
+  if (!isExactObject(requestedTps, ['initial', 'max', 'min', 'mutability', 'step', 'unit'])) {
     throw new Error('snapshot throttler requested TPS config is invalid')
   }
   if (
-    !isWireInteger(requestedTps.default) || !isWireInteger(requestedTps.min) ||
+    !isWireInteger(requestedTps.initial) || !isWireInteger(requestedTps.min) ||
     !isWireInteger(requestedTps.max) || !isWireInteger(requestedTps.step) ||
     requestedTps.max <= requestedTps.min || requestedTps.step <= 0 ||
     requestedTps.unit !== 'transactions/s' || requestedTps.mutability !== 'immediate'
@@ -536,19 +536,19 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
     throw new Error('snapshot throttler requested TPS config is invalid')
   }
   const requestedTpsConfig = {
-    default: requestedTps.default,
+    initial: requestedTps.initial,
     min: requestedTps.min,
     max: requestedTps.max,
     step: requestedTps.step,
     unit: requestedTps.unit,
     mutability: requestedTps.mutability,
   }
-  if (!isRangeValue(requestedTpsConfig.default, requestedTpsConfig)) {
-    throw new Error('snapshot throttler requested TPS config default is invalid')
+  if (!isRangeValue(requestedTpsConfig.initial, requestedTpsConfig)) {
+    throw new Error('snapshot throttler requested TPS config initial is invalid')
   }
 
   const installationMode = value.throttlerInstallationMode
-  if (!isExactObject(installationMode, ['allowed', 'default', 'mutability'])) {
+  if (!isExactObject(installationMode, ['allowed', 'initial', 'mutability'])) {
     throw new Error('snapshot throttler installation mode config is invalid')
   }
   if (
@@ -556,8 +556,8 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
     installationMode.allowed.length !== 2 ||
     installationMode.allowed[0] !== 'installed' ||
     installationMode.allowed[1] !== 'bypass' ||
-    installationMode.default !== 'installed' && installationMode.default !== 'bypass' ||
-    !installationMode.allowed.includes(installationMode.default) ||
+    installationMode.initial !== 'installed' && installationMode.initial !== 'bypass' ||
+    !installationMode.allowed.includes(installationMode.initial) ||
     installationMode.mutability !== 'immediate'
   ) {
     throw new Error('snapshot throttler installation mode config is invalid')
@@ -565,9 +565,9 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
   const senderRanges = [
     [value.senderWorkers, 32, 1, 32, 1, 'workers'],
   ] as const
-  for (const [senderRange, defaultValue, min, max, step, unit] of senderRanges) {
-    if (!isExactObject(senderRange, ['default', 'max', 'min', 'mutability', 'step', 'unit']) ||
-      senderRange.default !== defaultValue || senderRange.min !== min ||
+  for (const [senderRange, initialValue, min, max, step, unit] of senderRanges) {
+    if (!isExactObject(senderRange, ['initial', 'max', 'min', 'mutability', 'step', 'unit']) ||
+      senderRange.initial !== initialValue || senderRange.min !== min ||
       senderRange.max !== max || senderRange.step !== step ||
       senderRange.unit !== unit || senderRange.mutability !== 'immediate') {
       throw new Error('snapshot Sender config is invalid')
@@ -584,20 +584,20 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
     readerWorkers: Object.freeze(readerWorkers as unknown as LoadgenConfigSnapshot['readerWorkers']),
     metricsWindowMs: Object.freeze(metricsWindowConfig),
     readerChannelCapacity: Object.freeze({
-      default: readerChannel.default,
+      initial: readerChannel.initial,
       allowed,
       unit: readerChannel.unit,
       mutability: readerChannel.mutability,
     }),
     senderChannelCapacity: Object.freeze({
-      default: senderChannel.default,
+      initial: senderChannel.initial,
       allowed: senderAllowed,
       unit: senderChannel.unit,
       mutability: senderChannel.mutability,
     }),
     throttlerRequestedTps: Object.freeze(requestedTpsConfig),
     throttlerInstallationMode: Object.freeze({
-      default: installationMode.default,
+      initial: installationMode.initial,
       allowed: Object.freeze([...installationMode.allowed]),
       mutability: installationMode.mutability,
     }),

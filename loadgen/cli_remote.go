@@ -410,16 +410,16 @@ func validateSnapshotKeys(root map[string]json.RawMessage) error {
 		return fmt.Errorf("decode snapshot config: %w", err)
 	}
 	for _, name := range []string{"readerReadBatchSize", "readerWorkers", "metricsWindowMs", "senderWorkers", "throttlerRequestedTps"} {
-		if err := validateSnapshotObjectKeys(config, name, []string{"default", "max", "min", "mutability", "step", "unit"}); err != nil {
+		if err := validateSnapshotObjectKeys(config, name, []string{"initial", "max", "min", "mutability", "step", "unit"}); err != nil {
 			return err
 		}
 	}
 	for _, name := range []string{"readerChannelCapacity", "senderChannelCapacity"} {
-		if err := validateSnapshotObjectKeys(config, name, []string{"allowed", "default", "mutability", "unit"}); err != nil {
+		if err := validateSnapshotObjectKeys(config, name, []string{"allowed", "initial", "mutability", "unit"}); err != nil {
 			return err
 		}
 	}
-	if err := validateSnapshotObjectKeys(config, "throttlerInstallationMode", []string{"allowed", "default", "mutability"}); err != nil {
+	if err := validateSnapshotObjectKeys(config, "throttlerInstallationMode", []string{"allowed", "initial", "mutability"}); err != nil {
 		return err
 	}
 	if err := validateSnapshotObjectKeys(config, "logging", []string{"level", "mutability"}); err != nil {

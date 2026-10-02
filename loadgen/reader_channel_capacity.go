@@ -8,5 +8,5 @@ func (state *controlState) readerChannelCapacity() int {
 	if state.controls.readerChannelCapacityConfigured {
 		return state.controls.configuredReaderChannelCapacity
 	}
-	return state.controls.config.ReaderChannel.Capacity.Default
+	return state.controls.config.ReaderChannel.Capacity.Initial
 }

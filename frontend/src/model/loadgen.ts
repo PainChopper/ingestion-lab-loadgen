@@ -56,7 +56,7 @@ export interface NumericControlSnapshot {
 }
 
 export interface RangeControlConfigSnapshot {
-  readonly default: number
+  readonly initial: number
   readonly min: number
   readonly max: number
   readonly step: number
@@ -65,7 +65,7 @@ export interface RangeControlConfigSnapshot {
 }
 
 export interface AllowedControlConfigSnapshot {
-  readonly default: number
+  readonly initial: number
   readonly allowed: readonly number[]
   readonly unit: string
   readonly mutability: string
@@ -89,7 +89,7 @@ export interface LoggingConfigSnapshot {
 }
 
 export interface InstallationModeConfigSnapshot {
-  readonly default: ThrottlerInstallationMode
+  readonly initial: ThrottlerInstallationMode
   readonly allowed: readonly ThrottlerInstallationMode[]
   readonly mutability: string
 }

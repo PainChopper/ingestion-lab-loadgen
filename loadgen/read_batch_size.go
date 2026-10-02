@@ -8,5 +8,5 @@ func (state *controlState) readBatchSize() int {
 	if state.controls.configuredReadBatchSize != 0 {
 		return state.controls.configuredReadBatchSize
 	}
-	return state.controls.config.Reader.ReadBatchSize.Default
+	return state.controls.config.Reader.ReadBatchSize.Initial
 }

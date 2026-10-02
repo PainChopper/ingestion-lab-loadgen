@@ -98,7 +98,7 @@ const VALID_WIRE: TestWireSnapshot = {
   },
   config: {
     readerReadBatchSize: {
-      default: 50_000,
+      initial: 50_000,
       min: 1_000,
       max: 100_000,
       step: 1_000,
@@ -106,19 +106,19 @@ const VALID_WIRE: TestWireSnapshot = {
       mutability: 'idle-only',
     },
     readerChannelCapacity: {
-      default: 2,
+      initial: 2,
       allowed: [0, 1, 2, 8, 16, 64, 8_192],
       unit: 'batches',
       mutability: 'idle-only',
     },
     senderChannelCapacity: {
-      default: 0,
+      initial: 0,
       allowed: [0, 1, 2, 8, 16, 64, 8_192],
       unit: 'batches',
       mutability: 'idle-only',
     },
     readerWorkers: {
-      default: 1,
+      initial: 1,
       min: 1,
       max: 7,
       step: 1,
@@ -126,7 +126,7 @@ const VALID_WIRE: TestWireSnapshot = {
       mutability: 'immediate',
     },
     metricsWindowMs: {
-      default: 1_000,
+      initial: 1_000,
       min: 100,
       max: 10_000,
       step: 100,
@@ -134,7 +134,7 @@ const VALID_WIRE: TestWireSnapshot = {
       mutability: 'startup-only',
     },
     throttlerRequestedTps: {
-      default: 200,
+      initial: 200,
       min: 0,
       max: 400,
       step: 25,
@@ -142,11 +142,11 @@ const VALID_WIRE: TestWireSnapshot = {
       mutability: 'immediate',
     },
     throttlerInstallationMode: {
-      default: 'installed',
+      initial: 'installed',
       allowed: ['installed', 'bypass'],
       mutability: 'immediate',
     },
-    senderWorkers: { default: 32, min: 1, max: 32, step: 1, unit: 'workers', mutability: 'immediate' },
+    senderWorkers: { initial: 32, min: 1, max: 32, step: 1, unit: 'workers', mutability: 'immediate' },
 		logging: { level: 'info', mutability: 'startup-only' },
   },
 }
@@ -674,8 +674,8 @@ const malformedCases: ReadonlyArray<{
         ...VALID_WIRE,
         config: {
           ...VALID_WIRE.config,
-          [obsoleteDelayKey]: { default: 10, min: 0, max: 2000, step: 10, unit: 'milliseconds', mutability: 'immediate' },
-          [obsoleteErrorRateKey]: { default: 2, min: 0, max: 100, step: 1, unit: 'percent', mutability: 'immediate' },
+          [obsoleteDelayKey]: { initial: 10, min: 0, max: 2000, step: 10, unit: 'milliseconds', mutability: 'immediate' },
+          [obsoleteErrorRateKey]: { initial: 2, min: 0, max: 100, step: 1, unit: 'percent', mutability: 'immediate' },
         },
       })
     },
@@ -859,6 +859,35 @@ describe('HttpAdapter', () => {
     vi.unstubAllGlobals()
     vi.useRealTimers()
   })
+
+  it.each(['readerReadBatchSize', 'readerWorkers', 'readerChannelCapacity', 'senderChannelCapacity', 'throttlerRequestedTps', 'throttlerInstallationMode', 'senderWorkers', 'metricsWindowMs'] as const)(
+    'requires initial without a legacy alias in %s and blocks stale dispatch',
+    async (field) => {
+      const valid = JSON.parse(JSON.stringify(VALID_WIRE))
+      if (field === 'readerChannelCapacity' || field === 'senderChannelCapacity') valid.config[field].initial = 0
+      for (const shape of ['initial-only', 'legacy-only', 'both', 'missing']) {
+        const wire = structuredClone(valid)
+        if (shape === 'legacy-only' || shape === 'both') wire.config[field].default = wire.config[field].initial
+        if (shape === 'legacy-only' || shape === 'missing') delete wire.config[field].initial
+        fetchMock.mockResolvedValueOnce(mockResponse(valid)).mockResolvedValueOnce(mockResponse(wire))
+        const adapter = new HttpAdapter()
+        await flushPoll()
+        expect(adapter.getSnapshot().connectionState).toBe('connected')
+        await vi.advanceTimersByTimeAsync(1_000)
+        await flushPoll()
+        if (shape === 'initial-only') {
+          expect(adapter.getSnapshot().connectionState).toBe('connected')
+          expect(adapter.getSnapshot().config).toEqual(valid.config)
+        } else {
+          expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'error', config: null })
+          const receipt = await adapter.dispatch({ type: 'set-requested-tps', value: 200 })
+          expect(receipt).toMatchObject({ accepted: false, error: { code: 'unavailable' } })
+          expect(commandFetchCalls()).toHaveLength(0)
+        }
+        adapter.dispose()
+      }
+    },
+  )
 
   it('accepts the config public contract', async () => {
     const { config: settings, ...telemetry } = VALID_WIRE

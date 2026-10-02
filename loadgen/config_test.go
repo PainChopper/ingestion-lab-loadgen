@@ -35,7 +35,7 @@ func newTestControlState(t *testing.T) controlState {
 	t.Cleanup(server.Close)
 	loaded.Sender.API.URL = server.URL
 	return controlState{
-		metricsWindow: time.Duration(loaded.Metrics.WindowMS.Default) * time.Millisecond,
+		metricsWindow: time.Duration(loaded.Metrics.WindowMS.Initial) * time.Millisecond,
 		run:           controlRunState{lifecycle: newLifecycle()},
 		controls:      configuredControls{config: loaded},
 	}
@@ -44,18 +44,61 @@ func newTestControlState(t *testing.T) controlState {
 func testConfigContents() string {
 	return strings.Join([]string{
 		"schema_version = 2", "", "[source]", "path = 'C:\\dataset\\*.parquet'", "unit = \"glob-pattern\"", "mutability = \"startup-only\"", "",
-		"[reader.read_batch_size]", "default = 1000", "min = 1000", "max = 100000", "step = 1000", "unit = \"transactions\"", "mutability = \"idle-only\"", "",
-		"[reader.workers]", "default = 1", "min = 1", "max = 7", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"", "",
-		"[readerChannel.capacity]", "default = 2", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
-		"", "[senderChannel.capacity]", "default = 0", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
-		"", "[throttler.requested_tps]", "default = 2000000", "min = 0", "max = 4000000", "step = 200000", "unit = \"transactions/s\"", "mutability = \"immediate\"",
-		"", "[throttler.installation_mode]", "default = \"installed\"", "allowed = [\"installed\", \"bypass\"]", "mutability = \"immediate\"",
-		"", "[sender.workers]", "default = 32", "min = 1", "max = 32", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"",
+		"[reader.read_batch_size]", "initial = 1000", "min = 1000", "max = 100000", "step = 1000", "unit = \"transactions\"", "mutability = \"idle-only\"", "",
+		"[reader.workers]", "initial = 1", "min = 1", "max = 7", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"", "",
+		"[readerChannel.capacity]", "initial = 2", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
+		"", "[senderChannel.capacity]", "initial = 0", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
+		"", "[throttler.requested_tps]", "initial = 2000000", "min = 0", "max = 4000000", "step = 200000", "unit = \"transactions/s\"", "mutability = \"immediate\"",
+		"", "[throttler.installation_mode]", "initial = \"installed\"", "allowed = [\"installed\", \"bypass\"]", "mutability = \"immediate\"",
+		"", "[sender.workers]", "initial = 32", "min = 1", "max = 32", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"",
 		"", "[sender.api]", "url = \"http://127.0.0.1:8080/internal/test/ingest\"", "mutability = \"startup-only\"",
 		"", "[sender.retry]", "delays_ms = [250, 500, 1000, 2000, 5000]", "jitter_percent = 20", "mutability = \"startup-only\"",
-		"", "[metrics.window_ms]", "default = 1000", "min = 100", "max = 10000", "step = 100", "unit = \"milliseconds\"", "mutability = \"startup-only\"",
+		"", "[metrics.window_ms]", "initial = 1000", "min = 100", "max = 10000", "step = 100", "unit = \"milliseconds\"", "mutability = \"startup-only\"",
 		"", "[logging]", "level = \"info\"", "mutability = \"startup-only\"",
 	}, "\n")
+}
+
+func TestLoadConfigInitialContract(t *testing.T) {
+	contents := testConfigContents()
+	fields := []struct{ section, value string }{
+		{section: "reader.read_batch_size", value: "1000"}, {section: "reader.workers", value: "1"},
+		{section: "readerChannel.capacity", value: "2"}, {section: "senderChannel.capacity", value: "0"},
+		{section: "throttler.requested_tps", value: "2000000"},
+		{section: "throttler.installation_mode", value: `"installed"`},
+		{section: "sender.workers", value: "32"}, {section: "metrics.window_ms", value: "1000"},
+	}
+	for _, field := range fields {
+		for _, shape := range []string{"initial-only", "legacy-only", "both", "missing"} {
+			t.Run(field.section+"/"+shape, func(t *testing.T) {
+				prefix := "[" + field.section + "]\n"
+				line := "initial = " + field.value + "\n"
+				replacement := line
+				switch shape {
+				case "legacy-only":
+					replacement = "default = " + field.value + "\n"
+				case "both":
+					replacement += "default = " + field.value + "\n"
+				case "missing":
+					replacement = ""
+				}
+				input := strings.Replace(contents, prefix+line, prefix+replacement, 1)
+				if shape != "initial-only" && input == contents {
+					t.Fatal("contract mutation did not apply")
+				}
+				path := filepath.Join(t.TempDir(), "config.toml")
+				if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				_, err := loadConfig(path)
+				if shape == "initial-only" && err != nil {
+					t.Fatalf("initial config rejected: %v", err)
+				}
+				if shape != "initial-only" && err == nil {
+					t.Fatal("legacy or incomplete config accepted")
+				}
+			})
+		}
+	}
 }
 
 func TestLoadConfigValidatesSenderAPI(t *testing.T) {
@@ -128,28 +171,28 @@ func TestLoadConfigRequiresExplicitConfigFields(t *testing.T) {
 		{name: "source path", old: "[source]\npath = 'C:\\dataset\\*.parquet'\n", new: "[source]\n"},
 		{name: "source unit", old: "path = 'C:\\dataset\\*.parquet'\nunit = \"glob-pattern\"\n", new: "path = 'C:\\dataset\\*.parquet'\n"},
 		{name: "source mutability", old: "unit = \"glob-pattern\"\nmutability = \"startup-only\"\n", new: "unit = \"glob-pattern\"\n"},
-		{name: "reader batch default", old: "[reader.read_batch_size]\ndefault = 1000\n", new: "[reader.read_batch_size]\n"},
-		{name: "reader batch min", old: "default = 1000\nmin = 1000\n", new: "default = 1000\n"},
+		{name: "reader batch initial", old: "[reader.read_batch_size]\ninitial = 1000\n", new: "[reader.read_batch_size]\n"},
+		{name: "reader batch min", old: "initial = 1000\nmin = 1000\n", new: "initial = 1000\n"},
 		{name: "reader batch max", old: "min = 1000\nmax = 100000\n", new: "min = 1000\n"},
 		{name: "reader batch step", old: "max = 100000\nstep = 1000\n", new: "max = 100000\n"},
 		{name: "reader batch unit", old: "step = 1000\nunit = \"transactions\"\n", new: "step = 1000\n"},
 		{name: "reader batch mutability", old: "unit = \"transactions\"\nmutability = \"idle-only\"\n", new: "unit = \"transactions\"\n"},
-		{name: "reader channel default", old: "[readerChannel.capacity]\ndefault = 2\n", new: "[readerChannel.capacity]\n"},
-		{name: "reader channel allowed", old: "default = 2\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n", new: "default = 2\n"},
+		{name: "reader channel initial", old: "[readerChannel.capacity]\ninitial = 2\n", new: "[readerChannel.capacity]\n"},
+		{name: "reader channel allowed", old: "initial = 2\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n", new: "initial = 2\n"},
 		{name: "reader channel unit", old: "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n", new: "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n"},
-		{name: "reader channel mutability", old: "[readerChannel.capacity]\ndefault = 2\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"idle-only\"\n", new: "[readerChannel.capacity]\ndefault = 2\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n"},
-		{name: "sender channel default", old: "[senderChannel.capacity]\ndefault = 0\n", new: "[senderChannel.capacity]\n"},
-		{name: "sender channel allowed", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n", new: "[senderChannel.capacity]\ndefault = 0\n"},
-		{name: "sender channel unit", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n"},
-		{name: "sender channel mutability", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"idle-only\"\n", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n"},
-		{name: "requested TPS default", old: "[throttler.requested_tps]\ndefault = 2000000\n", new: "[throttler.requested_tps]\n"},
-		{name: "requested TPS min", old: "default = 2000000\nmin = 0\n", new: "default = 2000000\n"},
+		{name: "reader channel mutability", old: "[readerChannel.capacity]\ninitial = 2\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"idle-only\"\n", new: "[readerChannel.capacity]\ninitial = 2\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n"},
+		{name: "sender channel initial", old: "[senderChannel.capacity]\ninitial = 0\n", new: "[senderChannel.capacity]\n"},
+		{name: "sender channel allowed", old: "[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n", new: "[senderChannel.capacity]\ninitial = 0\n"},
+		{name: "sender channel unit", old: "[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n", new: "[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\n"},
+		{name: "sender channel mutability", old: "[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"idle-only\"\n", new: "[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\n"},
+		{name: "requested TPS initial", old: "[throttler.requested_tps]\ninitial = 2000000\n", new: "[throttler.requested_tps]\n"},
+		{name: "requested TPS min", old: "initial = 2000000\nmin = 0\n", new: "initial = 2000000\n"},
 		{name: "requested TPS max", old: "min = 0\nmax = 4000000\n", new: "min = 0\n"},
 		{name: "requested TPS step", old: "max = 4000000\nstep = 200000\n", new: "max = 4000000\n"},
 		{name: "requested TPS unit", old: "step = 200000\nunit = \"transactions/s\"\n", new: "step = 200000\n"},
 		{name: "requested TPS mutability", old: "unit = \"transactions/s\"\nmutability = \"immediate\"\n", new: "unit = \"transactions/s\"\n"},
-		{name: "installation mode default", old: "[throttler.installation_mode]\ndefault = \"installed\"\n", new: "[throttler.installation_mode]\n"},
-		{name: "installation mode allowed", old: "default = \"installed\"\nallowed = [\"installed\", \"bypass\"]\n", new: "default = \"installed\"\n"},
+		{name: "installation mode initial", old: "[throttler.installation_mode]\ninitial = \"installed\"\n", new: "[throttler.installation_mode]\n"},
+		{name: "installation mode allowed", old: "initial = \"installed\"\nallowed = [\"installed\", \"bypass\"]\n", new: "initial = \"installed\"\n"},
 		{name: "installation mode mutability", old: "allowed = [\"installed\", \"bypass\"]\nmutability = \"immediate\"", new: "allowed = [\"installed\", \"bypass\"]\n"},
 	}
 
@@ -177,19 +220,19 @@ func TestLoadConfigAllowsExplicitZeroValues(t *testing.T) {
 		mustContain string
 	}{
 		{
-			name:        "reader channel capacity default",
-			contents:    strings.Replace(testConfigContents(), "[readerChannel.capacity]\ndefault = 2\n", "[readerChannel.capacity]\ndefault = 0\n", 1),
-			mustContain: "[readerChannel.capacity]\ndefault = 0\n",
+			name:        "reader channel capacity initial",
+			contents:    strings.Replace(testConfigContents(), "[readerChannel.capacity]\ninitial = 2\n", "[readerChannel.capacity]\ninitial = 0\n", 1),
+			mustContain: "[readerChannel.capacity]\ninitial = 0\n",
 		},
 		{
-			name:        "sender channel capacity default",
+			name:        "sender channel capacity initial",
 			contents:    testConfigContents(),
-			mustContain: "[senderChannel.capacity]\ndefault = 0\n",
+			mustContain: "[senderChannel.capacity]\ninitial = 0\n",
 		},
 		{
 			name:        "requested TPS minimum",
 			contents:    testConfigContents(),
-			mustContain: "[throttler.requested_tps]\ndefault = 2000000\nmin = 0\n",
+			mustContain: "[throttler.requested_tps]\ninitial = 2000000\nmin = 0\n",
 		},
 	}
 
@@ -212,8 +255,8 @@ func TestLoadConfigAllowsExplicitZeroValues(t *testing.T) {
 func TestLoadConfigAllowsSenderChannelCapacityConfig(t *testing.T) {
 	contents := strings.Replace(
 		testConfigContents(),
-		"[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]",
-		"[senderChannel.capacity]\ndefault = 3\nallowed = [0, 3, 7]",
+		"[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]",
+		"[senderChannel.capacity]\ninitial = 3\nallowed = [0, 3, 7]",
 		1,
 	)
 	if contents == testConfigContents() {
@@ -235,11 +278,11 @@ func TestLoadConfigRejectsInvalidSenderChannelCapacityConfig(t *testing.T) {
 		old  string
 		new  string
 	}{
-		{name: "wrong unit", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"transactions\""},
-		{name: "wrong mutability", old: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"idle-only\"", new: "[senderChannel.capacity]\ndefault = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"immediate\""},
+		{name: "wrong unit", old: "[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"", new: "[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"transactions\""},
+		{name: "wrong mutability", old: "[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"idle-only\"", new: "[senderChannel.capacity]\ninitial = 0\nallowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]\nunit = \"batches\"\nmutability = \"immediate\""},
 		{name: "negative allowed value", old: "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", new: "allowed = [-1, 0, 1]"},
 		{name: "not strictly increasing allowed values", old: "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", new: "allowed = [0, 2, 1]"},
-		{name: "default outside allowed", old: "[senderChannel.capacity]\ndefault = 0", new: "[senderChannel.capacity]\ndefault = 3"},
+		{name: "initial outside allowed", old: "[senderChannel.capacity]\ninitial = 0", new: "[senderChannel.capacity]\ninitial = 3"},
 	}
 
 	for _, test := range tests {
@@ -262,12 +305,12 @@ func TestLoadConfigRejectsInvalidSenderChannelCapacityConfig(t *testing.T) {
 func TestThrottlerConfigUsesApprovedProfile(t *testing.T) {
 	loaded := testConfig(t)
 	reader := loaded.Reader.ReadBatchSize
-	if reader.Default != 1_000 || reader.Min != 1_000 || reader.Max != 100_000 ||
+	if reader.Initial != 1_000 || reader.Min != 1_000 || reader.Max != 100_000 ||
 		reader.Step != 1_000 || reader.Unit != batchSizeUnit || reader.Mutability != idleOnly {
 		t.Fatalf("reader batch size config = %+v", reader)
 	}
 	requested := loaded.Throttler.RequestedTPS
-	if requested.Default != 2_000_000 || requested.Min != 0 || requested.Max != 4_000_000 ||
+	if requested.Initial != 2_000_000 || requested.Min != 0 || requested.Max != 4_000_000 ||
 		requested.Step != 200_000 || requested.Unit != requestedTPSUnit || requested.Mutability != immediate {
 		t.Fatalf("requested TPS config = %+v", requested)
 	}
@@ -275,11 +318,11 @@ func TestThrottlerConfigUsesApprovedProfile(t *testing.T) {
 	for value := requested.Min; value <= requested.Max; value += requested.Step {
 		values[value] = struct{}{}
 	}
-	if len(values) != 21 || !requested.contains(requested.Default) {
-		t.Fatalf("requested TPS grid = %d values, default valid = %t", len(values), requested.contains(requested.Default))
+	if len(values) != 21 || !requested.contains(requested.Initial) {
+		t.Fatalf("requested TPS grid = %d values, initial valid = %t", len(values), requested.contains(requested.Initial))
 	}
 	mode := loaded.Throttler.InstallationMode
-	if mode.Default != throttlerInstalled || !mode.contains(throttlerInstalled) ||
+	if mode.Initial != throttlerInstalled || !mode.contains(throttlerInstalled) ||
 		!mode.contains(throttlerBypass) || mode.Mutability != immediate {
 		t.Fatalf("installation mode config = %+v", mode)
 	}
@@ -287,7 +330,7 @@ func TestThrottlerConfigUsesApprovedProfile(t *testing.T) {
 
 func TestMetricsWindowConfigUsesApprovedProfile(t *testing.T) {
 	window := testConfig(t).Metrics.WindowMS
-	if window.Default != 1_000 || window.Min != 100 || window.Max != 10_000 ||
+	if window.Initial != 1_000 || window.Min != 100 || window.Max != 10_000 ||
 		window.Step != 100 || window.Unit != metricsWindowUnit || window.Mutability != startupOnly {
 		t.Fatalf("metrics window config = %+v", window)
 	}
@@ -299,12 +342,12 @@ func TestLoadConfigRejectsInvalidMetricsWindowConfig(t *testing.T) {
 		old  string
 		new  string
 	}{
-		{name: "missing default", old: "[metrics.window_ms]\ndefault = 1000", new: "[metrics.window_ms]"},
+		{name: "missing initial", old: "[metrics.window_ms]\ninitial = 1000", new: "[metrics.window_ms]"},
 		{name: "wrong unit", old: "unit = \"milliseconds\"", new: "unit = \"seconds\""},
-		{name: "wrong mutability", old: "[metrics.window_ms]\ndefault = 1000\nmin = 100\nmax = 10000\nstep = 100\nunit = \"milliseconds\"\nmutability = \"startup-only\"", new: "[metrics.window_ms]\ndefault = 1000\nmin = 100\nmax = 10000\nstep = 100\nunit = \"milliseconds\"\nmutability = \"immediate\""},
-		{name: "below minimum", old: "[metrics.window_ms]\ndefault = 1000\nmin = 100", new: "[metrics.window_ms]\ndefault = 1000\nmin = 99"},
-		{name: "above maximum", old: "[metrics.window_ms]\ndefault = 1000\nmin = 100\nmax = 10000", new: "[metrics.window_ms]\ndefault = 1000\nmin = 100\nmax = 10100"},
-		{name: "off grid default", old: "[metrics.window_ms]\ndefault = 1000", new: "[metrics.window_ms]\ndefault = 1050"},
+		{name: "wrong mutability", old: "[metrics.window_ms]\ninitial = 1000\nmin = 100\nmax = 10000\nstep = 100\nunit = \"milliseconds\"\nmutability = \"startup-only\"", new: "[metrics.window_ms]\ninitial = 1000\nmin = 100\nmax = 10000\nstep = 100\nunit = \"milliseconds\"\nmutability = \"immediate\""},
+		{name: "below minimum", old: "[metrics.window_ms]\ninitial = 1000\nmin = 100", new: "[metrics.window_ms]\ninitial = 1000\nmin = 99"},
+		{name: "above maximum", old: "[metrics.window_ms]\ninitial = 1000\nmin = 100\nmax = 10000", new: "[metrics.window_ms]\ninitial = 1000\nmin = 100\nmax = 10100"},
+		{name: "off grid initial", old: "[metrics.window_ms]\ninitial = 1000", new: "[metrics.window_ms]\ninitial = 1050"},
 	}
 
 	for _, test := range tests {
@@ -324,13 +367,13 @@ func TestLoadConfigRejectsInvalidMetricsWindowConfig(t *testing.T) {
 	}
 }
 
-func TestLoadConfigAllowsSafeMetricsWindowDefaults(t *testing.T) {
+func TestLoadConfigAllowsSafeMetricsWindowInitials(t *testing.T) {
 	for _, value := range []int{100, 300, 1_000, 10_000} {
 		t.Run(fmt.Sprintf("%d milliseconds", value), func(t *testing.T) {
 			contents := strings.Replace(
 				testConfigContents(),
-				"[metrics.window_ms]\ndefault = 1000",
-				fmt.Sprintf("[metrics.window_ms]\ndefault = %d", value),
+				"[metrics.window_ms]\ninitial = 1000",
+				fmt.Sprintf("[metrics.window_ms]\ninitial = %d", value),
 				1,
 			)
 			path := filepath.Join(t.TempDir(), "config.toml")
@@ -349,10 +392,10 @@ func TestCheckedInConfigLoadsApprovedThrottlerProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load checked-in config: %v", err)
 	}
-	if loaded.Reader.ReadBatchSize.Default != 1_000 ||
-		loaded.Throttler.RequestedTPS.Default != 2_000_000 || loaded.Throttler.RequestedTPS.Min != 0 ||
+	if loaded.Reader.ReadBatchSize.Initial != 1_000 ||
+		loaded.Throttler.RequestedTPS.Initial != 2_000_000 || loaded.Throttler.RequestedTPS.Min != 0 ||
 		loaded.Throttler.RequestedTPS.Max != 4_000_000 || loaded.Throttler.RequestedTPS.Step != 200_000 ||
-		loaded.Throttler.InstallationMode.Default != throttlerInstalled {
+		loaded.Throttler.InstallationMode.Initial != throttlerInstalled {
 		t.Fatalf("checked-in throttler config = %+v", loaded.Throttler)
 	}
 }
@@ -364,16 +407,16 @@ func TestLoadConfigRejectsInvalidThrottlerConfig(t *testing.T) {
 		new       string
 		wantError string
 	}{
-		{name: "missing TPS default", old: "[throttler.requested_tps]\ndefault = 2000000", new: "[throttler.requested_tps]"},
+		{name: "missing TPS initial", old: "[throttler.requested_tps]\ninitial = 2000000", new: "[throttler.requested_tps]"},
 		{name: "missing mode allowed", old: "allowed = [\"installed\", \"bypass\"]", new: ""},
 		{name: "unknown key", old: "[throttler.installation_mode]", new: "[throttler.installation_mode]\nextra = true"},
 		{name: "negative minimum", old: "min = 0", new: "min = -100"},
-		{name: "default above maximum", old: "default = 2000000", new: "default = 4400000", wantError: "throttler.requested_tps: default=4400000 is outside range min=0 max=4000000 (step=200000)"},
-		{name: "off grid default", old: "default = 2000000", new: "default = 2000001", wantError: "throttler.requested_tps: default=2000001 is not aligned to step=200000 from min=0 (max=4000000)"},
+		{name: "initial above maximum", old: "initial = 2000000", new: "initial = 4400000", wantError: "throttler.requested_tps: initial=4400000 is outside range min=0 max=4000000 (step=200000)"},
+		{name: "off grid initial", old: "initial = 2000000", new: "initial = 2000001", wantError: "throttler.requested_tps: initial=2000001 is not aligned to step=200000 from min=0 (max=4000000)"},
 		{name: "invalid unit", old: "unit = \"transactions/s\"", new: "unit = \"batches/s\""},
-		{name: "invalid mutability", old: "[throttler.requested_tps]\ndefault = 2000000\nmin = 0\nmax = 4000000\nstep = 200000\nunit = \"transactions/s\"\nmutability = \"immediate\"", new: "[throttler.requested_tps]\ndefault = 2000000\nmin = 0\nmax = 4000000\nstep = 200000\nunit = \"transactions/s\"\nmutability = \"idle-only\""},
+		{name: "invalid mutability", old: "[throttler.requested_tps]\ninitial = 2000000\nmin = 0\nmax = 4000000\nstep = 200000\nunit = \"transactions/s\"\nmutability = \"immediate\"", new: "[throttler.requested_tps]\ninitial = 2000000\nmin = 0\nmax = 4000000\nstep = 200000\nunit = \"transactions/s\"\nmutability = \"idle-only\""},
 		{name: "duplicate mode", old: "[\"installed\", \"bypass\"]", new: "[\"installed\", \"installed\"]"},
-		{name: "unknown mode", old: "default = \"installed\"\nallowed", new: "default = \"unknown\"\nallowed"},
+		{name: "unknown mode", old: "initial = \"installed\"\nallowed", new: "initial = \"unknown\"\nallowed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -396,7 +439,7 @@ func TestLoadConfigRejectsInvalidThrottlerConfig(t *testing.T) {
 
 func TestSenderConfigUsesApprovedProfile(t *testing.T) {
 	sender := testConfig(t).Sender
-	if sender.Workers != (rangeConfig{Default: 32, Min: 1, Max: 32, Step: 1, Unit: workersUnit, Mutability: immediate}) {
+	if sender.Workers != (rangeConfig{Initial: 32, Min: 1, Max: 32, Step: 1, Unit: workersUnit, Mutability: immediate}) {
 		t.Fatalf("workers config = %+v", sender.Workers)
 	}
 	if got, want := sender.Retry.DelaysMS, []int{250, 500, 1_000, 2_000, 5_000}; !slices.Equal(got, want) {
@@ -406,7 +449,7 @@ func TestSenderConfigUsesApprovedProfile(t *testing.T) {
 
 func TestReaderWorkersConfigUsesApprovedProfile(t *testing.T) {
 	workers := testConfig(t).Reader.Workers
-	want := rangeConfig{Default: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}
+	want := rangeConfig{Initial: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}
 	if workers != want || !workers.contains(1) || !workers.contains(7) || workers.contains(0) || workers.contains(8) {
 		t.Fatalf("Reader workers config = %+v, want %+v", workers, want)
 	}
@@ -414,12 +457,12 @@ func TestReaderWorkersConfigUsesApprovedProfile(t *testing.T) {
 
 func TestLoadConfigRejectsReaderWorkersProfileDrift(t *testing.T) {
 	tests := []struct{ name, old, replacement string }{
-		{"missing workers", "[reader.workers]\ndefault = 1", "[reader.workers]"},
-		{"default zero", "[reader.workers]\ndefault = 1", "[reader.workers]\ndefault = 0"},
-		{"minimum zero", "[reader.workers]\ndefault = 1\nmin = 1", "[reader.workers]\ndefault = 1\nmin = 0"},
-		{"maximum eight", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 8"},
-		{"step two", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7\nstep = 1", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7\nstep = 2"},
-		{"wrong mutability", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7\nstep = 1\nunit = \"workers\"\nmutability = \"immediate\"", "[reader.workers]\ndefault = 1\nmin = 1\nmax = 7\nstep = 1\nunit = \"workers\"\nmutability = \"idle-only\""},
+		{"missing workers", "[reader.workers]\ninitial = 1", "[reader.workers]"},
+		{"initial zero", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = 0"},
+		{"minimum zero", "[reader.workers]\ninitial = 1\nmin = 1", "[reader.workers]\ninitial = 1\nmin = 0"},
+		{"maximum eight", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 8"},
+		{"step two", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7\nstep = 1", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7\nstep = 2"},
+		{"wrong mutability", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7\nstep = 1\nunit = \"workers\"\nmutability = \"immediate\"", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7\nstep = 1\nunit = \"workers\"\nmutability = \"idle-only\""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -440,7 +483,7 @@ func TestLoadConfigRejectsReaderWorkersProfileDrift(t *testing.T) {
 
 func TestLoadConfigRejectsInvalidSenderConfig(t *testing.T) {
 	tests := []struct{ name, old, replacement string }{
-		{"missing workers", "[sender.workers]\ndefault = 32", "[sender.workers]"},
+		{"missing workers", "[sender.workers]\ninitial = 32", "[sender.workers]"},
 		{"wrong workers max", "max = 32", "max = 33"},
 		{"empty retry delays", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = []"},
 		{"decreasing retry delays", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [250, 100]"},
