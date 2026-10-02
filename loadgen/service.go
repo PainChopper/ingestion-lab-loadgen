@@ -24,10 +24,10 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 
 	state := newControlState(cfg, logger)
 	requests := make(chan runtimeCommand, 10)
-	m := newMetrics(cfg)
-	defer m.stop()
+	metrics := newServiceMetrics(cfg)
+	defer metrics.stop()
 
-	server, serverDone, err := startHTTPServer(requests, m.prometheusMetrics, cfg, logger)
+	server, serverDone, err := startHTTPServer(requests, metrics.prometheusMetrics, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -35,7 +35,7 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	eventLoopDone := make(chan struct{})
 	go func() {
 		defer close(eventLoopDone)
-		state.runEventLoop(serviceCtx, requests, m.ticks, m.prometheusMetrics)
+		state.runEventLoop(serviceCtx, requests, metrics.ticks, metrics.prometheusMetrics)
 	}()
 	if runAfterStart {
 		if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {

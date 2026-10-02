@@ -2,20 +2,20 @@ package main
 
 import "time"
 
-type metrics struct {
+type serviceMetrics struct {
 	ticks             <-chan time.Time
 	prometheusMetrics *PrometheusMetrics
 	ticker            *time.Ticker
 }
 
-func newMetrics(config config) metrics {
+func newServiceMetrics(config config) serviceMetrics {
 	window := time.Duration(config.Metrics.WindowMS.Initial) * time.Millisecond
 	prometheusMetrics := NewPrometheusMetrics()
 	prometheusMetrics.targetTPS.Set(float64(config.Throttler.RequestedTPS.Initial))
 	ticker := time.NewTicker(window)
-	return metrics{ticks: ticker.C, prometheusMetrics: prometheusMetrics, ticker: ticker}
+	return serviceMetrics{ticks: ticker.C, prometheusMetrics: prometheusMetrics, ticker: ticker}
 }
 
-func (m metrics) stop() {
+func (m serviceMetrics) stop() {
 	m.ticker.Stop()
 }
