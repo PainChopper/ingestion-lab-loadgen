@@ -114,7 +114,7 @@ func TestPipelineRuntimeSenderInheritsRunContextAcrossPauseResume(t *testing.T) 
 	runtime.stop()
 }
 
-func TestPipelineRuntimeStopIsIdempotentAfterActiveAndSoftResetRuns(t *testing.T) {
+func TestPipelineRuntimeStopIsIdempotentWithAndWithoutSender(t *testing.T) {
 	state := newTestControlState(t)
 	read := func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
 		done := make(chan struct{})
@@ -136,7 +136,6 @@ func TestPipelineRuntimeStopIsIdempotentAfterActiveAndSoftResetRuns(t *testing.T
 	if err := runtime.start(context.Background()); err != nil {
 		t.Fatalf("start reset runtime: %v", err)
 	}
-	runtime.resetPaused()
 	runtime.stop()
 	runtime.stop()
 
@@ -1303,7 +1302,7 @@ func TestCloseAndDrainReturnsForClosedChannel(t *testing.T) {
 	}
 }
 
-func TestEventLoopRetainsActualChannelsAcrossPauseResumeAndSameCapacityReset(t *testing.T) {
+func TestEventLoopKeepsActualChannelsAcrossPauseResume(t *testing.T) {
 	for _, capacity := range []int{0, 1, 8_192} {
 		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
 			harness := startActualChannelEventLoopForTest(t)
@@ -1325,32 +1324,13 @@ func TestEventLoopRetainsActualChannelsAcrossPauseResumeAndSameCapacityReset(t *
 				t.Fatal("Pause/Resume replaced an actual event-loop channel")
 			}
 
-			if capacity > 0 {
-				harness.send(t, []Transaction{{ClientID: "old"}})
-			}
-			harness.command(t, cmdPause)
-			harness.command(t, cmdReset)
-			if harness.state.telemetry.readerChannel.batches != reader || harness.state.telemetry.senderChannel.batches != sender {
-				t.Fatal("same-capacity Reset replaced an actual event-loop channel")
-			}
-			if cap(reader) != capacity || cap(sender) != capacity || len(reader) != 0 || len(sender) != 0 {
-				t.Fatalf("channels after Reset = Reader(cap=%d len=%d), Sender(cap=%d len=%d)", cap(reader), len(reader), cap(sender), len(sender))
-			}
-
-			harness.command(t, cmdRun)
-			if next := harness.nextReader(t); next != reader {
-				t.Fatal("same-capacity Reset did not retain actual Reader channel")
-			}
-			if next := harness.nextSender(t); next != sender {
-				t.Fatal("same-capacity Reset did not retain actual Sender channel")
-			}
 			harness.send(t, []Transaction{{ClientID: "fresh"}})
 			waitForTransactions(t, harness.requests, harness.metrics, 1)
 		})
 	}
 }
 
-func TestEventLoopSenderChannelTelemetryUsesAppliedReadBatchSizeAfterReuse(t *testing.T) {
+func TestEventLoopSenderChannelTelemetryUsesAppliedReadBatchSizeAfterReset(t *testing.T) {
 	harness := startActualChannelEventLoopWithHeldThrottlerForTest(t)
 	defer harness.stop()
 
@@ -1366,7 +1346,7 @@ func TestEventLoopSenderChannelTelemetryUsesAppliedReadBatchSizeAfterReuse(t *te
 	harness.setCapacity(t, cmdSetSenderChannelCapacity, 1)
 	harness.command(t, cmdRun)
 	harness.nextReader(t)
-	sender := harness.nextSender(t)
+	harness.nextSender(t)
 	harness.command(t, cmdPause)
 	close(harness.allowThrottlerForward)
 	harness.send(t, []Transaction{{ClientID: "initial"}})
@@ -1385,19 +1365,17 @@ func TestEventLoopSenderChannelTelemetryUsesAppliedReadBatchSizeAfterReuse(t *te
 
 	harness.command(t, cmdRun)
 	harness.nextReader(t)
-	if next := harness.nextSender(t); next != sender {
-		t.Fatal("same-capacity Reset did not retain actual Sender channel")
-	}
+	harness.nextSender(t)
 	harness.command(t, cmdPause)
 	harness.send(t, []Transaction{{ClientID: "updated"}})
 	<-harness.forwardedBatches
 	if got := snapshot(); got.SenderChannel.DepthBatches != 1 ||
 		got.SenderChannel.BufferedTransactions != updatedBatchSize {
-		t.Fatalf("reused Sender channel telemetry = %+v, want depth 1 and %d buffered transactions", got, updatedBatchSize)
+		t.Fatalf("Sender channel telemetry after Reset = %+v, want depth 1 and %d buffered transactions", got, updatedBatchSize)
 	}
 }
 
-func TestEventLoopSameCapacityResetDrainsRetainedActualReaderBatch(t *testing.T) {
+func TestEventLoopResetDrainsQueuedReaderBatch(t *testing.T) {
 	for _, capacity := range []int{1, 8_192} {
 		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
 			harness := startActualChannelEventLoopWithHeldThrottlerForTest(t)
@@ -1419,20 +1397,18 @@ func TestEventLoopSameCapacityResetDrainsRetainedActualReaderBatch(t *testing.T)
 
 			harness.command(t, cmdPause)
 			harness.command(t, cmdReset)
-			if harness.state.telemetry.readerChannel.batches != reader || harness.state.telemetry.senderChannel.batches != sender {
-				t.Fatal("same-capacity Reset replaced an actual event-loop channel")
+			if harness.state.telemetry.readerChannel.batches != nil || harness.state.telemetry.senderChannel.batches != nil {
+				t.Fatal("Reset retained telemetry channel attachment")
 			}
 			if len(reader) != 0 || len(sender) != 0 {
 				t.Fatalf("actual queues after Reset = Reader %d, Sender %d, want empty", len(reader), len(sender))
 			}
+			assertClosedActualChannel(t, reader)
+			assertClosedActualChannel(t, sender)
 
 			harness.command(t, cmdRun)
-			if next := harness.nextReader(t); next != reader {
-				t.Fatal("same-capacity Reset did not retain actual Reader channel")
-			}
-			if next := harness.nextSender(t); next != sender {
-				t.Fatal("same-capacity Reset did not retain actual Sender channel")
-			}
+			harness.nextReader(t)
+			harness.nextSender(t)
 			harness.send(t, []Transaction{{ClientID: "fresh"}})
 			close(harness.allowThrottlerForward)
 
@@ -1453,68 +1429,14 @@ func TestEventLoopSameCapacityResetDrainsRetainedActualReaderBatch(t *testing.T)
 	}
 }
 
-func TestEventLoopSelectivelyReplacesActualChannelsAfterSoftReset(t *testing.T) {
-	harness := startActualChannelEventLoopForTest(t)
-	defer harness.stop()
-
-	harness.setCapacity(t, cmdSetReaderChannelCapacity, 1)
-	harness.setCapacity(t, cmdSetSenderChannelCapacity, 1)
-	harness.command(t, cmdRun)
-	reader := harness.nextReader(t)
-	sender := harness.nextSender(t)
-
-	harness.command(t, cmdPause)
-	harness.command(t, cmdReset)
-	harness.setCapacity(t, cmdSetReaderChannelCapacity, 8_192)
-	if harness.state.telemetry.readerChannel.batches != reader || harness.state.telemetry.senderChannel.batches != sender {
-		t.Fatal("idle Reader capacity setter replaced an actual channel")
-	}
-	harness.command(t, cmdRun)
-	replacedReader := harness.nextReader(t)
-	if replacedReader == reader || cap(replacedReader) != 8_192 {
-		t.Fatalf("Reader replacement = %p (capacity %d), want new channel with capacity 8192", replacedReader, cap(replacedReader))
-	}
-	if retainedSender := harness.nextSender(t); retainedSender != sender {
-		t.Fatal("Reader-only replacement changed Sender channel")
-	}
-	assertClosedActualChannel(t, reader)
-
-	harness.command(t, cmdPause)
-	harness.command(t, cmdReset)
-	harness.setCapacity(t, cmdSetSenderChannelCapacity, 0)
-	harness.command(t, cmdRun)
-	if retainedReader := harness.nextReader(t); retainedReader != replacedReader {
-		t.Fatal("Sender-only replacement changed Reader channel")
-	}
-	replacedSender := harness.nextSender(t)
-	if replacedSender == sender || cap(replacedSender) != 0 {
-		t.Fatalf("Sender replacement = %p (capacity %d), want new channel with capacity 0", replacedSender, cap(replacedSender))
-	}
-	assertClosedActualChannel(t, sender)
-
-	harness.command(t, cmdPause)
-	harness.command(t, cmdReset)
-	harness.setCapacity(t, cmdSetReaderChannelCapacity, 0)
-	harness.setCapacity(t, cmdSetSenderChannelCapacity, 8_192)
-	harness.command(t, cmdRun)
-	if next := harness.nextReader(t); next == replacedReader || cap(next) != 0 {
-		t.Fatal("both-capacity replacement did not replace Reader channel")
-	}
-	if next := harness.nextSender(t); next == replacedSender || cap(next) != 8_192 {
-		t.Fatal("both-capacity replacement did not replace Sender channel")
-	}
-	assertClosedActualChannel(t, replacedReader)
-	assertClosedActualChannel(t, replacedSender)
-}
-
 func TestEventLoopTeardownClosesActualChannelsAndDetachesTelemetry(t *testing.T) {
-	for _, afterSoftReset := range []bool{false, true} {
-		t.Run(strconv.FormatBool(afterSoftReset), func(t *testing.T) {
+	for _, afterReset := range []bool{false, true} {
+		t.Run(strconv.FormatBool(afterReset), func(t *testing.T) {
 			harness := startActualChannelEventLoopForTest(t)
 			harness.command(t, cmdRun)
 			reader := harness.nextReader(t)
 			sender := harness.nextSender(t)
-			if afterSoftReset {
+			if afterReset {
 				harness.command(t, cmdPause)
 				harness.command(t, cmdReset)
 			}
