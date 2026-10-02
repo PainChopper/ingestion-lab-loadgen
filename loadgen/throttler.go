@@ -11,11 +11,6 @@ type throttlerSettings struct {
 	paused       bool
 }
 
-type throttlerUpdate struct {
-	settings     throttlerSettings
-	acknowledged chan struct{}
-}
-
 func startThrottler(
 	ctx context.Context,
 	readerBatches <-chan []Transaction,
@@ -23,9 +18,9 @@ func startThrottler(
 	readerChannelTelemetry *channelTelemetry,
 	senderChannelTelemetry *channelTelemetry,
 	initial throttlerSettings,
-) (<-chan struct{}, chan<- throttlerUpdate) {
+) (<-chan struct{}, chan<- throttlerSettings) {
 	done := make(chan struct{})
-	updates := make(chan throttlerUpdate)
+	updates := make(chan throttlerSettings)
 	go func() {
 		defer close(done)
 		settings := initial
@@ -34,8 +29,7 @@ func startThrottler(
 			case <-ctx.Done():
 				return
 			case update := <-updates:
-				settings = update.settings
-				close(update.acknowledged)
+				settings = update
 			case batch, ok := <-readerBatches:
 				if !ok {
 					return
@@ -55,7 +49,7 @@ func forwardThrottledBatch(
 	senderBatches chan<- []Transaction,
 	senderChannel *channelTelemetry,
 	batch []Transaction,
-	updates <-chan throttlerUpdate,
+	updates <-chan throttlerSettings,
 	settings *throttlerSettings,
 ) bool {
 	waitStarted := time.Now()
@@ -65,9 +59,8 @@ func forwardThrottledBatch(
 			case <-ctx.Done():
 				return false
 			case update := <-updates:
-				*settings = update.settings
+				*settings = update
 				waitStarted = time.Now()
-				close(update.acknowledged)
 			}
 			continue
 		}
@@ -82,9 +75,8 @@ func forwardThrottledBatch(
 					return false
 				case update := <-updates:
 					timer.Stop()
-					*settings = update.settings
+					*settings = update
 					waitStarted = time.Now()
-					close(update.acknowledged)
 				case <-timer.C:
 				}
 				continue
@@ -95,9 +87,8 @@ func forwardThrottledBatch(
 		case <-ctx.Done():
 			return false
 		case update := <-updates:
-			*settings = update.settings
+			*settings = update
 			waitStarted = time.Now()
-			close(update.acknowledged)
 			continue
 		case senderBatches <- batch:
 			senderChannel.recordSend(len(batch))
@@ -112,9 +103,8 @@ func forwardThrottledBatch(
 			return false
 		case update := <-updates:
 			senderChannel.finishBlocked(time.Now())
-			*settings = update.settings
+			*settings = update
 			waitStarted = time.Now()
-			close(update.acknowledged)
 		case senderBatches <- batch:
 			senderChannel.finishBlocked(time.Now())
 			senderChannel.recordSend(len(batch))

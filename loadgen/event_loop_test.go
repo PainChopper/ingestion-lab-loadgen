@@ -74,13 +74,13 @@ func TestPipelineRuntimeSenderInheritsRunContextAcrossPauseResume(t *testing.T) 
 		_ *channelTelemetry,
 		_ *channelTelemetry,
 		_ throttlerSettings,
-	) (<-chan struct{}, chan<- throttlerUpdate) {
+	) (<-chan struct{}, chan<- throttlerSettings) {
 		done := make(chan struct{})
 		go func() {
 			<-ctx.Done()
 			close(done)
 		}()
-		return done, make(chan throttlerUpdate)
+		return done, make(chan throttlerSettings)
 	}
 	runtime := newPipelineRuntime(&state, read, start)
 	if err := runtime.start(applicationContext); err != nil {
@@ -678,11 +678,11 @@ func TestResetFromPausedStopsReaderClearsProgressAndStartsFreshRun(t *testing.T)
 		_ *channelTelemetry,
 		_ *channelTelemetry,
 		_ throttlerSettings,
-	) (<-chan struct{}, chan<- throttlerUpdate) {
+	) (<-chan struct{}, chan<- throttlerSettings) {
 		throttlerStarts++
 		first := throttlerStarts == 1
 		done := make(chan struct{})
-		updates := make(chan throttlerUpdate)
+		updates := make(chan throttlerSettings)
 		go func() {
 			defer close(done)
 			var pending []Transaction
@@ -690,8 +690,7 @@ func TestResetFromPausedStopsReaderClearsProgressAndStartsFreshRun(t *testing.T)
 			for {
 				if pending == nil {
 					select {
-					case update := <-updates:
-						close(update.acknowledged)
+					case <-updates:
 					case batch := <-batches:
 						pending = batch
 						if first && delivered == 1 {
@@ -707,8 +706,7 @@ func TestResetFromPausedStopsReaderClearsProgressAndStartsFreshRun(t *testing.T)
 					continue
 				}
 				select {
-				case update := <-updates:
-					close(update.acknowledged)
+				case <-updates:
 				case output <- pending:
 					capturedIDs <- pending[0].ClientID
 					delivered++
@@ -1596,7 +1594,7 @@ func startActualChannelEventLoopForTestWithHeldThrottler(t *testing.T, holdThrot
 		readerChannelTelemetry *channelTelemetry,
 		senderChannelTelemetry *channelTelemetry,
 		settings throttlerSettings,
-	) (<-chan struct{}, chan<- throttlerUpdate) {
+	) (<-chan struct{}, chan<- throttlerSettings) {
 		senderStarts <- struct{}{}
 		if holdThrottler {
 			return startHeldThrottlerForTest(
@@ -1652,9 +1650,9 @@ func startHeldThrottlerForTest(
 	senderChannelTelemetry *channelTelemetry,
 	allowForward <-chan struct{},
 	forwarded chan<- []Transaction,
-) (<-chan struct{}, chan<- throttlerUpdate) {
+) (<-chan struct{}, chan<- throttlerSettings) {
 	done := make(chan struct{})
-	updates := make(chan throttlerUpdate)
+	updates := make(chan throttlerSettings)
 	go func() {
 		defer close(done)
 
@@ -1663,8 +1661,7 @@ func startHeldThrottlerForTest(
 			select {
 			case <-ctx.Done():
 				return
-			case update := <-updates:
-				close(update.acknowledged)
+			case <-updates:
 			case <-allowForward:
 				allowForward = nil
 				batches = input
