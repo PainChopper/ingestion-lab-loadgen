@@ -14,7 +14,7 @@ type commandRequest struct {
 	Value  json.RawMessage `json:"value"`
 }
 
-func commandsHandler(control controlPlane, config config, logger *zap.Logger) http.Handler {
+func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.Logger) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -55,7 +55,7 @@ func commandsHandler(control controlPlane, config config, logger *zap.Logger) ht
 
 		switch cr.Action {
 		case "run":
-			if result := control.execute(runtimeCommand{kind: cmdRun}); result.status == commandConflict {
+			if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			} else if result.err != nil {
 				w.Header().Set("Content-Type", "application/json")
@@ -68,9 +68,9 @@ func commandsHandler(control controlPlane, config config, logger *zap.Logger) ht
 				}
 			}
 		case "pause":
-			control.executeAsync(runtimeCommand{kind: cmdPause})
+			requests <- runtimeCommand{kind: cmdPause}
 		case "reset":
-			if result := control.execute(runtimeCommand{kind: cmdReset}); result.status == commandConflict {
+			if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-read-batch-size":
@@ -79,7 +79,7 @@ func commandsHandler(control controlPlane, config config, logger *zap.Logger) ht
 				http.Error(w, "Invalid read batch size", http.StatusBadRequest)
 				return
 			}
-			if result := control.execute(runtimeCommand{
+			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetReadBatchSize,
 				value: value,
 			}); result.status == commandConflict {
@@ -91,7 +91,7 @@ func commandsHandler(control controlPlane, config config, logger *zap.Logger) ht
 				http.Error(w, "Invalid Reader workers", http.StatusBadRequest)
 				return
 			}
-			if result := control.execute(runtimeCommand{
+			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetReaderWorkers,
 				value: value,
 			}); result.status == commandConflict {
@@ -107,7 +107,7 @@ func commandsHandler(control controlPlane, config config, logger *zap.Logger) ht
 				http.Error(w, "Invalid reader channel capacity", http.StatusBadRequest)
 				return
 			}
-			if result := control.execute(runtimeCommand{
+			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetReaderChannelCapacity,
 				value: value,
 			}); result.status == commandConflict {
@@ -123,7 +123,7 @@ func commandsHandler(control controlPlane, config config, logger *zap.Logger) ht
 				http.Error(w, "Invalid sender channel capacity", http.StatusBadRequest)
 				return
 			}
-			if result := control.execute(runtimeCommand{
+			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetSenderChannelCapacity,
 				value: value,
 			}); result.status == commandConflict {
@@ -139,7 +139,7 @@ func commandsHandler(control controlPlane, config config, logger *zap.Logger) ht
 				http.Error(w, "Invalid requested TPS", http.StatusBadRequest)
 				return
 			}
-			if result := control.execute(runtimeCommand{
+			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetRequestedTPS,
 				value: value,
 			}); result.status == commandConflict {
@@ -151,7 +151,7 @@ func commandsHandler(control controlPlane, config config, logger *zap.Logger) ht
 				http.Error(w, "Invalid throttler installation mode", http.StatusBadRequest)
 				return
 			}
-			if result := control.execute(runtimeCommand{
+			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:      cmdSetThrottlerInstallationMode,
 				textValue: value,
 			}); result.status == commandConflict {
@@ -174,7 +174,7 @@ func commandsHandler(control controlPlane, config config, logger *zap.Logger) ht
 				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
 				return
 			}
-			if result := control.execute(runtimeCommand{kind: kind, value: value}); result.status == commandConflict {
+			if result := executeRuntimeCommand(requests, runtimeCommand{kind: kind, value: value}); result.status == commandConflict {
 				w.WriteHeader(http.StatusConflict)
 			}
 		default:

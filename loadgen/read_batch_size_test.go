@@ -34,7 +34,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(testControlPlane(commands), testConfig(t), nil).ServeHTTP(recorder, request)
+				commandsHandler(commands, testConfig(t), nil).ServeHTTP(recorder, request)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -70,7 +70,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 
 func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	requests := make(chan runtimeCommand, 3)
-	control := testControlPlane(requests)
+	control := requests
 	metrics := make(chan time.Time)
 	startedSizes := make(chan int, 2)
 	read := func(ctx context.Context, _ chan<- []Transaction, size, _ int) (readerRun, error) {
@@ -85,11 +85,11 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	startCustomEventLoopForTest(t, requests, metrics, read)
 	snapshot := func() runtimeStatus {
 		t.Helper()
-		return control.status()
+		return requestRuntimeStatus(control)
 	}
 	execute := func(command runtimeCommand, want runtimeCommandStatus) {
 		t.Helper()
-		if result := control.execute(command); result.status != want {
+		if result := executeRuntimeCommand(control, command); result.status != want {
 			t.Fatalf("command %+v = %+v, want status %d", command, result, want)
 		}
 	}
@@ -100,7 +100,7 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
 		t.Fatalf("configured size = %d, want 25000", got)
 	}
-	if result := control.execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 25_001}); result.status != commandConflict {
+	if result := executeRuntimeCommand(control, runtimeCommand{kind: cmdSetReadBatchSize, value: 25_001}); result.status != commandConflict {
 		t.Fatalf("invalid direct command status = %d, want conflict", result.status)
 	}
 	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
@@ -114,7 +114,7 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
 		t.Fatalf("size changed during Run: %d", got)
 	}
-	control.executeAsync(runtimeCommand{kind: cmdPause})
+	control <- runtimeCommand{kind: cmdPause}
 	if got := snapshot().Run.State; got != runStatePaused {
 		t.Fatalf("state after Pause = %s", got)
 	}
