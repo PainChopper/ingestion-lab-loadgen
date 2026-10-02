@@ -35,7 +35,7 @@ type LoggingConfig struct {
 
 type LabConfig struct {
 	ResponseDelay  time.Duration
-	ResponseStatus int
+	ResponseStatus *int
 }
 
 type fileConfig struct {
@@ -53,7 +53,7 @@ type fileServerConfig struct {
 
 type fileLabConfig struct {
 	ResponseDelayMS int64 `toml:"response_delay_ms"`
-	ResponseStatus  int   `toml:"response_status"`
+	ResponseStatus  *int  `toml:"response_status"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -92,11 +92,6 @@ func (config fileConfig) config() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	responseStatus := config.Lab.ResponseStatus
-	if responseStatus == 0 {
-		responseStatus = 204
-	}
-
 	result := Config{
 		SchemaVersion: config.SchemaVersion,
 		Server: ServerConfig{
@@ -107,7 +102,7 @@ func (config fileConfig) config() (Config, error) {
 		Logging: config.Logging,
 		Lab: LabConfig{
 			ResponseDelay:  responseDelay,
-			ResponseStatus: responseStatus,
+			ResponseStatus: config.Lab.ResponseStatus,
 		},
 	}
 	if err := validateConfig(result); err != nil {
@@ -157,7 +152,7 @@ func validateConfig(config Config) error {
 	if config.Lab.ResponseDelay < 0 {
 		return fmt.Errorf("lab.response_delay_ms must not be negative")
 	}
-	if !supportedResponseStatus(config.Lab.ResponseStatus) {
+	if !supportedResponseStatus(config.Lab.responseStatus()) {
 		return fmt.Errorf("lab.response_status is unsupported")
 	}
 
@@ -171,6 +166,13 @@ func supportedLoggingLevel(level string) bool {
 	default:
 		return false
 	}
+}
+
+func (config LabConfig) responseStatus() int {
+	if config.ResponseStatus == nil || *config.ResponseStatus == 0 {
+		return 204
+	}
+	return *config.ResponseStatus
 }
 
 func supportedResponseStatus(status int) bool {

@@ -11,9 +11,10 @@ import (
 )
 
 type Server struct {
-	config  Config
-	handler http.Handler
-	state   serverState
+	config         Config
+	responseStatus int
+	handler        http.Handler
+	state          serverState
 }
 
 type serverState struct {
@@ -56,15 +57,13 @@ type labStatusResponse struct {
 }
 
 func NewServer(config Config) (*Server, error) {
-	if config.Lab.ResponseStatus == 0 {
-		config.Lab.ResponseStatus = http.StatusNoContent
-	}
 	if err := validateConfig(config); err != nil {
 		return nil, err
 	}
 
 	server := &Server{
-		config: config,
+		config:         config,
+		responseStatus: config.Lab.responseStatus(),
 		state: serverState{
 			startedAt: time.Now().UTC(),
 		},
@@ -126,8 +125,8 @@ func (server *Server) handleIngest(writer http.ResponseWriter, request *http.Req
 	if !waitForDelay(request, server.config.Lab.ResponseDelay) {
 		return
 	}
-	if server.config.Lab.ResponseStatus != http.StatusNoContent {
-		writer.WriteHeader(server.config.Lab.ResponseStatus)
+	if server.responseStatus != http.StatusNoContent {
+		writer.WriteHeader(server.responseStatus)
 		return
 	}
 
@@ -142,7 +141,7 @@ func (server *Server) handleStatus(writer http.ResponseWriter, request *http.Req
 		return
 	}
 
-	status := server.state.snapshot(server.config.Lab)
+	status := server.state.snapshot(server.config.Lab, server.responseStatus)
 	writer.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(writer).Encode(status); err != nil {
 		return
@@ -176,7 +175,7 @@ func (state *serverState) accept(transactionCount int) {
 	state.lastAcceptedAt = &acceptedAt
 }
 
-func (state *serverState) snapshot(lab LabConfig) statusResponse {
+func (state *serverState) snapshot(lab LabConfig, responseStatus int) statusResponse {
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 
@@ -193,7 +192,7 @@ func (state *serverState) snapshot(lab LabConfig) statusResponse {
 		LastAcceptedAt:            lastAcceptedAt,
 		Lab: labStatusResponse{
 			ResponseDelayMS: int(lab.ResponseDelay / time.Millisecond),
-			ResponseStatus:  lab.ResponseStatus,
+			ResponseStatus:  responseStatus,
 		},
 	}
 }

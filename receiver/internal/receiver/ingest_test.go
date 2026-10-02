@@ -203,7 +203,7 @@ func TestServer_LabModes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			server := newTestServer(t, test.maxBody, LabConfig{
 				ResponseDelay:  250 * time.Millisecond,
-				ResponseStatus: http.StatusInternalServerError,
+				ResponseStatus: new(http.StatusInternalServerError),
 			})
 
 			startedAt := time.Now()
@@ -225,7 +225,10 @@ func TestServer_LabModes(t *testing.T) {
 	}
 
 	t.Run("delays validated success before acknowledgement", func(t *testing.T) {
-		server := newTestServer(t, 1024, LabConfig{ResponseDelay: 25 * time.Millisecond, ResponseStatus: http.StatusNoContent})
+		server := newTestServer(t, 1024, LabConfig{
+			ResponseDelay:  25 * time.Millisecond,
+			ResponseStatus: new(http.StatusNoContent),
+		})
 
 		startedAt := time.Now()
 		recorder := performRequest(server, httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()))
@@ -240,7 +243,7 @@ func TestServer_LabModes(t *testing.T) {
 	})
 
 	t.Run("forced status does not acknowledge batch", func(t *testing.T) {
-		server := newTestServer(t, 1024, LabConfig{ResponseStatus: http.StatusInternalServerError})
+		server := newTestServer(t, 1024, LabConfig{ResponseStatus: new(http.StatusInternalServerError)})
 
 		recorder := performRequest(server, httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()))
 		if recorder.Code != http.StatusInternalServerError {
@@ -250,7 +253,7 @@ func TestServer_LabModes(t *testing.T) {
 	})
 
 	t.Run("canceled request stops waiting for lab delay", func(t *testing.T) {
-		server := newTestServer(t, 1024, LabConfig{ResponseDelay: time.Second, ResponseStatus: http.StatusNoContent})
+		server := newTestServer(t, 1024, LabConfig{ResponseDelay: time.Second, ResponseStatus: new(http.StatusNoContent)})
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
