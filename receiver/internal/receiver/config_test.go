@@ -38,8 +38,8 @@ func TestLoadConfig(t *testing.T) {
 				if config.Lab.ResponseDelay != 25*time.Millisecond {
 					t.Fatalf("Lab.ResponseDelay = %s, want 25ms", config.Lab.ResponseDelay)
 				}
-				if config.Lab.ResponseStatus != 204 {
-					t.Fatalf("Lab.ResponseStatus = %d, want 204", config.Lab.ResponseStatus)
+				if config.Lab.ResponseStatus == nil || *config.Lab.ResponseStatus != 204 {
+					t.Fatalf("Lab.ResponseStatus = %v, want pointer to 204", config.Lab.ResponseStatus)
 				}
 			},
 		},
