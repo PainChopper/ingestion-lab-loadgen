@@ -79,8 +79,11 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 func (runtime *pipelineRuntime) startSender() {
 	runtime.senderPool = startSenderPool(
 		runtime.runContext,
-		runtime.senderBatches, &runtime.state.telemetry.senderChannel, &runtime.state.telemetry.sender,
-		&runtime.terminallyCompletedTransactionsSinceTick, runtime.state.senderWorkers(), runtime.state.config.Sender.API,
+		runtime.senderBatches,
+		&runtime.state.telemetry.senderChannel,
+		&runtime.terminallyCompletedTransactionsSinceTick,
+		runtime.state.senderWorkers(),
+		runtime.state.config.Sender.API,
 		runtime.state.config.Sender.Retry,
 		runtime.state.logger,
 	)

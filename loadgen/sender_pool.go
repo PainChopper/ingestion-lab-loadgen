@@ -58,7 +58,6 @@ type senderPool struct {
 	retry                                    senderRetryConfig
 	batches                                  <-chan []Transaction
 	channelTelemetry                         *channelTelemetry
-	telemetry                                *senderTelemetry
 	terminallyCompletedTransactionsSinceTick *atomic.Int64
 	attempt                                  senderAttempt
 	wait                                     func(context.Context, time.Duration) bool
@@ -69,7 +68,6 @@ func startSenderPool(
 	parent context.Context,
 	batches <-chan []Transaction,
 	channelTelemetry *channelTelemetry,
-	telemetry *senderTelemetry,
 	terminallyCompletedTransactionsSinceTick *atomic.Int64,
 	workers int,
 	api senderAPIConfig,
@@ -88,7 +86,6 @@ func startSenderPool(
 		retry:                                    retry,
 		batches:                                  batches,
 		channelTelemetry:                         channelTelemetry,
-		telemetry:                                telemetry,
 		terminallyCompletedTransactionsSinceTick: terminallyCompletedTransactionsSinceTick,
 		attempt:                                  newSenderHTTPAttempt(api.URL, http.DefaultClient).deliver,
 		wait:                                     waitSenderBackoff,
@@ -320,7 +317,6 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		p.mu.Unlock()
 		switch p.attempt(p.ctx, batch, attempt) {
 		case senderAttemptSuccess:
-			p.telemetry.finishBatch()
 			return true
 		case senderAttemptCanceled:
 			return false

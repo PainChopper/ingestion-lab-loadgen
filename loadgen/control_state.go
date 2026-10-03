@@ -57,7 +57,6 @@ type controlTelemetry struct {
 	reader        readerTelemetry
 	readerChannel channelTelemetry
 	senderChannel channelTelemetry
-	sender        senderTelemetry
 }
 
 func (state *controlState) startReaderPool(ctx context.Context, batches chan<- []Transaction, batchSize, workers int) (*readerPool, error) {

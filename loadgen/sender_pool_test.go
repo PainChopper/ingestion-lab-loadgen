@@ -32,10 +32,9 @@ func TestSenderPoolRetryLogExcludesRequestMarkers(t *testing.T) {
 
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry, logger)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, logger)
 	var attempts atomic.Int64
 	pool.attempt = func(context.Context, []Transaction, int) senderAttemptOutcome {
 		if attempts.Add(1) == 2 {
@@ -75,10 +74,9 @@ func waitForSenderCondition(t *testing.T, condition func() bool) {
 func TestSenderPoolRetriesTerminalFailureUntilSuccess(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
 	var attempts atomic.Int64
 	var backoffs atomic.Int64
 	pool.attempt = func(context.Context, []Transaction, int) senderAttemptOutcome {
@@ -119,10 +117,9 @@ func TestSenderPoolAggregateSnapshotPartitionsActivities(t *testing.T) {
 func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
 	entered := make(chan struct{})
 	var attempts atomic.Int64
 	pool.attempt = func(ctx context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -138,8 +135,8 @@ func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	if attempts.Load() != 1 {
 		t.Fatalf("canceled attempts = %d, want 1", attempts.Load())
 	}
-	if consumed.Load() != 0 || telemetry.snapshot().completedBatches != 0 {
-		t.Fatalf("canceled batch was counted as completed: consumed=%d telemetry=%+v", consumed.Load(), telemetry.snapshot())
+	if consumed.Load() != 0 {
+		t.Fatalf("canceled batch was counted as completed: consumed=%d", consumed.Load())
 	}
 }
 
@@ -148,10 +145,9 @@ func TestSenderPoolParentCancellationStopsRetryBackoff(t *testing.T) {
 	defer cancel()
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(parent, batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry, nil)
+	pool := startSenderPool(parent, batches, &channel, &consumed, 1, config.API, config.Retry, nil)
 	backoffStarted := make(chan struct{})
 	backoffStopped := make(chan struct{})
 	pool.attempt = func(context.Context, []Transaction, int) senderAttemptOutcome {
@@ -173,18 +169,17 @@ func TestSenderPoolParentCancellationStopsRetryBackoff(t *testing.T) {
 		t.Fatal("parent cancellation did not stop Sender backoff")
 	}
 	<-pool.stop()
-	if consumed.Load() != 0 || telemetry.snapshot().completedBatches != 0 {
-		t.Fatalf("parent-canceled batch was counted as completed: consumed=%d telemetry=%+v", consumed.Load(), telemetry.snapshot())
+	if consumed.Load() != 0 {
+		t.Fatalf("parent-canceled batch was counted as completed: consumed=%d", consumed.Load())
 	}
 }
 
 func TestSenderPoolBackpressureWhenAllWorkersRetry(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 2, config.API, config.Retry, nil)
 	backoffEntered := make(chan struct{}, 3)
 	release := make(chan struct{}, 3)
 	pool.attempt = func(_ context.Context, _ []Transaction, attempt int) senderAttemptOutcome {
@@ -224,10 +219,9 @@ func TestSenderPoolBackpressureWhenAllWorkersRetry(t *testing.T) {
 func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) {
 	batches := make(chan []Transaction, 3)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 2, config.API, config.Retry, nil)
 	entered := make(chan struct{}, 3)
 	release := make(chan struct{})
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -270,10 +264,9 @@ func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) 
 func TestSenderPoolScaleDownJoinsIdleWorkerBeforeNextReceive(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 2, config.API, config.Retry, nil)
 	entered := make(chan int, 1)
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
 		entered <- 0
@@ -293,10 +286,9 @@ func TestSenderPoolScaleDownJoinsIdleWorkerBeforeNextReceive(t *testing.T) {
 func TestSenderPoolReplacementRestoresDesiredWorkerCount(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 2, config.API, config.Retry, nil)
 
 	pool.reconcile(1)
 	pool.reconcile(2)
@@ -309,10 +301,9 @@ func TestSenderPoolReplacementRestoresDesiredWorkerCount(t *testing.T) {
 func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 2, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 2, config.API, config.Retry, nil)
 	entered := make(chan int, 2)
 	releaseFirst := make(chan struct{})
 	pool.attempt = func(_ context.Context, batch []Transaction, _ int) senderAttemptOutcome {
@@ -349,11 +340,10 @@ func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
 	config.Retry.JitterPercent = 0
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
 	var attempts atomic.Int64
 	var backoffs atomic.Int64
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -396,10 +386,9 @@ func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -418,14 +407,13 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	close(release)
 	<-done
 	if consumed.Load() != 1 || pool.aggregateSnapshot().liveWorkers != 0 {
-		t.Fatalf("after join: consumed=%d sender=%+v", consumed.Load(), telemetry.snapshot())
+		t.Fatalf("after join: consumed=%d live workers=%d", consumed.Load(), pool.aggregateSnapshot().liveWorkers)
 	}
 }
 
 func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	var channel channelTelemetry
-	var telemetry senderTelemetry
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -433,7 +421,7 @@ func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
 	}))
 	defer server.Close()
 	config.API.URL = server.URL
-	pool := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry, nil)
+	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -473,7 +461,7 @@ func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
 		t.Fatalf("after stop: completed=%d queued=%d, want one of each", consumed.Load(), len(batches))
 	}
 
-	resumed := startSenderPool(context.Background(), batches, &channel, &telemetry, &consumed, 1, config.API, config.Retry, nil)
+	resumed := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
 	waitForSenderCondition(t, func() bool { return consumed.Load() == 2 })
 	<-resumed.stop()
 	if got := channel.snapshot(time.Now()).receivedBatchesTotal; got != 2 {
