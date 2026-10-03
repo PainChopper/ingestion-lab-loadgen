@@ -20,12 +20,12 @@ func newSenderHTTPAttempt(url string, client *http.Client) senderHTTPAttempt {
 func (a senderHTTPAttempt) deliver(ctx context.Context, batch []Transaction, _ int) senderAttemptOutcome {
 	body, err := json.Marshal(batch)
 	if err != nil {
-		return senderAttemptTerminalFailure
+		return senderAttemptFailure
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, a.url, bytes.NewReader(body))
 	if err != nil {
-		return senderAttemptTerminalFailure
+		return senderAttemptFailure
 	}
 	request.Header.Set("Content-Type", "application/json")
 
@@ -34,19 +34,15 @@ func (a senderHTTPAttempt) deliver(ctx context.Context, batch []Transaction, _ i
 		if ctx.Err() != nil {
 			return senderAttemptCanceled
 		}
-		return senderAttemptRetryableFailure
+		return senderAttemptFailure
 	}
 	defer response.Body.Close()
 	if _, err := io.Copy(io.Discard, response.Body); err != nil {
-		return senderAttemptRetryableFailure
+		return senderAttemptFailure
 	}
 
-	switch response.StatusCode {
-	case http.StatusNoContent:
+	if response.StatusCode == http.StatusNoContent {
 		return senderAttemptSuccess
-	case http.StatusBadRequest, http.StatusMethodNotAllowed, http.StatusRequestEntityTooLarge:
-		return senderAttemptTerminalFailure
-	default:
-		return senderAttemptRetryableFailure
 	}
+	return senderAttemptFailure
 }
