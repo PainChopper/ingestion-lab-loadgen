@@ -11,9 +11,6 @@ type PrometheusMetrics struct {
 	actualTPS prometheus.Gauge
 
 	transactionsTotal prometheus.Counter
-	errorsTotal       prometheus.Counter
-
-	parquetReadSeconds prometheus.Histogram
 }
 
 func NewPrometheusMetrics() *PrometheusMetrics {
