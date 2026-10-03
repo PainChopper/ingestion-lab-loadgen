@@ -19,17 +19,18 @@ func TestStartThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 	}
 	close(readerBatches)
 
-	var state controlState
-	telemetry := &state.telemetry.readerChannel
-	senderChannel := &state.telemetry.senderChannel
+	var readerChannel, outputTelemetry channelTelemetry
+	telemetry := &readerChannel
+	senderChannel := &outputTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
-	runtime := pipelineRuntime{
-		state:         &state,
+	stage := throttler{
+		readerChannel: &readerChannel,
+		senderChannel: senderChannel,
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	done, _ := runtime.startThrottler(context.Background(), throttlerSettings{mode: throttlerBypass})
+	stage.start(context.Background(), throttlerSettings{mode: throttlerBypass})
 	if got := cap(senderBatches); got != 0 {
 		t.Fatalf("Sender channel capacity = %d, want 0", got)
 	}
@@ -43,7 +44,7 @@ func TestStartThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 			t.Fatalf("batch %d was not forwarded", index)
 		}
 	}
-	waitForThrottlerDone(t, done)
+	waitForThrottlerDone(t, stage.done)
 	select {
 	case _, ok := <-senderBatches:
 		if !ok {
@@ -64,16 +65,17 @@ func TestStartThrottlerUsesConfiguredSenderChannelCapacity(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			readerBatches := make(chan []Transaction)
-			var state controlState
-			senderChannel := &state.telemetry.senderChannel
+			var readerChannel, outputTelemetry channelTelemetry
+			senderChannel := &outputTelemetry
 			senderBatches := make(chan []Transaction, capacity)
 			senderChannel.start(senderBatches, 0)
-			runtime := pipelineRuntime{
-				state:         &state,
+			stage := throttler{
+				readerChannel: &readerChannel,
+				senderChannel: senderChannel,
 				readerBatches: readerBatches,
 				senderBatches: senderBatches,
 			}
-			done, _ := runtime.startThrottler(ctx, throttlerSettings{mode: throttlerBypass})
+			stage.start(ctx, throttlerSettings{mode: throttlerBypass})
 			if got := cap(senderBatches); got != capacity {
 				t.Fatalf("Sender channel capacity = %d, want %d", got, capacity)
 			}
@@ -81,7 +83,7 @@ func TestStartThrottlerUsesConfiguredSenderChannelCapacity(t *testing.T) {
 				t.Fatalf("Sender telemetry capacity = %d, want %d", got, capacity)
 			}
 			cancel()
-			waitForThrottlerDone(t, done)
+			waitForThrottlerDone(t, stage.done)
 		})
 	}
 }
@@ -89,18 +91,19 @@ func TestStartThrottlerUsesConfiguredSenderChannelCapacity(t *testing.T) {
 func TestStartThrottlerCancelWhileWaitingForInput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	readerBatches := make(chan []Transaction)
-	var state controlState
-	senderChannel := &state.telemetry.senderChannel
+	var readerChannel, outputTelemetry channelTelemetry
+	senderChannel := &outputTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
-	runtime := pipelineRuntime{
-		state:         &state,
+	stage := throttler{
+		readerChannel: &readerChannel,
+		senderChannel: senderChannel,
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	done, _ := runtime.startThrottler(ctx, throttlerSettings{mode: throttlerBypass})
+	stage.start(ctx, throttlerSettings{mode: throttlerBypass})
 	cancel()
-	waitForThrottlerDone(t, done)
+	waitForThrottlerDone(t, stage.done)
 	select {
 	case _, ok := <-senderBatches:
 		if !ok {
@@ -114,17 +117,18 @@ func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	readerBatches := make(chan []Transaction, 1)
 	readerBatches <- []Transaction{{ClientID: "pending"}}
-	var state controlState
-	telemetry := &state.telemetry.readerChannel
-	senderChannel := &state.telemetry.senderChannel
+	var readerChannel, outputTelemetry channelTelemetry
+	telemetry := &readerChannel
+	senderChannel := &outputTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
-	runtime := pipelineRuntime{
-		state:         &state,
+	stage := throttler{
+		readerChannel: &readerChannel,
+		senderChannel: senderChannel,
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	done, _ := runtime.startThrottler(ctx, throttlerSettings{mode: throttlerBypass})
+	stage.start(ctx, throttlerSettings{mode: throttlerBypass})
 	deadline := time.After(time.Second)
 	for telemetry.snapshot(time.Now()).receivedBatchesTotal != 1 {
 		select {
@@ -140,7 +144,7 @@ func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 		t.Fatalf("blocked Sender channel = %+v", blocked)
 	}
 	cancel()
-	waitForThrottlerDone(t, done)
+	waitForThrottlerDone(t, stage.done)
 	select {
 	case _, ok := <-senderBatches:
 		if !ok {
@@ -159,16 +163,17 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 	defer cancel()
 	readerBatches := make(chan []Transaction, 1)
 	readerBatches <- make([]Transaction, 3)
-	var state controlState
-	senderChannel := &state.telemetry.senderChannel
+	var readerChannel, outputTelemetry channelTelemetry
+	senderChannel := &outputTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
-	runtime := pipelineRuntime{
-		state:         &state,
+	stage := throttler{
+		readerChannel: &readerChannel,
+		senderChannel: senderChannel,
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	done, _ := runtime.startThrottler(ctx, throttlerSettings{mode: throttlerBypass})
+	stage.start(ctx, throttlerSettings{mode: throttlerBypass})
 	waitForBlockedSender(t, senderChannel)
 	time.Sleep(5 * time.Millisecond)
 	before := senderChannel.snapshot(time.Now())
@@ -181,7 +186,7 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 		t.Fatalf("Sender batch size = %d, want 3", len(batch))
 	}
 	close(readerBatches)
-	waitForThrottlerDone(t, done)
+	waitForThrottlerDone(t, stage.done)
 	senderChannel.sample(time.Second)
 	after := senderChannel.snapshot(time.Now())
 	if after.blockedSenders != 0 || after.oldestBlockedSenderMs != 0 || after.blockedMs <= 0 ||
@@ -201,18 +206,19 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 	defer cancel()
 	readerBatches := make(chan []Transaction, 1)
 	readerBatches <- []Transaction{{}}
-	var state controlState
-	senderChannel := &state.telemetry.senderChannel
+	var readerChannel, outputTelemetry channelTelemetry
+	senderChannel := &outputTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
-	runtime := pipelineRuntime{
-		state:         &state,
+	stage := throttler{
+		readerChannel: &readerChannel,
+		senderChannel: senderChannel,
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	done, updates := runtime.startThrottler(ctx, throttlerSettings{mode: throttlerBypass})
+	stage.start(ctx, throttlerSettings{mode: throttlerBypass})
 	waitForBlockedSender(t, senderChannel)
-	updates <- throttlerSettings{mode: throttlerBypass, paused: true}
+	stage.update(throttlerSettings{mode: throttlerBypass, paused: true})
 	waitForBlockedSenders(t, senderChannel, 0)
 	paused := senderChannel.snapshot(time.Now())
 	if paused.blockedSenders != 0 || paused.sentBatchesTotal != 0 || paused.sentTransactionsTotal != 0 {
@@ -223,7 +229,7 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 		t.Fatalf("Sender sent rate after Pause = %v, want 0", got.sentTransactionsPerSecond)
 	}
 	cancel()
-	waitForThrottlerDone(t, done)
+	waitForThrottlerDone(t, stage.done)
 	select {
 	case _, ok := <-senderBatches:
 		if !ok {
@@ -248,17 +254,18 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 			readerBatches := make(chan []Transaction, 1)
 			readerBatches <- make([]Transaction, test.batchSize)
 			close(readerBatches)
-			var state controlState
-			senderChannel := &state.telemetry.senderChannel
+			var readerChannel, outputTelemetry channelTelemetry
+			senderChannel := &outputTelemetry
 			started := time.Now()
 			senderBatches := make(chan []Transaction)
 			senderChannel.start(senderBatches, 0)
-			runtime := pipelineRuntime{
-				state:         &state,
+			stage := throttler{
+				readerChannel: &readerChannel,
+				senderChannel: senderChannel,
 				readerBatches: readerBatches,
 				senderBatches: senderBatches,
 			}
-			done, _ := runtime.startThrottler(ctx, throttlerSettings{requestedTPS: 25, mode: throttlerInstalled})
+			stage.start(ctx, throttlerSettings{requestedTPS: 25, mode: throttlerInstalled})
 			select {
 			case batch := <-senderBatches:
 				if len(batch) != test.batchSize {
@@ -270,7 +277,7 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("paced batch was not delivered")
 			}
-			waitForThrottlerDone(t, done)
+			waitForThrottlerDone(t, stage.done)
 		})
 	}
 }
@@ -300,16 +307,17 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 			defer cancel()
 			readerBatches := make(chan []Transaction, 1)
 			readerBatches <- []Transaction{{ClientID: "held"}}
-			var state controlState
-			senderChannel := &state.telemetry.senderChannel
+			var readerChannel, outputTelemetry channelTelemetry
+			senderChannel := &outputTelemetry
 			senderBatches := make(chan []Transaction)
 			senderChannel.start(senderBatches, 0)
-			runtime := pipelineRuntime{
-				state:         &state,
+			stage := throttler{
+				readerChannel: &readerChannel,
+				senderChannel: senderChannel,
 				readerBatches: readerBatches,
 				senderBatches: senderBatches,
 			}
-			done, updates := runtime.startThrottler(ctx, throttlerSettings{requestedTPS: 0, mode: throttlerInstalled})
+			stage.start(ctx, throttlerSettings{requestedTPS: 0, mode: throttlerInstalled})
 			select {
 			case <-senderBatches:
 				t.Fatal("zero TPS forwarded a batch")
@@ -319,7 +327,7 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 				got.sentBatchesTotal != 0 {
 				t.Fatalf("zero TPS Sender channel = %+v", got)
 			}
-			updates <- test.settings
+			stage.update(test.settings)
 			select {
 			case batch := <-senderBatches:
 				if len(batch) != 1 || batch[0].ClientID != "held" {
@@ -329,7 +337,7 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 				t.Fatal("held batch did not wake")
 			}
 			cancel()
-			waitForThrottlerDone(t, done)
+			waitForThrottlerDone(t, stage.done)
 		})
 	}
 }
@@ -340,16 +348,17 @@ func TestStartThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
 	readerBatches := make(chan []Transaction, 2)
 	readerBatches <- []Transaction{{ClientID: "first"}}
 	readerBatches <- []Transaction{{ClientID: "second"}}
-	var state controlState
-	senderChannel := &state.telemetry.senderChannel
+	var readerChannel, outputTelemetry channelTelemetry
+	senderChannel := &outputTelemetry
 	senderBatches := make(chan []Transaction)
 	senderChannel.start(senderBatches, 0)
-	runtime := pipelineRuntime{
-		state:         &state,
+	stage := throttler{
+		readerChannel: &readerChannel,
+		senderChannel: senderChannel,
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	done, _ := runtime.startThrottler(ctx, throttlerSettings{requestedTPS: 25, mode: throttlerInstalled})
+	stage.start(ctx, throttlerSettings{requestedTPS: 25, mode: throttlerInstalled})
 	time.Sleep(120 * time.Millisecond)
 	select {
 	case batch := <-senderBatches:
@@ -372,7 +381,7 @@ func TestStartThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
 		t.Fatal("second batch did not arrive")
 	}
 	cancel()
-	waitForThrottlerDone(t, done)
+	waitForThrottlerDone(t, stage.done)
 }
 
 func waitForThrottlerDone(t *testing.T, done <-chan struct{}) {

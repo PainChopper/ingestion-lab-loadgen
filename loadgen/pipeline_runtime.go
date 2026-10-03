@@ -18,8 +18,7 @@ type pipelineRuntime struct {
 	runContext                               context.Context
 	cancelRun                                context.CancelFunc
 	cancelThrottler                          context.CancelFunc
-	throttlerDone                            <-chan struct{}
-	throttlerUpdates                         chan<- throttlerSettings
+	throttler                                *throttler
 	cancelReader                             context.CancelFunc
 	readerPool                               *readerPool
 }
@@ -64,7 +63,13 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 	runtime.cancelReader = cancelReader
 	throttlerContext, cancelThrottler := context.WithCancel(runtime.runContext)
 	runtime.cancelThrottler = cancelThrottler
-	runtime.throttlerDone, runtime.throttlerUpdates = runtime.startThrottler(
+	runtime.throttler = &throttler{
+		readerBatches: runtime.readerBatches,
+		senderBatches: runtime.senderBatches,
+		readerChannel: &runtime.state.telemetry.readerChannel,
+		senderChannel: &runtime.state.telemetry.senderChannel,
+	}
+	runtime.throttler.start(
 		throttlerContext,
 		runtime.state.throttlerSettings(false),
 	)
@@ -103,8 +108,8 @@ func (runtime *pipelineRuntime) stop() {
 	if runtime.readerPool != nil {
 		<-runtime.readerPool.done
 	}
-	if runtime.throttlerDone != nil {
-		<-runtime.throttlerDone
+	if runtime.throttler != nil {
+		<-runtime.throttler.done
 	}
 	closeAndDrain(runtime.readerBatches)
 	closeAndDrain(runtime.senderBatches)
@@ -121,8 +126,7 @@ func (runtime *pipelineRuntime) clearActive() {
 	runtime.cancelReader = nil
 	runtime.readerPool = nil
 	runtime.cancelThrottler = nil
-	runtime.throttlerDone = nil
-	runtime.throttlerUpdates = nil
+	runtime.throttler = nil
 }
 
 func (runtime *pipelineRuntime) reconcileReader(workers int) {
@@ -134,16 +138,6 @@ func (runtime *pipelineRuntime) reconcileReader(workers int) {
 func (runtime *pipelineRuntime) reconcileSender(workers int) {
 	if runtime.senderPool != nil {
 		runtime.senderPool.reconcile(workers)
-	}
-}
-
-func (runtime *pipelineRuntime) updateThrottler(settings throttlerSettings) {
-	if runtime.throttlerUpdates == nil {
-		return
-	}
-	select {
-	case runtime.throttlerUpdates <- settings:
-	case <-runtime.throttlerDone:
 	}
 }
 

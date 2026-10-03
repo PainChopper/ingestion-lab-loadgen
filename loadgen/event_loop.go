@@ -70,7 +70,7 @@ func (state *controlState) eventLoopContext(
 				if state.run.lifecycle.run() {
 					state.run.runStartedAt = time.Now()
 					if resuming {
-						runtime.updateThrottler(state.throttlerSettings(false))
+						runtime.throttler.update(state.throttlerSettings(false))
 					}
 					runtime.startSender()
 					if resuming {
@@ -91,7 +91,7 @@ func (state *controlState) eventLoopContext(
 				promMetrics.transactionsTotal.Add(float64(delta))
 				promMetrics.actualTPS.Set(0)
 				state.run.lifecycle.pause()
-				runtime.updateThrottler(state.throttlerSettings(true))
+				runtime.throttler.update(state.throttlerSettings(true))
 				logger.Info("run paused", zap.String("event", "run_paused"))
 			case cmdReset:
 				result := runtimeCommandReceipt{status: commandAccepted}
@@ -154,7 +154,7 @@ func (state *controlState) eventLoopContext(
 				} else if state.requestedTPS() != command.value {
 					state.controls.requestedTPS = command.value
 					promMetrics.targetTPS.Set(float64(state.requestedTPS()))
-					runtime.updateThrottler(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
+					runtime.throttler.update(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
 					logger.Info(
 						"throttler rate changed",
 						zap.String("event", "throttler_rate_changed"),
@@ -168,7 +168,7 @@ func (state *controlState) eventLoopContext(
 					result.status = commandConflict
 				} else if state.installationMode() != command.textValue {
 					state.controls.installationMode = command.textValue
-					runtime.updateThrottler(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
+					runtime.throttler.update(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
 					logger.Info(
 						"throttler mode changed",
 						zap.String("event", "throttler_mode_changed"),
