@@ -81,7 +81,7 @@ func TestReaderPoolAppendRowsSplitsShortReadsAtBatchBoundary(t *testing.T) {
 	batches := make(chan []Transaction, 2)
 	var channel channelTelemetry
 	channel.start(batches, 2)
-	worker := &readerWorker{ctx: ctx, busy: true}
+	worker := &readerWorker{busy: true}
 	pool := &readerPool{
 		ctx:       ctx,
 		batchSize: 2,
@@ -121,7 +121,7 @@ func TestReaderPoolImmediateSendKeepsWorkerReading(t *testing.T) {
 	var telemetry readerTelemetry
 	var channel channelTelemetry
 	channel.start(batches, 1)
-	worker := &readerWorker{ctx: context.Background(), busy: true}
+	worker := &readerWorker{busy: true}
 	pool := &readerPool{
 		ctx:       context.Background(),
 		batches:   batches,
@@ -151,7 +151,7 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 	var telemetry readerTelemetry
 	var channel channelTelemetry
 	channel.start(batches, 1)
-	worker := &readerWorker{ctx: context.Background(), draining: true, busy: true}
+	worker := &readerWorker{draining: true, busy: true}
 	pool := &readerPool{
 		ctx:       context.Background(),
 		desired:   0,
@@ -208,9 +208,9 @@ func TestReaderPoolCanceledBlockedSendDoesNotRestoreReading(t *testing.T) {
 	var telemetry readerTelemetry
 	var channel channelTelemetry
 	channel.start(batches, 1)
-	worker := &readerWorker{ctx: ctx, busy: true}
+	worker := &readerWorker{busy: true}
 	pool := &readerPool{
-		ctx:       context.Background(),
+		ctx:       ctx,
 		batches:   batches,
 		telemetry: &telemetry,
 		channel:   &channel,
@@ -643,11 +643,10 @@ func TestReaderPoolCanceledCleanupIgnoresCloseErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	pool := &readerPool{ctx: ctx}
-	worker := &readerWorker{ctx: ctx}
 	reader := &errorCloser{err: errors.New("reader close failed")}
 	file := &errorCloser{err: errors.New("file close failed")}
 
-	if sourceError := pool.closeResources(worker, "source.parquet", reader, file, nil); sourceError != nil {
+	if sourceError := pool.closeResources("source.parquet", reader, file, nil); sourceError != nil {
 		t.Fatalf("canceled cleanup source error = %+v, want nil", sourceError)
 	}
 	if !reader.closed || !file.closed {
@@ -658,11 +657,10 @@ func TestReaderPoolCanceledCleanupIgnoresCloseErrors(t *testing.T) {
 func TestReaderPoolActiveCleanupPreservesFirstCloseError(t *testing.T) {
 	ctx := context.Background()
 	pool := &readerPool{ctx: ctx}
-	worker := &readerWorker{ctx: ctx}
 	reader := &errorCloser{err: errors.New("reader close failed")}
 	file := &errorCloser{err: errors.New("file close failed")}
 
-	sourceError := pool.closeResources(worker, "source.parquet", reader, file, nil)
+	sourceError := pool.closeResources("source.parquet", reader, file, nil)
 	if sourceError == nil || sourceError.Operation != "reader-close" || sourceError.Message != "reader close failed" {
 		t.Fatalf("active cleanup source error = %+v", sourceError)
 	}
