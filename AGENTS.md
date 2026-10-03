@@ -23,7 +23,7 @@
    - `REVIEWER` → [REVIEWER.md](../ingestion-lab-agents/rules/REVIEWER.md) и [REVIEW-GO.md](../ingestion-lab-agents/rules/REVIEW-GO.md).
 
 
-Go-модуль loadgen находится в `loadgen/`, самостоятельный Go-модуль receiver — в `receiver/`; React-код — в `frontend/`. Агентам запрещено изменять `frontend/`.
+Go-модуль loadgen находится в `loadgen/`, самостоятельный Go-модуль receiver — в `receiver/`; React-код — в `frontend/`. 
 Пути 00_STATE.md, MAIL/, PLANS/, ARCHIVE/, BUILD/ и RUNLOGS/ из общих правил находятся в соседнем каталоге ../ingestion-lab-agents-runtime/.
 
 Все временные артефакты проверок сохраняются только в ../ingestion-lab-agents-runtime/: включая Playwright state, browser snapshots, console logs, fixtures, build output и run logs. Процессы по умолчанию запускаются оттуда; если продукт разрешает обязательный относительный asset от своего checkout, допускается CWD checkout только для его чтения, а все временные output/state явно направляются в runtime. В checkout нельзя создавать временные каталоги инструментов, включая `.playwright-cli`.
