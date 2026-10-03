@@ -14,10 +14,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// readerWorker holds the per-worker cancellation and lifecycle state.
+// readerWorker holds the per-worker lifecycle state.
 type readerWorker struct {
-	// Is canceled when the pool stops.
-	ctx context.Context
 	// Prevents the worker from claiming another file.
 	draining bool
 	// Indicates that the worker currently owns a source file.
@@ -203,7 +201,7 @@ func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
 }
 
 func (p *readerPool) startReplacementLocked() {
-	worker := &readerWorker{ctx: p.ctx}
+	worker := &readerWorker{}
 	p.workers = append(p.workers, worker)
 	p.wg.Add(1)
 	go p.runWorker(worker)
@@ -248,7 +246,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 	p.logger.Debug("reader source opened", zap.String("event", "reader_source_opened"))
 	reader, err := openParquetReader(file)
 	if err != nil {
-		if closeErr := file.Close(); closeErr != nil && worker.ctx.Err() == nil && p.ctx.Err() == nil {
+		if closeErr := file.Close(); closeErr != nil && p.ctx.Err() == nil {
 			return p.newReaderSourceError("close", filePath, closeErr)
 		}
 		return p.newReaderSourceError("open", filePath, err)
@@ -258,7 +256,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 	var sourceError *readerSourceError
 	batchSendStopped := false
 	for {
-		if worker.ctx.Err() != nil {
+		if p.ctx.Err() != nil {
 			break
 		}
 		n, err := reader.Read(rows[:p.batchSize-len(batch)])
@@ -279,15 +277,15 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 			break
 		}
 	}
-	if sourceError == nil && !batchSendStopped && worker.ctx.Err() == nil && len(batch) > 0 {
+	if sourceError == nil && !batchSendStopped && p.ctx.Err() == nil && len(batch) > 0 {
 		if !p.sendBatch(worker, batch) {
 			batchSendStopped = true
 		}
 	}
-	if sourceError == nil && !batchSendStopped && worker.ctx.Err() == nil {
+	if sourceError == nil && !batchSendStopped && p.ctx.Err() == nil {
 		p.logger.Debug("reader source exhausted", zap.String("event", "reader_source_exhausted"))
 	}
-	return p.closeResources(worker, filePath, reader, file, sourceError)
+	return p.closeResources(filePath, reader, file, sourceError)
 }
 
 func openParquetReader(file *os.File) (reader *parquet.GenericReader[Transaction], err error) {
@@ -300,13 +298,12 @@ func openParquetReader(file *os.File) (reader *parquet.GenericReader[Transaction
 }
 
 func (p *readerPool) closeResources(
-	worker *readerWorker,
 	filePath string,
 	reader io.Closer,
 	file io.Closer,
 	sourceError *readerSourceError,
 ) *readerSourceError {
-	cancelled := worker.ctx.Err() != nil || p.ctx.Err() != nil
+	cancelled := p.ctx.Err() != nil
 	if err := reader.Close(); sourceError == nil && !cancelled && err != nil {
 		sourceError = p.newReaderSourceError("reader-close", filePath, err)
 	}
@@ -345,7 +342,7 @@ func relativeSourcePath(sourceDirectory, sourcePath string) string {
 
 func (p *readerPool) appendRows(worker *readerWorker, batch, rows []Transaction) ([]Transaction, bool) {
 	for len(rows) > 0 {
-		if worker.ctx.Err() != nil {
+		if p.ctx.Err() != nil {
 			return nil, false
 		}
 		remainingCapacity := p.batchSize - len(batch)
@@ -366,7 +363,7 @@ func (p *readerPool) appendRows(worker *readerWorker, batch, rows []Transaction)
 }
 
 func (p *readerPool) sendBatch(worker *readerWorker, batch []Transaction) bool {
-	if worker.ctx.Err() != nil {
+	if p.ctx.Err() != nil {
 		return false
 	}
 	if p.channel.trySend(p.batches, batch) {
@@ -378,7 +375,7 @@ func (p *readerPool) sendBatch(worker *readerWorker, batch []Transaction) bool {
 	worker.blocked = true
 	p.mu.Unlock()
 
-	sent := pending.wait(worker.ctx)
+	sent := pending.wait(p.ctx)
 	p.mu.Lock()
 	worker.blocked = false
 	p.mu.Unlock()
