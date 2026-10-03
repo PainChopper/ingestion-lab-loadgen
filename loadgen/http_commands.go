@@ -75,7 +75,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 			}
 		case "set-read-batch-size":
 			var value int
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReadBatchSize(config, value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !config.Reader.ReadBatchSize.contains(value) {
 				http.Error(w, "Invalid read batch size", http.StatusBadRequest)
 				return
 			}
@@ -103,7 +103,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 				http.Error(w, "Invalid reader channel capacity", http.StatusBadRequest)
 				return
 			}
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !validReaderChannelCapacity(config, value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !config.ReaderChannel.Capacity.contains(value) {
 				http.Error(w, "Invalid reader channel capacity", http.StatusBadRequest)
 				return
 			}
@@ -119,7 +119,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 				http.Error(w, "Invalid sender channel capacity", http.StatusBadRequest)
 				return
 			}
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !validSenderChannelCapacity(config, value) {
+			if err := json.Unmarshal(cr.Value, &value); err != nil || !config.SenderChannel.Capacity.contains(value) {
 				http.Error(w, "Invalid sender channel capacity", http.StatusBadRequest)
 				return
 			}

@@ -53,7 +53,7 @@ HTTP attempts, включая retry; текущая отображаемая к�
 | 5 | Удаление лишних child contexts в runtime | Реализовано в T8148; адресные/test/race/vet/build пройдены, commit/push по поручению владельца |
 | 6 | Одна категория ошибки доставки Sender | Реализовано напрямую по поручению владельца; Sender/test/race/vet/build пройдены |
 | 7 | Вывод runtimeStatus без промежуточной runtimeSummary | Реализовано в T8149; CLI/log/test/race/vet/build пройдены |
-| 8 | Прямые обращения вместо пустых forwarding-функций | Частично: тестовая eventLoop удалена; остальные обращения к реализации |
+| 8 | Прямые обращения вместо пустых forwarding-функций | Завершено в T8151; validation/persistence/test/race/vet/build пройдены |
 | 9 | Удаление двух неиспользуемых полей PrometheusMetrics | К реализации |
 | 10 | Новые каналы после Reset | Реализовано в HEAD 566af63 |
 | 11 | Прямой Reader pool вместо readerRun | Реализовано; readerStarter и подмена запуска полностью удалены |
@@ -62,6 +62,13 @@ HTTP attempts, включая retry; текущая отображаемая к�
 
 ### Выполнено 2026-10-03
 
+- Пункт 8 завершён в T8151: семь getters и три valid wrappers заменены
+  прямыми controls/contains, sender capacity validator заменён validate.
+  Три опустевших production-файла и два wrapper-only tests удалены;
+  HTTP/direct validation, idle-only/persistence и business assertions сохранены.
+  Адресные tests, общие test/race, vet, build, gofmt и diff-check прошли.
+  Подготовительный T8150 завершился до правок из-за ошибочного необязательного
+  пути README; Go checks в нём не запускались, исторический OUT сохранён.
 - Пункт 7 реализован в T8149: runtimeSummary и преобразователь удалены;
   карточка CLI и выбранные поля периодического лога читают runtimeStatus напрямую.
   SourceError берётся из Reader; format/golden/sanitize, список полей, событие
@@ -153,7 +160,7 @@ HTTP attempts, включая retry; текущая отображаемая к�
 [T8134](../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8134_20261002-0000_REVIEWER_state-config_report.md),
 [T8135](../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8135_20261003-0000_CODER_remove-reader-start-seams_report.md).
 
-Оставшаяся часть 8, пункты 9 и 12 не выполнены. Пункты 2, 5–7 и 10 завершены;
+Пункты 9 и 12 не выполнены. Пункты 2, 5–8 и 10 завершены;
 пункты 3 и 4 приняты владельцем. Пункт 13 завершён, сокращение принято.
 Сохранение paused в Throttler сейчас необходимо для прежней Pause; удаление
 выполняется вместе с новым затвором Sender в пункте 12.
@@ -383,6 +390,9 @@ CLI-карточки и выбранных полей логирования. У
 CLI status, прежние exit codes, logfmt fields/cadence и фильтрация debug-событий.
 
 ## 8. Убрать пустые forwarding-функции
+
+Статус: завершено в [T8151](../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8151_20261003-2315_CODER_direct-controls-followup_report.md).
+Существующие business tests сохранены; адресные/full/race/vet/build/gofmt/diff-check прошли.
 
 **Зачем.** Getters текущих controls, три setting wrappers и
 `allowedConfig.validateSenderChannelCapacity` только возвращают поле или

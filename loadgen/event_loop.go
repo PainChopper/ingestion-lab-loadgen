@@ -114,7 +114,7 @@ func (state *controlState) eventLoopContext(
 				result := runtimeCommandReceipt{status: commandAccepted}
 				if state.run.lifecycle.currentState() != runStateIdle {
 					result.status = commandConflict
-				} else if !validReadBatchSize(state.config, command.value) {
+				} else if !state.config.Reader.ReadBatchSize.contains(command.value) {
 					result.status = commandConflict
 				} else {
 					state.controls.readBatchSize = command.value
@@ -132,7 +132,7 @@ func (state *controlState) eventLoopContext(
 			case cmdSetReaderChannelCapacity:
 				result := runtimeCommandReceipt{status: commandAccepted}
 				if state.run.lifecycle.currentState() != runStateIdle ||
-					!validReaderChannelCapacity(state.config, command.value) {
+					!state.config.ReaderChannel.Capacity.contains(command.value) {
 					result.status = commandConflict
 				} else {
 					state.controls.readerChannelCapacity = command.value
@@ -141,7 +141,7 @@ func (state *controlState) eventLoopContext(
 			case cmdSetSenderChannelCapacity:
 				result := runtimeCommandReceipt{status: commandAccepted}
 				if state.run.lifecycle.currentState() != runStateIdle ||
-					!validSenderChannelCapacity(state.config, command.value) {
+					!state.config.SenderChannel.Capacity.contains(command.value) {
 					result.status = commandConflict
 				} else {
 					state.controls.senderChannelCapacity = command.value
@@ -151,9 +151,9 @@ func (state *controlState) eventLoopContext(
 				result := runtimeCommandReceipt{status: commandAccepted}
 				if !state.config.Throttler.RequestedTPS.contains(command.value) {
 					result.status = commandConflict
-				} else if state.requestedTPS() != command.value {
+				} else if state.controls.requestedTPS != command.value {
 					state.controls.requestedTPS = command.value
-					promMetrics.targetTPS.Set(float64(state.requestedTPS()))
+					promMetrics.targetTPS.Set(float64(state.controls.requestedTPS))
 					runtime.throttler.update(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
 					logger.Info(
 						"throttler rate changed",
@@ -166,7 +166,7 @@ func (state *controlState) eventLoopContext(
 				result := runtimeCommandReceipt{status: commandAccepted}
 				if !state.config.Throttler.InstallationMode.contains(command.textValue) {
 					result.status = commandConflict
-				} else if state.installationMode() != command.textValue {
+				} else if state.controls.installationMode != command.textValue {
 					state.controls.installationMode = command.textValue
 					runtime.throttler.update(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
 					logger.Info(
@@ -222,8 +222,8 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 	readerChannel := state.telemetry.readerChannel.snapshot(now)
 	senderChannel := state.telemetry.senderChannel.snapshot(now)
 	if runState == runStateIdle || runState == runStateFaulted {
-		readerChannel.capacity = state.readerChannelCapacity()
-		senderChannel.capacity = state.senderChannelCapacity()
+		readerChannel.capacity = state.controls.readerChannelCapacity
+		senderChannel.capacity = state.controls.senderChannelCapacity
 	}
 
 	return runtimeStatus{
@@ -233,24 +233,24 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 			ElapsedMs:         state.elapsedMs(now),
 		},
 		Reader: runtimeReaderStatus{
-			Workers: state.readerWorkers(), LiveWorkers: readerPool.liveWorkers,
+			Workers: state.controls.readerWorkers, LiveWorkers: readerPool.liveWorkers,
 			IdleWorkers: readerPool.idleWorkers, ReadingWorkers: readerPool.readingWorkers,
 			BlockedWorkers: readerPool.blockedWorkers, DrainingWorkers: readerPool.drainingWorkers,
 			DrainingIdleWorkers:    readerPool.drainingIdleWorkers,
 			DrainingReadingWorkers: readerPool.drainingReadingWorkers,
 			DrainingBlockedWorkers: readerPool.drainingBlockedWorkers,
-			ReadBatchSize:          state.readBatchSize(), ReadTps: reader.readTPS,
+			ReadBatchSize:          state.controls.readBatchSize, ReadTps: reader.readTPS,
 			RowsRead:        reader.rowsRead,
 			SourceDirectory: readerSourceDirectory(state.config.Source.Path),
 			SourceError:     state.run.sourceError,
 		},
 		Throttler: runtimeThrottlerStatus{
-			RequestedTps:     state.requestedTPS(),
+			RequestedTps:     state.controls.requestedTPS,
 			AdmittedTps:      senderChannel.sentTransactionsPerSecond,
-			InstallationMode: state.installationMode(),
+			InstallationMode: state.controls.installationMode,
 		},
 		Sender: runtimeSenderStatus{
-			Workers: state.senderWorkers(), LiveWorkers: senderPool.liveWorkers,
+			Workers: state.controls.senderWorkers, LiveWorkers: senderPool.liveWorkers,
 			IdleWorkers: senderPool.idleWorkers, InFlightWorkers: senderPool.inFlightWorkers,
 			BackoffWorkers: senderPool.backoffWorkers, DrainingWorkers: senderPool.drainingWorkers,
 			DrainingIdleWorkers:     senderPool.drainingIdleWorkers,
@@ -293,26 +293,10 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 	}
 }
 
-func (state *controlState) readerWorkers() int {
-	return state.controls.readerWorkers
-}
-
-func (state *controlState) senderWorkers() int {
-	return state.controls.senderWorkers
-}
-
-func (state *controlState) requestedTPS() int {
-	return state.controls.requestedTPS
-}
-
-func (state *controlState) installationMode() string {
-	return state.controls.installationMode
-}
-
 func (state *controlState) throttlerSettings(paused bool) throttlerSettings {
 	return throttlerSettings{
-		requestedTPS: state.requestedTPS(),
-		mode:         state.installationMode(),
+		requestedTPS: state.controls.requestedTPS,
+		mode:         state.controls.installationMode,
 		paused:       paused,
 	}
 }

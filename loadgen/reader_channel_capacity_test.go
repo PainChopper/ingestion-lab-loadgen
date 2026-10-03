@@ -62,21 +62,6 @@ func TestReaderChannelCapacityValidation(t *testing.T) {
 	}
 }
 
-func TestValidReaderChannelCapacityAcceptsOnlyConfiguredSteps(t *testing.T) {
-	validValues := []int{0, 1, 2, 4, 1_024, 8_192}
-	for _, value := range validValues {
-		if !validReaderChannelCapacity(testConfig(t), value) {
-			t.Errorf("value %d is rejected", value)
-		}
-	}
-
-	for _, value := range []int{-1, 3, 8_193, 16_384} {
-		if validReaderChannelCapacity(testConfig(t), value) {
-			t.Errorf("value %d is accepted", value)
-		}
-	}
-}
-
 func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *testing.T) {
 	for _, capacity := range []int{0, 1, 8_192} {
 		t.Run(strconv.Itoa(capacity), func(t *testing.T) {

@@ -28,18 +28,18 @@ func newPipelineRuntime(state *controlState) *pipelineRuntime {
 func (runtime *pipelineRuntime) start(ctx context.Context) error {
 	runtime.state.telemetry.reader.startInterval(time.Now())
 	runtime.runContext, runtime.cancelRun = context.WithCancel(ctx)
-	runtime.readerBatches = make(chan []Transaction, runtime.state.readerChannelCapacity())
-	runtime.state.telemetry.readerChannel.start(runtime.readerBatches, runtime.state.readBatchSize())
+	runtime.readerBatches = make(chan []Transaction, runtime.state.controls.readerChannelCapacity)
+	runtime.state.telemetry.readerChannel.start(runtime.readerBatches, runtime.state.controls.readBatchSize)
 	runtime.state.telemetry.readerChannel.clearMeasurements()
-	runtime.senderBatches = make(chan []Transaction, runtime.state.senderChannelCapacity())
-	runtime.state.telemetry.senderChannel.start(runtime.senderBatches, runtime.state.readBatchSize())
+	runtime.senderBatches = make(chan []Transaction, runtime.state.controls.senderChannelCapacity)
+	runtime.state.telemetry.senderChannel.start(runtime.senderBatches, runtime.state.controls.readBatchSize)
 	runtime.state.telemetry.senderChannel.clearMeasurements()
 
 	started, err := runtime.state.startReaderPool(
 		runtime.runContext,
 		runtime.readerBatches,
-		runtime.state.readBatchSize(),
-		runtime.state.readerWorkers(),
+		runtime.state.controls.readBatchSize,
+		runtime.state.controls.readerWorkers,
 	)
 	if err != nil {
 		runtime.cancelRun()
@@ -75,7 +75,7 @@ func (runtime *pipelineRuntime) startSender() {
 		runtime.senderBatches,
 		&runtime.state.telemetry.senderChannel,
 		&runtime.terminallyCompletedTransactionsSinceTick,
-		runtime.state.senderWorkers(),
+		runtime.state.controls.senderWorkers,
 		runtime.state.config.Sender.API,
 		runtime.state.config.Sender.Retry,
 		runtime.state.logger,
