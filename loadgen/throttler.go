@@ -11,54 +11,53 @@ type throttlerSettings struct {
 	paused       bool
 }
 
-func (runtime *pipelineRuntime) startThrottler(
-	ctx context.Context,
-	initial throttlerSettings,
-) (<-chan struct{}, chan<- throttlerSettings) {
-	done := make(chan struct{})
-	updates := make(chan throttlerSettings)
+type throttler struct {
+	readerBatches <-chan []Transaction
+	senderBatches chan<- []Transaction
+	readerChannel *channelTelemetry
+	senderChannel *channelTelemetry
+	updates       chan throttlerSettings
+	done          chan struct{}
+}
+
+func (t *throttler) start(ctx context.Context, initial throttlerSettings) {
+	t.done = make(chan struct{})
+	t.updates = make(chan throttlerSettings)
 	go func() {
-		defer close(done)
+		defer close(t.done)
 		settings := initial
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case update := <-updates:
+			case update := <-t.updates:
 				settings = update
-			case batch, ok := <-runtime.readerBatches:
+			case batch, ok := <-t.readerBatches:
 				if !ok {
 					return
 				}
-				runtime.state.telemetry.readerChannel.recordReceive(len(batch))
-				if !runtime.forwardThrottledBatch(
-					ctx,
-					batch,
-					updates,
-					&settings,
-				) {
+				t.readerChannel.recordReceive(len(batch))
+				if !t.forwardBatch(ctx, batch, &settings) {
 					return
 				}
 			}
 		}
 	}()
-	return done, updates
 }
 
-func (runtime *pipelineRuntime) forwardThrottledBatch(
+func (t *throttler) forwardBatch(
 	ctx context.Context,
 	batch []Transaction,
-	updates <-chan throttlerSettings,
 	settings *throttlerSettings,
 ) bool {
-	senderChannel := &runtime.state.telemetry.senderChannel
+	senderChannel := t.senderChannel
 	waitStarted := time.Now()
 	for {
 		if settings.paused || (settings.mode == throttlerInstalled && settings.requestedTPS == 0) {
 			select {
 			case <-ctx.Done():
 				return false
-			case update := <-updates:
+			case update := <-t.updates:
 				*settings = update
 				waitStarted = time.Now()
 			}
@@ -73,7 +72,7 @@ func (runtime *pipelineRuntime) forwardThrottledBatch(
 				case <-ctx.Done():
 					timer.Stop()
 					return false
-				case update := <-updates:
+				case update := <-t.updates:
 					timer.Stop()
 					*settings = update
 					waitStarted = time.Now()
@@ -86,11 +85,11 @@ func (runtime *pipelineRuntime) forwardThrottledBatch(
 		select {
 		case <-ctx.Done():
 			return false
-		case update := <-updates:
+		case update := <-t.updates:
 			*settings = update
 			waitStarted = time.Now()
 			continue
-		case runtime.senderBatches <- batch:
+		case t.senderBatches <- batch:
 			senderChannel.recordSend(len(batch))
 			return true
 		default:
@@ -101,14 +100,24 @@ func (runtime *pipelineRuntime) forwardThrottledBatch(
 		case <-ctx.Done():
 			senderChannel.finishBlocked(time.Now())
 			return false
-		case update := <-updates:
+		case update := <-t.updates:
 			senderChannel.finishBlocked(time.Now())
 			*settings = update
 			waitStarted = time.Now()
-		case runtime.senderBatches <- batch:
+		case t.senderBatches <- batch:
 			senderChannel.finishBlocked(time.Now())
 			senderChannel.recordSend(len(batch))
 			return true
 		}
+	}
+}
+
+func (t *throttler) update(settings throttlerSettings) {
+	if t == nil {
+		return
+	}
+	select {
+	case t.updates <- settings:
+	case <-t.done:
 	}
 }

@@ -500,7 +500,7 @@ func TestPipelineRuntimeStopJoinsStagesClearsProgressAndStartsFreshRun(t *testin
 	reader := runtime.readerPool
 	readerBatches := runtime.readerBatches
 	senderBatches := runtime.senderBatches
-	throttlerDone := runtime.throttlerDone
+	throttlerDone := runtime.throttler.done
 	runContext := runtime.runContext
 	capturedIDs := make(chan string, 2)
 	runtime.startSender()
@@ -521,7 +521,7 @@ func TestPipelineRuntimeStopJoinsStagesClearsProgressAndStartsFreshRun(t *testin
 	if got := runtime.terminallyCompletedTransactionsSinceTick.Load(); got != 1 {
 		t.Fatalf("completed transactions = %d, want 1", got)
 	}
-	runtime.updateThrottler(state.throttlerSettings(true))
+	runtime.throttler.update(state.throttlerSettings(true))
 	readerBatches <- []Transaction{{ClientID: "old-held"}}
 	deadline := time.After(time.Second)
 	for state.telemetry.readerChannel.snapshot(time.Now()).receivedBatchesTotal != 2 {
@@ -547,7 +547,7 @@ func TestPipelineRuntimeStopJoinsStagesClearsProgressAndStartsFreshRun(t *testin
 	}
 	assertClosedActualChannel(t, readerBatches)
 	assertClosedActualChannel(t, senderBatches)
-	if runtime.readerPool != nil || runtime.senderPool != nil || runtime.sourceErrors() != nil {
+	if runtime.readerPool != nil || runtime.senderPool != nil || runtime.throttler != nil || runtime.sourceErrors() != nil {
 		t.Fatal("stop retained a stage or source-error channel")
 	}
 	rr, sr := runtime.snapshots()
