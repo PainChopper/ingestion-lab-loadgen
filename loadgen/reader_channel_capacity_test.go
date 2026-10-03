@@ -83,26 +83,15 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 			requests := make(chan runtimeCommand, 3)
 			control := requests
 			metrics := make(chan time.Time)
-			startedCapacities := make(chan int, 2)
 			state := newTestControlState(t)
-			read := func(ctx context.Context, output chan<- []Transaction, _, _ int) (readerRun, error) {
-				startedCapacities <- cap(output)
-				done := make(chan struct{})
-				go func() {
-					defer close(done)
-					<-ctx.Done()
-				}()
-				return readerRun{done: done, reconcile: func(int) {}}, nil
-			}
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				state.eventLoopWithThrottler(
+				state.eventLoopContext(
+					context.Background(),
 					requests,
 					metrics,
 					NewPrometheusMetrics(),
-					read,
-					startThrottler,
 				)
 			}()
 			t.Cleanup(func() {
@@ -124,8 +113,8 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 				}
 			}
 
-			if got := snapshot().ReaderChannel.Capacity; got != state.controls.config.ReaderChannel.Capacity.Initial {
-				t.Fatalf("initial capacity = %d, want %d", got, state.controls.config.ReaderChannel.Capacity.Initial)
+			if got := snapshot().ReaderChannel.Capacity; got != state.config.ReaderChannel.Capacity.Initial {
+				t.Fatalf("initial capacity = %d, want %d", got, state.config.ReaderChannel.Capacity.Initial)
 			}
 			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: capacity}, commandAccepted)
 			if got := snapshot().ReaderChannel.Capacity; got != capacity {
@@ -136,8 +125,8 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 				t.Fatalf("invalid direct command status = %d, want conflict", result.status)
 			}
 			execute(runtimeCommand{kind: cmdRun}, commandAccepted)
-			if got := <-startedCapacities; got != capacity {
-				t.Fatalf("reader configured capacity = %d, want %d", got, capacity)
+			if got := cap(state.telemetry.readerChannel.batches); got != capacity {
+				t.Fatalf("actual Reader capacity = %d, want %d", got, capacity)
 			}
 			if got := snapshot(); got.ReaderChannel.Capacity != capacity || got.Run.State != runStateRunning {
 				t.Fatalf("running snapshot = %+v", got)
@@ -153,8 +142,8 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 				t.Fatalf("reset snapshot = %+v", got)
 			}
 			execute(runtimeCommand{kind: cmdRun}, commandAccepted)
-			if got := <-startedCapacities; got != capacity {
-				t.Fatalf("reader capacity after Reset = %d, want %d", got, capacity)
+			if got := cap(state.telemetry.readerChannel.batches); got != capacity {
+				t.Fatalf("actual Reader capacity = %d, want %d", got, capacity)
 			}
 		})
 	}

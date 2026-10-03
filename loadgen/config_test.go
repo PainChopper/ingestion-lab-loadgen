@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/parquet-go/parquet-go"
 )
 
 func testConfig(t *testing.T) config {
@@ -33,6 +35,10 @@ func newTestControlState(t *testing.T) controlState {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(server.Close)
+	loaded.Source.Path = filepath.Join(t.TempDir(), "source.parquet")
+	if err := parquet.WriteFile(loaded.Source.Path, []Transaction{}); err != nil {
+		t.Fatal(err)
+	}
 	loaded.Sender.API.URL = server.URL
 	return newControlState(loaded, nil)
 }

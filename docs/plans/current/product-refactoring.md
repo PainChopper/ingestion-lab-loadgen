@@ -1,6 +1,6 @@
-# Рефакторинг ingestion-lab
+# План реализации рефакторинга ingestion-lab
 
-Статус: планирование; кандидаты отделены от выбранных решений.
+Статус: решения для реализации; выполненное отмечено отдельно.
 Создан: 2026-10-02.
 
 ## Цель
@@ -9,109 +9,172 @@
 и тех же зависимостей, искусственные ветки и обёртки. Основание каждого изменения —
 нынешняя обязанность кода. Будущие требования и точки расширения не добавлять.
 
-План дополняется по мере разбора с владельцем. Запись кандидата не означает
-разрешения на реализацию. Каждый пункт выполняется и проверяется отдельно.
+Этот документ задаёт решения, границы и проверки следующих изменений.
+По просьбе владельца рекомендации аудита оформлены как решения для реализации,
+без дополнительного этапа выбора для каждого пункта. Работа этого чата ограничена
+планом: кодеры, реализация, commit/push здесь не запускаются. Каждый шаг имеет
+согласованный diff и проверку затронутого поведения; обязательного порядка нет.
 
 Основание пунктов 2–10 — [отчёт T8124 с дополнением T8125](../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8124_20261002-0000_REVIEWER_product-simplification_report.md).
 Это статический аудит: в дополнении заявлено полное чтение Go-кода и тестов двух
 модулей; будущие изменения ещё не проверены выполнением. Полный frontend-аудит
 в дополнение не входил. Карта файлов и доказательства остаются в исходном отчёте.
 
-На момент переноса проверен HEAD `f1a46a1`: ранее выполненные readerRun и удаление
-throttler ack уже присутствуют; перечисленные ниже кандидаты ещё существуют.
+Пункт 11 основан на [анализе T8128 — прямой Reader pool](../../../../ingestion-lab-agents-runtime/MAIL/ANALYST/OUT/T8128_20261002-0000_ANALYST_reader-runtime_report.md).
+Пункт 12 использует [анализ T8127 — Pause перед HTTP-попытками Sender](../../../../ingestion-lab-agents-runtime/MAIL/ANALYST/OUT/T8127_20261002-0000_ANALYST_run-pause_report.md).
+Последующие прямые уточнения владельца имеют приоритет: обычный затвор перед
+HTTP attempts, включая retry; текущая отображаемая картинка метрик фиксируется
+на Pause, внутренний учёт доставок продолжается. Точность до миллисекунд,
+особая гарантия физического сетевого старта и привязка к точному времени клика
+не требуются. Устаревшие ссылки отчёта на reuse не применять: пункт 10 завершён.
 
-## Порядок работы
+Исходная сверка с LEAD 2026-10-02, baseline `566af63` (актуальное исполнение ниже):
+
+- `f1a46a1`: уже выполнены группировка полей в readerRun и удаление throttler ack.
+  Группировка в readerRun не является реализацией прямого pool из пункта 11.
+- `566af63`: реализованы fresh channels после Reset и переименование readerBatches;
+  владелец принял изменение, коммит запушен. Пункт 10 закрыт.
+- На момент исходной сверки пункты 2–9 и 11 ещё не были реализованы.
+- Sender-only Pause выбрана владельцем, но ещё не реализована. Это пункт 12.
+- «Оставить функции throttler» — рекомендация LEAD, не решение владельца.
+  Владелец сохранил исходную задачу перехода к методам и проверки уже доступных
+  зависимостей. Конкретная форма реализации задана в пункте 1.
+- Уточнения владельца отменяют обязательный порядок и сохранение существующих
+  test seams как самостоятельную цель. Рабочий код определяет тесты.
+
+## Состав работы и текущие статусы
 
 | Пункт | Содержание | Состояние |
 |---|---|---|
-| 1 | Владелец и методы throttler | Обсуждение; согласовать с разбором Pause у LEAD |
-| 2 | Удаление senderTelemetry | Кандидат, высокий приоритет |
-| 3 | Один рабочий путь Reader вместо nil-worker ветки | Кандидат, высокий приоритет |
-| 4 | Общий контекст Reader pool вместо копии в worker | Кандидат |
-| 5 | Удаление лишних child contexts в runtime | Кандидат; согласовать lifecycle с LEAD |
-| 6 | Одна категория ошибки доставки Sender | Кандидат |
-| 7 | Вывод runtimeStatus без промежуточной runtimeSummary | Кандидат |
-| 8 | Прямые обращения вместо пустых forwarding-функций | Кандидат, ниже по приоритету |
-| 9 | Удаление двух неиспользуемых полей PrometheusMetrics | Маленький независимый кандидат |
-| 10 | Новые каналы после Reset | Решение принято по отчёту; реализация приостановлена у LEAD |
+| 1 | Методы throttler на существующем pipelineRuntime | Реализовано; удаление paused остаётся в пункте 12 |
+| 2 | Удаление senderTelemetry | К реализации |
+| 3 | Один рабочий путь Reader вместо nil-worker ветки | К реализации |
+| 4 | Общий контекст Reader pool вместо копии в worker | К реализации |
+| 5 | Удаление лишних child contexts в runtime | К реализации |
+| 6 | Одна категория ошибки доставки Sender | К реализации |
+| 7 | Вывод runtimeStatus без промежуточной runtimeSummary | К реализации |
+| 8 | Прямые обращения вместо пустых forwarding-функций | Частично: тестовая eventLoop удалена; остальные обращения к реализации |
+| 9 | Удаление двух неиспользуемых полей PrometheusMetrics | К реализации |
+| 10 | Новые каналы после Reset | Реализовано в HEAD 566af63 |
+| 11 | Прямой Reader pool вместо readerRun | Реализовано; readerStarter и подмена запуска полностью удалены |
+| 12 | Pause живого Sender и фиксация отображаемых метрик | Требования владельца приняты; к реализации |
 
-Для первых самостоятельных правок подходят пункты 2, 3 и 9. Пункт 4 можно
-выполнить после 3, чтобы повторно не переписывать один и тот же путь Reader.
-Пункты 6 и 7 независимы. Пункт 8 удобнее делать после согласованных изменений
-runtime. Нумерация сохраняет историю обсуждения и не задаёт обязательный порядок.
+### Выполнено 2026-10-03
 
-Пункты 1, 5 и 10 затрагивают общие участки runtime: перед работой согласовать
-актуальный код и результат разбора Pause с LEAD. Новую семантику Pause здесь
-не проектируем; поле `paused` автоматически не удаляем.
+- Пункт 1: методы Throttler используют каналы и telemetry существующего runtime,
+  настройки остаются локальными в горутине. throttlerStarter удалён полностью,
+  без замещающего механизма. Выполнение T8129/T8131, review T8130/T8132.
+- Пункт 11: runtime хранит прямые `readerPool *readerPool` и `senderPool *senderPool`;
+  readerRun удалён. Дополнительно по решению владельца удалены readerStarter,
+  runtime.read и передача функции запуска: runtime вызывает state.startReaderPool.
+  Выполнение T8131/T8135; T8132 принял прямые pools, T8135 передан владельцу.
+- В рамках пункта 8 удалена использовавшаяся только тестами обёртка eventLoop.
+  Тесты вызывают eventLoopContext с явным контекстом. Остальная часть пункта 8
+  не объявляется выполненной.
+- Отдельное принятое упрощение: неизменяемая загруженная конфигурация перенесена
+  из configuredControls в state.config; controls хранят текущие изменяемые значения.
+  Начальные значения, TOML/JSON и поведение сохранены. Выполнение T8133, review T8134.
+- Существующие тесты запуска Reader переведены на настоящие временные Parquet
+  и каналы. Удалены искусственные callbacks и задержка join через добавленную
+  тестом goroutine; реальные ошибки источника, Reset, done/cleanup, batch size
+  и capacity проверяются рабочим путём. Новых подмен и production hooks нет.
+- Финальные проверки T8135: go test ./..., go test -race ./..., go vet и build
+  завершились с exit code 0; gofmt и git diff --check также успешны.
 
-## 1. Владелец состояния и методы throttler
+Доказательства: [T8132](../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8132_20261002-0000_REVIEWER_direct-runtime-pools_report.md),
+[T8134](../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8134_20261002-0000_REVIEWER_state-config_report.md),
+[T8135](../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8135_20261003-0000_CODER_remove-reader-start-seams_report.md).
 
-Статус: кандидат; окончательная форма обсуждается.
+Пункты 2–7, оставшаяся часть 8, 9 и 12 не выполнены. Пункт 10 завершён ранее.
+Сохранение paused в Throttler сейчас необходимо для прежней Pause; удаление
+выполняется вместе с новым затвором Sender в пункте 12.
 
-Разбор общей паузы ведёт LEAD. Предложения ниже описывают устройство стадии;
-сохранение или замена нынешнего pause-механизма определяется отдельно.
+Владелец не устанавливает обязательный порядок. Нумерация — адреса пунктов,
+а не последовательность исполнения. Предложения LEAD делать 3 перед 4 и 11 перед 5
+можно использовать для удобства, но они не являются зависимостями реализации.
+Связанные обращения и тесты согласовывать в каждом diff; пункты можно объединять
+или выполнять отдельно. Переход к методам не требует готовности новой Pause.
+Удаление throttler.paused согласовать с появлением Pause в Sender, чтобы не оставить
+промежуточную версию без паузы. Пункт 10 не выполнять повторно.
 
-### Проблема
+## 1. Методы throttler на существующем pipelineRuntime
 
-В `loadgen/throttler.go` функции `startThrottler` и `forwardThrottledBatch`
-принимают по шесть параметров. Во вторую функцию повторно передаются канал Sender,
-его телеметрия, канал обновлений и указатель на текущие настройки. Эти значения
-относятся к одной работающей стадии и живут в течение одного запуска.
+Статус: реализовано. Перенос Pause в Sender выполняется отдельно по пункту 12.
 
-`throttlerSettings` содержит TPS, режим и паузу. Эта структура также служит
-значением сообщения в небуферизованном канале обновлений. Число полей само по себе
-не доказывает необходимости её расширения или удаления.
+Решение плана: использовать методы существующего владельца ресурсов run.
+Новый тип только ради упаковки каналов не создавать. Настройки TPS/mode остаются
+локальными в единственной рабочей горутине. Это конкретная форма исходной задачи
+владельца; рекомендация LEAD оставить функции её не отменяет.
 
-### Уже доступные зависимости
+### Проблема и уже доступные зависимости
 
-В `loadgen/pipeline_runtime.go`:
+В loadgen/throttler.go startThrottler и forwardThrottledBatch принимают по шесть
+параметров. Во вторую функцию повторно передаются Sender channel, его телеметрия,
+updates и указатель на текущие настройки. Зависимости живут весь run:
 
-- Reader channel — `runtime.batches`;
-- Sender channel — `runtime.senderBatches`;
-- телеметрия каналов — `runtime.state.telemetry.readerChannel` и
-  `runtime.state.telemetry.senderChannel`;
-- канал обновлений хранится в `runtime.throttlerUpdates` как send-only;
-- контекст запуска — `runtime.runContext`; сейчас для throttler создаётся child context.
+- Reader channel — runtime.readerBatches; Sender channel — runtime.senderBatches.
+- Телеметрия — runtime.state.telemetry.readerChannel и senderChannel.
+- Send-side updates уже хранится в runtime.throttlerUpdates.
+- Контекст run — runtime.runContext; пока есть отдельный child context стадии.
 
-Следовательно, сначала установить, можно ли использовать существующего владельца
-ресурсов. Не создавать ещё одну структуру только для упаковки списка параметров.
+throttlerSettings — небольшое значение сообщения об изменении настроек.
+Не добавлять в него каналы, telemetry, context или общую Pause.
 
-### Варианты для сравнения
+### Конкретная форма и владение
 
-1. Методы существующего `pipelineRuntime`. Использовать уже принадлежащие ему
-   каналы и телеметрию. Проверить, не смешивает ли это управление запуском с
-   обработкой батчей и не добавляет ли конкурентное чтение изменяемого состояния.
-2. Конкретный `throttler` с методами, если стадия действительно нуждается в своём
-   владельце. Хранить только её зависимости и текущие настройки. Возможная форма:
-   `run(ctx)` и `forwardBatch(ctx, batch)`; запуск согласовать с существующими
-   тестовыми подстановками без нового интерфейса или forwarding-адаптера.
+```go
+func (runtime *pipelineRuntime) startThrottler(
+    ctx context.Context,
+    initial throttlerSettings,
+) (<-chan struct{}, chan<- throttlerSettings)
 
-Предпочесть вариант, который делает владение и путь данных понятнее и уменьшает
-общий код. Сокращение сигнатуры само по себе не является достаточным результатом.
+func (runtime *pipelineRuntime) forwardThrottledBatch(
+    ctx context.Context,
+    batch []Transaction,
+    updates <-chan throttlerSettings,
+    settings *throttlerSettings,
+) bool
+```
 
-### Условия сохранения поведения
+- startThrottler создаёт done и небуферизованный updates; settings копируется
+  в локальную переменную рабочей горутины. В ней остаётся нынешний цикл.
+- Оба метода берут каналы и телеметрию из runtime. Поля каналов и адреса telemetry
+  сохраняются до join рабочей горутины; clearActive/новый Run выполняются после него.
+- forwardThrottledBatch получает только данные вызова: context, batch,
+  receive-side updates и указатель на локальное settings. Настройки не переносить
+  в общие поля runtime; state.controls из рабочей горутины не читать.
+- Context передаётся явно: методы не перечитывают изменяемый runContext.
+  Updates получают из локального канала, а не из send-only поля runtime.
+- Удалить старые функции и согласовать места запуска. Новый тип throttler,
+  интерфейс и forwarding-адаптер для этих зависимостей не нужны.
+- По последующему решению владельца throttlerStarter удалён полностью.
+  Runtime запускает свой метод напрямую; новую подмену старта не добавлять.
 
-- Текущие настройки меняет только горутина throttler после получения сообщения.
-  Начальные настройки фиксируются до её запуска; не читать изменяемые controls
-  напрямую из другой горутины.
-- Сохранить небуферизованный канал обновлений без ack.
-- Обновления принимаются при ожидании Reader, паузе/нулевом TPS, ожидании таймера
-  и блокировке отправки в Sender.
-- Сохранить расчёт задержки, её перезапуск после обновления, телеметрию и порядок батчей.
-- Сохранить отмену, сигнал завершения и ожидание горутины до освобождения каналов.
+Форма метода сама по себе не создаёт гонку. Безопасность обеспечивают локальные
+settings, неизменность зависимостей в течение run и join перед очисткой.
+Конкурентное чтение controls — отдельное изменение; его в этом пункте нет.
 
-### Границы и проверка
+### Сохранение поведения и проверка
 
-Основные файлы: `loadgen/throttler.go`, `loadgen/pipeline_runtime.go`.
-Изменять связанные вызовы и существующие тестовые подстановки только по необходимости.
-Отдельное удаление child contexts, изменение Reset и другие кандидаты сюда не входят.
+- Начальные настройки фиксируются владельцем controls до запуска горутины.
+  Дальнейшие изменения принимает только горутина throttler через updates.
+- Сохранить небуферизованный updates без ack. Сообщения принимаются при ожидании
+  Reader, нулевом TPS, таймера и заблокированной отправки Sender.
+- Сохранить pacing, перезапуск задержки после update, порядок batches,
+  blocked telemetry, отмену и done/join до освобождения каналов.
+- Удаление paused и pause-related updates согласовать с пунктом 12.
+  После него settings содержит requestedTPS и mode.
 
-Использовать существующие проверки throttler и lifecycle. Тесты согласовывать
-с наблюдаемым поведением; новые тесты только ради формы структуры или числа
-параметров не добавлять. После реализации проверить Go-тесты и гонки по затронутому пути.
+Основные файлы: throttler.go, pipeline_runtime.go, необходимые вызовы event_loop.go
+и существующие throttler/lifecycle-тесты. Child contexts можно убрать отдельным
+diff или вместе с пунктом 5; обязательного порядка нет. Reset сюда не входит.
+Подмены адаптировать или убрать по нуждам сценария, а не сохранять прежний test API.
+Новые тесты ради формы методов и числа параметров не добавлять.
 
-Критерий завершения: выбран и объяснён владелец стадии; повторная передача зависимостей
-устранена без лишнего слоя и дополнительного состояния; существующее поведение сохранено.
+Критерий завершения: методы используют уже принадлежащие runtime зависимости,
+повторная передача каналов/telemetry устранена; TPS/mode updates,
+pacing/backpressure/отмена и join сохранены. Проверить существующее поведение
+и гонки по затронутому конкурентному пути.
 
 ## 2. Удалить неиспользуемый счётчик Sender
 
@@ -187,8 +250,7 @@ worker заканчивает свой файл и не берёт следую�
 останавливают весь run. Их cancel не используется для самостоятельного управления
 стадиями: остановка/Reset отменяют run, а ошибка старта также завершает весь run.
 
-**Изменение.** Если актуальный разбор Pause у LEAD сохраняет эту модель,
-передавать стадиям `runContext`, удалить `cancelReader`/`cancelThrottler`
+**Изменение.** Передавать стадиям `runContext`, удалить `cancelReader`/`cancelThrottler`
 и связанные создание, вызовы и очистку. Сигнатуры starter сами по себе не меняются.
 
 **Границы.** `pipeline_runtime.go` и необходимые связанные проверки.
@@ -197,7 +259,7 @@ worker заканчивает свой файл и не берёт следую�
 местом отмены. Сохранить последовательность завершения: остановка Sender,
 отмена run, ожидание Reader/throttler, затем очистка/закрытие каналов. Контексты
 внутри Reader/Sender pools имеют собственные обязанности и этим пунктом не удаляются.
-Если LEAD введёт самостоятельную остановку стадии, проверить кандидата заново.
+Принятая Pause из пункта 12 сохраняет contexts и не требует отдельной отмены стадий.
 
 **Проверка.** Отмена приложения, наследование Sender контекста через Pause/Resume,
 Reset с удерживаемым батчем при нулевом TPS, ошибка старта/источника и последующий Run.
@@ -278,8 +340,14 @@ HTTP validation и event-loop validation остаются: это разные �
 
 ## 10. Освобождать каналы на Reset, создавать заново на Run
 
-Статус: в обновлённом отчёте отмечено принятое решение владельца и приостановленная
-реализация T8126. Пункт фиксирует цель; возобновление и согласование с Pause ведёт LEAD.
+Статус: реализовано в `566af63`. В текущем коде Reset использует `runtime.stop`,
+новый Run создаёт обе очереди, reuse helpers и created flags удалены.
+Прежняя отметка отчёта T8124 о приостановке T8126 устарела. По
+[отчёту T8126](../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8126_20261002-0000_CODER_fresh-channels_report.md)
+до переименования владельца прошли test/race/vet/build. LEAD подтвердил повторный
+go test после переименования; повторные race/vet/build после него не подтверждены:
+владелец остановил кодера и поручил commit/push. Это существующие результаты,
+независимо здесь не повторялись. Условия ниже сохраняются для последующих изменений.
 
 **Зачем.** Сохранение физических каналов между завершёнными запусками экономит
 повторную allocation, но требует отдельного reset-пути, reuse/replacement helpers,
@@ -288,7 +356,7 @@ created flags и тестов идентичности. Иного текуще�
 **Результат.** Reset завершает run, дожидается горутин, закрывает/очищает каналы,
 убирает ссылки и обнуляет прогресс. Следующий Run создаёт два новых канала
 с выбранными capacity. Настройки сохраняются. Pause/Resume внутри одного запуска
-сохраняет его очереди; общая семантика паузы определяется в работе LEAD.
+сохраняет его очереди; семантика новой Pause зафиксирована в пункте 12.
 
 **Границы.** `pipeline_runtime.go`, Reset в `event_loop.go` и непосредственные тесты.
 Меняется приватная гарантия identity между run; новые allocations ожидаемы.
@@ -303,6 +371,302 @@ reuse helpers и created flags после упрощения ошибки ста
 capacity, обновлённого batch size и метрик. Отдельно сохранить assertions
 Pause/Resume, проверить нулевой TPS, ошибку старта и отсутствие зависания teardown.
 Не удалять целый behavioral-тест только потому, что одна его проверка устарела.
+
+## 11. Хранить прямой Reader pool вместо readerRun
+
+Основание: T8128, `CONCLUSIVE`, baseline `566af63908780be6852e8da2140fd4d15d7d5ea8`.
+Статус: реализовано в T8131/T8135. Прямые pools приняты review T8132;
+финальная адаптация тестов T8135 прошла обычные и race-проверки и передана владельцу.
+
+### Решение и его основание
+
+Удалить `readerRun`; в `pipelineRuntime` хранить `readerPool *readerPool`.
+Функция создания возвращает `(*readerPool, error)`, а
+`state.startReaderPool` возвращает созданный pool напрямую. По последующему
+решению владельца readerStarter полностью удалён: запуск не подменяется.
+
+Четыре поля `readerRun` — done, reconcile, aggregateSnapshot и sourceErrors —
+только повторяют каналы и bound methods настоящего pool. Обёртка сама не создаёт
+ресурсы, не отменяет работу, не ждёт завершения, не синхронизирует состояние
+и не обрабатывает ошибку источника. Единственная рабочая сборка находится
+в `control_state.go`; остальные сборки используются тестами.
+
+Fallible startup, sourceErrors и сохранение Reader на Pause — реальные особенности
+Reader, но существующий pool уже реализует их. Сходство с хранением `*senderPool`
+полезно для чтения runtime, однако основание удаления — отсутствие обязанности
+у wrapper, а не симметрия сама по себе.
+
+### Изменение рабочего пути
+
+| Путь | Что остаётся и что меняется |
+|---|---|
+| Успешный Run | Runtime создаёт context/очереди, starter создаёт полноценный pool, runtime сохраняет указатель и запускает throttler. Контекст pool, cond, workers, done и watcher создаются прежним конструктором. |
+| Ошибка старта | Glob error/пустой fixture возвращают `nil, error` до запуска ресурсов pool. Runtime выполняет прежний startup cleanup; event loop сохраняет source diagnostic и faulted. Не вводить частично стартовавший pool вместе с error. |
+| Повторный Run, Pause/Resume | Reader создаётся только из idle. Внутри текущего run сохраняется тот же указатель; существующая семантика Pause не меняется этим пунктом. |
+| Reset/shutdown | Сначала остановка/отмена, затем ожидание горутин, close/drain/detach очередей и `reader = nil`. Новый Run создаёт новый pool и новые очереди. Закрытие requests/application cancellation по-прежнему ведут к общему stop. |
+| Ошибка источника во время Run | Pool передаёт одну ошибку через прежний буфер sourceErrors размером 1, отменяется и будит workers. Event loop сохраняет диагностику, faulted и выполняет stop/reset измерений. Правила закрытия файлов и выбора cleanup error остаются в pool. |
+| Reconcile | После проверки `reader != nil` вызвать `reader.reconcile(workers)`. Mutex, safe downscale и отказ от reconcile после отмены/stop принадлежат pool. |
+| Snapshot | После проверки указателя вызвать `reader.aggregateSnapshot()`; при nil вернуть прежний нулевой readerPoolSnapshot. Методы pool сами обеспечивают нужную синхронизацию. |
+| SourceErrors select | При nil Reader вернуть nil channel, отключающий select case; иначе вернуть тот же `reader.sourceErrors`. После stop старый pool/канал больше не доступны runtime. |
+
+### Минимальная карта реализации
+
+1. `pipeline_runtime.go`: удалить тип `readerRun`, изменить поле reader и результат
+   `readerStarter`. Согласовать stop/join, clearActive, reconcile, snapshot и
+   sourceErrors. Проверять nil указатель перед доступом к pool.
+2. `control_state.go`: сохранить существующую привязку config/telemetry/logger
+   в функции создания; вернуть `startReaderPool(...)` непосредственно.
+3. `event_loop.go`: согласовать необходимые типы. Подстановку создания сохранять
+   только для нужного итогового сценария; удобство старых тестов не является
+   обязанностью рабочего кода. Общий lifecycle framework не добавлять.
+4. Адаптировать существующие helpers в пяти test-файлах, перечисленных ниже.
+   По анализу изменение рабочего API reader_pool.go/sender_pool.go и переписывание
+   pool-тестов не требуются.
+
+Удаление child contexts — пункт 5 без обязательного порядка относительно 11.
+Если 5 ещё не выполнен, сохранить cancelReader; если выполнен — отменять общий run.
+В обоих случаях отменить Reader и throttler до ожидания обоих done,
+проверить pointer перед доступом и не вводить новый stop-wrapper.
+
+### Полная карта существующих тестовых подмен
+
+Историческая карта baseline T8128, не инструкция сохранять подмены.
+Уточнение владельца и итог T8135 заменяют ниже требования захвата starter,
+ручного producer и искусственных join gates: тесты используют реальные источники,
+pool и каналы; удалённые тестовые механизмы не восстанавливать.
+
+На baseline T8128 найдено **15 определений starter-подмен в пяти файлах**.
+Первая строка таблицы объединяет две подмены. Все успешные возвраты имеют done,
+14 используют no-op reconcile, одна наблюдает reconcile; sourceErrors задаёт одна.
+Ни одна не подменяет aggregateSnapshot. Два успешных return Reset-подмены —
+одно определение. Это инвентаризация существующих тестов, не требование сохранить
+все подмены и сигнатуры. Для каждой строки сохранить нужное поведение и выбрать
+прямой рабочий вызов либо необходимую подмену. Числа строк — anchors baseline;
+после правок искать также по именам тестов/helpers.
+
+| Место в loadgen/ | Проверяемое поведение | Адаптация и сохраняемые детали |
+|---|---|---|
+| event_loop_test.go:62, :119 — SenderInheritsRunContextAcrossPauseResume; StopIsIdempotentWithAndWithoutSender | Наследование Sender context, Pause/Resume, повторный stop с Sender и без него | Вернуть настоящий инициализированный Reader pool; сохранить assertions context, runtime и очередей. |
+| event_loop_test.go:161 — MetricsWindowDrivesChannelRatesAndActualTPS | Ручные три транзакции, metrics tick и скорости | Сохранить захват output/ручной ввод; pool обеспечивает настоящий cancel/join. Согласовать завершение доставки с пунктом 2, а не добавлять новый production барьер. |
+| event_loop_test.go:232 — SenderSnapshotKeepsAppliedControlsAcrossLifecycle | Применённые настройки и live workers Sender | Reader остаётся тихим участником lifecycle, без фонового чтения и лишних метрик. |
+| event_loop_test.go:332 — RunFailureFaultsAndResetClearsSourceError | Две разные ошибки, успешная третья попытка после Reset, отсутствие лишнего старта | Вернуть `nil,error` в двух ошибочных ветках и настоящий pool при успехе. Сохранить проверку arbitrary error через sourceErrorFromStartup. |
+| event_loop_test.go:408 — RuntimeSourceErrorResetClearsFaultedSnapshot | Асинхронный source fault, faulted snapshot, Reset и новый Run | Использовать sourceErrors/существующий reportSourceError реального pool; не вводить отдельный канал-замену. |
+| event_loop_test.go:634 — ResetFromPausedStopsReaderClearsProgressAndStartsFreshRun | Старые/fresh batches, ожидание Reader и throttler | Сохранить ручной producer и gate его завершения в тесте; связать join с существующим wg/done pool. Одно состояние idle не заменяет доказательство ожидания обеих стадий. |
+| event_loop_test.go:873 — ReaderMeasurementsSurvivePauseAndClearOnReset | Измерения на Pause и обнуление Reset | Сохранить ручные записи telemetry/assertions; pool не генерирует посторонние данные. |
+| event_loop_test.go:1164 — startEventLoopForTest | Управляемый producer и число запусков | Сохранить передачу, отмену и ожидание producer. Потребители: StartsPipelineOnce (:540), PauseStopsConsumption (:569), ResetDuringRun (:835), ThrottlerControls (:955), ZeroTPSReset (:1022), SenderChannelTelemetry (:1057). |
+| event_loop_test.go:1194 — ReaderWorkersIdleUpdateAfterResetDoesNotReconcileStoppedPool | Idle update не затрагивает старый pool; новый старт получает 7 | Удалить callback-count assertion как деталь wrapper. Проверять очищенный runtime Reader, завершение старого pool и значение 7 при новом создании. Reconcile-hook в product не добавлять. |
+| event_loop_test.go:1491 — actual-channel harness | Физические очереди, capacity, old/fresh batches, close и detach | Сохранить управляемый producer. Потребители :1305, :1333, :1378, :1432. Сохранять Pause/Resume identity и новые гарантии Reset из пункта 10. Нужность Throttler-подмены оценить по итоговому join/flow-сценарию. |
+| reader_channel_capacity_test.go:88 | cap(output) обоих запусков, idle-only управление | Сохранить захват capacity существующим starter; вернуть настоящий pool. |
+| sender_channel_capacity_test.go:85 | Sender capacity через lifecycle | Только адаптация Reader lifecycle; assertions Sender не ослаблять. |
+| read_batch_size_test.go:76 | Применённый size обоих запусков | Сохранить захват size в существующей функции создания. |
+| runtime_summary_test.go:208 | Поля и периодичность runtime summary | Адаптировать только тихий Reader lifecycle; учесть отдельный пункт 7. |
+
+### Рекомендации по адаптации тестов
+
+- Тихий pool можно создать прежним `startReaderPool` с существующим совпадающим
+  fixture path и нулём workers. Конструктор сейчас принимает 0 и создаёт настоящий
+  ctx/cancel/cond/sourceErrors/done/watcher. Это способ подготовки конкретного
+  теста, не изменение допустимых публичных настроек.
+- Сохранить захват настоящих applied workers/size/capacity в starter. Тихая
+  подготовка не должна скрыть проверяемое значение workers или породить фоновое
+  чтение после команд reconcile. Где проверяются реальные workers, использовать
+  соответствующий настоящий pool и fixtures.
+- Не создавать неполный `&readerPool{done: ...}`: реальные reconcile/stop/snapshot
+  используют ctx, cancel, cond и mutable state. Неполная инициализация может дать panic.
+- Управляемые producer/gates нужны там, где без них нельзя проверить конкретный
+  join/передачу данных. Если producer учитывается в pool.wg, включить его
+  до возможной отмены и начала Wait, затем гарантировать Done
+  и освобождение gates в cleanup. Add после начала завершения недопустим.
+- Не добавлять в product новые hooks, callbacks, интерфейс или другой wrapper
+  ради сохранения старых искусственных assertions.
+
+### Обязательные условия и проверки
+
+- Nil guards нужны в stop/join/reconcile/snapshot/sourceErrors; clearActive
+  присваивает nil. Повторный stop безопасен.
+- **Не закрывать sourceErrors при stop.** Нынешний pool этого не делает;
+  closed channel постоянно выдавал бы zero-value errors в event-loop select.
+  Отключение выполняется nil channel после удаления указателя на старый pool.
+- Отменить обе upstream стадии до ожидания, дождаться обеих до close очередей.
+  Reader done не доказывает завершения throttler; управляемый Reset join-тест сохраняется.
+- После stop snapshot/reconcile/sourceErrors не обращаются к предыдущему pool.
+  Ошибка старта оставляет reader nil; runtime startup cleanup и source diagnostics сохраняются.
+- Существующие reader_pool_test.go проверки напрямую тестируют pool и сохраняются:
+  safe downscale (:324, :396, :464), реактивация (:543), cancellation (:584),
+  закрытие файла после отмены (:611), close errors (:640, :656).
+- Сохранить реальные event-loop проверки corrupt parquet (:462) и startup glob
+  failure (:507), всю карту поведения пяти test-файлов и проверку новых очередей Reset.
+- После адаптации выполнить компиляцию/существующие тесты затронутого пути,
+  race-проверку и независимый review по правилам проекта. Аналитический
+  `CONCLUSIVE` доказывает избыточность wrapper, но не успешность будущей реализации.
+
+**Итоговый scope:** pipeline_runtime.go, control_state.go, связанные сигнатуры
+event_loop.go; event_loop_test.go, reader_channel_capacity_test.go,
+sender_channel_capacity_test.go, read_batch_size_test.go, runtime_summary_test.go.
+Новая Pause/Sender gate, удаление pool mutex/cond, изменение публичного контракта,
+общая перестройка lifecycle и новый API pool в этот пункт не входят.
+
+## 12. Pause живого Sender и фиксация отображаемых метрик
+
+Статус: требования владельца приняты; реализация не выполнена.
+Последующие уточнения владельца заменяют несовместимые выводы T8127 и прежнего
+плана. Нужен обычный синхронизированный затвор, без специальной гарантии
+физического сетевого старта в микроскопическом промежутке. Точный момент клика
+и отдельный UI-протокол для этого не требуются.
+
+### Выбранное поведение
+
+- Sender pool и context живут весь run, включая Pause/Resume.
+- Pause запрещает новые HTTP attempts, включая retries. Проверка затвора
+  выполняется непосредственно перед следующим attempt.
+- Выполняющийся HTTP request не отменяется и может завершиться success/failure.
+  Success учитывается один раз. После failure тот же batch сохраняется;
+  следующая попытка ждёт Resume.
+- Resume будит ожидающих workers того же pool.
+- Reader и throttler продолжают внутреннюю работу до backpressure. Файлы,
+  частичные/удерживаемые batches, workers и очереди сохраняются.
+- На Pause текущая отображаемая картинка метрик фиксируется до Resume/нового run.
+  Если worker показан InFlightWorkers, он остаётся так показан, даже если
+  физический HTTP уже завершился. Это снимок, а не live-состояние workers.
+- Внутренний учёт реальных доставок продолжается и не теряет поздний success.
+- Reset/fault/shutdown отменяют ожидания, ждут все стадии, затем освобождают очереди.
+
+### Затвор и реакция backoff на Pause
+
+В существующем senderPool добавить один resume channel под pool.mu.
+Nil — работа разрешена; nonnil открытый канал — Pause. Pause создаёт его,
+Resume закрывает и ставит nil. Повторные команды no-op по lifecycle.
+
+Перед первой и каждой повторной попыткой под mutex проверить ctx и затвор.
+При Pause ждать close канала либо ctx.Done; после пробуждения заново проверить
+текущее состояние. Не выдавать заранее сохраняемый «допуск» на будущую попытку:
+проверка находится у вызова attempt. При Resume → новой Pause старый wake
+не отменяет проверку нового затвора. Mutex не держать на время HTTP response.
+
+Backoff должен реагировать на Pause сразу, а не только по истечении долгого timer:
+
+- Pause под pool.mu посылает существующим workers сигнал в их worker.wake.
+- Ожидание retry принимает ctx.Done, timer и worker.wake. Wake приводит
+  к проверке затвора; на Pause worker переходит в ожидание Resume.
+- Сохранить deadline задержки и attempt number. Время backoff продолжает течь:
+  после Resume ждать остаток, если deadline ещё впереди; иначе перейти
+  к проверке перед attempt. Pause не сбрасывает jitter/delay и retry clock.
+- Reconcile тоже использует wake: такой сигнал лишь перепроверяет состояние,
+  не завершает задержку досрочно. Закрытие Resume будит всех gate waiters.
+- Нынешний p.wait(ctx, delay) сам по себе не знает о Pause. Заменить его
+  необходимым pool/worker-aware ожиданием; старую wait-подмену не сохранять
+  как ограничение рабочего API.
+
+Polling, global run-control, worker-local paused, pausePending,
+acks и ожидание успешной доставки на Pause не добавлять.
+
+### Владение batches и worker lifecycle
+
+Intake может передать queued batch свободному worker на Pause. Worker остаётся
+busy и удерживает batch до success или настоящей отмены; освобождение слота
+раньше этого может перезаписать принятую работу. Новая очередь не нужна.
+Число таких batches ограничено workers; сохраняются bounded очереди,
+один held batch throttler и прежние локальные Reader buffers.
+
+После failure backoff-state сохраняется до следующего attempt; gate wait
+первого batch остаётся busy. Это внутреннее состояние; на Pause экран показывает
+зафиксированный снимок. Новый публичный enum/field для gate wait не нужен.
+
+Downscale сохраняет draining: busy worker заканчивает batch после Resume
+и уходит по прежней границе. Reconcile не ждёт busy gate waiters; idle workers
+уходят прежним wake-путём. Upscale/reanimation используют тот же pool/gate.
+Настоящая отмена прерывает gate wait, backoff и HTTP.
+
+### Конкретная фиксация метрик
+
+Использовать уже существующий runtimeStatus как значение сохранённого снимка
+в controlRunState. Новую runtimeSummary/paused-metrics wrapper не создавать.
+
+- При обработке cmdPause закрыть затвор и зафиксировать текущие измерения:
+  elapsed, totalTransactions, Reader/Throttler rates, worker categories,
+  counters/depth/blocked durations обоих каналов. Сохранить копию значений.
+- runtimeStatusAt в paused возвращает сохранённые измерения, а не перечитывает
+  фактические pool/queue counters. Lifecycle, source error и изменяемые controls
+  обслуживаются отдельно: команды не должны выглядеть неприменёнными из-за
+  фиксации измерений. Не замораживать весь control-plane response.
+- Поздний success продолжает попадать в внутренний atomic/накопительный учёт;
+  metrics tick не меняет сохранённую картинку. actualTPS не обнулять на Pause
+  и не заменять поздним значением: сохранить последнее показанное измерение.
+- Накопительный учёт реальных доставок не откатывать к копии снимка. Не терять
+  delta при Resume, Reset, fault или shutdown; накопительный Prometheus
+  transactionsTotal сохраняет реальные success, даже когда экран зафиксирован.
+- На Resume убрать снимок и начать новое окно rates от Resume. Накопленные
+  успехи Pause включить в итоги один раз, не превращать весь paused interval
+  в TPS одного короткого окна. Очереди/worker state после Resume показывать живыми.
+- Reset очищает сохранённый снимок вместе с прогрессом после joins. Fault
+  показывает faulted и диагностику по прежнему пути, снимая paused-картинку.
+- Периодический runtime log/CLI status использует тот же runtimeStatus,
+  поэтому paused-измерения не вычисляются заново при каждом чтении.
+
+Фиксация в backend достаточна для текущего UI, который получает runtimeStatus
+опросом. Специальная фиксация в момент клика и изменение JSON schema не нужны.
+Frontend-изменения не включать без конкретного обнаруженного несовместимого пути.
+
+### Команды и файлы
+
+- cmdPause: вместо stopSender закрыть затвор, сохранить картинку и lifecycle.
+  Не ждать завершения HTTP; event loop продолжает snapshot/settings/Resume/Reset/fault.
+- cmdRun из paused: открыть затвор прежнего pool, снять картинку, продолжить elapsed.
+  startSender выполнять только для нового run из idle.
+- Reset из paused останавливает живой Sender через runtime.stop из пункта 10.
+  Reset из running остаётся conflict. Stop отменяет ожидающих и ждёт joins.
+- Удалить paused у сборки throttlerSettings, поле settings.paused и pause updates.
+  Сохранить TPS/mode, installed && TPS==0, pacing, telemetry и ctx/updates.
+- HTTP Pause сохраняет нынешний enqueue-only путь; новая receipt/schema не нужна.
+
+Основной diff: sender_pool.go (затвор и retry wait), pipeline_runtime.go,
+event_loop.go (команды, frozen runtimeStatus и metrics), control_state.go
+(хранение снимка), throttler.go; соответствующие существующие тесты.
+sender_http.go менять только если итоговый путь требует переноса проверки
+к непосредственному attempt; классификация/доставка/закрытие body сохраняются.
+Receiver, config и frontend в механизм не входят.
+
+### Карта адаптации и необходимые проверки
+
+| Нынешняя проверка | Итоговое поведение |
+|---|---|
+| PipelineRuntimeSenderInheritsRunContextAcrossPauseResume | Один pool/context внутри run; Pause не stop/recreate. App cancellation/Reset выполняют join. |
+| SenderSnapshotKeepsAppliedControlsAcrossLifecycle | Applied controls продолжают работать; отображаемые worker categories на Pause неизменны, физический pool жив. Reset освобождает workers и snapshot. |
+| PauseStopsConsumptionUntilRun | Проверять отсутствие новых HTTP attempts, не прекращение dequeue. Выполняющийся request завершается; следующая попытка того же batch ждёт Resume. |
+| ResetFromPausedStopsReaderClearsProgressAndStartsFreshRun; ResetWhileZeroTPSHoldsBatchCompletes; source/startup fault | Сохранить joins, fault diagnostics, очистку старых batches и новые очереди. Включить отмену живого Sender на gate/backoff; ResetDuringRun остаётся conflict. |
+| ThrottlerControlsApplyImmediatelyAndPersistThroughReset; SenderChannelTelemetryFollowsWindowPauseRunAndReset | Сохранить TPS/mode/persistence; различать меняющийся внутренний учёт и неизменные отображаемые rates/counters на Pause. |
+| ReaderMeasurementsSurvivePauseAndClearOnReset; metrics-window/runtime-summary tests | Добавить snapshot-инвариант: повторные ticks/status reads не меняют paused-картинку; Resume показывает реальные итоги и новое rate window. |
+| Actual-channel harness | Identity внутри Pause/Resume, capacity, batch-size telemetry, fresh queues/old-batch cleanup на Reset. Меж-run reuse не возвращать. |
+| Sender retry/cancellation/backpressure/reconcile/downscale tests | При открытом затворе прежнее поведение. Pause во время длинного backoff немедленно переводит ожидание на gate, Resume сохраняет deadline/batch. |
+| StopWaitsForAcceptedBatch; StopLeavesReadyBatchForResume | Сохранить stop/cancel/intake/join сценарии. Не выдавать mock, игнорирующий ctx, за доказательство доставки на Pause. Подмены оценить заново. |
+| Throttler ControlUpdateEndsBlockedWaitWithoutAdmission | Вместо paused=true использовать installed/TPS=0. Сохранить завершение blocked measurement без отправки и тот же удерживаемый batch. Остальные pacing/zeroTPS/cancel/no-credit сценарии остаются. |
+| HTTP commands/CLI/status; sender HTTP; Reader pools | Сохранить wire/command validation, диагностику, реальные resources/cancel. Форма прежних test seams не обязательна. |
+
+Дополнить существующие сценарии проверками существенного нового поведения:
+
+1. HTTP завершается success/failure после Pause; следующий retry не начинается.
+   Тот же batch/ClientID доставляется после Resume, success учитывается один раз.
+2. Несколько gate waiters просыпаются на Resume; повторная Pause перепроверяется.
+   Длинный backoff быстро реагирует на Pause и сохраняет deadline.
+3. Зафиксированный InFlightWorkers и rates/counters не меняются от завершения HTTP,
+   Reader flow и metrics ticks. Внутренний success виден в итогах после Resume.
+4. Reset/app cancel/fault освобождают gate/backoff waiters и ждут завершения.
+   Downscale/upscale на Pause не теряет batch и не переиспользует busy slot.
+
+Ожидания подтверждать управляемыми событиями и результатами, не произвольным sleep.
+Нужную подмену сохранять только если сценарий нельзя разумно проверить через
+реальные pool/HTTP/clock пути; не создавать production hooks ради старого теста.
+Приёмка: Pause не ждёт request, запрещает следующие attempts, сохраняет данные,
+фиксирует картинку; Resume продолжает run, учёт и rates без потерь/двойного счёта.
+Выполнить затронутые Go-проверки и race по конкурентным путям после реализации.
+
+## Оставшиеся решения
+
+Обязательных нерешённых продуктовых вопросов для этих шагов нет.
+Методы throttler включены в реализацию; обязательный порядок не установлен.
+Точность до миллисекунд и особые сетевые гарантии не добавлять. Если фактический
+код выявит новую необходимость изменения wire/UI, показать конкретный путь
+и вернуть владельцу именно этот вопрос, не отменяя его требований.
 
 ## Общие рекомендации разработчику и кодеру
 
@@ -321,15 +685,19 @@ Pause/Resume, проверить нулевой TPS, ошибку старта �
 - Начать с проверок затронутого пути, затем выполнить необходимые общие Go-проверки.
   Для изменений конкурентного кода нужна race-проверка. Не расширять suite и не
   повторять прогоны без новой правки, сбоя или неразрешённой причины.
-- Receiver, frontend и публичные HTTP/JSON/TOML-контракты не меняются этими пунктами.
-  Сохранить доставку одного батча до success/cancel, backpressure и порядок shutdown.
+- В выбранной реализации Receiver, frontend и HTTP/JSON/TOML schema не меняются.
+  Новые требования владельца к Pause и отображению обязательны; если появится
+  конкретная необходимость затронуть UI/контракт, назвать её отдельно.
+  Сохранить batch до success/cancel, backpressure и порядок shutdown.
 
 ## Что сохраняем по результатам аудита
 
 - Mutex/Cond, Sender intake boundary, busy/backoff/draining и уникальное владение
   Reader файлами: они обеспечивают текущие параллельную работу и остановку.
-- Подстановки Reader/throttler/attempt/wait, которые нужны существующим проверкам
-  отмены и ожидания завершения. Одно число реализаций не является основанием удаления.
+- Тестируемость отмены, retries, удержания batches и join. Конкретные подстановки
+  Reader/throttler/attempt/wait сохранять только при доказанной необходимости
+  после рефакторинга. «Бытие определяет тесты, а не наоборот»: инвентаризация
+  нынешних seams не является требованием рабочего кода.
 - Валидацию HTTP и прямых runtime commands, строгую CLI snapshot schema,
   timeout/context, проверку результата CLI set и прежние exit codes.
 - Ограничения переполнения retry durations, учёт каждого blocked writer,

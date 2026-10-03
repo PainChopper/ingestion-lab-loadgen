@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -79,18 +78,9 @@ func TestSenderChannelCapacityValidation(t *testing.T) {
 func TestSenderChannelCapacityIdleOnlyAppliesToThrottlerAndPersistsAfterReset(t *testing.T) {
 	for _, capacity := range []int{0, 1, 8_192} {
 		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
-			requests := make(chan runtimeCommand, 3)
+			harness := startActualChannelEventLoopForTest(t)
+			requests := harness.requests
 			control := requests
-			metrics := make(chan time.Time)
-			read := func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
-				done := make(chan struct{})
-				go func() {
-					defer close(done)
-					<-ctx.Done()
-				}()
-				return readerRun{done: done, reconcile: func(int) {}}, nil
-			}
-			startCustomEventLoopForTest(t, requests, metrics, read)
 			snapshot := func() runtimeStatus {
 				t.Helper()
 				return requestRuntimeStatus(control)
@@ -114,6 +104,9 @@ func TestSenderChannelCapacityIdleOnlyAppliesToThrottlerAndPersistsAfterReset(t 
 				t.Fatalf("invalid direct command status = %d, want conflict", result.status)
 			}
 			execute(runtimeCommand{kind: cmdRun}, commandAccepted)
+			if got := cap(harness.nextSender(t)); got != capacity {
+				t.Fatalf("actual Sender capacity = %d, want %d", got, capacity)
+			}
 			if got := snapshot(); got.Run.State != runStateRunning || got.SenderChannel.Capacity != capacity {
 				t.Fatalf("running snapshot = %+v", got)
 			}
@@ -128,6 +121,9 @@ func TestSenderChannelCapacityIdleOnlyAppliesToThrottlerAndPersistsAfterReset(t 
 				t.Fatalf("reset snapshot = %+v", got)
 			}
 			execute(runtimeCommand{kind: cmdRun}, commandAccepted)
+			if got := cap(harness.nextSender(t)); got != capacity {
+				t.Fatalf("actual Sender capacity = %d, want %d", got, capacity)
+			}
 			if got := snapshot(); got.Run.State != runStateRunning || got.SenderChannel.Capacity != capacity {
 				t.Fatalf("running snapshot after Reset = %+v", got)
 			}
