@@ -71,7 +71,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 
 func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	harness := startActualChannelEventLoopForTest(t)
-	if err := parquet.WriteFile(harness.state.config.Source.Path, make([]Transaction, 50_000)); err != nil {
+	if err := parquet.WriteFile(harness.state.config.Source.Path, make([]Transaction, 4_000)); err != nil {
 		t.Fatal(err)
 	}
 	harness.state.controls.requestedTPS = 0
@@ -90,51 +90,51 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	if got := snapshot().Reader.ReadBatchSize; got != testConfig(t).Reader.ReadBatchSize.Initial {
 		t.Fatalf("initial size = %d, want %d", got, testConfig(t).Reader.ReadBatchSize.Initial)
 	}
-	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 25_000}, commandAccepted)
-	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
-		t.Fatalf("configured size = %d, want 25000", got)
+	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 2_000}, commandAccepted)
+	if got := snapshot().Reader.ReadBatchSize; got != 2_000 {
+		t.Fatalf("configured size = %d, want 2000", got)
 	}
-	if result := executeRuntimeCommand(control, runtimeCommand{kind: cmdSetReadBatchSize, value: 25_001}); result.status != commandConflict {
+	if result := executeRuntimeCommand(control, runtimeCommand{kind: cmdSetReadBatchSize, value: 2_001}); result.status != commandConflict {
 		t.Fatalf("invalid direct command status = %d, want conflict", result.status)
 	}
-	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
+	if got := snapshot().Reader.ReadBatchSize; got != 2_000 {
 		t.Fatalf("size changed after invalid direct command: %d", got)
 	}
 	execute(runtimeCommand{kind: cmdRun}, commandAccepted)
 	select {
 	case batch := <-harness.nextReader(t):
-		if len(batch) != 25_000 {
-			t.Fatalf("real Reader batch size = %d, want 25000", len(batch))
+		if len(batch) != 2_000 {
+			t.Fatalf("real Reader batch size = %d, want 2000", len(batch))
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Reader did not emit a configured batch")
 	}
-	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
-		t.Fatalf("reader size = %d, want 25000", got)
+	if got := snapshot().Reader.ReadBatchSize; got != 2_000 {
+		t.Fatalf("reader size = %d, want 2000", got)
 	}
-	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 30_000}, commandConflict)
-	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
+	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 3_000}, commandConflict)
+	if got := snapshot().Reader.ReadBatchSize; got != 2_000 {
 		t.Fatalf("size changed during Run: %d", got)
 	}
 	control <- runtimeCommand{kind: cmdPause}
 	if got := snapshot().Run.State; got != runStatePaused {
 		t.Fatalf("state after Pause = %s", got)
 	}
-	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 30_000}, commandConflict)
+	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 3_000}, commandConflict)
 	execute(runtimeCommand{kind: cmdReset}, commandAccepted)
-	if got := snapshot(); got.Run.State != runStateIdle || got.Reader.ReadBatchSize != 25_000 {
+	if got := snapshot(); got.Run.State != runStateIdle || got.Reader.ReadBatchSize != 2_000 {
 		t.Fatalf("snapshot after Reset = %+v", got)
 	}
 	execute(runtimeCommand{kind: cmdRun}, commandAccepted)
 	select {
 	case batch := <-harness.nextReader(t):
-		if len(batch) != 25_000 {
-			t.Fatalf("real Reader batch size = %d, want 25000", len(batch))
+		if len(batch) != 2_000 {
+			t.Fatalf("real Reader batch size = %d, want 2000", len(batch))
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Reader did not emit a configured batch")
 	}
-	if got := snapshot().Reader.ReadBatchSize; got != 25_000 {
-		t.Fatalf("reader size after Reset = %d, want 25000", got)
+	if got := snapshot().Reader.ReadBatchSize; got != 2_000 {
+		t.Fatalf("reader size after Reset = %d, want 2000", got)
 	}
 }
