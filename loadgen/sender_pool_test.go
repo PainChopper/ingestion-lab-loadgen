@@ -40,7 +40,7 @@ func TestSenderPoolRetryLogExcludesRequestMarkers(t *testing.T) {
 		if attempts.Add(1) == 2 {
 			return senderAttemptSuccess
 		}
-		return senderAttemptTerminalFailure
+		return senderAttemptFailure
 	}
 	pool.wait = func(context.Context, time.Duration) bool { return true }
 
@@ -71,7 +71,7 @@ func waitForSenderCondition(t *testing.T, condition func() bool) {
 	}
 }
 
-func TestSenderPoolRetriesTerminalFailureUntilSuccess(t *testing.T) {
+func TestSenderPoolRetriesFailureUntilSuccess(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
 	var consumed atomic.Int64
@@ -83,7 +83,7 @@ func TestSenderPoolRetriesTerminalFailureUntilSuccess(t *testing.T) {
 		if attempts.Add(1) == 4 {
 			return senderAttemptSuccess
 		}
-		return senderAttemptTerminalFailure
+		return senderAttemptFailure
 	}
 	pool.wait = func(context.Context, time.Duration) bool {
 		backoffs.Add(1)
@@ -94,7 +94,7 @@ func TestSenderPoolRetriesTerminalFailureUntilSuccess(t *testing.T) {
 	waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
 	<-pool.stop()
 	if attempts.Load() != 4 || backoffs.Load() != 3 {
-		t.Fatalf("terminal failure attempts=%d backoffs=%d, want 4 and 3", attempts.Load(), backoffs.Load())
+		t.Fatalf("failure attempts=%d backoffs=%d, want 4 and 3", attempts.Load(), backoffs.Load())
 	}
 }
 
@@ -151,7 +151,7 @@ func TestSenderPoolParentCancellationStopsRetryBackoff(t *testing.T) {
 	backoffStarted := make(chan struct{})
 	backoffStopped := make(chan struct{})
 	pool.attempt = func(context.Context, []Transaction, int) senderAttemptOutcome {
-		return senderAttemptRetryableFailure
+		return senderAttemptFailure
 	}
 	pool.wait = func(ctx context.Context, _ time.Duration) bool {
 		close(backoffStarted)
@@ -184,7 +184,7 @@ func TestSenderPoolBackpressureWhenAllWorkersRetry(t *testing.T) {
 	release := make(chan struct{}, 3)
 	pool.attempt = func(_ context.Context, _ []Transaction, attempt int) senderAttemptOutcome {
 		if attempt == 1 {
-			return senderAttemptRetryableFailure
+			return senderAttemptFailure
 		}
 		return senderAttemptSuccess
 	}
@@ -350,7 +350,7 @@ func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 		if attempts.Add(1) == 7 {
 			return senderAttemptSuccess
 		}
-		return senderAttemptRetryableFailure
+		return senderAttemptFailure
 	}
 	delays := make(chan time.Duration, 6)
 	pool.wait = func(_ context.Context, delay time.Duration) bool {

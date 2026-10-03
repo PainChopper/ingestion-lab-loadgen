@@ -46,11 +46,11 @@ func TestSenderHTTPAttemptClassifiesResponseStatuses(t *testing.T) {
 		want   senderAttemptOutcome
 	}{
 		{status: http.StatusNoContent, want: senderAttemptSuccess},
-		{status: http.StatusBadRequest, want: senderAttemptTerminalFailure},
-		{status: http.StatusMethodNotAllowed, want: senderAttemptTerminalFailure},
-		{status: http.StatusRequestEntityTooLarge, want: senderAttemptTerminalFailure},
-		{status: http.StatusOK, want: senderAttemptRetryableFailure},
-		{status: http.StatusInternalServerError, want: senderAttemptRetryableFailure},
+		{status: http.StatusBadRequest, want: senderAttemptFailure},
+		{status: http.StatusMethodNotAllowed, want: senderAttemptFailure},
+		{status: http.StatusRequestEntityTooLarge, want: senderAttemptFailure},
+		{status: http.StatusOK, want: senderAttemptFailure},
+		{status: http.StatusInternalServerError, want: senderAttemptFailure},
 	}
 	for _, test := range tests {
 		t.Run(http.StatusText(test.status), func(t *testing.T) {
@@ -107,8 +107,8 @@ func TestSenderHTTPAttemptRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 		}, nil
 	})}
 	attempt := newSenderHTTPAttempt("http://example.test/ingest", client)
-	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptRetryableFailure {
-		t.Fatalf("response outcome = %d, want retryable failure", got)
+	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptFailure {
+		t.Fatalf("response outcome = %d, want failure", got)
 	}
 	if !closed.Load() {
 		t.Fatal("response body was not closed")
@@ -117,8 +117,8 @@ func TestSenderHTTPAttemptRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 	client.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("network failure")
 	})
-	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptRetryableFailure {
-		t.Fatalf("network outcome = %d, want retryable failure", got)
+	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptFailure {
+		t.Fatalf("network outcome = %d, want failure", got)
 	}
 }
 

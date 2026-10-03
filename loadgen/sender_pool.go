@@ -16,8 +16,7 @@ type senderAttemptOutcome uint8
 
 const (
 	senderAttemptSuccess senderAttemptOutcome = iota
-	senderAttemptRetryableFailure
-	senderAttemptTerminalFailure
+	senderAttemptFailure
 	senderAttemptCanceled
 )
 
@@ -320,7 +319,7 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 			return true
 		case senderAttemptCanceled:
 			return false
-		case senderAttemptRetryableFailure, senderAttemptTerminalFailure:
+		case senderAttemptFailure:
 			p.logger.Warn("batch delivery will retry", zap.String("event", "batch_delivery_retry"), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
 		}
 
