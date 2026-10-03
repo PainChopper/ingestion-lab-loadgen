@@ -10,25 +10,26 @@ import (
 type controlState struct {
 	metricsWindow time.Duration
 	run           controlRunState
+	config        config
 	controls      configuredControls
 	telemetry     controlTelemetry
 	logger        *zap.Logger
 }
 
-func newControlState(loadedConfig config, logger *zap.Logger) controlState {
-	metricsWindow := time.Duration(loadedConfig.Metrics.WindowMS.Initial) * time.Millisecond
+func newControlState(cfg config, logger *zap.Logger) controlState {
+	metricsWindow := time.Duration(cfg.Metrics.WindowMS.Initial) * time.Millisecond
 	return controlState{
 		metricsWindow: metricsWindow,
 		run:           controlRunState{lifecycle: newLifecycle()},
+		config:        cfg,
 		controls: configuredControls{
-			readBatchSize:         loadedConfig.Reader.ReadBatchSize.Initial,
-			readerWorkers:         loadedConfig.Reader.Workers.Initial,
-			readerChannelCapacity: loadedConfig.ReaderChannel.Capacity.Initial,
-			senderChannelCapacity: loadedConfig.SenderChannel.Capacity.Initial,
-			requestedTPS:          loadedConfig.Throttler.RequestedTPS.Initial,
-			installationMode:      loadedConfig.Throttler.InstallationMode.Initial,
-			senderWorkers:         loadedConfig.Sender.Workers.Initial,
-			config:                loadedConfig,
+			readBatchSize:         cfg.Reader.ReadBatchSize.Initial,
+			readerWorkers:         cfg.Reader.Workers.Initial,
+			readerChannelCapacity: cfg.ReaderChannel.Capacity.Initial,
+			senderChannelCapacity: cfg.SenderChannel.Capacity.Initial,
+			requestedTPS:          cfg.Throttler.RequestedTPS.Initial,
+			installationMode:      cfg.Throttler.InstallationMode.Initial,
+			senderWorkers:         cfg.Sender.Workers.Initial,
 		},
 		logger: logger,
 	}
@@ -50,7 +51,6 @@ type configuredControls struct {
 	requestedTPS          int
 	installationMode      string
 	senderWorkers         int
-	config                config
 }
 
 type controlTelemetry struct {
@@ -60,10 +60,15 @@ type controlTelemetry struct {
 	sender        senderTelemetry
 }
 
-func (state *controlState) startReaderPool(ctx context.Context, batches chan<- []Transaction, batchSize, workers int) (readerRun, error) {
-	pool, err := startReaderPool(ctx, state.controls.config.Source.Path, batchSize, workers, batches, &state.telemetry.reader, &state.telemetry.readerChannel, state.logger)
-	if err != nil {
-		return readerRun{}, err
-	}
-	return readerRun{done: pool.done, reconcile: pool.reconcile, aggregateSnapshot: pool.aggregateSnapshot, sourceErrors: pool.sourceErrors}, nil
+func (state *controlState) startReaderPool(ctx context.Context, batches chan<- []Transaction, batchSize, workers int) (*readerPool, error) {
+	return startReaderPool(
+		ctx,
+		state.config.Source.Path,
+		batchSize,
+		workers,
+		batches,
+		&state.telemetry.reader,
+		&state.telemetry.readerChannel,
+		state.logger,
+	)
 }

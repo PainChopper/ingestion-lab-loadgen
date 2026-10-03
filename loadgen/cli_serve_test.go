@@ -61,7 +61,7 @@ func TestNewControlStateStartsIdleWithLoadedConfig(t *testing.T) {
 	if got := state.run.lifecycle.currentState(); got != runStateIdle {
 		t.Fatalf("initial lifecycle state = %q, want %q", got, runStateIdle)
 	}
-	if state.controls.config.Source.Path != loadedConfig.Source.Path {
+	if state.config.Source.Path != loadedConfig.Source.Path {
 		t.Fatal("serve state did not retain loaded config")
 	}
 	wantMetricsWindow := time.Duration(loadedConfig.Metrics.WindowMS.Initial) * time.Millisecond

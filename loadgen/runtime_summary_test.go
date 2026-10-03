@@ -205,14 +205,7 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoop(requests, metrics, NewPrometheusMetrics(), func(ctx context.Context, _ chan<- []Transaction, _, _ int) (readerRun, error) {
-			readerDone := make(chan struct{})
-			go func() {
-				<-ctx.Done()
-				close(readerDone)
-			}()
-			return readerRun{done: readerDone, reconcile: func(int) {}}, nil
-		})
+		state.eventLoopContext(context.Background(), requests, metrics, NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() {
 		close(requests)

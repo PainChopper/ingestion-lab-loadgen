@@ -11,12 +11,8 @@ type throttlerSettings struct {
 	paused       bool
 }
 
-func startThrottler(
+func (runtime *pipelineRuntime) startThrottler(
 	ctx context.Context,
-	readerBatches <-chan []Transaction,
-	senderBatches chan<- []Transaction,
-	readerChannelTelemetry *channelTelemetry,
-	senderChannelTelemetry *channelTelemetry,
 	initial throttlerSettings,
 ) (<-chan struct{}, chan<- throttlerSettings) {
 	done := make(chan struct{})
@@ -30,12 +26,17 @@ func startThrottler(
 				return
 			case update := <-updates:
 				settings = update
-			case batch, ok := <-readerBatches:
+			case batch, ok := <-runtime.readerBatches:
 				if !ok {
 					return
 				}
-				readerChannelTelemetry.recordReceive(len(batch))
-				if !forwardThrottledBatch(ctx, senderBatches, senderChannelTelemetry, batch, updates, &settings) {
+				runtime.state.telemetry.readerChannel.recordReceive(len(batch))
+				if !runtime.forwardThrottledBatch(
+					ctx,
+					batch,
+					updates,
+					&settings,
+				) {
 					return
 				}
 			}
@@ -44,14 +45,13 @@ func startThrottler(
 	return done, updates
 }
 
-func forwardThrottledBatch(
+func (runtime *pipelineRuntime) forwardThrottledBatch(
 	ctx context.Context,
-	senderBatches chan<- []Transaction,
-	senderChannel *channelTelemetry,
 	batch []Transaction,
 	updates <-chan throttlerSettings,
 	settings *throttlerSettings,
 ) bool {
+	senderChannel := &runtime.state.telemetry.senderChannel
 	waitStarted := time.Now()
 	for {
 		if settings.paused || (settings.mode == throttlerInstalled && settings.requestedTPS == 0) {
@@ -90,7 +90,7 @@ func forwardThrottledBatch(
 			*settings = update
 			waitStarted = time.Now()
 			continue
-		case senderBatches <- batch:
+		case runtime.senderBatches <- batch:
 			senderChannel.recordSend(len(batch))
 			return true
 		default:
@@ -105,7 +105,7 @@ func forwardThrottledBatch(
 			senderChannel.finishBlocked(time.Now())
 			*settings = update
 			waitStarted = time.Now()
-		case senderBatches <- batch:
+		case runtime.senderBatches <- batch:
 			senderChannel.finishBlocked(time.Now())
 			senderChannel.recordSend(len(batch))
 			return true

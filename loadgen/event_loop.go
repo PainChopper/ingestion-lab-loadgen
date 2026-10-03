@@ -9,47 +9,31 @@ import (
 	"go.uber.org/zap"
 )
 
-func (state *controlState) eventLoop(
-	requests <-chan runtimeCommand,
-	metrics <-chan time.Time,
-	promMetrics *PrometheusMetrics,
-	read readerStarter,
-) {
-	state.eventLoopWithThrottlerContext(context.Background(), requests, metrics, promMetrics, read, startThrottler)
-}
-
 func (state *controlState) runEventLoop(
 	ctx context.Context,
 	requests <-chan runtimeCommand,
 	metrics <-chan time.Time,
 	promMetrics *PrometheusMetrics,
 ) {
-	state.eventLoopWithThrottlerContext(ctx, requests, metrics, promMetrics, state.startReaderPool, startThrottler)
+	state.eventLoopContext(
+		ctx,
+		requests,
+		metrics,
+		promMetrics,
+	)
 }
 
-func (state *controlState) eventLoopWithThrottler(
-	requests <-chan runtimeCommand,
-	metrics <-chan time.Time,
-	promMetrics *PrometheusMetrics,
-	read readerStarter,
-	start throttlerStarter,
-) {
-	state.eventLoopWithThrottlerContext(context.Background(), requests, metrics, promMetrics, read, start)
-}
-
-func (state *controlState) eventLoopWithThrottlerContext(
+func (state *controlState) eventLoopContext(
 	ctx context.Context,
 	requests <-chan runtimeCommand,
 	metrics <-chan time.Time,
 	promMetrics *PrometheusMetrics,
-	read readerStarter,
-	start throttlerStarter,
 ) {
 	logger := state.logger
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	runtime := newPipelineRuntime(state, read, start)
+	runtime := newPipelineRuntime(state)
 	nextRuntimeSummaryAt := time.Now().Add(runtimeSummaryInterval)
 	defer func() {
 		runtime.stop()
@@ -71,7 +55,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				if state.run.lifecycle.currentState() == runStateIdle {
 					err := runtime.start(ctx)
 					if err != nil {
-						sourceError := sourceErrorFromStartup(err, state.controls.config.Source.Path)
+						sourceError := sourceErrorFromStartup(err, state.config.Source.Path)
 						logger.Error("run failed to start", zap.String("event", "run_failed"), zap.String("operation", sourceError.Operation))
 						state.run.sourceError = &sourceError
 						state.run.lifecycle.faultStart()
@@ -130,7 +114,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				result := runtimeCommandReceipt{status: commandAccepted}
 				if state.run.lifecycle.currentState() != runStateIdle {
 					result.status = commandConflict
-				} else if !validReadBatchSize(state.controls.config, command.value) {
+				} else if !validReadBatchSize(state.config, command.value) {
 					result.status = commandConflict
 				} else {
 					state.controls.readBatchSize = command.value
@@ -138,7 +122,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				command.respond(result)
 			case cmdSetReaderWorkers:
 				result := runtimeCommandReceipt{status: commandAccepted}
-				if !state.controls.config.Reader.Workers.contains(command.value) {
+				if !state.config.Reader.Workers.contains(command.value) {
 					result.status = commandConflict
 				} else {
 					state.controls.readerWorkers = command.value
@@ -148,7 +132,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			case cmdSetReaderChannelCapacity:
 				result := runtimeCommandReceipt{status: commandAccepted}
 				if state.run.lifecycle.currentState() != runStateIdle ||
-					!validReaderChannelCapacity(state.controls.config, command.value) {
+					!validReaderChannelCapacity(state.config, command.value) {
 					result.status = commandConflict
 				} else {
 					state.controls.readerChannelCapacity = command.value
@@ -157,7 +141,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 			case cmdSetSenderChannelCapacity:
 				result := runtimeCommandReceipt{status: commandAccepted}
 				if state.run.lifecycle.currentState() != runStateIdle ||
-					!validSenderChannelCapacity(state.controls.config, command.value) {
+					!validSenderChannelCapacity(state.config, command.value) {
 					result.status = commandConflict
 				} else {
 					state.controls.senderChannelCapacity = command.value
@@ -165,7 +149,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				command.respond(result)
 			case cmdSetRequestedTPS:
 				result := runtimeCommandReceipt{status: commandAccepted}
-				if !state.controls.config.Throttler.RequestedTPS.contains(command.value) {
+				if !state.config.Throttler.RequestedTPS.contains(command.value) {
 					result.status = commandConflict
 				} else if state.requestedTPS() != command.value {
 					state.controls.requestedTPS = command.value
@@ -180,7 +164,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				command.respond(result)
 			case cmdSetThrottlerInstallationMode:
 				result := runtimeCommandReceipt{status: commandAccepted}
-				if !state.controls.config.Throttler.InstallationMode.contains(command.textValue) {
+				if !state.config.Throttler.InstallationMode.contains(command.textValue) {
 					result.status = commandConflict
 				} else if state.installationMode() != command.textValue {
 					state.controls.installationMode = command.textValue
@@ -193,7 +177,7 @@ func (state *controlState) eventLoopWithThrottlerContext(
 				}
 				command.respond(result)
 			case cmdSetSenderWorkers:
-				if !state.controls.config.Sender.Workers.contains(command.value) {
+				if !state.config.Sender.Workers.contains(command.value) {
 					command.respond(runtimeCommandReceipt{status: commandConflict})
 					continue
 				}
@@ -257,7 +241,7 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 			DrainingBlockedWorkers: readerPool.drainingBlockedWorkers,
 			ReadBatchSize:          state.readBatchSize(), ReadTps: reader.readTPS,
 			RowsRead:        reader.rowsRead,
-			SourceDirectory: readerSourceDirectory(state.controls.config.Source.Path),
+			SourceDirectory: readerSourceDirectory(state.config.Source.Path),
 			SourceError:     state.run.sourceError,
 		},
 		Throttler: runtimeThrottlerStatus{
@@ -305,7 +289,7 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 			ReceivedBatchesPerSecond:      senderChannel.receivedBatchesPerSecond,
 			ReceivedTransactionsPerSecond: senderChannel.receivedTransactionsPerSecond,
 		},
-		Config: runtimeConfigStatusFromConfig(state.controls.config),
+		Config: runtimeConfigStatusFromConfig(state.config),
 	}
 }
 
