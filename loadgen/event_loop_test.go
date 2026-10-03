@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,6 +42,45 @@ func TestElapsedMsUsesRunStartAndAccumulatedTime(t *testing.T) {
 	}
 }
 
+func TestPausedFaultPreservesElapsedAndCollectsLateSuccessOnce(t *testing.T) {
+	state := newTestControlState(t)
+	start := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.UTC)
+	state.run.lifecycle.run()
+	state.run.runStartedAt = start
+	state.pauseElapsed(start.Add(time.Second))
+	state.run.lifecycle.pause()
+	state.run.pausedStatus = runtimeStatus{Run: runtimeRunStatus{ElapsedMs: 1_000}}
+	if !state.run.lifecycle.fault() {
+		t.Fatal("Pause did not allow source fault")
+	}
+	state.pauseElapsed(start.Add(time.Hour))
+	state.run.sourceError = &readerSourceError{Category: "source", Operation: "read", Message: "corrupt"}
+	var completed atomic.Int64
+	completed.Add(3)
+	metrics := NewPrometheusMetrics()
+	state.resetFaultedMeasurements(&completed, metrics)
+	state.resetFaultedMeasurements(&completed, metrics)
+	metric := &dto.Metric{}
+	if err := metrics.transactionsTotal.Write(metric); err != nil {
+		t.Fatal(err)
+	}
+	status := state.runtimeStatusAt(newPipelineRuntime(&state), start.Add(2*time.Hour))
+	if status.Run.State != runStateFaulted || status.Run.ElapsedMs != 1_000 ||
+		status.Run.TotalTransactions != 3 || status.Reader.SourceError == nil ||
+		state.run.pausedStatus.Run.ElapsedMs != 0 || metric.GetCounter().GetValue() != 3 {
+		t.Fatalf("faulted status=%+v cumulative=%v", status, metric.GetCounter().GetValue())
+	}
+	completed.Add(2)
+	state.resetProgress(&completed, metrics)
+	if err := metrics.transactionsTotal.Write(metric); err != nil {
+		t.Fatal(err)
+	}
+	if state.run.totalTransactions != 0 || state.run.elapsedBeforeRun != 0 ||
+		state.run.sourceError != nil || metric.GetCounter().GetValue() != 5 {
+		t.Fatalf("Reset progress=%+v cumulative=%v", state.run, metric.GetCounter().GetValue())
+	}
+}
+
 func TestRunEventLoopStopsWhenApplicationContextIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	state := newTestControlState(t)
@@ -68,14 +108,15 @@ func TestPipelineRuntimeSenderInheritsRunContextAcrossPauseResume(t *testing.T) 
 	}
 	runtime.startSender()
 	firstPool := runtime.senderPool
-	runtime.stopSender()
+	firstContext := firstPool.ctx
+	firstPool.pause()
 	if runtime.runContext.Err() != nil {
 		t.Fatal("Pause canceled the pipeline run context")
 	}
 
-	runtime.startSender()
-	if runtime.senderPool == firstPool {
-		t.Fatal("Resume reused the stopped Sender pool")
+	firstPool.resumeRun()
+	if runtime.senderPool != firstPool || runtime.senderPool.ctx != firstContext {
+		t.Fatal("Resume replaced the Sender pool/context")
 	}
 	stopped := make(chan struct{})
 	runtime.senderPool.attempt = func(ctx context.Context, _ []Transaction, _ int) senderAttemptOutcome {
@@ -168,11 +209,27 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 	if got := snapshot.SenderChannel; got.ReceivedTransactionsPerSecond != float64(got.ReceivedTransactionsTotal)/state.metricsWindow.Seconds() {
 		t.Fatalf("Sender channel rate = %+v", got)
 	}
+	requests <- runtimeCommand{kind: cmdPause}
+	waitForState(t, requests, runStatePaused)
+	frozen := requestRuntimeStatus(requests)
+	metrics <- time.Now().Add(time.Minute)
+	paused := requestRuntimeStatus(requests)
+	if paused.Run != frozen.Run || paused.Sender != frozen.Sender || paused.Reader != frozen.Reader ||
+		paused.ReaderChannel != frozen.ReaderChannel || paused.SenderChannel != frozen.SenderChannel ||
+		gaugeValue(t, promMetrics.actualTPS) != 10 {
+		t.Fatalf("paused measurements/gauge changed: %+v TPS=%v", paused, gaugeValue(t, promMetrics.actualTPS))
+	}
 	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 2_400_000}); result.status != commandAccepted {
 		t.Fatalf("set TPS = %+v", result)
 	}
 	if got := gaugeValue(t, promMetrics.targetTPS); got != 2_400_000 {
 		t.Fatalf("target TPS = %v", got)
+	}
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {
+		t.Fatal(result.err)
+	}
+	if got := gaugeValue(t, promMetrics.actualTPS); got != 0 {
+		t.Fatalf("fresh Resume actual TPS = %v, want 0", got)
 	}
 }
 
@@ -221,7 +278,19 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 	}
 	assertSender(runStateRunning, 3)
 	requests <- runtimeCommand{kind: cmdPause}
-	assertSender(runStatePaused, 0)
+	assertSender(runStatePaused, 3)
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetSenderWorkers, value: 7}); result.status != commandAccepted {
+		t.Fatalf("paused Sender workers = %+v", result)
+	}
+	if got := requestRuntimeStatus(requests).Sender; got.Workers != 7 || got.LiveWorkers != 3 {
+		t.Fatalf("paused live controls/frozen categories = %+v", got)
+	}
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.status != commandAccepted {
+		t.Fatalf("Reset = %+v", result)
+	}
+	if got := requestRuntimeStatus(requests).Sender; got.Workers != 7 || got.LiveWorkers != 0 {
+		t.Fatalf("reset Sender = %+v", got)
+	}
 }
 
 func gaugeValue(t *testing.T, gauge interface{ Write(*dto.Metric) error }) float64 {
@@ -456,37 +525,59 @@ func TestRunCommandStartsPipelineOnce(t *testing.T) {
 	}
 }
 
-func TestPauseStopsConsumptionUntilRun(t *testing.T) {
-	requests, metrics := startEventLoopForTest(t)
+func TestPauseKeepsInFlightHTTPAndProcessesCommandsUntilRun(t *testing.T) {
+	state := newTestControlState(t)
+	if err := parquet.WriteFile(state.config.Source.Path, []Transaction{{ClientID: "retained"}}); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch []Transaction
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Error(err)
+			return
+		}
+		entered <- batch[0].ClientID
+		select {
+		case <-release:
+			w.WriteHeader(http.StatusNoContent)
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	state.config.Sender.API.URL = server.URL
+	requests := make(chan runtimeCommand)
+	metrics := make(chan time.Time)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		state.eventLoopContext(context.Background(), requests, metrics, NewPrometheusMetrics())
+	}()
+	defer func() { close(requests); <-done }()
 	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {
 		t.Fatal(result.err)
 	}
-	deadline := time.After(time.Second)
-	for requestRuntimeStatus(requests).SenderChannel.ReceivedTransactionsTotal == 0 {
-		select {
-		case <-deadline:
-			t.Fatal("Sender did not consume real Reader rows")
-		case <-time.After(time.Millisecond):
-		}
+	if id := <-entered; id != "retained" {
+		t.Fatalf("in-flight ClientID = %q", id)
 	}
 	requests <- runtimeCommand{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
 	before := requestRuntimeStatus(requests)
+	if before.Sender.InFlightWorkers != 1 {
+		t.Fatalf("Pause snapshot = %+v", before.Sender)
+	}
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 0}); result.status != commandAccepted {
+		t.Fatalf("setting with pending HTTP = %+v", result)
+	}
 	metrics <- time.Now()
-	if got := requestRuntimeStatus(requests); got.SenderChannel.ReceivedTransactionsTotal != before.SenderChannel.ReceivedTransactionsTotal {
-		t.Fatal("Pause admitted another Sender batch")
+	if got := requestRuntimeStatus(requests); got.Sender != before.Sender || got.Throttler.RequestedTps != 0 {
+		t.Fatalf("paused snapshot/live setting = %+v", got)
 	}
 	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {
 		t.Fatal(result.err)
 	}
-	deadline = time.After(time.Second)
-	for requestRuntimeStatus(requests).SenderChannel.ReceivedTransactionsTotal <= before.SenderChannel.ReceivedTransactionsTotal {
-		select {
-		case <-deadline:
-			t.Fatal("Resume did not resume consumption")
-		case <-time.After(time.Millisecond):
-		}
-	}
+	close(release)
 }
 
 func TestPipelineRuntimeStopJoinsStagesClearsProgressAndStartsFreshRun(t *testing.T) {
@@ -521,13 +612,15 @@ func TestPipelineRuntimeStopJoinsStagesClearsProgressAndStartsFreshRun(t *testin
 	if got := runtime.terminallyCompletedTransactionsSinceTick.Load(); got != 1 {
 		t.Fatalf("completed transactions = %d, want 1", got)
 	}
-	runtime.throttler.update(state.throttlerSettings(true))
+	state.controls.installationMode = throttlerInstalled
+	state.controls.requestedTPS = 0
+	runtime.throttler.update(state.throttlerSettings())
 	readerBatches <- []Transaction{{ClientID: "old-held"}}
 	deadline := time.After(time.Second)
 	for state.telemetry.readerChannel.snapshot(time.Now()).receivedBatchesTotal != 2 {
 		select {
 		case <-deadline:
-			t.Fatal("Throttler did not hold the paused batch")
+			t.Fatal("Throttler did not hold the zero-TPS batch")
 		default:
 		}
 	}
@@ -561,6 +654,7 @@ func TestPipelineRuntimeStopJoinsStagesClearsProgressAndStartsFreshRun(t *testin
 	if runtime.terminallyCompletedTransactionsSinceTick.Load() != 0 || state.run.totalTransactions != 0 {
 		t.Fatal("reset retained progress")
 	}
+	state.controls.installationMode = throttlerBypass
 	if err := runtime.start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -638,6 +732,8 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 		t.Fatal("readerChannel send failed")
 	}
 	state.telemetry.reader.recordRead(2)
+	metrics <- time.Now()
+	before := requestRuntimeStatus(requests)
 	requests <- runtimeCommand{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
 	state.telemetry.reader.recordRead(3)
@@ -646,24 +742,31 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	statusReply := make(chan runtimeStatus, 1)
 	requests <- runtimeCommand{kind: getRuntimeStatus, statusReply: statusReply}
 	snapshot := <-statusReply
-	if snapshot.Reader.RowsRead != 5 || snapshot.ReaderChannel.Capacity != 2 ||
+	if snapshot.Reader.RowsRead != 2 || snapshot.ReaderChannel.Capacity != 2 ||
 		snapshot.ReaderChannel.DepthBatches != 1 || snapshot.ReaderChannel.BufferedTransactions != 2 ||
 		snapshot.ReaderChannel.SentBatchesTotal != 1 || snapshot.ReaderChannel.SentTransactionsTotal != 2 ||
 		snapshot.ReaderChannel.SentBatchesPerSecond != 1 || snapshot.ReaderChannel.SentTransactionsPerSecond != 2 {
 		t.Fatalf("paused snapshot = %+v, want reader and readerChannel measurements", snapshot)
 	}
+	if snapshot.Reader.ReadTps != before.Reader.ReadTps {
+		t.Fatalf("Pause changed last Reader rate: %v -> %v", before.Reader.ReadTps, snapshot.Reader.ReadTps)
+	}
+	frozen := snapshot
 	state.telemetry.readerChannel.recordReceive(len(<-readerChannel))
 	metrics <- time.Now()
 	requests <- runtimeCommand{kind: getRuntimeStatus, statusReply: statusReply}
 	snapshot = <-statusReply
-	if snapshot.ReaderChannel.ReceivedBatchesTotal != 1 || snapshot.ReaderChannel.ReceivedTransactionsTotal != 2 ||
-		snapshot.ReaderChannel.SentBatchesPerSecond != 0 || snapshot.ReaderChannel.SentTransactionsPerSecond != 0 ||
-		snapshot.ReaderChannel.ReceivedBatchesPerSecond != 1 || snapshot.ReaderChannel.ReceivedTransactionsPerSecond != 2 {
-		t.Fatalf("drained readerChannel snapshot = %+v", snapshot)
+	if snapshot.ReaderChannel != frozen.ReaderChannel || snapshot.Reader != frozen.Reader || snapshot.Run != frozen.Run {
+		t.Fatalf("paused measurements changed after Reader flow/tick: %+v", snapshot)
 	}
 
 	requests <- runtimeCommand{kind: cmdRun}
 	waitForState(t, requests, runStateRunning)
+	resumed := requestRuntimeStatus(requests)
+	if resumed.Reader.RowsRead != 5 || resumed.Reader.ReadTps != 0 ||
+		resumed.ReaderChannel.ReceivedTransactionsTotal != 2 || resumed.ReaderChannel.ReceivedTransactionsPerSecond != 0 {
+		t.Fatalf("Resume totals/rate window = %+v", resumed)
+	}
 	requests <- runtimeCommand{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
 	resetReply := make(chan runtimeCommandReceipt, 1)
@@ -790,7 +893,7 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 	}
 	metrics <- time.Now()
 	paused := requestRuntimeStatus(requests)
-	if paused.SenderChannel.SentTransactionsTotal != active.SenderChannel.SentTransactionsTotal || paused.SenderChannel.ReceivedTransactionsTotal != active.SenderChannel.ReceivedTransactionsTotal || paused.Throttler.AdmittedTps != 0 || paused.SenderChannel.ReceivedTransactionsPerSecond != 0 {
+	if paused.SenderChannel != active.SenderChannel || paused.Throttler != active.Throttler || paused.Run != active.Run || paused.Sender != active.Sender {
 		t.Fatalf("paused telemetry = %+v", paused)
 	}
 	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {

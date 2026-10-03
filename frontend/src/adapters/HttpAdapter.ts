@@ -644,7 +644,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   if (!isRangeValue(sender.workers, config.senderWorkers) ||
     !isWireInteger(sender.liveWorkers) || !isWireInteger(sender.idleWorkers) || !isWireInteger(sender.inFlightWorkers) || !isWireInteger(sender.backoffWorkers) || !isWireInteger(sender.drainingWorkers) || !isWireInteger(sender.drainingIdleWorkers) || !isWireInteger(sender.drainingInFlightWorkers) || !isWireInteger(sender.drainingBackoffWorkers) ||
     sender.liveWorkers !== sender.idleWorkers + sender.inFlightWorkers + sender.backoffWorkers || sender.drainingWorkers !== sender.drainingIdleWorkers + sender.drainingInFlightWorkers + sender.drainingBackoffWorkers || sender.drainingIdleWorkers > sender.idleWorkers || sender.drainingInFlightWorkers > sender.inFlightWorkers || sender.drainingBackoffWorkers > sender.backoffWorkers ||
-    ((run.state === 'idle' || run.state === 'paused' || run.state === 'faulted') &&
+    ((run.state === 'idle' || run.state === 'faulted') &&
       (sender.liveWorkers !== 0 || sender.drainingWorkers !== 0))) {
     throw new Error('snapshot sender values are invalid')
   }

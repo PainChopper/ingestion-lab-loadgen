@@ -260,6 +260,12 @@ func TestReaderChannelTelemetryCountsSuccessfulSendAndSamplesWindow(t *testing.T
 	}
 
 	telemetry.recordReceive(len(<-batches))
+	telemetry.startInterval()
+	telemetry.sample(time.Second)
+	if resumed := telemetry.snapshot(time.Now()); resumed.receivedTransactionsTotal != 5 ||
+		resumed.receivedTransactionsPerSecond != 0 || resumed.sentTransactionsTotal != 5 {
+		t.Fatalf("new interval included paused deltas or lost totals: %+v", resumed)
+	}
 	telemetry.clearMeasurements()
 	telemetry.sample(time.Second)
 	reset := telemetry.snapshot(time.Now())

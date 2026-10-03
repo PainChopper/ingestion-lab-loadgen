@@ -32,6 +32,13 @@ func TestReaderTelemetryMeasuresElapsedIntervals(t *testing.T) {
 	if got.readTPS != 0 || got.rowsRead != 9 {
 		t.Fatalf("idle interval = %+v, want zero rate and 9 rows", got)
 	}
+	telemetry.recordRead(5)
+	telemetry.startInterval(start.Add(10 * time.Second))
+	telemetry.recordRead(2)
+	telemetry.sample(start.Add(11 * time.Second))
+	if got := telemetry.snapshot(); got.rowsRead != 16 || got.readTPS != 2 {
+		t.Fatalf("new interval included paused rows or lost totals: %+v", got)
+	}
 
 	telemetry.reset()
 	got = telemetry.snapshot()

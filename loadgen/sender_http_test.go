@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestSenderHTTPAttemptPostsJSONBatch(t *testing.T) {
@@ -84,9 +83,9 @@ func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 			var channel channelTelemetry
 			var consumed atomic.Int64
 			config := testConfig(t).Sender
+			config.Retry.DelaysMS = []int{1}
 			config.API.URL = server.URL
 			pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
-			pool.wait = func(context.Context, time.Duration) bool { return true }
 			batches <- []Transaction{{ClientID: "invalid"}}
 			waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
 			<-pool.stop()

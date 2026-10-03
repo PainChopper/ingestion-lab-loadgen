@@ -37,6 +37,7 @@ func (state *controlState) eventLoopContext(
 	nextRuntimeSummaryAt := time.Now().Add(runtimeSummaryInterval)
 	defer func() {
 		runtime.stop()
+		state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
 	}()
 
 	for {
@@ -70,9 +71,16 @@ func (state *controlState) eventLoopContext(
 				if state.run.lifecycle.run() {
 					state.run.runStartedAt = time.Now()
 					if resuming {
-						runtime.throttler.update(state.throttlerSettings(false))
+						state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+						state.run.pausedStatus = runtimeStatus{}
+						state.telemetry.reader.startInterval(state.run.runStartedAt)
+						state.telemetry.readerChannel.startInterval()
+						state.telemetry.senderChannel.startInterval()
+						promMetrics.actualTPS.Set(0)
+						runtime.senderPool.resumeRun()
+					} else {
+						runtime.startSender()
 					}
-					runtime.startSender()
 					if resuming {
 						logger.Info("run resumed", zap.String("event", "run_resumed"))
 					} else {
@@ -84,14 +92,12 @@ func (state *controlState) eventLoopContext(
 				if state.run.lifecycle.currentState() != runStateRunning {
 					continue
 				}
-				runtime.stopSender()
-				state.pauseElapsed(time.Now())
-				delta := runtime.terminallyCompletedTransactionsSinceTick.Swap(0)
-				state.run.totalTransactions += delta
-				promMetrics.transactionsTotal.Add(float64(delta))
-				promMetrics.actualTPS.Set(0)
+				runtime.senderPool.pause()
+				now := time.Now()
+				state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+				state.run.pausedStatus = state.runtimeStatusAt(runtime, now)
+				state.pauseElapsed(now)
 				state.run.lifecycle.pause()
-				runtime.throttler.update(state.throttlerSettings(true))
 				logger.Info("run paused", zap.String("event", "run_paused"))
 			case cmdReset:
 				result := runtimeCommandReceipt{status: commandAccepted}
@@ -154,7 +160,7 @@ func (state *controlState) eventLoopContext(
 				} else if state.controls.requestedTPS != command.value {
 					state.controls.requestedTPS = command.value
 					promMetrics.targetTPS.Set(float64(state.controls.requestedTPS))
-					runtime.throttler.update(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
+					runtime.throttler.update(state.throttlerSettings())
 					logger.Info(
 						"throttler rate changed",
 						zap.String("event", "throttler_rate_changed"),
@@ -168,7 +174,7 @@ func (state *controlState) eventLoopContext(
 					result.status = commandConflict
 				} else if state.controls.installationMode != command.textValue {
 					state.controls.installationMode = command.textValue
-					runtime.throttler.update(state.throttlerSettings(state.run.lifecycle.currentState() == runStatePaused))
+					runtime.throttler.update(state.throttlerSettings())
 					logger.Info(
 						"throttler mode changed",
 						zap.String("event", "throttler_mode_changed"),
@@ -197,13 +203,13 @@ func (state *controlState) eventLoopContext(
 			state.resetFaultedMeasurements(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
 
 		case now := <-metrics:
-			state.telemetry.reader.sample(now)
-			state.telemetry.readerChannel.sample(state.metricsWindow)
-			state.telemetry.senderChannel.sample(state.metricsWindow)
-			delta := runtime.terminallyCompletedTransactionsSinceTick.Swap(0)
-			state.run.totalTransactions += delta
-			promMetrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
-			promMetrics.transactionsTotal.Add(float64(delta))
+			delta := state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+			if state.run.lifecycle.currentState() != runStatePaused {
+				state.telemetry.reader.sample(now)
+				state.telemetry.readerChannel.sample(state.metricsWindow)
+				state.telemetry.senderChannel.sample(state.metricsWindow)
+				promMetrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
+			}
 			if !now.Before(nextRuntimeSummaryAt) {
 				nextRuntimeSummaryAt = now.Add(runtimeSummaryInterval)
 				logger.Info(
@@ -217,6 +223,17 @@ func (state *controlState) eventLoopContext(
 
 func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Time) runtimeStatus {
 	runState := state.run.lifecycle.currentState()
+	if runState == runStatePaused {
+		status := state.run.pausedStatus
+		status.Run.State = runState
+		status.Reader.SourceError = state.run.sourceError
+		status.Reader.Workers = state.controls.readerWorkers
+		status.Reader.ReadBatchSize = state.controls.readBatchSize
+		status.Sender.Workers = state.controls.senderWorkers
+		status.Throttler.RequestedTps = state.controls.requestedTPS
+		status.Throttler.InstallationMode = state.controls.installationMode
+		return status
+	}
 	reader := state.telemetry.reader.snapshot()
 	readerPool, senderPool := runtime.snapshots()
 	readerChannel := state.telemetry.readerChannel.snapshot(now)
@@ -293,15 +310,15 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 	}
 }
 
-func (state *controlState) throttlerSettings(paused bool) throttlerSettings {
+func (state *controlState) throttlerSettings() throttlerSettings {
 	return throttlerSettings{
 		requestedTPS: state.controls.requestedTPS,
 		mode:         state.controls.installationMode,
-		paused:       paused,
 	}
 }
 
 func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTick *atomic.Int64, promMetrics *PrometheusMetrics) {
+	state.collectCompleted(terminallyCompletedTransactionsSinceTick, promMetrics)
 	state.telemetry.reader.reset()
 	state.telemetry.readerChannel.clearMeasurements()
 	state.telemetry.senderChannel.clearMeasurements()
@@ -310,6 +327,7 @@ func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTic
 	state.run.elapsedBeforeRun = 0
 	state.run.runStartedAt = time.Time{}
 	state.run.sourceError = nil
+	state.run.pausedStatus = runtimeStatus{}
 	promMetrics.actualTPS.Set(0)
 }
 
@@ -317,11 +335,23 @@ func (state *controlState) resetFaultedMeasurements(
 	terminallyCompletedTransactionsSinceTick *atomic.Int64,
 	promMetrics *PrometheusMetrics,
 ) {
+	state.collectCompleted(terminallyCompletedTransactionsSinceTick, promMetrics)
+	state.run.pausedStatus = runtimeStatus{}
 	state.telemetry.reader.reset()
 	state.telemetry.readerChannel.clearMeasurements()
 	state.telemetry.senderChannel.clearMeasurements()
 	terminallyCompletedTransactionsSinceTick.Store(0)
 	promMetrics.actualTPS.Set(0)
+}
+
+func (state *controlState) collectCompleted(
+	completed *atomic.Int64,
+	promMetrics *PrometheusMetrics,
+) int64 {
+	delta := completed.Swap(0)
+	state.run.totalTransactions += delta
+	promMetrics.transactionsTotal.Add(float64(delta))
+	return delta
 }
 
 func sourceErrorFromStartup(err error, sourcePath string) readerSourceError {
@@ -349,6 +379,9 @@ func (state *controlState) elapsedMs(now time.Time) int64 {
 }
 
 func (state *controlState) pauseElapsed(now time.Time) {
+	if state.run.runStartedAt.IsZero() {
+		return
+	}
 	state.run.elapsedBeforeRun += now.Sub(state.run.runStartedAt)
 	state.run.runStartedAt = time.Time{}
 }
