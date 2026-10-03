@@ -319,7 +319,6 @@ func (state *controlState) throttlerSettings(paused bool) throttlerSettings {
 
 func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTick *atomic.Int64, promMetrics *PrometheusMetrics) {
 	state.telemetry.reader.reset()
-	state.telemetry.sender.reset()
 	state.telemetry.readerChannel.clearMeasurements()
 	state.telemetry.senderChannel.clearMeasurements()
 	terminallyCompletedTransactionsSinceTick.Store(0)
@@ -335,7 +334,6 @@ func (state *controlState) resetFaultedMeasurements(
 	promMetrics *PrometheusMetrics,
 ) {
 	state.telemetry.reader.reset()
-	state.telemetry.sender.reset()
 	state.telemetry.readerChannel.clearMeasurements()
 	state.telemetry.senderChannel.clearMeasurements()
 	terminallyCompletedTransactionsSinceTick.Store(0)
