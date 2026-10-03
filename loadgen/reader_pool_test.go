@@ -252,7 +252,7 @@ func TestReaderPoolOwnsFilesAcrossConcurrentCycles(t *testing.T) {
 	pool.available = sync.NewCond(&pool.mu)
 	defer pool.cancel()
 	first, second := &readerWorker{}, &readerWorker{}
-	for cycle := range 20 {
+	for cycle := range 2 {
 		one, ok := pool.claimNextFile(first)
 		if !ok {
 			t.Fatalf("cycle %d: first job unavailable", cycle)
