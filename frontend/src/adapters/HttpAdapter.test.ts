@@ -158,6 +158,9 @@ function withRunState(state: RunState): TestWireSnapshot {
     reader: state === 'idle'
       ? { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0 }
       : VALID_WIRE.reader,
+    sender: state === 'paused'
+      ? { ...VALID_WIRE.sender, liveWorkers: 32, idleWorkers: 28, inFlightWorkers: 3, backoffWorkers: 1, drainingWorkers: 3, drainingIdleWorkers: 1, drainingInFlightWorkers: 1, drainingBackoffWorkers: 1 }
+      : VALID_WIRE.sender,
   }
 }
 
@@ -687,6 +690,30 @@ const malformedCases: ReadonlyArray<{
       sender: { ...VALID_WIRE.sender, inFlightWorkers: 'one' },
     }),
   },
+  ...(['idle', 'faulted'] as const).map((state) => ({
+    name: `live Sender in ${state}`,
+    result: async () => mockResponse({
+      ...withRunState('idle'),
+      run: { ...VALID_WIRE.run, state },
+      sender: { ...VALID_WIRE.sender, liveWorkers: 1, idleWorkers: 1, drainingWorkers: 1, drainingIdleWorkers: 1 },
+    }),
+  })),
+  ...([
+    { liveWorkers: 31 },
+    { drainingWorkers: 2 },
+    { idleWorkers: -1 },
+    { inFlightWorkers: 0.5 },
+    { backoffWorkers: 'one' },
+    { drainingIdleWorkers: 29, drainingWorkers: 31 },
+    { drainingInFlightWorkers: 4, drainingWorkers: 6 },
+    { drainingBackoffWorkers: 2, drainingWorkers: 4 },
+  ] as const).map((sender, index) => ({
+    name: `invalid paused Sender partition ${index}`,
+    result: async () => {
+      const wire = withRunState('paused')
+      return mockResponse({ ...wire, sender: { ...wire.sender, ...sender } })
+    },
+  })),
   {
     name: 'missing metrics window config',
     result: async () => mockResponse({
@@ -1128,7 +1155,7 @@ describe('HttpAdapter', () => {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'paused', elapsedMs: 67_890, totalTransactions: 84_000 },
       reader: { ...VALID_WIRE.reader, workers: 2, liveWorkers: 2, idleWorkers: 1, readingWorkers: 1, readTps: 2_000, readBatchSize: 25_000, rowsRead: 28_000 },
-      sender: { ...VALID_WIRE.sender, workers: 3 },
+      sender: { ...VALID_WIRE.sender, workers: 3, liveWorkers: 3, idleWorkers: 1, inFlightWorkers: 1, backoffWorkers: 1 },
       readerChannel: { ...VALID_WIRE.readerChannel, capacity: 16, depthBatches: 4, bufferedTransactions: 100_000, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 2_000 },
     }
     fetchMock
@@ -1149,6 +1176,76 @@ describe('HttpAdapter', () => {
     await flushPoll()
     expect(adapter.getSnapshot())
       .toEqual(expectedSnapshot(3, 'connected', recoveredWire))
+    adapter.dispose()
+  })
+
+  it('keeps frozen live Sender telemetry connected through Pause, controls and Resume', async () => {
+    const pausedWire = withRunState('paused')
+    const runningWire: TestWireSnapshot = {
+      ...pausedWire,
+      run: { ...pausedWire.run, state: 'running' },
+    }
+    const appliedWire: TestWireSnapshot = {
+      ...pausedWire,
+      reader: { ...pausedWire.reader, workers: 2 },
+      sender: { ...pausedWire.sender, workers: 31 },
+      throttler: { ...pausedWire.throttler, requestedTps: 25, installationMode: 'bypass' },
+    }
+    const resumedWire: TestWireSnapshot = {
+      ...appliedWire,
+      run: { state: 'running', elapsedMs: 13_345, totalTransactions: 43_000 },
+      sender: { ...VALID_WIRE.sender, workers: 31, liveWorkers: 31, idleWorkers: 31 },
+    }
+    const polls = [runningWire, pausedWire, appliedWire, resumedWire]
+    let pollIndex = 0
+    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
+      ? Promise.resolve(mockCommandResponse())
+      : Promise.resolve(mockResponse(polls[pollIndex++])))
+    const adapter = new HttpAdapter()
+    await flushPoll()
+
+    await expect(adapter.dispatch({ type: 'pause' })).resolves.toMatchObject({ accepted: true })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPoll()
+    const pausedSnapshot = adapter.getSnapshot()
+    expect(pausedSnapshot).toEqual(expectedSnapshot(2, 'connected', pausedWire))
+    expect(pausedSnapshot.sender.workers.applyMode).toBe('immediate')
+    expect(pausedSnapshot.reader.workers.applyMode).toBe('immediate')
+    expect(pausedSnapshot.throttler.requestedTps.applyMode).toBe('immediate')
+    expect(pausedSnapshot.throttler.installationMode.writable).toBe(true)
+
+    for (const command of [
+      { type: 'set-sender-workers', value: 31 },
+      { type: 'set-worker-count', actor: 'reader', value: 2 },
+      { type: 'set-requested-tps', value: 25 },
+      { type: 'set-throttler-installation-mode', value: 'bypass' },
+    ] as const) {
+      await expect(adapter.dispatch(command)).resolves.toMatchObject({ accepted: true })
+    }
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPoll()
+    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(3, 'connected', appliedWire))
+    expect(adapter.getSnapshot().sender).toMatchObject({
+      workers: { applied: 31 },
+      liveWorkers: 32,
+      inFlightWorkers: 3,
+      backoffWorkers: 1,
+      drainingWorkers: 3,
+    })
+
+    await expect(adapter.dispatch({ type: 'run' })).resolves.toMatchObject({ accepted: true })
+    expect(adapter.getSnapshot().runState).toBe('paused')
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPoll()
+    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(4, 'connected', resumedWire))
+    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
+      '{"action":"pause"}',
+      '{"action":"set-sender-workers","value":31}',
+      '{"action":"set-reader-workers","value":2}',
+      '{"action":"set-requested-tps","value":25}',
+      '{"action":"set-throttler-installation-mode","value":"bypass"}',
+      '{"action":"run"}',
+    ])
     adapter.dispose()
   })
 
@@ -1808,7 +1905,7 @@ describe('HttpAdapter', () => {
 
   it('does not send a buffered senderChannel capacity after the snapshot enters Pause', async () => {
     const idleWire = withRunState('idle')
-    const pausedWire: TestWireSnapshot = { ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'paused' } }
+    const pausedWire = withRunState('paused')
     const pauseResponse = deferred<Response>()
     let snapshotRequests = 0
     fetchMock.mockImplementation((input) => {
@@ -2219,7 +2316,7 @@ describe('HttpAdapter', () => {
     const pause = adapter.dispatch({ type: 'pause' })
     await flushPoll()
 
-    poll.resolve(mockResponse({ ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'paused' } }))
+    poll.resolve(mockResponse(withRunState('paused')))
     await flushPoll()
     const authoritative = adapter.getSnapshot()
     expect(authoritative.revision).toBe(1)

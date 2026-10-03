@@ -54,12 +54,12 @@ type senderPool struct {
 	workers                                  []*senderWorker
 	desired                                  int
 	stopping                                 bool
+	resume                                   chan struct{}
 	retry                                    senderRetryConfig
 	batches                                  <-chan []Transaction
 	channelTelemetry                         *channelTelemetry
 	terminallyCompletedTransactionsSinceTick *atomic.Int64
 	attempt                                  senderAttempt
-	wait                                     func(context.Context, time.Duration) bool
 	logger                                   *zap.Logger
 }
 
@@ -87,7 +87,6 @@ func startSenderPool(
 		channelTelemetry:                         channelTelemetry,
 		terminallyCompletedTransactionsSinceTick: terminallyCompletedTransactionsSinceTick,
 		attempt:                                  newSenderHTTPAttempt(api.URL, http.DefaultClient).deliver,
-		wait:                                     waitSenderBackoff,
 		logger:                                   logger,
 	}
 	pool.available = sync.NewCond(&pool.mu)
@@ -171,6 +170,50 @@ func (p *senderPool) stop() <-chan struct{} {
 		close(done)
 	}()
 	return done
+}
+
+func (p *senderPool) pause() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.resume != nil || p.stopping {
+		return
+	}
+	p.resume = make(chan struct{})
+	for _, worker := range p.workers {
+		select {
+		case worker.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (p *senderPool) resumeRun() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.resume != nil {
+		close(p.resume)
+		p.resume = nil
+	}
+}
+
+func (p *senderPool) waitUntilRunnable() bool {
+	for {
+		p.mu.Lock()
+		if p.ctx.Err() != nil {
+			p.mu.Unlock()
+			return false
+		}
+		resume := p.resume
+		p.mu.Unlock()
+		if resume == nil {
+			return true
+		}
+		select {
+		case <-p.ctx.Done():
+			return false
+		case <-resume:
+		}
+	}
 }
 
 func (p *senderPool) startWorkerLocked() {
@@ -314,6 +357,9 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		p.mu.Lock()
 		worker.backoff = false
 		p.mu.Unlock()
+		if !p.waitUntilRunnable() {
+			return false
+		}
 		switch p.attempt(p.ctx, batch, attempt) {
 		case senderAttemptSuccess:
 			return true
@@ -327,7 +373,7 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		worker.backoff = true
 		p.mu.Unlock()
 		delay := p.retry.delay(attempt, batch)
-		if !p.wait(p.ctx, delay) {
+		if !p.waitBackoff(worker, delay) {
 			return false
 		}
 	}
@@ -359,14 +405,25 @@ func (p *senderPool) aggregateSnapshot() senderPoolSnapshot {
 	return snapshot
 }
 
-func waitSenderBackoff(ctx context.Context, duration time.Duration) bool {
-	timer := time.NewTimer(duration)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
+func (p *senderPool) waitBackoff(worker *senderWorker, duration time.Duration) bool {
+	deadline := time.Now().Add(duration)
+	for {
+		if !p.waitUntilRunnable() {
+			return false
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return true
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-p.ctx.Done():
+			timer.Stop()
+			return false
+		case <-worker.wake:
+			timer.Stop()
+		case <-timer.C:
+		}
 	}
 }
 

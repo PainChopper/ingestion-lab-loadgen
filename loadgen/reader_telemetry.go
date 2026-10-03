@@ -23,6 +23,7 @@ func (r *readerTelemetry) startInterval(now time.Time) {
 	defer r.mu.Unlock()
 	r.intervalAt = now
 	r.intervalRows = r.rowsRead
+	r.readTPS = 0
 }
 
 func (r *readerTelemetry) recordRead(n int) {

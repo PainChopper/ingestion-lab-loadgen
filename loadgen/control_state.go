@@ -40,6 +40,7 @@ type controlRunState struct {
 	elapsedBeforeRun  time.Duration
 	runStartedAt      time.Time
 	sourceError       *readerSourceError
+	pausedStatus      runtimeStatus
 	lifecycle         *lifecycle
 }
 

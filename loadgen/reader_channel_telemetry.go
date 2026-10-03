@@ -174,6 +174,19 @@ func (q *channelTelemetry) clearMeasurements() {
 	q.clearMeasurementsLocked()
 }
 
+func (q *channelTelemetry) startInterval() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.measurements.sentBatchesPerSecond = 0
+	q.measurements.sentTransactionsPerSecond = 0
+	q.measurements.receivedBatchesPerSecond = 0
+	q.measurements.receivedTransactionsPerSecond = 0
+	q.measurements.sentBatchesSinceTick = 0
+	q.measurements.sentTransactionsSinceTick = 0
+	q.measurements.receivedBatchesSinceTick = 0
+	q.measurements.receivedTransactionsSinceTick = 0
+}
+
 func (q *channelTelemetry) detach() {
 	q.mu.Lock()
 	defer q.mu.Unlock()

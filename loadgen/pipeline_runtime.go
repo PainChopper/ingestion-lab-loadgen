@@ -64,7 +64,7 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 	}
 	runtime.throttler.start(
 		runtime.runContext,
-		runtime.state.throttlerSettings(false),
+		runtime.state.throttlerSettings(),
 	)
 	return nil
 }
