@@ -168,7 +168,7 @@ func (p config) validate() error {
 	if err := p.ReaderChannel.Capacity.validate(); err != nil {
 		return fmt.Errorf("readerChannel.capacity: %w", err)
 	}
-	if err := p.SenderChannel.Capacity.validateSenderChannelCapacity(); err != nil {
+	if err := p.SenderChannel.Capacity.validate(); err != nil {
 		return fmt.Errorf("senderChannel.capacity: %w", err)
 	}
 	if int64(p.Reader.ReadBatchSize.Max) > math.MaxInt64/int64(time.Second) {
@@ -395,11 +395,4 @@ func (p allowedConfig) validate() error {
 
 func (p allowedConfig) contains(value int) bool {
 	return slices.Contains(p.Allowed, value)
-}
-
-func (p allowedConfig) validateSenderChannelCapacity() error {
-	if err := p.validate(); err != nil {
-		return err
-	}
-	return nil
 }

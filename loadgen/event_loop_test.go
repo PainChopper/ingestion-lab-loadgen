@@ -409,7 +409,7 @@ func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testi
 	if snapshot.Reader.LiveWorkers != 0 || snapshot.Sender.LiveWorkers != 0 {
 		t.Fatalf("faulted workers = reader %+v sender %+v", snapshot.Reader, snapshot.Sender)
 	}
-	assertFaultedChannelSnapshot(t, snapshot, state.readerChannelCapacity(), state.senderChannelCapacity())
+	assertFaultedChannelSnapshot(t, snapshot, state.controls.readerChannelCapacity, state.controls.senderChannelCapacity)
 }
 
 func TestRunEventLoopFaultsBeforeWorkersForUnavailableSourceDirectory(t *testing.T) {
@@ -442,7 +442,7 @@ func TestRunEventLoopFaultsBeforeWorkersForUnavailableSourceDirectory(t *testing
 	if snapshot.Reader.LiveWorkers != 0 || snapshot.Sender.LiveWorkers != 0 {
 		t.Fatalf("startup failure workers = reader %+v sender %+v", snapshot.Reader, snapshot.Sender)
 	}
-	assertFaultedChannelSnapshot(t, snapshot, state.readerChannelCapacity(), state.senderChannelCapacity())
+	assertFaultedChannelSnapshot(t, snapshot, state.controls.readerChannelCapacity, state.controls.senderChannelCapacity)
 }
 
 func TestRunCommandStartsPipelineOnce(t *testing.T) {
