@@ -52,7 +52,7 @@ HTTP attempts, включая retry; текущая отображаемая к�
 | 4 | Общий контекст Reader pool вместо копии в worker | Реализовано в T8147 и принято владельцем; коммит 87f233e |
 | 5 | Удаление лишних child contexts в runtime | Реализовано в T8148; адресные/test/race/vet/build пройдены, commit/push по поручению владельца |
 | 6 | Одна категория ошибки доставки Sender | Реализовано напрямую по поручению владельца; Sender/test/race/vet/build пройдены |
-| 7 | Вывод runtimeStatus без промежуточной runtimeSummary | К реализации |
+| 7 | Вывод runtimeStatus без промежуточной runtimeSummary | Реализовано в T8149; CLI/log/test/race/vet/build пройдены |
 | 8 | Прямые обращения вместо пустых forwarding-функций | Частично: тестовая eventLoop удалена; остальные обращения к реализации |
 | 9 | Удаление двух неиспользуемых полей PrometheusMetrics | К реализации |
 | 10 | Новые каналы после Reset | Реализовано в HEAD 566af63 |
@@ -62,6 +62,12 @@ HTTP attempts, включая retry; текущая отображаемая к�
 
 ### Выполнено 2026-10-03
 
+- Пункт 7 реализован в T8149: runtimeSummary и преобразователь удалены;
+  карточка CLI и выбранные поля периодического лога читают runtimeStatus напрямую.
+  SourceError берётся из Reader; format/golden/sanitize, список полей, событие
+  runtime_summary и минутный интервал сохранены. Четыре Go-файла, существующие
+  tests адаптированы без новых seams. CLI/log tests, общие test/race, vet,
+  build, gofmt и diff-check прошли; commit/push поручены владельцем.
 - Пункт 6: terminal/retryable failure объединены в senderAttemptFailure.
   Только HTTP 204 означает успех; остальные ответы и ошибки сохраняют retry,
   отмена остаётся отдельным исходом. Закрытие response body и задержки сохранены.
@@ -147,7 +153,7 @@ HTTP attempts, включая retry; текущая отображаемая к�
 [T8134](../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8134_20261002-0000_REVIEWER_state-config_report.md),
 [T8135](../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8135_20261003-0000_CODER_remove-reader-start-seams_report.md).
 
-Пункт 7, оставшаяся часть 8, 9 и 12 не выполнены. Пункты 2, 5, 6 и 10 завершены;
+Оставшаяся часть 8, пункты 9 и 12 не выполнены. Пункты 2, 5–7 и 10 завершены;
 пункты 3 и 4 приняты владельцем. Пункт 13 завершён, сокращение принято.
 Сохранение paused в Throttler сейчас необходимо для прежней Pause; удаление
 выполняется вместе с новым затвором Sender в пункте 12.
@@ -353,6 +359,10 @@ HTTP-клиента и чтения response body. Меняется класси
 батча после исчерпания списка задержек и остановка при отмене.
 
 ## 7. Выводить runtimeStatus без промежуточной runtimeSummary
+
+Статус: реализовано в [T8149](../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8149_20261003-2304_CODER_direct-runtime-status_report.md).
+Карточка/golden/sanitize, CLI status/exit codes, log fields/cadence/debug,
+общие test/race, vet, build, gofmt и diff-check прошли.
 
 **Зачем.** `runtimeSummaryFromStatus` перекладывает поля готового snapshot
 в ещё одну структуру. Не вычисляет значения, не делает глубокую копию

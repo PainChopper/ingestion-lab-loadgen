@@ -15,7 +15,7 @@ import (
 )
 
 func TestFormatRuntimeStatusCard(t *testing.T) {
-	summary := runtimeSummaryFromStatus(runtimeStatus{
+	status := runtimeStatus{
 		Run: runtimeRunStatus{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
 		Reader: runtimeReaderStatus{
 			Workers: 3, LiveWorkers: 2, ReadingWorkers: 1, IdleWorkers: 1, BlockedWorkers: 0,
@@ -26,9 +26,9 @@ func TestFormatRuntimeStatusCard(t *testing.T) {
 		ReaderChannel: runtimeChannelStatus{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, SentTransactionsPerSecond: 1.25, ReceivedTransactionsPerSecond: 2.5},
 		SenderChannel: runtimeChannelStatus{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, SentTransactionsPerSecond: 3.75, ReceivedTransactionsPerSecond: 4.5},
 		Sender:        runtimeSenderStatus{Workers: 5, LiveWorkers: 4, InFlightWorkers: 2, IdleWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
-	})
+	}
 
-	got := formatRuntimeStatusCard(summary)
+	got := formatRuntimeStatusCard(status)
 	want := "INGESTION LAB LOADGEN STATUS\n" +
 		"State:                    faulted\n" +
 		"Elapsed:                  1.25s\n" +
@@ -62,7 +62,7 @@ func TestFormatRuntimeStatusCard(t *testing.T) {
 }
 
 func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
-	summary := runtimeSummaryFromStatus(runtimeStatus{
+	status := runtimeStatus{
 		Run: runtimeRunStatus{State: runState("running\n\x1b[2J")},
 		Reader: runtimeReaderStatus{
 			SourceDirectory: "source\r\n\x1b[31m",
@@ -74,18 +74,18 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 			},
 		},
 		Throttler: runtimeThrottlerStatus{InstallationMode: "mode\n\x1b"},
-	})
+	}
 
-	got := formatRuntimeStatusCard(summary)
+	got := formatRuntimeStatusCard(status)
 	if strings.IndexFunc(got, func(character rune) bool {
 		return character != '\n' && unicode.IsControl(character)
 	}) >= 0 {
 		t.Fatalf("card contains unsafe control byte: %q", got)
 	}
-	if strings.Count(got, "\n") != strings.Count(formatRuntimeStatusCard(runtimeSummaryFromStatus(runtimeStatus{
+	if strings.Count(got, "\n") != strings.Count(formatRuntimeStatusCard(runtimeStatus{
 		Run:       runtimeRunStatus{State: runStateRunning},
 		Throttler: runtimeThrottlerStatus{InstallationMode: throttlerInstalled},
-	})), "\n") || !strings.HasSuffix(got, "\n") {
+	}), "\n") || !strings.HasSuffix(got, "\n") {
 		t.Fatalf("card layout changed or has no final newline: %q", got)
 	}
 	for _, want := range []string{
@@ -101,9 +101,9 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 }
 
 func TestFormatRuntimeStatusCardIdleSourceGolden(t *testing.T) {
-	card := formatRuntimeStatusCard(runtimeSummaryFromStatus(runtimeStatus{
+	card := formatRuntimeStatusCard(runtimeStatus{
 		Run: runtimeRunStatus{State: runStateIdle},
-	}))
+	})
 	if !strings.Contains(card, "Source:                   none\nSource error:             none\n\nReader channel\n") {
 		t.Fatalf("idle source fields are not adjacent golden values: %q", card)
 	}
