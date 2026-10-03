@@ -50,7 +50,7 @@ HTTP attempts, включая retry; текущая отображаемая к�
 | 2 | Удаление senderTelemetry | Реализовано в T8140 с проверками T8142; принято владельцем, коммит 3f393e0 |
 | 3 | Один рабочий путь Reader вместо nil-worker ветки | Реализовано в T8145 и принято владельцем; коммит d986614 |
 | 4 | Общий контекст Reader pool вместо копии в worker | Реализовано в T8147 и принято владельцем; коммит 87f233e |
-| 5 | Удаление лишних child contexts в runtime | К реализации |
+| 5 | Удаление лишних child contexts в runtime | Реализовано в T8148; адресные/test/race/vet/build пройдены, commit/push по поручению владельца |
 | 6 | Одна категория ошибки доставки Sender | К реализации |
 | 7 | Вывод runtimeStatus без промежуточной runtimeSummary | К реализации |
 | 8 | Прямые обращения вместо пустых forwarding-функций | Частично: тестовая eventLoop удалена; остальные обращения к реализации |
@@ -62,6 +62,12 @@ HTTP attempts, включая retry; текущая отображаемая к�
 
 ### Выполнено 2026-10-03
 
+- Пункт 5 реализован в T8148: Reader и throttler получают runContext напрямую;
+  cancelReader/cancelThrottler и создание child contexts удалены. Контексты pools,
+  startup cleanup и порядок stopSender → cancelRun → joins → очистка сохранены.
+  Изменён только pipeline_runtime.go; адресные lifecycle tests, общие test/race,
+  vet, build, gofmt и diff-check прошли. Commit/push поручены владельцем для
+  каждого пункта плана; отдельная независимая приёмка не проводилась.
 - Пункт 4 реализован в T8147: readerWorker.ctx и его initializer удалены;
   чтение, append, send, blocked wait и cleanup используют pool.ctx.
   closeResources больше не принимает worker; дублирующая проверка отмены
@@ -134,7 +140,7 @@ HTTP attempts, включая retry; текущая отображаемая к�
 [T8134](../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8134_20261002-0000_REVIEWER_state-config_report.md),
 [T8135](../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8135_20261003-0000_CODER_remove-reader-start-seams_report.md).
 
-Пункты 5–7, оставшаяся часть 8, 9 и 12 не выполнены. Пункты 2 и 10 завершены;
+Пункты 6–7, оставшаяся часть 8, 9 и 12 не выполнены. Пункты 2, 5 и 10 завершены;
 пункты 3 и 4 приняты владельцем. Пункт 13 завершён, сокращение принято.
 Сохранение paused в Throttler сейчас необходимо для прежней Pause; удаление
 выполняется вместе с новым затвором Sender в пункте 12.
@@ -292,6 +298,9 @@ worker заканчивает свой файл и не берёт следую�
 Поведение blocked/reading и остатки файлов не меняются.
 
 ## 5. Удалить лишние child contexts Reader и throttler в runtime
+
+Статус: реализовано в [T8148](../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8148_20261003-2256_CODER_runtime-run-context_report.md).
+Адресные lifecycle tests, общие test/race, vet, build, gofmt и diff-check прошли.
 
 **Зачем.** Runtime создаёт отдельные контексты двух стадий, но текущие пути
 останавливают весь run. Их cancel не используется для самостоятельного управления
