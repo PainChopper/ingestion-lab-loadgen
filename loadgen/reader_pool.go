@@ -265,7 +265,7 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 		if n > 0 {
 			p.telemetry.recordRead(n)
 			var sent bool
-			batch, sent = p.appendRowsForWorker(worker, batch, rows[:n])
+			batch, sent = p.appendRows(worker, batch, rows[:n])
 			if !sent {
 				batchSendStopped = true
 				break
@@ -343,13 +343,9 @@ func relativeSourcePath(sourceDirectory, sourcePath string) string {
 	return filepath.ToSlash(relative)
 }
 
-func (p *readerPool) appendRows(batch, rows []Transaction) ([]Transaction, bool) {
-	return p.appendRowsForWorker(nil, batch, rows)
-}
-
-func (p *readerPool) appendRowsForWorker(worker *readerWorker, batch, rows []Transaction) ([]Transaction, bool) {
+func (p *readerPool) appendRows(worker *readerWorker, batch, rows []Transaction) ([]Transaction, bool) {
 	for len(rows) > 0 {
-		if worker != nil && worker.ctx.Err() != nil {
+		if worker.ctx.Err() != nil {
 			return nil, false
 		}
 		remainingCapacity := p.batchSize - len(batch)
@@ -370,9 +366,6 @@ func (p *readerPool) appendRowsForWorker(worker *readerWorker, batch, rows []Tra
 }
 
 func (p *readerPool) sendBatch(worker *readerWorker, batch []Transaction) bool {
-	if worker == nil {
-		return p.channel.send(p.ctx, p.batches, batch)
-	}
 	if worker.ctx.Err() != nil {
 		return false
 	}
