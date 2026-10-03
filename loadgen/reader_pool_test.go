@@ -81,26 +81,28 @@ func TestReaderPoolAppendRowsSplitsShortReadsAtBatchBoundary(t *testing.T) {
 	batches := make(chan []Transaction, 2)
 	var channel channelTelemetry
 	channel.start(batches, 2)
+	worker := &readerWorker{ctx: ctx, busy: true}
 	pool := &readerPool{
 		ctx:       ctx,
 		batchSize: 2,
 		batches:   batches,
 		channel:   &channel,
+		workers:   []*readerWorker{worker},
 	}
 
 	batch := make([]Transaction, 0, pool.batchSize)
-	batch, sent := pool.appendRows(batch, []Transaction{{ClientID: "one"}})
+	batch, sent := pool.appendRows(worker, batch, []Transaction{{ClientID: "one"}})
 	if !sent {
 		t.Fatal("first short read was not sent")
 	}
-	batch, sent = pool.appendRows(batch, []Transaction{{ClientID: "two"}, {ClientID: "three"}})
+	batch, sent = pool.appendRows(worker, batch, []Transaction{{ClientID: "two"}, {ClientID: "three"}})
 	if !sent {
 		t.Fatal("second short read was not sent")
 	}
 	if len(batch) != 1 {
 		t.Fatalf("EOF residual size = %d, want 1", len(batch))
 	}
-	if !channel.send(ctx, batches, batch) {
+	if !pool.sendBatch(worker, batch) {
 		t.Fatal("EOF residual was not sent")
 	}
 
