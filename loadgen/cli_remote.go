@@ -212,7 +212,7 @@ func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) err
 		if err != nil {
 			return err
 		}
-		_, err = io.WriteString(stdout, formatRuntimeStatusCard(runtimeSummaryFromStatus(snapshot)))
+		_, err = io.WriteString(stdout, formatRuntimeStatusCard(snapshot))
 		return err
 	}
 	if command.remoteAction == "set" {

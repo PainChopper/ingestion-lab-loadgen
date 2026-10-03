@@ -208,7 +208,7 @@ func (state *controlState) eventLoopContext(
 				nextRuntimeSummaryAt = now.Add(runtimeSummaryInterval)
 				logger.Info(
 					"runtime summary",
-					runtimeSummaryFields(runtimeSummaryFromStatus(state.runtimeStatusAt(runtime, now)))...,
+					runtimeSummaryFields(state.runtimeStatusAt(runtime, now))...,
 				)
 			}
 		}
