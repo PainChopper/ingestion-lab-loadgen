@@ -17,9 +17,7 @@ type pipelineRuntime struct {
 	senderPool                               *senderPool
 	runContext                               context.Context
 	cancelRun                                context.CancelFunc
-	cancelThrottler                          context.CancelFunc
 	throttler                                *throttler
-	cancelReader                             context.CancelFunc
 	readerPool                               *readerPool
 }
 
@@ -37,15 +35,13 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 	runtime.state.telemetry.senderChannel.start(runtime.senderBatches, runtime.state.readBatchSize())
 	runtime.state.telemetry.senderChannel.clearMeasurements()
 
-	readerContext, cancelReader := context.WithCancel(runtime.runContext)
 	started, err := runtime.state.startReaderPool(
-		readerContext,
+		runtime.runContext,
 		runtime.readerBatches,
 		runtime.state.readBatchSize(),
 		runtime.state.readerWorkers(),
 	)
 	if err != nil {
-		cancelReader()
 		runtime.cancelRun()
 		runtime.runContext = nil
 		runtime.cancelRun = nil
@@ -60,9 +56,6 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 	}
 
 	runtime.readerPool = started
-	runtime.cancelReader = cancelReader
-	throttlerContext, cancelThrottler := context.WithCancel(runtime.runContext)
-	runtime.cancelThrottler = cancelThrottler
 	runtime.throttler = &throttler{
 		readerBatches: runtime.readerBatches,
 		senderBatches: runtime.senderBatches,
@@ -70,7 +63,7 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 		senderChannel: &runtime.state.telemetry.senderChannel,
 	}
 	runtime.throttler.start(
-		throttlerContext,
+		runtime.runContext,
 		runtime.state.throttlerSettings(false),
 	)
 	return nil
@@ -102,12 +95,6 @@ func (runtime *pipelineRuntime) stop() {
 	if runtime.cancelRun != nil {
 		runtime.cancelRun()
 	}
-	if runtime.cancelReader != nil {
-		runtime.cancelReader()
-	}
-	if runtime.cancelThrottler != nil {
-		runtime.cancelThrottler()
-	}
 	if runtime.readerPool != nil {
 		<-runtime.readerPool.done
 	}
@@ -126,9 +113,7 @@ func (runtime *pipelineRuntime) stop() {
 func (runtime *pipelineRuntime) clearActive() {
 	runtime.runContext = nil
 	runtime.cancelRun = nil
-	runtime.cancelReader = nil
 	runtime.readerPool = nil
-	runtime.cancelThrottler = nil
 	runtime.throttler = nil
 }
 
