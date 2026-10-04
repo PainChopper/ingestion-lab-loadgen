@@ -115,8 +115,8 @@ describe('channel cable capacity geometry', () => {
     ).legCount
 
     expect([
-      legCount(152), legCount(144), legCount(136), legCount(128),
-      legCount(120), legCount(112), legCount(104), legCount(100),
+      legCount(186), legCount(178), legCount(170), legCount(162),
+      legCount(154), legCount(146), legCount(138), legCount(134),
     ]).toEqual([14, 12, 10, 8, 6, 4, 2, 0])
   })
 
@@ -124,20 +124,57 @@ describe('channel cable capacity geometry', () => {
     const geometry = getChannelCapacityGeometryPresentation(
       capacityControl(64, readerChannelRange),
       { x: 150, y: 415 },
-      { x: 355, y: 415 },
+      { x: 505, y: 415 },
       'landscape',
       configAllowed,
     )
 
     expect(geometry.legCount).toBe(6)
     expect(geometry.scaleForbiddenBox).toEqual({
-      x: 226.5,
+      x: 301.5,
       y: 210,
-      width: 52,
+      width: 86,
       height: 40,
     })
     expect(geometry.cablePath).toContain('210')
     expect(geometry.cablePath).not.toContain('459')
+    const tokens = geometry.cablePath.match(/[MLHVQ]|-?\d+(?:\.\d+)?/g)!
+    let point = { x: 150, y: 415 }
+    const box = geometry.scaleForbiddenBox
+    const paintBounds = [
+      { x: box.x + 8, y: box.y + 8, width: 36, height: 24 },
+      ...getCapacityTicks(readerChannelRange, 390, 240, configAllowed)
+        .filter((tick) => tick.major)
+        .map((tick) => ({ x: box.x + 54, y: tick.y - 8, width: 22, height: 12 })),
+    ]
+    while (tokens.length > 0) {
+      const command = tokens.shift()
+      if (command === 'M') {
+        point = { x: Number(tokens.shift()), y: Number(tokens.shift()) }
+        continue
+      }
+      const control = command === 'Q'
+        ? { x: Number(tokens.shift()), y: Number(tokens.shift()) } : null
+      const end = command === 'H' ? { x: Number(tokens.shift()), y: point.y }
+        : command === 'V' ? { x: point.x, y: Number(tokens.shift()) }
+        : { x: Number(tokens.shift()), y: Number(tokens.shift()) }
+      for (let sample = 0; sample <= 20; sample += 1) {
+        const t = sample / 20
+        const x = control === null ? point.x + (end.x - point.x) * t
+          : (1 - t) ** 2 * point.x + 2 * (1 - t) * t * control.x + t ** 2 * end.x
+        const y = control === null ? point.y + (end.y - point.y) * t
+          : (1 - t) ** 2 * point.y + 2 * (1 - t) * t * control.y + t ** 2 * end.y
+        for (const bounds of paintBounds) {
+          const distance = Math.hypot(
+            Math.max(bounds.x - x, 0, x - bounds.x - bounds.width),
+            Math.max(bounds.y - y, 0, y - bounds.y - bounds.height),
+          )
+          expect(distance).toBeGreaterThanOrEqual(5)
+        }
+      }
+      point = end
+    }
+    expect(point).toEqual({ x: 505, y: 415 })
   })
 
   it('uses a direct path for zero capacity in both orientations', () => {
@@ -437,9 +474,71 @@ describe('channel cable capacity geometry', () => {
 
       expect(presentation.cablePath).toContain(String(bypassX))
       expect(presentation.requestedPath).toContain(String(bypassX))
-      expect(geometry.batchControl.guard.y +
-        geometry.batchControl.guard.height).toBeLessThan(channel.metrics.requestY)
-      expect(channel.start.y).toBe(channel.end.y)
+      expect(channel.metrics.requestY + 12).toBeLessThan(geometry.batchControl.guard.y)
+      expect(channel.end.y - channel.start.y).toBeGreaterThan(300)
+    },
+  )
+
+  it.each([0, 8, 64, 8_192])(
+    'fits portrait channel branches and leaves the label rail clear at capacity %s',
+    (applied) => {
+      const geometry = createPipelineGeometry({ orientation: 'portrait', readerWorkers: 7, senderWorkers: 32 })
+      const values = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+      for (const channel of Object.values(geometry.channels)) {
+        const guard = { x: 70, y: channel.end.y - 196, width: 340, height: 188 }
+        const presentation = getChannelCapacityGeometryPresentation(
+          capacityControl(applied, readerChannelRange), channel.start, channel.end,
+          'portrait', values, [guard],
+        )
+        expect(presentation.legCount).toBe(applied === 0 ? 0 : applied === 8 ? 4 : applied === 64 ? 6 : 14)
+        const scaleY = (channel.start.y + channel.end.y) / 2 - CHANNEL_CAPACITY_SCALE_OFFSET
+        const sliderX = capacityToCableY(applied, readerChannelRange, channel.start.x, 140, values)
+        const paintBounds = [
+          { x: sliderX - 18, y: scaleY - 12, width: 36, height: 24 },
+          ...getCapacityTicks(readerChannelRange, channel.start.x, 140, values)
+            .filter((tick) => tick.major)
+            .map((tick) => ({ x: tick.y - 11, y: scaleY + 24, width: 22, height: 12 })),
+        ]
+        const tokens = presentation.cablePath.match(/[MLHVQ]|-?\d+(?:\.\d+)?/g)!
+        let point = channel.start
+        const assertPoint = (x: number, y: number) => {
+          expect(x).toBeGreaterThanOrEqual(24)
+          expect(x).toBeLessThanOrEqual(geometry.viewBox.width - 24)
+          expect(y).toBeGreaterThanOrEqual(channel.start.y)
+          expect(y).toBeLessThanOrEqual(channel.end.y)
+          expect(x > guard.x && x < guard.x + guard.width &&
+            y > guard.y && y < guard.y + guard.height).toBe(false)
+          for (const bounds of paintBounds) {
+            expect(Math.hypot(
+              Math.max(bounds.x - x, 0, x - bounds.x - bounds.width),
+              Math.max(bounds.y - y, 0, y - bounds.y - bounds.height),
+            )).toBeGreaterThanOrEqual(5)
+          }
+        }
+        while (tokens.length > 0) {
+          const command = tokens.shift()
+          if (command === 'M') {
+            point = { x: Number(tokens.shift()), y: Number(tokens.shift()) }
+            continue
+          }
+          const control = command === 'Q'
+            ? { x: Number(tokens.shift()), y: Number(tokens.shift()) }
+            : null
+          const end = command === 'H' ? { x: Number(tokens.shift()), y: point.y }
+            : command === 'V' ? { x: point.x, y: Number(tokens.shift()) }
+            : { x: Number(tokens.shift()), y: Number(tokens.shift()) }
+          for (let sample = 0; sample <= 20; sample += 1) {
+            const t = sample / 20
+            const x = control === null ? point.x + (end.x - point.x) * t
+              : (1 - t) ** 2 * point.x + 2 * (1 - t) * t * control.x + t ** 2 * end.x
+            const y = control === null ? point.y + (end.y - point.y) * t
+              : (1 - t) ** 2 * point.y + 2 * (1 - t) * t * control.y + t ** 2 * end.y
+            assertPoint(x, y)
+          }
+          point = end
+        }
+        expect(point).toEqual(channel.end)
+      }
     },
   )
 })

@@ -12,7 +12,7 @@ import type {
   SelectableId,
 } from '../../model/loadgen'
 import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
-import { CHANNEL_CABLE_ENDPOINTS } from './geometry'
+import { CHANNEL_CABLE_ENDPOINTS, createPipelineGeometry } from './geometry'
 import {
   capacityFromVerticalDrag,
   capacityToCableY,
@@ -132,6 +132,63 @@ function translatedY(element: Element): number {
 }
 
 describe('ChannelCable mounted behavior', () => {
+  it.each([0, 64, 8_192])('keeps all portrait captions below the whole handle at capacity %s', (applied) => {
+    const adapter = new SimulationAdapter()
+    const snapshot = derivedSnapshot(adapter)
+    const geometry = createPipelineGeometry({ orientation: 'portrait', readerWorkers: 7, senderWorkers: 32 })
+    const values = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+    for (const source of [snapshot.readerChannel, snapshot.senderChannel]) {
+      const channel = { ...source, capacity: { ...source.capacity, applied, min: 0, max: 8192, step: 1 } }
+      const endpoints = geometry.channels[channel.id]
+      const view = render(<svg><ChannelCable snapshot={channel} start={endpoints.start} end={endpoints.end}
+        selected={false} onSelect={() => undefined} onCapacityChange={() => undefined}
+        batchSize={snapshot.reader.readBatchSize} capacityValues={values} orientation="portrait" /></svg>)
+      const handle = view.container.querySelector('.pipeline-channel-handle')!
+      const body = handle.querySelector('.pipeline-channel-handle__body')!
+      const bodyBottom = translatedY(handle) + Number(body.getAttribute('y')) + Number(body.getAttribute('height'))
+      const captions = [...view.container.querySelectorAll('.pipeline-channel-scale__label')]
+      expect(captions.map((label) => label.textContent)).toEqual(['0', '64', '8,192'])
+      for (const caption of captions) {
+        expect(Number(caption.getAttribute('y')) - 10).toBeGreaterThan(bodyBottom + 8)
+      }
+      expect(view.container.querySelector(`#channel-${channel.id}`)?.getAttribute('data-leg-count'))
+        .toBe(String(applied === 0 ? 0 : applied === 64 ? 6 : 14))
+      view.unmount()
+    }
+    adapter.dispose()
+  })
+
+  it.each([0, 64, 8_192])('keeps all wide scale captions outside the handle at capacity %s', (applied) => {
+    const adapter = new SimulationAdapter()
+    const snapshot = derivedSnapshot(adapter)
+    const values = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
+    for (const source of [snapshot.readerChannel, snapshot.senderChannel]) {
+      const channel = { ...source, capacity: { ...source.capacity, applied, min: 0, max: 8192, step: 1 } }
+      const view = renderCable(channel, { capacityValues: values })
+      const handle = view.container.querySelector('.pipeline-channel-handle')!
+      const body = handle.querySelector('.pipeline-channel-handle__body')!
+      const handleX = Number(handle.getAttribute('transform')!.match(/translate\(([^ ]+)/)![1])
+      const handleRight = handleX + Number(body.getAttribute('x')) + Number(body.getAttribute('width'))
+      const labels = [...view.container.querySelectorAll('.pipeline-channel-scale__label')]
+      expect(labels.map((label) => label.textContent)).toEqual(['0', '64', '8,192'])
+      const endpoints = CHANNEL_CABLE_ENDPOINTS[channel.id]
+      const geometry = getChannelCapacityGeometryPresentation(channel.capacity, endpoints.start, endpoints.end, 'landscape', values)
+      for (const label of labels) {
+        const left = Number(label.getAttribute('x'))
+        expect(left).toBeGreaterThan(handleRight + 7)
+        // Live largest caption is 21.506px wide; include the maximum 10px hose stroke.
+        expect(left + 22 + 10 / 2 + 4).toBeLessThanOrEqual(
+          geometry.scaleForbiddenBox.x + geometry.scaleForbiddenBox.width,
+        )
+      }
+      expect(geometry.legCount).toBe(applied === 0 ? 0 : applied === 64 ? 6 : 14)
+      expect(geometry.scaleForbiddenBox.x).toBeGreaterThan(endpoints.start.x)
+      expect(geometry.scaleForbiddenBox.x + geometry.scaleForbiddenBox.width).toBeLessThan(endpoints.end.x)
+      view.unmount()
+    }
+    adapter.dispose()
+  })
+
   it('keeps batch thickness and capacity path independent', () => {
     const adapter = new SimulationAdapter()
     const channel = derivedSnapshot(adapter).readerChannel

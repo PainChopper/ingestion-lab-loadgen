@@ -14,7 +14,6 @@ import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import {
   createPipelineGeometry,
   FLOW_BASELINE,
-  PIPELINE_BATCH_CONTROL,
   type TextPlacement,
 } from './geometry'
 import {
@@ -98,6 +97,27 @@ describe('responsive pipeline geometry', () => {
     ).toBeCloseTo(215 + delta, 10)
     expect(geometry.http.end.x - geometry.http.start.x)
       .toBeCloseTo(60 + delta, 10)
+    const { reader, target } = geometry.actors
+    const receiver = target.stages[0]
+    // Live wide text bounds measured 15px high; reserve spacing and inner padding.
+    expect(receiver.label.y - receiver.request!.y).toBeGreaterThanOrEqual(20)
+    expect(receiver.detail!.y - receiver.label.y).toBeGreaterThanOrEqual(20)
+    expect(receiver.request!.y - 12).toBeGreaterThanOrEqual(receiver.y + 4)
+    expect(receiver.detail!.y + 3).toBeLessThanOrEqual(receiver.y + receiver.height - 4)
+    expect(target.connectors[0].y1).toBe(receiver.y + receiver.height)
+    expect(target.connectors[0].y2).toBeGreaterThan(target.connectors[0].y1)
+    expect(reader.metrics.status.anchor).toBe('start')
+    expect(reader.metrics.status.x).toBeGreaterThanOrEqual(reader.bounds.x)
+    expect(reader.metrics.status.x).toBeGreaterThanOrEqual(16)
+    const httpRows = [geometry.http.metrics.statusY, geometry.http.metrics.throughputY,
+      geometry.http.metrics.detailY]
+    for (const baseline of httpRows) {
+      expect(baseline - 12).toBeGreaterThan(target.bounds.y + target.bounds.height + 8)
+      expect(baseline - 12).toBeGreaterThan(geometry.actors.sender.metrics.status.y + 15 + 8)
+      expect(baseline + 3).toBeLessThan(geometry.viewBox.height - 12)
+    }
+    expect(httpRows[1] - httpRows[0]).toBeGreaterThanOrEqual(20)
+    expect(httpRows[2] - httpRows[1]).toBeGreaterThanOrEqual(20)
   })
 
   it.each([
@@ -115,24 +135,27 @@ describe('responsive pipeline geometry', () => {
         readerWorkers: reader,
         senderWorkers: sender,
       })
-      const topRowBaseline = 275
-      const targetTop = topRowBaseline + 55
-
-      expect(geometry.actors.reader.ports.output).toEqual({ x: 140, y: topRowBaseline })
-      expect(geometry.actors.throttler.ports.input).toEqual({ x: 165, y: topRowBaseline })
-      expect(geometry.actors.throttler.ports.output).toEqual({ x: 315, y: topRowBaseline })
-      expect(geometry.actors.sender.ports.input).toEqual({ x: 340, y: topRowBaseline })
-      expect(geometry.actors.sender.ports.output).toEqual({ x: 405, y: topRowBaseline })
-      expect(geometry.actors.target.ports.input).toEqual({ x: 240, y: targetTop })
-      expect(geometry.viewBox.height).toBe(targetTop + 340)
-      expect(geometry.batchControl.anchor).toEqual({
-        x: 165,
-        y: topRowBaseline - PIPELINE_BATCH_CONTROL.portraitInputOffset,
-      })
-      expect(geometry.channels['reader-to-throttler'].metrics.throughputY)
-        .toBe(topRowBaseline + 60)
-      expect(geometry.channels['throttler-to-sender'].metrics.throughputY)
-        .toBe(topRowBaseline + 42)
+      const { reader: readerActor, throttler, sender: senderActor, target } = geometry.actors
+      const ports = [readerActor.ports.output, throttler.ports.input,
+        throttler.ports.output, senderActor.ports.input,
+        senderActor.ports.output, target.ports.input]
+      expect(ports.every((port) => port.x === 240)).toBe(true)
+      for (let index = 1; index < ports.length; index += 1) {
+        expect(ports[index]!.y).toBeGreaterThan(ports[index - 1]!.y)
+      }
+      expect(senderActor.title.y).toBeGreaterThan(throttler.bounds.y + throttler.bounds.height)
+      expect(target.title.y).toBeGreaterThan(senderActor.bounds.bottom)
+      expect(target.bounds.y + target.bounds.height).toBeLessThan(geometry.viewBox.height)
+      for (const channel of Object.values(geometry.channels)) {
+        expect(channel.metrics.throughputY).toBeGreaterThan(channel.start.y + 50)
+        expect(channel.metrics.requestY).toBeLessThan(channel.end.y - 80)
+        expect(channel.end.y - channel.start.y).toBeGreaterThan(300)
+      }
+      expect(geometry.batchControl.guard.y).toBeGreaterThan(
+        geometry.channels['reader-to-throttler'].metrics.requestY + 12,
+      )
+      expect(geometry.batchControl.guard.y + geometry.batchControl.guard.height)
+        .toBeLessThan(throttler.title.y)
     },
   )
 
@@ -234,16 +257,16 @@ describe('responsive pipeline geometry', () => {
       }))
       if (installationMode === 'installed') {
         expect(globalPlacements).toEqual([
-          { x: 330, y: 233 },
-          { x: 330, y: 254 },
-          { x: 330, y: 293 },
-          { x: 330, y: 314 },
+          { x: 330, y: throttler.bounds.y + 55 },
+          { x: 330, y: throttler.bounds.y + 76 },
+          { x: 330, y: throttler.bounds.y + 115 },
+          { x: 330, y: throttler.bounds.y + 136 },
         ])
         expect(globalPlacements[1].y).toBeLessThan(globalPlacements[2].y)
       } else {
         expect(globalPlacements).toEqual([
-          { x: 330, y: 293 },
-          { x: 330, y: 314 },
+          { x: 330, y: throttler.bounds.y + 115 },
+          { x: 330, y: throttler.bounds.y + 136 },
         ])
         expect(throttler.metrics.bypass.admitted)
           .toEqual(throttler.metrics.installed.admitted)
@@ -309,10 +332,10 @@ describe('responsive pipeline geometry', () => {
       expect(directionChanges.length).toBeLessThanOrEqual(1)
     }
 
-    expect(globalPoint(input.start)).toEqual({ x: 240, y: 178 })
+    expect(globalPoint(input.start)).toEqual(throttler.ports.input)
     expect(input.end).toEqual({ x: VALVE_FLANGES.left, y: 415 })
     expect(output.start).toEqual({ x: VALVE_FLANGES.right, y: 415 })
-    expect(globalPoint(output.end)).toEqual({ x: 240, y: 371 })
+    expect(globalPoint(output.end)).toEqual(throttler.ports.output)
     expect(input.d).toBe(
       'M430 282 V306 Q430 322 414 322 H390 Q374 322 374 338 V399 Q374 415 390 415 H401',
     )
@@ -767,10 +790,7 @@ describe('PipelineSvg rendering', () => {
         '#target-actor .pipeline-target-secondary',
       )
       expectTextPlacement(receiverDetails.item(0), actorGeometry.target.stages[0].detail!)
-      expectTextPlacement(receiverDetails.item(1), {
-        ...actorGeometry.target.stages[0].label,
-        y: actorGeometry.target.stages[0].label.y - 8,
-      })
+      expectTextPlacement(receiverDetails.item(1), actorGeometry.target.stages[0].request!)
 
       const throttlerMetrics = installationMode === 'installed'
         ? actorGeometry.throttler.metrics.installed
@@ -1267,6 +1287,22 @@ describe('PipelineSvg rendering', () => {
     expect(requestedValues[2]).toBe(snapshot.throttler.requestedTps.max)
     expect(requestedValues[3]).not.toBe(snapshot.throttler.requestedTps.max)
     expect(onInstallationModeChange).not.toHaveBeenCalled()
+  })
+
+  it('reserves portrait card height for frozen live workers after downscale', () => {
+    const base = activeSnapshot()
+    const snapshot = {
+      ...base,
+      sender: { ...base.sender, workers: { ...base.sender.workers, applied: 1 }, liveWorkers: 32 },
+    }
+    const view = render(<PipelineSvg snapshot={snapshot} selectedId={null} onSelect={vi.fn()}
+      onChannelCapacityChange={vi.fn()} liveControls={liveControls(snapshot)} orientation="portrait" />)
+    const card = view.container.querySelector('#sender-actor .pipeline-actor-box')!
+    const title = view.container.querySelector('.pipeline-title--sender')!
+    const port = view.container.querySelector('#sender-actor .pipeline-port')!
+    expect(Number(card.getAttribute('y'))).toBeGreaterThan(Number(title.getAttribute('y')) + 40)
+    expect(Number(port.getAttribute('cy'))).toBe(Number(card.getAttribute('y')))
+    expect(view.container.querySelector('#sender-actor')?.getAttribute('data-worker-rows')).toBe('7')
   })
 
   it('renders portrait viewBox, vertical ports, elbows, and cable paths', () => {
@@ -1961,27 +1997,27 @@ describe('PipelineSvg rendering', () => {
     }
   })
 
-  it('aligns landscape HTTP metrics and preserves portrait coordinates', () => {
+  it('places all landscape HTTP metrics below actor labels and preserves portrait coordinates', () => {
     const snapshot = activeSnapshot()
     const landscape = renderPipeline(snapshot)
     const landscapeMetrics = [...landscape.container.querySelectorAll(
       '#http-link text',
     )]
-    const channelTopRow = landscape.container.querySelector(
-      '#channel-throttler-to-sender .pipeline-channel-metric',
+    const targetBox = landscape.container.querySelector(
+      '#target-actor .pipeline-actor-box',
     )!
-    const senderTopRow = landscape.container.querySelector(
-      '#sender-actor .pipeline-value',
+    const senderStatus = landscape.container.querySelector(
+      '#sender-actor .pipeline-worker-status',
     )!
 
-    expect(landscapeMetrics.map((metric) => metric.getAttribute('y')))
-      .toEqual(['507', '528', '549'])
-    expect(landscapeMetrics[0].getAttribute('y'))
-      .toBe(channelTopRow.getAttribute('y'))
-    expect(Math.abs(
-      Number(landscapeMetrics[0].getAttribute('y')) -
-      Number(senderTopRow.getAttribute('y')),
-    )).toBeLessThanOrEqual(3)
+    expect(landscapeMetrics).toHaveLength(3)
+    for (const metric of landscapeMetrics) {
+      const textTop = Number(metric.getAttribute('y')) - 12
+      expect(textTop).toBeGreaterThan(Number(targetBox.getAttribute('y')) +
+        Number(targetBox.getAttribute('height')) + 8)
+      expect(textTop).toBeGreaterThan(Number(senderStatus.getAttribute('y')) + 15 + 8)
+      expect(Number(metric.getAttribute('y')) + 3).toBeLessThan(650 - 12)
+    }
     landscape.unmount()
 
     const portrait = renderPipeline(snapshot, 'portrait')
@@ -1994,7 +2030,7 @@ describe('PipelineSvg rendering', () => {
       '#http-link text',
     )]
     expect(portraitMetrics.map((metric) => metric.getAttribute('x')))
-      .toEqual(['340', '340', '340'])
+      .toEqual(Array(3).fill(String(geometry.http.metrics.x)))
     expect(portraitMetrics.map((metric) => metric.getAttribute('y')))
       .toEqual([
         String(geometry.http.metrics.statusY),

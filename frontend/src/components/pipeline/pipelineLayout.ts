@@ -15,6 +15,7 @@ export function resolvePipelineOrientation(
   viewportHeight: number,
 ): PipelineOrientation {
   if (mode !== 'auto') return mode
+  if (viewportWidth < 900) return 'portrait'
   if (viewportWidth === viewportHeight) return 'landscape'
   return portraitMediaMatches ? 'portrait' : 'landscape'
 }
