@@ -822,7 +822,7 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	before := requestRuntimeStatus(requests)
 	metrics <- time.Now()
 	if got := requestRuntimeStatus(requests); got.SenderChannel.ReceivedTransactionsTotal != before.SenderChannel.ReceivedTransactionsTotal {
-		t.Fatal("paused setting admitted a batch")
+		t.Fatal("paused snapshot changed after settings update and metrics tick")
 	}
 	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {
 		t.Fatal(result.err)

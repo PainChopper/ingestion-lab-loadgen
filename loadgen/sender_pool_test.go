@@ -14,23 +14,14 @@ import (
 	"time"
 )
 
-func TestSenderPoolRetryLogExcludesRequestMarkers(t *testing.T) {
+func TestSenderPoolRetryLogWritesEventWithoutClientID(t *testing.T) {
 	var output bytes.Buffer
 	logger, err := newApplicationLogger("info", &output)
 	if err != nil {
 		t.Fatalf("newApplicationLogger() error = %v", err)
 	}
 
-	urlMarker := "url-credential-and-query-marker"
-	headerMarker := "header-value-marker"
-	bodyMarker := "body-payload-marker"
 	clientMarker := "client-id-marker"
-	requestURL := "https://" + urlMarker + "@example.test/ingest?token=" + urlMarker
-	headers := http.Header{"Authorization": {headerMarker}}
-	body := []byte(bodyMarker)
-	if requestURL == "" || len(headers) == 0 || len(body) == 0 {
-		t.Fatal("test request markers were not initialized")
-	}
 
 	batches := make(chan []Transaction)
 	var channel channelTelemetry
@@ -54,10 +45,8 @@ func TestSenderPoolRetryLogExcludesRequestMarkers(t *testing.T) {
 	if !strings.Contains(line, "event=batch_delivery_retry") {
 		t.Fatalf("retry event was not written")
 	}
-	for _, marker := range []string{urlMarker, headerMarker, bodyMarker, clientMarker} {
-		if strings.Contains(line, marker) {
-			t.Fatal("request marker was written to the log")
-		}
+	if strings.Contains(line, clientMarker) {
+		t.Fatal("batch ClientID was written to the retry log")
 	}
 }
 
@@ -249,9 +238,9 @@ func TestSenderPoolScaleDownJoinsIdleWorkerBeforeNextReceive(t *testing.T) {
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
 	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 2, config.API, config.Retry, nil)
-	entered := make(chan int, 1)
-	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
-		entered <- 0
+	entered := make(chan string, 1)
+	pool.attempt = func(_ context.Context, batch []Transaction, _ int) senderAttemptOutcome {
+		entered <- batch[0].ClientID
 		return senderAttemptSuccess
 	}
 	pool.reconcile(1)
@@ -259,10 +248,13 @@ func TestSenderPoolScaleDownJoinsIdleWorkerBeforeNextReceive(t *testing.T) {
 		t.Fatalf("after idle downscale = %+v, want one active worker", snapshot)
 	}
 	batches <- []Transaction{{ClientID: "after-scale-down"}}
-	if ordinal := <-entered; ordinal != 0 {
-		t.Fatalf("batch entered worker %d after scale-down, want worker 0", ordinal)
+	if clientID := <-entered; clientID != "after-scale-down" {
+		t.Fatalf("attempted batch = %q, want after-scale-down", clientID)
 	}
 	<-pool.stop()
+	if got := consumed.Load(); got != 1 {
+		t.Fatalf("completed transactions = %d, want 1", got)
+	}
 }
 
 func TestSenderPoolReplacementRestoresDesiredWorkerCount(t *testing.T) {
@@ -286,18 +278,33 @@ func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 	var consumed atomic.Int64
 	config := testConfig(t).Sender
 	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 2, config.API, config.Retry, nil)
-	entered := make(chan int, 2)
+	entered := make(chan struct {
+		clientID      string
+		firstReleased bool
+	}, 2)
 	releaseFirst := make(chan struct{})
 	pool.attempt = func(_ context.Context, batch []Transaction, _ int) senderAttemptOutcome {
-		entered <- 0
-		if batch[0].ClientID == "first" {
+		clientID := batch[0].ClientID
+		var firstReleased bool
+		if clientID == "after-mark" {
+			select {
+			case <-releaseFirst:
+				firstReleased = true
+			default:
+			}
+		}
+		entered <- struct {
+			clientID      string
+			firstReleased bool
+		}{clientID: clientID, firstReleased: firstReleased}
+		if clientID == "first" {
 			<-releaseFirst
 		}
 		return senderAttemptSuccess
 	}
 	batches <- []Transaction{{ClientID: "first"}}
-	if ordinal := <-entered; ordinal != 0 {
-		t.Fatalf("first batch entered worker %d, want worker 0", ordinal)
+	if attempt := <-entered; attempt.clientID != "first" {
+		t.Fatalf("first attempted batch = %q, want first", attempt.clientID)
 	}
 
 	// Hold dispatch at the assignment lock while drain wake and a batch are both ready.
@@ -310,10 +317,11 @@ func TestSenderPoolReadyBatchCannotEnterMarkedDrainingWorker(t *testing.T) {
 	pool.mu.Unlock()
 	<-draining.done
 	close(releaseFirst)
-	if ordinal := <-entered; ordinal != 0 {
-		t.Fatalf("batch after drain mark entered worker %d, want worker 0", ordinal)
-	}
+	attempt := <-entered
 	<-pool.stop()
+	if attempt.clientID != "after-mark" || !attempt.firstReleased {
+		t.Fatalf("after-mark attempt = %+v, want after-mark after first release", attempt)
+	}
 	if got := consumed.Load(); got != 2 {
 		t.Fatalf("completed transactions = %d, want 2", got)
 	}
