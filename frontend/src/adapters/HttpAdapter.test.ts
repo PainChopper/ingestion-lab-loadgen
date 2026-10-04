@@ -1833,7 +1833,10 @@ describe('HttpAdapter', () => {
   })
 
   it('does not send a buffered readerChannel capacity after the snapshot enters Run', async () => {
-    const idleWire = withRunState('idle')
+    const idleWire = {
+      ...withRunState('idle'),
+      readerChannel: { ...VALID_WIRE.readerChannel, capacity: 2 },
+    }
     const runningWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'running' },
@@ -1851,12 +1854,21 @@ describe('HttpAdapter', () => {
     const adapter = new HttpAdapter()
 
     await flushPoll()
+    expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'connected', runState: 'idle' })
     const runReceipt = adapter.dispatch({ type: 'run' })
     await Promise.resolve()
+    let capacitySettled = false
     const capacityReceipt = adapter.dispatch({
       type: 'set-reader-channel-capacity',
-      value: 4,
+      value: 8,
+    }).then((receipt) => {
+      capacitySettled = true
+      return receipt
     })
+    await flushPoll()
+    expect(capacitySettled).toBe(false)
+    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body))
+      .toEqual(['{"action":"run"}'])
 
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPoll()
@@ -1919,12 +1931,21 @@ describe('HttpAdapter', () => {
     const adapter = new HttpAdapter()
 
     await flushPoll()
+    expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'connected', runState: 'idle' })
     const pauseReceipt = adapter.dispatch({ type: 'pause' })
     await Promise.resolve()
+    let capacitySettled = false
     const capacityReceipt = adapter.dispatch({
       type: 'set-sender-channel-capacity',
-      value: 4,
+      value: 8,
+    }).then((receipt) => {
+      capacitySettled = true
+      return receipt
     })
+    await flushPoll()
+    expect(capacitySettled).toBe(false)
+    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body))
+      .toEqual(['{"action":"pause"}'])
 
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPoll()
@@ -1964,7 +1985,7 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('accepts every 2xx status without reading headers or a malformed body', async () => {
+  it('accepts 299 without reading headers or a malformed body', async () => {
     const { response, accessors } = responseWithThrowingRepresentation(299)
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? Promise.resolve(response)

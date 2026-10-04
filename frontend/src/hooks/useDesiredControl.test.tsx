@@ -29,27 +29,51 @@ describe('useDesiredControl', () => {
   })
 
   it('rolls rejected and unavailable commands back to the latest applied value', async () => {
-    const dispatch = vi.fn().mockResolvedValue({ accepted: false })
-    const view = renderHook(() => useDesiredControl({
-      applied: 4,
-      revision: 10,
-      available: true,
-      dispatch,
+    let resolveReceipt!: (receipt: { accepted: boolean }) => void
+    let rejectReceipt!: (reason: Error) => void
+    const dispatch = vi.fn(() => new Promise<{ accepted: boolean }>((resolve, reject) => {
+      resolveReceipt = resolve
+      rejectReceipt = reject
     }))
+    const view = renderHook(
+      ({ applied, revision }) => useDesiredControl({
+        applied,
+        revision,
+        available: true,
+        dispatch,
+      }),
+      { initialProps: { applied: 4, revision: 10 } },
+    )
 
     act(() => view.result.current.preview(8))
-    await act(async () => { await view.result.current.commit() })
+    let rejected!: Promise<boolean>
+    act(() => { rejected = view.result.current.commit() })
+    expect(dispatch).toHaveBeenNthCalledWith(1, 8)
+    view.rerender({ applied: 5, revision: 11 })
+    expect(view.result.current).toMatchObject({ applied: 5, desired: 8, phase: 'pending' })
+    await act(async () => {
+      resolveReceipt({ accepted: false })
+      expect(await rejected).toBe(false)
+    })
     expect(view.result.current).toMatchObject({
-      desired: 4,
+      desired: 5,
       phase: 'idle',
       error: 'Change rejected',
     })
 
-    dispatch.mockRejectedValueOnce(new Error('offline'))
     act(() => view.result.current.preview(9))
-    await act(async () => { await view.result.current.commit() })
+    let unavailable!: Promise<boolean>
+    act(() => { unavailable = view.result.current.commit() })
+    expect(dispatch).toHaveBeenNthCalledWith(2, 9)
+    view.rerender({ applied: 6, revision: 12 })
+    expect(view.result.current).toMatchObject({ applied: 6, desired: 9, phase: 'pending' })
+    await act(async () => {
+      rejectReceipt(new Error('offline'))
+      expect(await unavailable).toBe(false)
+    })
+    expect(dispatch).toHaveBeenCalledTimes(2)
     expect(view.result.current).toMatchObject({
-      desired: 4,
+      desired: 6,
       phase: 'idle',
       error: 'Change unavailable',
     })
