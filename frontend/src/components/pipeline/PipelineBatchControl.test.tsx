@@ -71,6 +71,7 @@ describe('PipelineBatchControl', () => {
     await user.click(increase)
     fireEvent.keyDown(increase, { key: 'Enter' })
 
+    expect(commit).toHaveBeenCalledTimes(2)
     expect(commit).toHaveBeenNthCalledWith(1, 2_000)
     expect(commit).toHaveBeenNthCalledWith(2, 2_000)
   })
