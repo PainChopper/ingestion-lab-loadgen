@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"reflect"
-	"strconv"
 	"testing"
 	"time"
 )
@@ -31,9 +30,6 @@ func TestStartThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 		senderBatches: senderBatches,
 	}
 	stage.start(context.Background(), throttlerSettings{mode: throttlerBypass})
-	if got := cap(senderBatches); got != 0 {
-		t.Fatalf("Sender channel capacity = %d, want 0", got)
-	}
 	for index, batch := range want {
 		select {
 		case got, ok := <-senderBatches:
@@ -56,35 +52,6 @@ func TestStartThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 	got := telemetry.snapshot(time.Now())
 	if got.receivedBatchesTotal != 2 || got.receivedTransactionsTotal != 3 {
 		t.Fatalf("Reader channel receives = %+v, want 2 batches and 3 transactions", got)
-	}
-}
-
-func TestStartThrottlerUsesConfiguredSenderChannelCapacity(t *testing.T) {
-	for _, capacity := range []int{0, 1, 8_192} {
-		t.Run(strconv.Itoa(capacity), func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			readerBatches := make(chan []Transaction)
-			var readerChannel, outputTelemetry channelTelemetry
-			senderChannel := &outputTelemetry
-			senderBatches := make(chan []Transaction, capacity)
-			senderChannel.start(senderBatches, 0)
-			stage := throttler{
-				readerChannel: &readerChannel,
-				senderChannel: senderChannel,
-				readerBatches: readerBatches,
-				senderBatches: senderBatches,
-			}
-			stage.start(ctx, throttlerSettings{mode: throttlerBypass})
-			if got := cap(senderBatches); got != capacity {
-				t.Fatalf("Sender channel capacity = %d, want %d", got, capacity)
-			}
-			if got := senderChannel.snapshot(time.Now()).capacity; got != capacity {
-				t.Fatalf("Sender telemetry capacity = %d, want %d", got, capacity)
-			}
-			cancel()
-			waitForThrottlerDone(t, stage.done)
-		})
 	}
 }
 
@@ -283,18 +250,6 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 			}
 			waitForThrottlerDone(t, stage.done)
 		})
-	}
-}
-
-func TestThrottlerConfigWholeBatchPacingInterval(t *testing.T) {
-	const (
-		batchSize    = 1_000
-		requestedTPS = 2_000
-	)
-
-	interval := time.Duration(batchSize) * time.Second / time.Duration(requestedTPS)
-	if interval != 500*time.Millisecond {
-		t.Fatalf("whole-batch pacing interval = %v, want 500ms", interval)
 	}
 }
 

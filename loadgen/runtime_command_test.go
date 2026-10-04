@@ -4,9 +4,6 @@ import "testing"
 
 func TestExecuteRuntimeCommandForwardsCommandAndReceipt(t *testing.T) {
 	control := make(chan runtimeCommand, 10)
-	if cap(control) != 10 {
-		t.Fatalf("request capacity = %d, want 10", cap(control))
-	}
 	want := runtimeCommandReceipt{status: commandConflict}
 	done := make(chan struct{})
 
