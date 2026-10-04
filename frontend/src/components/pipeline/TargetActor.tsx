@@ -66,7 +66,7 @@ export function TargetActor({
         <text x={storage.label.x} y={storage.label.y} textAnchor={storage.label.anchor} className="pipeline-small-strong">S3 / Vaultbox</text>
         <text x={outbox.label.x} y={outbox.label.y} textAnchor={outbox.label.anchor} className="pipeline-small-strong">Postgres outbox</text>
         <text x={kafka.label.x} y={kafka.label.y} textAnchor={kafka.label.anchor} className="pipeline-small-strong">Kafka</text>
-        <text x={receiver.label.x} y={receiver.label.y - 8} textAnchor={receiver.label.anchor} className="pipeline-small pipeline-target-secondary">POST batch</text>
+        <text x={receiver.request!.x} y={receiver.request!.y} textAnchor={receiver.request!.anchor} className="pipeline-small pipeline-target-secondary">POST batch</text>
       </g>
     </>
   )

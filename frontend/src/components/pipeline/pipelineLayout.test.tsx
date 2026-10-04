@@ -28,13 +28,15 @@ describe('pipeline layout selection', () => {
     expect(getPipelineLayoutMode(search)).toBe(expected)
   })
 
-  it('gives explicit query mode precedence and treats square as landscape', () => {
+  it('gives explicit query mode precedence and uses portrait at narrow widths', () => {
     expect(resolvePipelineOrientation('portrait', false, 1200, 600))
       .toBe('portrait')
     expect(resolvePipelineOrientation('landscape', true, 600, 1200))
       .toBe('landscape')
+    expect(resolvePipelineOrientation('auto', false, 615, 400)).toBe('portrait')
+    expect(resolvePipelineOrientation('auto', false, 1440, 900)).toBe('landscape')
     expect(resolvePipelineOrientation('auto', true, 800, 800))
-      .toBe('landscape')
+      .toBe('portrait')
   })
 
   it('follows live orientation media changes in auto mode', () => {
@@ -76,6 +78,6 @@ describe('pipeline layout selection', () => {
       innerHeight: { configurable: true, value: 800 },
     })
     act(() => window.dispatchEvent(new Event('resize')))
-    expect(screen.getByLabelText('layout').textContent).toBe('landscape')
+    expect(screen.getByLabelText('layout').textContent).toBe('portrait')
   })
 })

@@ -77,7 +77,7 @@ export function getPortraitWorkerGridMetrics(
     columnPitch,
     rowPitch,
     gridBottom,
-    height: Math.ceil(gridBottom + 61),
+    height: Math.ceil(gridBottom + 90),
   }
 }
 

@@ -44,10 +44,10 @@ export function PipelineSvg({
   const resolvedGeometry = useMemo(
     () => geometry ?? createPipelineGeometry({
       orientation,
-      readerWorkers: liveControls.readerWorkers.desired,
-      senderWorkers: liveControls.senderWorkers.desired,
+      readerWorkers: Math.max(liveControls.readerWorkers.desired, Math.min(32, snapshot.reader.liveWorkers)),
+      senderWorkers: Math.max(liveControls.senderWorkers.desired, Math.min(32, snapshot.sender.liveWorkers)),
     }),
-    [geometry, liveControls.readerWorkers.desired, liveControls.senderWorkers.desired, orientation],
+    [geometry, liveControls.readerWorkers.desired, liveControls.senderWorkers.desired, orientation, snapshot.reader.liveWorkers, snapshot.sender.liveWorkers],
   )
   const readerChannelGeometry = resolvedGeometry.channels[snapshot.readerChannel.id]
   const senderChannelGeometry = resolvedGeometry.channels[snapshot.senderChannel.id]
@@ -81,7 +81,10 @@ export function PipelineSvg({
           ? snapshot.config?.readerChannelCapacity.allowed
           : undefined}
         hoseForbiddenBoxes={orientation === 'portrait'
-          ? [resolvedGeometry.batchControl.guard]
+          ? [
+              { x: 70, y: readerChannelGeometry.end.y - 196, width: 340, height: 188 },
+              resolvedGeometry.batchControl.guard,
+            ]
           : undefined}
       />
       <ChannelCable
@@ -94,6 +97,9 @@ export function PipelineSvg({
         orientation={orientation}
         capacityValues={snapshot.adapterKind === 'http'
           ? snapshot.config?.senderChannelCapacity.allowed
+          : undefined}
+        hoseForbiddenBoxes={orientation === 'portrait'
+          ? [{ x: 70, y: senderChannelGeometry.end.y - 196, width: 340, height: 188 }]
           : undefined}
       />
       <ellipse

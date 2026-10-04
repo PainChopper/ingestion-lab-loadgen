@@ -103,7 +103,7 @@ export const ACTOR_GEOMETRY = Object.freeze({
     metrics: {
       primary: { x: 90, y: 510, anchor: 'middle' } satisfies TextPlacement,
       secondary: { x: 90, y: 531, anchor: 'middle' } satisfies TextPlacement,
-      status: { x: 90, y: 548, anchor: 'middle' } satisfies TextPlacement,
+      status: { x: 30, y: 548, anchor: 'start' } satisfies TextPlacement,
     },
   },
   throttler: {
@@ -318,13 +318,13 @@ function landscapeGeometry(contentWidth: number) {
       anchor: ACTOR_GEOMETRY.target.title.anchor,
     },
     stages: [
-      { x: 914 + targetOffset, y: 250, width: 162, height: 44, label: { x: 995 + targetOffset, y: 271, anchor: 'middle' } satisfies TextPlacement, detail: { x: 995 + targetOffset, y: 286, anchor: 'middle' } satisfies TextPlacement },
+      { x: 914 + targetOffset, y: 240, width: 162, height: 64, request: { x: 995 + targetOffset, y: 256, anchor: 'middle' } satisfies TextPlacement, label: { x: 995 + targetOffset, y: 276, anchor: 'middle' } satisfies TextPlacement, detail: { x: 995 + targetOffset, y: 296, anchor: 'middle' } satisfies TextPlacement },
       { x: 914 + targetOffset, y: 315, width: 162, height: 34, label: { x: 995 + targetOffset, y: 337, anchor: 'middle' } satisfies TextPlacement },
       { x: 914 + targetOffset, y: 370, width: 162, height: 34, label: { x: 995 + targetOffset, y: 392, anchor: 'middle' } satisfies TextPlacement },
       { x: 914 + targetOffset, y: 425, width: 162, height: 34, label: { x: 995 + targetOffset, y: 447, anchor: 'middle' } satisfies TextPlacement },
     ],
     connectors: [
-      { x: 995 + targetOffset, y1: 294, y2: 315 },
+      { x: 995 + targetOffset, y1: 304, y2: 315 },
       { x: 995 + targetOffset, y1: 349, y2: 370 },
       { x: 995 + targetOffset, y1: 404, y2: 425 },
     ],
@@ -385,9 +385,9 @@ function landscapeGeometry(contentWidth: number) {
       end: target.ports.input,
       metrics: {
         x: (sender.ports.output.x + target.ports.input.x) / 2,
-        statusY: 507,
-        throughputY: 528,
-        detailY: 549,
+        statusY: Math.max(target.bounds.y + target.bounds.height, sender.metrics.status.y) + 37,
+        throughputY: Math.max(target.bounds.y + target.bounds.height, sender.metrics.status.y) + 58,
+        detailY: Math.max(target.bounds.y + target.bounds.height, sender.metrics.status.y) + 79,
       },
     },
   }
@@ -397,56 +397,57 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
   const readerGrid = getPortraitWorkerGridMetrics('reader', readerWorkers)
   const senderGrid = getPortraitWorkerGridMetrics('sender', senderWorkers)
   const readerTop = 88
-  const topRowBaseline = 275
-  const readerBottom = topRowBaseline
-  const senderTop = readerTop
-  const senderBottom = topRowBaseline
-  const targetTop = senderBottom + 55
+  const readerBottom = readerTop + readerGrid.height
+  const throttlerTop = readerBottom + 480
+  const throttlerBottom = throttlerTop + 193
+  const senderTop = throttlerBottom + 480
+  const senderBottom = senderTop + senderGrid.height
+  const targetTop = senderBottom + 190
   const viewBoxHeight = targetTop + 340
   const reader = {
     bounds: {
-      x: 10,
-      width: 130,
+      x: 60,
+      width: 360,
       bottom: readerBottom,
       rowHeight: 45,
       padding: 18,
     } satisfies WorkerActorBounds,
-    ports: { output: { x: 140, y: readerBottom } satisfies Point },
-    title: { x: 75, y: 34, anchor: 'middle' } satisfies TextPlacement,
-    controls: { x: 31, y: 48, width: 88, height: 30 },
+    ports: { output: { x: 240, y: readerBottom } satisfies Point },
+    title: { x: 240, y: 34, anchor: 'middle' } satisfies TextPlacement,
+    controls: { x: 196, y: 48, width: 88, height: 30 },
     metrics: {
       primary: {
-        x: 75,
+        x: 240,
         y: readerTop + readerGrid.gridBottom + 22,
         anchor: 'middle',
       } satisfies TextPlacement,
       secondary: {
-        x: 75,
+        x: 240,
         y: readerTop + readerGrid.gridBottom + 43,
         anchor: 'middle',
       } satisfies TextPlacement,
       status: {
-        x: 75,
+        x: 240,
         y: readerTop + readerGrid.gridBottom + 60,
         anchor: 'middle',
       } satisfies TextPlacement,
     },
-    markerPoint: { x: 75, y: (readerTop + readerBottom) / 2 },
+    markerPoint: { x: 240, y: (readerTop + readerBottom) / 2 },
   }
   const throttler = {
     bounds: {
       x: 165,
-      y: 178,
+      y: throttlerTop,
       width: 150,
       height: 193,
     } satisfies FixedActorBounds,
     ports: {
-      input: { x: 165, y: topRowBaseline } satisfies Point,
-      output: { x: 315, y: topRowBaseline } satisfies Point,
+      input: { x: 240, y: throttlerTop } satisfies Point,
+      output: { x: 240, y: throttlerBottom } satisfies Point,
     },
     title: {
       x: 240,
-      y: 160,
+      y: throttlerTop - 15,
       anchor: 'middle',
     } satisfies TextPlacement,
     renderTitle: { x: 430, y: 267, anchor: 'middle' } satisfies TextPlacement,
@@ -517,44 +518,44 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
         ],
       ),
     },
-    transform: { x: -190, y: -104 } satisfies Point,
+    transform: { x: -190, y: throttlerTop - 282 } satisfies Point,
   }
   const sender = {
     bounds: {
-      x: 340,
-      width: 130,
+      x: 60,
+      width: 360,
       bottom: senderBottom,
       rowHeight: 45,
       padding: 18,
     } satisfies WorkerActorBounds,
     ports: {
-      input: { x: 340, y: topRowBaseline } satisfies Point,
-      output: { x: 405, y: senderBottom } satisfies Point,
+      input: { x: 240, y: senderTop } satisfies Point,
+      output: { x: 240, y: senderBottom } satisfies Point,
     },
     title: {
-      x: 405,
-      y: 34,
+      x: 240,
+      y: senderTop - 54,
       anchor: 'middle',
     } satisfies TextPlacement,
-    controls: { x: 361, y: 48, width: 88, height: 30 },
+    controls: { x: 196, y: senderTop - 40, width: 88, height: 30 },
     metrics: {
       primary: {
-        x: 405,
+        x: 240,
         y: senderTop + senderGrid.gridBottom + 22,
         anchor: 'middle',
       } satisfies TextPlacement,
       secondary: {
-        x: 405,
+        x: 240,
         y: senderTop + senderGrid.gridBottom + 43,
         anchor: 'middle',
       } satisfies TextPlacement,
       status: {
-        x: 405,
+        x: 240,
         y: senderTop + senderGrid.gridBottom + 60,
         anchor: 'middle',
       } satisfies TextPlacement,
     },
-    markerPoint: { x: 405, y: (senderTop + senderBottom) / 2 },
+    markerPoint: { x: 240, y: (senderTop + senderBottom) / 2 },
   }
   const target = {
     bounds: {
@@ -566,19 +567,19 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
     ports: { input: { x: 240, y: targetTop } satisfies Point },
     title: {
       x: 240,
-      y: targetTop - 17,
+      y: targetTop + 18,
       anchor: 'middle',
     } satisfies TextPlacement,
     stages: [
-      { x: 78, y: targetTop + 28, width: 324, height: 48, label: { x: 240, y: targetTop + 50, anchor: 'middle' } satisfies TextPlacement, detail: { x: 240, y: targetTop + 67, anchor: 'middle' } satisfies TextPlacement },
-      { x: 78, y: targetTop + 98, width: 324, height: 38, label: { x: 240, y: targetTop + 122, anchor: 'middle' } satisfies TextPlacement },
-      { x: 78, y: targetTop + 158, width: 324, height: 38, label: { x: 240, y: targetTop + 182, anchor: 'middle' } satisfies TextPlacement },
-      { x: 78, y: targetTop + 218, width: 324, height: 38, label: { x: 240, y: targetTop + 242, anchor: 'middle' } satisfies TextPlacement },
+      { x: 78, y: targetTop + 28, width: 324, height: 72, request: { x: 240, y: targetTop + 44, anchor: 'middle' } satisfies TextPlacement, label: { x: 240, y: targetTop + 62, anchor: 'middle' } satisfies TextPlacement, detail: { x: 240, y: targetTop + 83, anchor: 'middle' } satisfies TextPlacement },
+      { x: 78, y: targetTop + 120, width: 324, height: 38, label: { x: 240, y: targetTop + 144, anchor: 'middle' } satisfies TextPlacement },
+      { x: 78, y: targetTop + 180, width: 324, height: 38, label: { x: 240, y: targetTop + 204, anchor: 'middle' } satisfies TextPlacement },
+      { x: 78, y: targetTop + 240, width: 324, height: 38, label: { x: 240, y: targetTop + 264, anchor: 'middle' } satisfies TextPlacement },
     ],
     connectors: [
-      { x: 240, y1: targetTop + 76, y2: targetTop + 98 },
-      { x: 240, y1: targetTop + 136, y2: targetTop + 158 },
-      { x: 240, y1: targetTop + 196, y2: targetTop + 218 },
+      { x: 240, y1: targetTop + 100, y2: targetTop + 120 },
+      { x: 240, y1: targetTop + 158, y2: targetTop + 180 },
+      { x: 240, y1: targetTop + 218, y2: targetTop + 240 },
     ],
     labels: {
       caption: { x: 240, y: targetTop + 50, anchor: 'middle' } satisfies TextPlacement,
@@ -593,11 +594,11 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       start: reader.ports.output,
       end: throttler.ports.input,
       metrics: {
-        x: 350,
-        throughputY: readerBottom + 60,
-        depthY: readerBottom + 84,
-        waitingY: readerBottom + 107,
-        requestY: readerBottom + 130,
+        x: 240,
+        throughputY: throttlerTop - 178,
+        depthY: throttlerTop - 156,
+        waitingY: throttlerTop - 134,
+        requestY: throttlerTop - 96,
       },
     },
     'throttler-to-sender': {
@@ -605,10 +606,10 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       end: sender.ports.input,
       metrics: {
         x: 240,
-        throughputY: topRowBaseline + 42,
-        depthY: topRowBaseline + 66,
-        waitingY: topRowBaseline + 89,
-        requestY: topRowBaseline + 112,
+        throughputY: senderTop - 178,
+        depthY: senderTop - 156,
+        waitingY: senderTop - 134,
+        requestY: senderTop - 96,
       },
     },
   }
@@ -622,8 +623,8 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
     },
     stationDelta: 0,
     batchControl: batchControlGeometry({
-      x: throttler.ports.input.x,
-      y: throttler.ports.input.y - PIPELINE_BATCH_CONTROL.portraitInputOffset,
+      x: 240,
+      y: throttlerTop - 50,
     }),
     actors: { reader, throttler, sender, target },
     channels,
@@ -631,10 +632,10 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       start: sender.ports.output,
       end: target.ports.input,
       metrics: {
-        x: 340,
-        statusY: (senderBottom + targetTop) / 2 - 24,
-        throughputY: (senderBottom + targetTop) / 2,
-        detailY: (senderBottom + targetTop) / 2 + 24,
+        x: 240,
+        statusY: senderBottom + 60,
+        throughputY: senderBottom + 84,
+        detailY: senderBottom + 108,
       },
     },
   }

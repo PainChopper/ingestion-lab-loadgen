@@ -46,7 +46,7 @@ export function HttpLink({
   const { start, end, metrics } = geometry.http
   const portrait = geometry.orientation === 'portrait'
   const path = portrait
-    ? `M${start.x} ${start.y} V${end.y}`
+    ? `M${start.x} ${start.y} V${start.y + 16} Q${start.x} ${start.y + 24} ${start.x - 8} ${start.y + 24} H88 Q80 ${start.y + 24} 80 ${start.y + 32} V${end.y - 8} Q80 ${end.y} 88 ${end.y} H${end.x}`
     : `M${start.x} ${start.y} H${end.x}`
   const isIdle =
     snapshot.throughputTps === 0 &&
@@ -91,7 +91,7 @@ export function HttpLink({
       />
       <path
         d={portrait
-          ? `M${end.x} ${end.y} l-7 -12 h14 z`
+          ? `M${end.x} ${end.y} l-12 -7 v14 z`
           : `M${end.x} ${end.y} l-12 -7 v14 z`}
         className="pipeline-http-arrow"
       />

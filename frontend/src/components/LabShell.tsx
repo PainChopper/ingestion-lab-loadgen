@@ -185,13 +185,15 @@ function PipelineViewport({
   const geometry = useMemo(() => createPipelineGeometry({
     orientation,
     landscapeContentWidth,
-    readerWorkers: liveControls.readerWorkers.desired,
-    senderWorkers: liveControls.senderWorkers.desired,
+    readerWorkers: Math.max(liveControls.readerWorkers.desired, Math.min(32, snapshot.reader.liveWorkers)),
+    senderWorkers: Math.max(liveControls.senderWorkers.desired, Math.min(32, snapshot.sender.liveWorkers)),
   }), [
     landscapeContentWidth,
     orientation,
     liveControls.readerWorkers.desired,
     liveControls.senderWorkers.desired,
+    snapshot.reader.liveWorkers,
+    snapshot.sender.liveWorkers,
   ])
 
   return (

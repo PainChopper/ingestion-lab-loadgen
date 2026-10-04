@@ -180,7 +180,7 @@ function spacedCoordinatesAroundForbiddenRanges(
   return spacedCoordinates(0, available, count).map((offset) => {
     let coordinate = start + offset
     for (const range of ranges) {
-      if (coordinate < range.start) break
+      if (coordinate <= range.start) break
       coordinate += range.end - range.start
     }
     return coordinate
@@ -324,13 +324,35 @@ function buildPortraitCapacityPath(
     })),
   )
   const points: Point[] = [start]
-  let x = start.x
-  for (const y of legs) {
+  const appendVertical = (x: number, y: number) => {
+    const previousY = points[points.length - 1]!.y
+    const crossings = mergeAxisRanges(previousY, y, forbidden
+      .filter((box) => x > box.x - CHANNEL_SCALE_HOSE_CLEARANCE &&
+        x < box.x + box.width + CHANNEL_SCALE_HOSE_CLEARANCE)
+      .map((box) => ({
+        start: box.y - CHANNEL_SCALE_HOSE_CLEARANCE,
+        end: box.y + box.height + CHANNEL_SCALE_HOSE_CLEARANCE,
+      })))
+    for (const crossing of crossings) {
+      points.push(
+        { x, y: crossing.start },
+        { x: outerX, y: crossing.start },
+        { x: outerX, y: crossing.end },
+        { x, y: crossing.end },
+      )
+    }
     points.push({ x, y })
+  }
+  let x = start.x
+  for (const [index, legY] of legs.entries()) {
+    const y = forbidden.length > 1 && index === legs.length - 1
+      ? end.y
+      : legY
+    appendVertical(x, y)
     x = x === start.x ? outerX : start.x
     points.push({ x, y })
   }
-  points.push(end)
+  appendVertical(x, end.y)
   const legSegments = new Set<number>()
   for (let index = 0; index < points.length - 1; index += 1) {
     if (points[index]!.y === points[index + 1]!.y) {
@@ -351,18 +373,11 @@ export function getChannelCapacityGeometryPresentation(
   const desiredLegCount = getCapacityLegCount(control, values)
   if (orientation === 'portrait') {
     const centerY = (start.y + end.y) / 2 - CHANNEL_CAPACITY_SCALE_OFFSET
-    const sliderX = capacityToCableY(
-      control.applied ?? control.min,
-      control,
-      start.x,
-      PORTRAIT_CHANNEL_CABLE_MAX_LIFT,
-      values,
-    )
     const scaleForbiddenBox = {
-      x: sliderX - 20,
+      x: start.x - PORTRAIT_CHANNEL_CABLE_MAX_LIFT - 20,
       y: centerY - 26,
-      width: 40,
-      height: 52,
+      width: PORTRAIT_CHANNEL_CABLE_MAX_LIFT + 40,
+      height: 74,
     }
     const forbiddenBoxes = [scaleForbiddenBox, ...hoseForbiddenBoxes]
     const forbiddenRanges = mergeAxisRanges(
@@ -402,7 +417,7 @@ export function getChannelCapacityGeometryPresentation(
   const scaleForbiddenBox = {
     x: centerX - 26,
     y: sliderY - 20,
-    width: 52,
+    width: 86,
     height: 40,
   }
   const availableSpan = end.x - start.x - 48 - scaleForbiddenBox.width

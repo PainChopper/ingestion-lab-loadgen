@@ -408,8 +408,8 @@ export function ChannelCable({
             />
             {tick.major && (
               <text
-                x={portrait ? tick.y : centerX + 10}
-                y={portrait ? scaleCenterY + 18 : tick.y + 4}
+                x={portrait ? tick.y : centerX + 28}
+                y={portrait ? scaleCenterY + 34 : tick.y + 4}
                 textAnchor={portrait ? 'middle' : undefined}
                 className="pipeline-channel-scale__label"
               >
@@ -481,7 +481,12 @@ export function ChannelCable({
           textAnchor="middle"
           className="pipeline-channel-wait-status"
         >
-          {presentation.waitingUpstream}
+          {portrait ? (
+            <>
+              <tspan x={metrics.x}>Waiting upstream {formatInteger(snapshot.blockedSenders)}</tspan>
+              <tspan x={metrics.x} dy="16">oldest {formatMilliseconds(snapshot.oldestBlockedSenderMs)}</tspan>
+            </>
+          ) : presentation.waitingUpstream}
         </text>
       )}
       {capacity.requestState !== null && (
