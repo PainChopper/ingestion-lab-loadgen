@@ -39,6 +39,30 @@ func TestSenderHTTPAttemptPostsJSONBatch(t *testing.T) {
 	}
 }
 
+func TestSenderHTTPAttemptReachesConfiguredMuxWithQuery(t *testing.T) {
+	loaded := testConfig(t)
+	loaded.Sender.API.URL = "http://example.test/test/receive?source=loadgen&batch=1"
+	mux, err := newServeMux(make(chan runtimeCommand), nil, loaded, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed <- r.URL.RequestURI()
+		mux.ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	loaded.Sender.API.URL = server.URL + "/test/receive?source=loadgen&batch=1"
+	attempt := newSenderHTTPAttempt(loaded.Sender.API.URL, server.Client())
+	if got := attempt.deliver(t.Context(), []Transaction{{ClientID: "client-1"}}, 1); got != senderAttemptSuccess {
+		t.Fatalf("real Sender→mux attempt outcome = %d, want success", got)
+	}
+	if got := <-observed; got != "/test/receive?source=loadgen&batch=1" {
+		t.Fatalf("Sender request URI = %q, want configured path and query", got)
+	}
+	t.Log("real Sender→configured ingest handler returned success; query source=loadgen&batch=1 preserved")
+}
+
 func TestSenderHTTPAttemptClassifiesResponseStatuses(t *testing.T) {
 	tests := []struct {
 		status int

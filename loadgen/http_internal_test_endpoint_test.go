@@ -96,7 +96,7 @@ func TestInternalTestIngestHandler(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			req := httptest.NewRequest(test.method, internalTestIngestPath, strings.NewReader(test.body))
+			req := httptest.NewRequest(test.method, "/test/receive", strings.NewReader(test.body))
 			req.Header.Set("Content-Type", test.content)
 			recorder := httptest.NewRecorder()
 

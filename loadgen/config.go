@@ -311,7 +311,7 @@ func (p senderAPIConfig) validate() error {
 
 	parsed, err := url.Parse(p.URL)
 	if err != nil {
-		return fmt.Errorf("url must be a valid absolute HTTP(S) URL")
+		return fmt.Errorf("sender.api.url must be a valid absolute HTTP(S) URL: %w", err)
 	}
 	if !parsed.IsAbs() || parsed.Host == "" {
 		return fmt.Errorf("url must be an absolute HTTP(S) URL with host")
