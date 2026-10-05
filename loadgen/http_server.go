@@ -49,7 +49,7 @@ func startHTTPServer(requests chan<- runtimeCommand, metrics *PrometheusMetrics,
 	mux := newServeMux(requests, metrics, config, logger)
 
 	server := &http.Server{
-		Addr:    "127.0.0.1:8080",
+		Addr:    config.HTTP.Addr,
 		Handler: mux,
 	}
 	listener, err := net.Listen("tcp", server.Addr)
