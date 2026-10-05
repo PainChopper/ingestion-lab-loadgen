@@ -45,9 +45,9 @@ func (sourceError readerSourceError) Error() string {
 }
 
 type runtimeThrottlerStatus struct {
-	RequestedTps     int     `json:"requestedTps"`
-	AdmittedTps      float64 `json:"admittedTps"`
-	InstallationMode string  `json:"installationMode"`
+	RequestedTps int     `json:"requestedTps"`
+	AdmittedTps  float64 `json:"admittedTps"`
+	Installed    bool    `json:"installed"`
 }
 
 type runtimeSenderStatus struct {
@@ -80,15 +80,15 @@ type runtimeChannelStatus struct {
 }
 
 type runtimeConfigStatus struct {
-	ReaderReadBatchSize       runtimeRangeConfig            `json:"readerReadBatchSize"`
-	ReaderWorkers             runtimeRangeConfig            `json:"readerWorkers"`
-	ReaderChannelCapacity     runtimeAllowedConfig          `json:"readerChannelCapacity"`
-	SenderChannelCapacity     runtimeAllowedConfig          `json:"senderChannelCapacity"`
-	ThrottlerRequestedTPS     runtimeRangeConfig            `json:"throttlerRequestedTps"`
-	ThrottlerInstallationMode runtimeInstallationModeConfig `json:"throttlerInstallationMode"`
-	MetricsWindowMS           runtimeRangeConfig            `json:"metricsWindowMs"`
-	SenderWorkers             runtimeRangeConfig            `json:"senderWorkers"`
-	Logging                   runtimeLoggingConfig          `json:"logging"`
+	ReaderReadBatchSize   runtimeRangeConfig     `json:"readerReadBatchSize"`
+	ReaderWorkers         runtimeRangeConfig     `json:"readerWorkers"`
+	ReaderChannelCapacity runtimeAllowedConfig   `json:"readerChannelCapacity"`
+	SenderChannelCapacity runtimeAllowedConfig   `json:"senderChannelCapacity"`
+	ThrottlerRequestedTPS runtimeRangeConfig     `json:"throttlerRequestedTps"`
+	ThrottlerInstalled    runtimeInstalledConfig `json:"throttlerInstalled"`
+	MetricsWindowMS       runtimeRangeConfig     `json:"metricsWindowMs"`
+	SenderWorkers         runtimeRangeConfig     `json:"senderWorkers"`
+	Logging               runtimeLoggingConfig   `json:"logging"`
 }
 
 type runtimeRangeConfig struct {
@@ -107,10 +107,10 @@ type runtimeAllowedConfig struct {
 	Mutability string `json:"mutability"`
 }
 
-type runtimeInstallationModeConfig struct {
-	Initial    string   `json:"initial"`
-	Allowed    []string `json:"allowed"`
-	Mutability string   `json:"mutability"`
+type runtimeInstalledConfig struct {
+	Initial    bool   `json:"initial"`
+	Allowed    []bool `json:"allowed"`
+	Mutability string `json:"mutability"`
 }
 
 type runtimeLoggingConfig struct {
@@ -120,15 +120,15 @@ type runtimeLoggingConfig struct {
 
 func runtimeConfigStatusFromConfig(config config) runtimeConfigStatus {
 	return runtimeConfigStatus{
-		ReaderReadBatchSize:       runtimeRangeConfigFromConfig(config.Reader.ReadBatchSize),
-		ReaderWorkers:             runtimeRangeConfigFromConfig(config.Reader.Workers),
-		ReaderChannelCapacity:     runtimeAllowedConfigFromConfig(config.ReaderChannel.Capacity),
-		SenderChannelCapacity:     runtimeAllowedConfigFromConfig(config.SenderChannel.Capacity),
-		ThrottlerRequestedTPS:     runtimeRangeConfigFromConfig(config.Throttler.RequestedTPS),
-		ThrottlerInstallationMode: runtimeInstallationModeConfigFromConfig(config.Throttler.InstallationMode),
-		MetricsWindowMS:           runtimeRangeConfigFromConfig(config.Metrics.WindowMS),
-		SenderWorkers:             runtimeRangeConfigFromConfig(config.Sender.Workers),
-		Logging:                   runtimeLoggingConfigFromConfig(config.Logging),
+		ReaderReadBatchSize:   runtimeRangeConfigFromConfig(config.Reader.ReadBatchSize),
+		ReaderWorkers:         runtimeRangeConfigFromConfig(config.Reader.Workers),
+		ReaderChannelCapacity: runtimeAllowedConfigFromConfig(config.ReaderChannel.Capacity),
+		SenderChannelCapacity: runtimeAllowedConfigFromConfig(config.SenderChannel.Capacity),
+		ThrottlerRequestedTPS: runtimeRangeConfigFromConfig(config.Throttler.RequestedTPS),
+		ThrottlerInstalled:    runtimeInstalledConfigFromConfig(config.Throttler.Installed),
+		MetricsWindowMS:       runtimeRangeConfigFromConfig(config.Metrics.WindowMS),
+		SenderWorkers:         runtimeRangeConfigFromConfig(config.Sender.Workers),
+		Logging:               runtimeLoggingConfigFromConfig(config.Logging),
 	}
 }
 
@@ -152,8 +152,8 @@ func runtimeAllowedConfigFromConfig(config allowedConfig) runtimeAllowedConfig {
 	}
 }
 
-func runtimeInstallationModeConfigFromConfig(config installationModeConfig) runtimeInstallationModeConfig {
-	return runtimeInstallationModeConfig{
+func runtimeInstalledConfigFromConfig(config installedConfig) runtimeInstalledConfig {
+	return runtimeInstalledConfig{
 		Initial:    config.Initial,
 		Allowed:    config.Allowed,
 		Mutability: config.Mutability,

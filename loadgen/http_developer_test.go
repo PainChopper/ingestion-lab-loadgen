@@ -139,13 +139,13 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 	seen := map[string]bool{}
 	expected := map[string]runtimeCommand{
 		"run": {kind: cmdRun}, "pause": {kind: cmdPause}, "reset": {kind: cmdReset},
-		"set-read-batch-size":             {kind: cmdSetReadBatchSize, value: 1000},
-		"set-reader-workers":              {kind: cmdSetReaderWorkers, value: 2},
-		"set-reader-channel-capacity":     {kind: cmdSetReaderChannelCapacity, value: 8192},
-		"set-sender-channel-capacity":     {kind: cmdSetSenderChannelCapacity, value: 8192},
-		"set-requested-tps":               {kind: cmdSetRequestedTPS, value: 2000000},
-		"set-throttler-installation-mode": {kind: cmdSetThrottlerInstallationMode, textValue: "installed"},
-		"set-sender-workers":              {kind: cmdSetSenderWorkers, value: 32},
+		"set-read-batch-size":         {kind: cmdSetReadBatchSize, value: 1000},
+		"set-reader-workers":          {kind: cmdSetReaderWorkers, value: 2},
+		"set-reader-channel-capacity": {kind: cmdSetReaderChannelCapacity, value: 8192},
+		"set-sender-channel-capacity": {kind: cmdSetSenderChannelCapacity, value: 8192},
+		"set-requested-tps":           {kind: cmdSetRequestedTPS, value: 2000000},
+		"set-throttler-installed":     {kind: cmdSetThrottlerInstalled, installed: true},
+		"set-sender-workers":          {kind: cmdSetSenderWorkers, value: 32},
 	}
 	if got := stringSet(mapKeys(mapping)); !reflect.DeepEqual(got, stringSet(mapKeysFromRuntimeCommands(expected))) {
 		t.Errorf("discriminator actions = %v, want actions accepted by commandsHandler %v", mapKeys(mapping), mapKeysFromRuntimeCommands(expected))
@@ -195,7 +195,7 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 				t.Errorf("%s example value presence = %t, required = %t", name, hasValue, requiresValue)
 			}
 			strict := action == "set-reader-workers" || action == "set-sender-channel-capacity" ||
-				action == "set-requested-tps" || action == "set-throttler-installation-mode" || action == "set-sender-workers"
+				action == "set-requested-tps" || action == "set-throttler-installed" || action == "set-sender-workers"
 			if (schema["additionalProperties"] == false) != strict {
 				t.Errorf("%s strict envelope = %v, want %t", name, schema["additionalProperties"], strict)
 			}
@@ -215,6 +215,10 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 				case "string":
 					if _, ok := body["value"].(string); !ok {
 						t.Errorf("%s example value is not string: %v", name, body["value"])
+					}
+				case "boolean":
+					if _, ok := body["value"].(bool); !ok {
+						t.Errorf("%s example value is not boolean: %v", name, body["value"])
 					}
 				default:
 					t.Errorf("%s unexpected value type %v", name, valueType)
@@ -257,11 +261,11 @@ func assertExampleDispatches(t *testing.T, body map[string]any, want runtimeComm
 	case <-time.After(time.Second):
 		t.Fatalf("example %q was not dispatched by commandsHandler", body["action"])
 	}
-	if got.kind != want.kind || got.value != want.value || got.textValue != want.textValue {
-		t.Errorf("example %q dispatched %+v, want kind %v value %d text %q", body["action"], got, want.kind, want.value, want.textValue)
+	if got.kind != want.kind || got.value != want.value || got.installed != want.installed {
+		t.Errorf("example %q dispatched %+v, want kind %v value %d installed %t", body["action"], got, want.kind, want.value, want.installed)
 	}
 	if got.receiptReply != nil {
-		got.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
+		got.receiptReply <- runtimeCommandReceipt{}
 	}
 	select {
 	case <-done:
@@ -334,6 +338,10 @@ func validateSchema(value any, schema map[string]any, schemas map[string]any) er
 	case "string":
 		if _, ok := value.(string); !ok {
 			return fmt.Errorf("got %T, want string", value)
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("got %T, want boolean", value)
 		}
 	case "integer":
 		number, ok := value.(float64)
@@ -415,18 +423,18 @@ func anyStringsOrEmpty(value any) []string {
 func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 	t.Helper()
 	models := map[string]reflect.Type{
-		"Snapshot":               reflect.TypeOf(runtimeStatus{}),
-		"RunStatus":              reflect.TypeOf(runtimeRunStatus{}),
-		"ReaderStatus":           reflect.TypeOf(runtimeReaderStatus{}),
-		"ReaderSourceError":      reflect.TypeOf(readerSourceError{}),
-		"ThrottlerStatus":        reflect.TypeOf(runtimeThrottlerStatus{}),
-		"SenderStatus":           reflect.TypeOf(runtimeSenderStatus{}),
-		"ChannelStatus":          reflect.TypeOf(runtimeChannelStatus{}),
-		"ConfigStatus":           reflect.TypeOf(runtimeConfigStatus{}),
-		"RangeConfig":            reflect.TypeOf(runtimeRangeConfig{}),
-		"AllowedConfig":          reflect.TypeOf(runtimeAllowedConfig{}),
-		"InstallationModeConfig": reflect.TypeOf(runtimeInstallationModeConfig{}),
-		"LoggingConfig":          reflect.TypeOf(runtimeLoggingConfig{}),
+		"Snapshot":          reflect.TypeOf(runtimeStatus{}),
+		"RunStatus":         reflect.TypeOf(runtimeRunStatus{}),
+		"ReaderStatus":      reflect.TypeOf(runtimeReaderStatus{}),
+		"ReaderSourceError": reflect.TypeOf(readerSourceError{}),
+		"ThrottlerStatus":   reflect.TypeOf(runtimeThrottlerStatus{}),
+		"SenderStatus":      reflect.TypeOf(runtimeSenderStatus{}),
+		"ChannelStatus":     reflect.TypeOf(runtimeChannelStatus{}),
+		"ConfigStatus":      reflect.TypeOf(runtimeConfigStatus{}),
+		"RangeConfig":       reflect.TypeOf(runtimeRangeConfig{}),
+		"AllowedConfig":     reflect.TypeOf(runtimeAllowedConfig{}),
+		"InstalledConfig":   reflect.TypeOf(runtimeInstalledConfig{}),
+		"LoggingConfig":     reflect.TypeOf(runtimeLoggingConfig{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
@@ -482,6 +490,8 @@ func checkFieldSchema(t *testing.T, name string, field reflect.Type, property ma
 	switch field.Kind() {
 	case reflect.String:
 		want = "string"
+	case reflect.Bool:
+		want = "boolean"
 	case reflect.Float64:
 		want = "number"
 	case reflect.Int, reflect.Int64:
@@ -517,7 +527,7 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 			"populated": {
 				Run:       runtimeRunStatus{State: runStatePaused, TotalTransactions: 46, ElapsedMs: 1234},
 				Reader:    runtimeReaderStatus{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
-				Throttler: runtimeThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
+				Throttler: runtimeThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, Installed: true},
 				Sender:    runtimeSenderStatus{Workers: 32},
 				Config:    runtimeConfigStatusFromConfig(testConfig(t)),
 			},

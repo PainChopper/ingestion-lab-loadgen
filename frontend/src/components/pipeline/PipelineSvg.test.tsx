@@ -195,9 +195,9 @@ describe('responsive pipeline geometry', () => {
     expect(geometry.actors.target.labels.state.anchor).toBe('middle')
   })
 
-  it.each(['installed', 'bypass'] as const)(
+  it.each([true, false] as const)(
     'stacks portrait throttler %s metrics in the right telemetry rail',
-    (installationMode) => {
+    (installed) => {
       const geometry = createPipelineGeometry({
         orientation: 'portrait',
         readerWorkers: 7,
@@ -207,7 +207,7 @@ describe('responsive pipeline geometry', () => {
       if (!('portraitPipe' in throttler)) {
         throw new Error('portrait pipe geometry is missing')
       }
-      const placements = installationMode === 'installed'
+      const placements = installed === true
         ? [
           throttler.metrics.installed.requested.caption,
           throttler.metrics.installed.requested.value,
@@ -255,7 +255,7 @@ describe('responsive pipeline geometry', () => {
         x: placement.x + throttler.transform.x,
         y: placement.y + throttler.transform.y,
       }))
-      if (installationMode === 'installed') {
+      if (installed === true) {
         expect(globalPlacements).toEqual([
           { x: 330, y: throttler.bounds.y + 55 },
           { x: 330, y: throttler.bounds.y + 76 },
@@ -429,7 +429,7 @@ function liveControls(
     readerWorkers: desiredControl(snapshot.reader.workers.applied ?? snapshot.reader.workers.min),
     readBatchSize: desiredControl(snapshot.reader.readBatchSize.applied ?? snapshot.reader.readBatchSize.min),
     requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? snapshot.throttler.requestedTps.min),
-    installationMode: desiredControl(snapshot.throttler.installationMode.applied ?? 'installed'),
+    installed: desiredControl(snapshot.throttler.installed.applied ?? true),
     senderWorkers: desiredControl(snapshot.sender.workers.applied ?? snapshot.sender.workers.min),
     timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? snapshot.sender.timeoutMs.min),
     ...overrides,
@@ -727,13 +727,13 @@ describe('PipelineSvg rendering', () => {
   })
 
   it.each([
-    { orientation: 'landscape', installationMode: 'installed' },
-    { orientation: 'landscape', installationMode: 'bypass' },
-    { orientation: 'portrait', installationMode: 'installed' },
-    { orientation: 'portrait', installationMode: 'bypass' },
+    { orientation: 'landscape', installed: true },
+    { orientation: 'landscape', installed: false },
+    { orientation: 'portrait', installed: true },
+    { orientation: 'portrait', installed: false },
   ] as const)(
-    'renders geometry-owned actor text in $orientation $installationMode',
-    ({ orientation, installationMode }) => {
+    'renders geometry-owned actor text in $orientation $installed',
+    ({ orientation, installed }) => {
       const base = activeSnapshot()
       const snapshot: LoadgenSnapshot = {
         ...base,
@@ -743,9 +743,9 @@ describe('PipelineSvg rendering', () => {
         },
         throttler: {
           ...base.throttler,
-          installationMode: {
-            ...base.throttler.installationMode,
-            applied: installationMode,
+          installed: {
+            ...base.throttler.installed,
+            applied: installed,
             pending: null,
           },
         },
@@ -792,7 +792,7 @@ describe('PipelineSvg rendering', () => {
       expectTextPlacement(receiverDetails.item(0), actorGeometry.target.stages[0].detail!)
       expectTextPlacement(receiverDetails.item(1), actorGeometry.target.stages[0].request!)
 
-      const throttlerMetrics = installationMode === 'installed'
+      const throttlerMetrics = installed === true
         ? actorGeometry.throttler.metrics.installed
         : actorGeometry.throttler.metrics.bypass
       const requestedCaption = view.container.querySelector(
@@ -801,7 +801,7 @@ describe('PipelineSvg rendering', () => {
       const requestedValue = view.container.querySelector(
         '[data-actor-metric="requested-value"]',
       )
-      if (installationMode === 'installed') {
+      if (installed === true) {
         expectTextPlacement(
           requestedCaption,
           actorGeometry.throttler.metrics.installed.requested.caption,
@@ -827,7 +827,7 @@ describe('PipelineSvg rendering', () => {
         const throttler = actorGeometry.throttler
         const throttlerRight = throttler.bounds.x + throttler.bounds.width
         const throttlerBottom = throttler.bounds.y + throttler.bounds.height
-        const renderedMetrics = installationMode === 'installed'
+        const renderedMetrics = installed === true
           ? [requestedCaption, requestedValue, admittedCaption, admittedValue]
           : [admittedCaption, admittedValue]
         const globalPlacements = renderedMetrics.map(
@@ -1221,7 +1221,7 @@ describe('PipelineSvg rendering', () => {
       },
     }
     const onRequestedTpsChange = vi.fn().mockResolvedValue(true)
-    const onInstallationModeChange = vi.fn().mockResolvedValue(true)
+    const onInstalledChange = vi.fn().mockResolvedValue(true)
     const geometry = createPipelineGeometry({
       orientation: 'landscape',
       readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
@@ -1235,9 +1235,9 @@ describe('PipelineSvg rendering', () => {
         onChannelCapacityChange={vi.fn()}
         liveControls={liveControls(snapshot, {
           requestedTps: desiredControl<number>(120_000, onRequestedTpsChange),
-          installationMode: desiredControl(
-            snapshot.throttler.installationMode.applied ?? 'installed',
-            onInstallationModeChange,
+          installed: desiredControl(
+            snapshot.throttler.installed.applied ?? true,
+            onInstalledChange,
           ),
         })}
         orientation="landscape"
@@ -1286,7 +1286,7 @@ describe('PipelineSvg rendering', () => {
     expect(requestedValues[0]).not.toBe(requestedValues[1])
     expect(requestedValues[2]).toBe(snapshot.throttler.requestedTps.max)
     expect(requestedValues[3]).not.toBe(snapshot.throttler.requestedTps.max)
-    expect(onInstallationModeChange).not.toHaveBeenCalled()
+    expect(onInstalledChange).not.toHaveBeenCalled()
   })
 
   it('reserves portrait card height for frozen live workers after downscale', () => {
@@ -1365,9 +1365,9 @@ describe('PipelineSvg rendering', () => {
       ...base,
       throttler: {
         ...base.throttler,
-        installationMode: {
-          ...base.throttler.installationMode,
-          applied: 'bypass',
+        installed: {
+          ...base.throttler.installed,
+          applied: false,
           pending: null,
         },
       },

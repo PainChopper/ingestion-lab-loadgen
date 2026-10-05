@@ -4,13 +4,13 @@ import "testing"
 
 func TestExecuteRuntimeCommandForwardsCommandAndReceipt(t *testing.T) {
 	control := make(chan runtimeCommand, 10)
-	want := runtimeCommandReceipt{status: commandConflict}
+	want := runtimeCommandReceipt{rejected: true}
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
 		command := <-control
-		if command.kind != cmdSetThrottlerInstallationMode || command.value != 42 || command.textValue != "bypass" {
+		if command.kind != cmdSetThrottlerInstalled || command.value != 42 || command.installed != false {
 			t.Errorf("command = %+v", command)
 		}
 		if cap(command.receiptReply) != 1 {
@@ -19,7 +19,7 @@ func TestExecuteRuntimeCommandForwardsCommandAndReceipt(t *testing.T) {
 		command.receiptReply <- want
 	}()
 
-	command := runtimeCommand{kind: cmdSetThrottlerInstallationMode, value: 42, textValue: "bypass"}
+	command := runtimeCommand{kind: cmdSetThrottlerInstalled, value: 42, installed: false}
 	if got := executeRuntimeCommand(control, command); got != want {
 		t.Errorf("receipt = %+v, want %+v", got, want)
 	}

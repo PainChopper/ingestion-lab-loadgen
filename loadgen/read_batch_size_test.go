@@ -48,7 +48,7 @@ func TestReadBatchSizeCommandValidation(t *testing.T) {
 						if command.kind != cmdSetReadBatchSize {
 							t.Errorf("command kind = %v, want set size", command.kind)
 						}
-						command.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
+						command.receiptReply <- runtimeCommandReceipt{}
 					}
 				case <-time.After(time.Second):
 					t.Fatal("valid command was not dispatched")
@@ -81,26 +81,26 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 		t.Helper()
 		return requestRuntimeStatus(control)
 	}
-	execute := func(command runtimeCommand, want runtimeCommandStatus) {
+	execute := func(command runtimeCommand, wantRejected bool) {
 		t.Helper()
-		if result := executeRuntimeCommand(control, command); result.status != want {
-			t.Fatalf("command %+v = %+v, want status %d", command, result, want)
+		if result := executeRuntimeCommand(control, command); result.rejected != wantRejected {
+			t.Fatalf("command %+v = %+v, want rejected %t", command, result, wantRejected)
 		}
 	}
 	if got := snapshot().Reader.ReadBatchSize; got != testConfig(t).Reader.ReadBatchSize.Initial {
 		t.Fatalf("initial size = %d, want %d", got, testConfig(t).Reader.ReadBatchSize.Initial)
 	}
-	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 2_000}, commandAccepted)
+	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 2_000}, false)
 	if got := snapshot().Reader.ReadBatchSize; got != 2_000 {
 		t.Fatalf("configured size = %d, want 2000", got)
 	}
-	if result := executeRuntimeCommand(control, runtimeCommand{kind: cmdSetReadBatchSize, value: 2_001}); result.status != commandConflict {
-		t.Fatalf("invalid direct command status = %d, want conflict", result.status)
+	if result := executeRuntimeCommand(control, runtimeCommand{kind: cmdSetReadBatchSize, value: 2_001}); !result.rejected {
+		t.Fatalf("invalid direct command rejected = %t, want true", result.rejected)
 	}
 	if got := snapshot().Reader.ReadBatchSize; got != 2_000 {
 		t.Fatalf("size changed after invalid direct command: %d", got)
 	}
-	execute(runtimeCommand{kind: cmdRun}, commandAccepted)
+	execute(runtimeCommand{kind: cmdRun}, false)
 	select {
 	case batch := <-harness.nextReader(t):
 		if len(batch) != 2_000 {
@@ -112,7 +112,7 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	if got := snapshot().Reader.ReadBatchSize; got != 2_000 {
 		t.Fatalf("reader size = %d, want 2000", got)
 	}
-	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 3_000}, commandConflict)
+	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 3_000}, true)
 	if got := snapshot().Reader.ReadBatchSize; got != 2_000 {
 		t.Fatalf("size changed during Run: %d", got)
 	}
@@ -120,12 +120,12 @@ func TestReadBatchSizeIdleOnlyAndPersistsAfterReset(t *testing.T) {
 	if got := snapshot().Run.State; got != runStatePaused {
 		t.Fatalf("state after Pause = %s", got)
 	}
-	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 3_000}, commandConflict)
-	execute(runtimeCommand{kind: cmdReset}, commandAccepted)
+	execute(runtimeCommand{kind: cmdSetReadBatchSize, value: 3_000}, true)
+	execute(runtimeCommand{kind: cmdReset}, false)
 	if got := snapshot(); got.Run.State != runStateIdle || got.Reader.ReadBatchSize != 2_000 {
 		t.Fatalf("snapshot after Reset = %+v", got)
 	}
-	execute(runtimeCommand{kind: cmdRun}, commandAccepted)
+	execute(runtimeCommand{kind: cmdRun}, false)
 	select {
 	case batch := <-harness.nextReader(t):
 		if len(batch) != 2_000 {

@@ -58,7 +58,7 @@ func TestNewControlStateStartsIdleWithLoadedConfig(t *testing.T) {
 	loadedConfig.Metrics.WindowMS.Initial = 300
 	state := newControlState(loadedConfig, zap.NewNop())
 
-	if got := state.run.lifecycle.currentState(); got != runStateIdle {
+	if got := state.run.lifecycle.state; got != runStateIdle {
 		t.Fatalf("initial lifecycle state = %q, want %q", got, runStateIdle)
 	}
 	if state.config.Source.Path != loadedConfig.Source.Path {

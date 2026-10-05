@@ -43,7 +43,7 @@
                 "readerChannelCapacity": { "value": { "action": "set-reader-channel-capacity", "value": 8192 } },
                 "senderChannelCapacity": { "value": { "action": "set-sender-channel-capacity", "value": 8192 } },
                 "requestedTPS": { "value": { "action": "set-requested-tps", "value": 2000000 } },
-                "installationMode": { "value": { "action": "set-throttler-installation-mode", "value": "installed" } },
+                "installed": { "value": { "action": "set-throttler-installed", "value": true } },
                 "senderWorkers": { "value": { "action": "set-sender-workers", "value": 32 } }
               }
             }
@@ -88,7 +88,7 @@
           { "$ref": "#/components/schemas/ReaderChannelCapacityCommand" },
           { "$ref": "#/components/schemas/SenderChannelCapacityCommand" },
           { "$ref": "#/components/schemas/RequestedTPSCommand" },
-          { "$ref": "#/components/schemas/InstallationModeCommand" },
+          { "$ref": "#/components/schemas/InstalledCommand" },
           { "$ref": "#/components/schemas/SenderWorkersCommand" }
         ],
         "discriminator": {
@@ -102,7 +102,7 @@
             "set-reader-channel-capacity": "#/components/schemas/ReaderChannelCapacityCommand",
             "set-sender-channel-capacity": "#/components/schemas/SenderChannelCapacityCommand",
             "set-requested-tps": "#/components/schemas/RequestedTPSCommand",
-            "set-throttler-installation-mode": "#/components/schemas/InstallationModeCommand",
+            "set-throttler-installed": "#/components/schemas/InstalledCommand",
             "set-sender-workers": "#/components/schemas/SenderWorkersCommand"
           }
         }
@@ -176,13 +176,13 @@
           "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.senderWorkers." }
         }
       },
-      "InstallationModeCommand": {
+      "InstalledCommand": {
         "type": "object", "additionalProperties": false,
-        "x-config-key": "throttlerInstallationMode",
+        "x-config-key": "throttlerInstalled",
         "required": ["action", "value"],
         "properties": {
-          "action": { "type": "string", "enum": ["set-throttler-installation-mode"] },
-          "value": { "type": "string", "enum": ["installed", "bypass"] }
+          "action": { "type": "string", "enum": ["set-throttler-installed"] },
+          "value": { "type": "boolean" }
         }
       },
       "Error": {
@@ -229,8 +229,8 @@
       },
       "ThrottlerStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["requestedTps", "admittedTps", "installationMode"],
-        "properties": { "requestedTps": { "type": "integer" }, "admittedTps": { "type": "number", "format": "double" }, "installationMode": { "type": "string", "enum": ["", "installed", "bypass"], "description": "Empty only in a zero-value HTTP snapshot." } }
+        "required": ["requestedTps", "admittedTps", "installed"],
+        "properties": { "requestedTps": { "type": "integer" }, "admittedTps": { "type": "number", "format": "double" }, "installed": { "type": "boolean" } }
       },
       "SenderStatus": {
         "type": "object", "additionalProperties": false,
@@ -251,9 +251,9 @@
       },
       "ConfigStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["readerReadBatchSize", "readerWorkers", "readerChannelCapacity", "senderChannelCapacity", "throttlerRequestedTps", "throttlerInstallationMode", "metricsWindowMs", "senderWorkers", "logging"],
+        "required": ["readerReadBatchSize", "readerWorkers", "readerChannelCapacity", "senderChannelCapacity", "throttlerRequestedTps", "throttlerInstalled", "metricsWindowMs", "senderWorkers", "logging"],
         "properties": {
-          "readerReadBatchSize": { "$ref": "#/components/schemas/RangeConfig" }, "readerWorkers": { "$ref": "#/components/schemas/RangeConfig" }, "readerChannelCapacity": { "$ref": "#/components/schemas/AllowedConfig" }, "senderChannelCapacity": { "$ref": "#/components/schemas/AllowedConfig" }, "throttlerRequestedTps": { "$ref": "#/components/schemas/RangeConfig" }, "throttlerInstallationMode": { "$ref": "#/components/schemas/InstallationModeConfig" }, "metricsWindowMs": { "$ref": "#/components/schemas/RangeConfig" }, "senderWorkers": { "$ref": "#/components/schemas/RangeConfig" }, "logging": { "$ref": "#/components/schemas/LoggingConfig" }
+          "readerReadBatchSize": { "$ref": "#/components/schemas/RangeConfig" }, "readerWorkers": { "$ref": "#/components/schemas/RangeConfig" }, "readerChannelCapacity": { "$ref": "#/components/schemas/AllowedConfig" }, "senderChannelCapacity": { "$ref": "#/components/schemas/AllowedConfig" }, "throttlerRequestedTps": { "$ref": "#/components/schemas/RangeConfig" }, "throttlerInstalled": { "$ref": "#/components/schemas/InstalledConfig" }, "metricsWindowMs": { "$ref": "#/components/schemas/RangeConfig" }, "senderWorkers": { "$ref": "#/components/schemas/RangeConfig" }, "logging": { "$ref": "#/components/schemas/LoggingConfig" }
         }
       },
       "RangeConfig": {
@@ -266,10 +266,10 @@
         "required": ["initial", "allowed", "unit", "mutability"],
         "properties": { "initial": { "type": "integer" }, "allowed": { "type": "array", "nullable": true, "items": { "type": "integer" } }, "unit": { "type": "string" }, "mutability": { "type": "string" } }
       },
-      "InstallationModeConfig": {
+      "InstalledConfig": {
         "type": "object", "additionalProperties": false,
         "required": ["initial", "allowed", "mutability"],
-        "properties": { "initial": { "type": "string" }, "allowed": { "type": "array", "nullable": true, "items": { "type": "string", "enum": ["installed", "bypass"] } }, "mutability": { "type": "string" } }
+        "properties": { "initial": { "type": "boolean" }, "allowed": { "type": "array", "nullable": true, "items": { "type": "boolean" } }, "mutability": { "type": "string" } }
       },
       "LoggingConfig": {
         "type": "object", "additionalProperties": false,

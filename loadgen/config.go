@@ -34,12 +34,6 @@ const (
 	immediate   = "immediate"
 )
 
-// Values accepted by throttler installation mode.
-const (
-	throttlerInstalled = "installed"
-	throttlerBypass    = "bypass"
-)
-
 type config struct {
 	SchemaVersion int                 `mapstructure:"schema_version"`
 	Source        sourceConfig        `mapstructure:"source"`
@@ -68,8 +62,8 @@ type readerChannelConfig struct {
 }
 
 type throttlerConfig struct {
-	RequestedTPS     rangeConfig            `mapstructure:"requested_tps"`
-	InstallationMode installationModeConfig `mapstructure:"installation_mode"`
+	RequestedTPS rangeConfig     `mapstructure:"requested_tps"`
+	Installed    installedConfig `mapstructure:"installed"`
 }
 
 type metricsConfig struct {
@@ -98,10 +92,10 @@ type senderRetryConfig struct {
 	Mutability    string `mapstructure:"mutability" json:"mutability"`
 }
 
-type installationModeConfig struct {
-	Initial    string   `mapstructure:"initial" json:"initial"`
-	Allowed    []string `mapstructure:"allowed" json:"allowed"`
-	Mutability string   `mapstructure:"mutability" json:"mutability"`
+type installedConfig struct {
+	Initial    bool   `mapstructure:"initial" json:"initial"`
+	Allowed    []bool `mapstructure:"allowed" json:"allowed"`
+	Mutability string `mapstructure:"mutability" json:"mutability"`
 }
 
 type rangeConfig struct {
@@ -135,6 +129,18 @@ func loadConfig(configPath string) (config, error) {
 	viperConfig.SetConfigFile(absConfigPath)
 	if err := viperConfig.ReadInConfig(); err != nil {
 		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
+	}
+	if _, ok := viperConfig.Get("throttler.installed.initial").(bool); !ok {
+		return config{}, fmt.Errorf("throttler.installed.initial must be boolean")
+	}
+	allowed, ok := viperConfig.Get("throttler.installed.allowed").([]any)
+	if !ok {
+		return config{}, fmt.Errorf("throttler.installed.allowed must be boolean array")
+	}
+	for _, value := range allowed {
+		if _, ok := value.(bool); !ok {
+			return config{}, fmt.Errorf("throttler.installed.allowed must contain only booleans")
+		}
 	}
 	var cfg config
 	if err := viperConfig.UnmarshalExact(&cfg, func(decoderConfig *mapstructure.DecoderConfig) {
@@ -177,8 +183,8 @@ func (p config) validate() error {
 	if err := p.Throttler.RequestedTPS.validateRequestedTPS(); err != nil {
 		return fmt.Errorf("throttler.requested_tps: %w", err)
 	}
-	if err := p.Throttler.InstallationMode.validate(); err != nil {
-		return fmt.Errorf("throttler.installation_mode: %w", err)
+	if err := p.Throttler.Installed.validate(); err != nil {
+		return fmt.Errorf("throttler.installed: %w", err)
 	}
 	if err := p.Sender.validate(); err != nil {
 		return fmt.Errorf("sender: %w", err)
@@ -342,16 +348,16 @@ func (p rangeConfig) validateRequestedTPS() error {
 	return nil
 }
 
-func (p installationModeConfig) validate() error {
+func (p installedConfig) validate() error {
 	if p.Mutability != immediate || len(p.Allowed) != 2 ||
-		!p.contains(throttlerInstalled) || !p.contains(throttlerBypass) ||
+		!p.contains(true) || !p.contains(false) ||
 		!p.contains(p.Initial) {
-		return fmt.Errorf("allowed must be [%q, %q], initial must be allowed, and mutability must be %q", throttlerInstalled, throttlerBypass, immediate)
+		return fmt.Errorf("allowed must be [true, false], initial must be allowed, and mutability must be %q", immediate)
 	}
 	return nil
 }
 
-func (p installationModeConfig) contains(value string) bool {
+func (p installedConfig) contains(value bool) bool {
 	return slices.Contains(p.Allowed, value)
 }
 

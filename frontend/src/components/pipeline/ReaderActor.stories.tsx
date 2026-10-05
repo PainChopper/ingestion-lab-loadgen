@@ -41,7 +41,7 @@ function liveControls(snapshot: LoadgenSnapshot): LiveControls {
     readerWorkers: desiredControl(snapshot.reader.workers.applied ?? 0),
     readBatchSize: desiredControl(snapshot.reader.readBatchSize.applied ?? 0),
     requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? 0),
-    installationMode: desiredControl(snapshot.throttler.installationMode.applied ?? 'installed'),
+    installed: desiredControl(snapshot.throttler.installed.applied ?? true),
     senderWorkers: desiredControl(snapshot.sender.workers.applied ?? 0),
     timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? 0),
   }
@@ -86,7 +86,7 @@ function snapshotFor(state: ReaderState): LoadgenSnapshot {
   const batchControl = numericControl(100, 'rows')
   const tpsControl = numericControl(active ? 120_000 : 0, 'tx/s')
   const modeControl = {
-    applied: 'installed' as const,
+    applied: true as const,
     pending: null,
     applyMode: 'immediate' as const,
     writable: true,
@@ -122,7 +122,7 @@ function snapshotFor(state: ReaderState): LoadgenSnapshot {
       state: runState,
     },
     throttler: {
-      id: 'throttler', requestedTps: tpsControl, installationMode: modeControl,
+      id: 'throttler', requestedTps: tpsControl, installed: modeControl,
       admittedTps: active ? (state === 'backpressured' ? 700 : 1_200) : null,
       limitedMs: state === 'backpressured' ? 1_250 : null, state: runState,
     },

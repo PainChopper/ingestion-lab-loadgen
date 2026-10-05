@@ -74,7 +74,7 @@ function freezeObservedTelemetry(
     throttler: Object.freeze({
       ...observed.throttler,
       requestedTps: live.throttler.requestedTps,
-      installationMode: live.throttler.installationMode,
+      installed: live.throttler.installed,
       state: live.throttler.state,
     }),
     readerChannel: Object.freeze({

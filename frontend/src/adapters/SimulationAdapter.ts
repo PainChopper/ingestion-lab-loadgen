@@ -6,7 +6,6 @@ import type {
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
   RunState,
-  ThrottlerInstallationMode,
 } from '../model/loadgen'
 import {
   FIXED_STEP_MS,
@@ -196,8 +195,8 @@ function freezeSnapshot(
         CONTROL_RANGES.requestedTps,
         'tx/s',
       ),
-      installationMode: Object.freeze({
-        applied: config.throttlerInstallationMode,
+      installed: Object.freeze({
+        applied: config.throttlerInstalled,
         pending: null,
         applyMode: 'immediate',
         writable: true,
@@ -318,7 +317,7 @@ export class SimulationAdapter implements LoadgenAdapter {
       readerWorkers: 4,
       senderWorkers: 3,
       requestedTps: 120_000,
-      throttlerInstallationMode: 'installed',
+      throttlerInstalled: true,
       readBatchSize: 25_000,
       httpTimeoutMs: 500,
       targetDelayMs: 40,
@@ -400,16 +399,16 @@ export class SimulationAdapter implements LoadgenAdapter {
           normalizeNumericValue(command.value, CONTROL_RANGES.requestedTps),
         )
         break
-      case 'set-throttler-installation-mode':
-        if (command.value !== 'installed' && command.value !== 'bypass') {
+      case 'set-throttler-installed':
+        if (typeof command.value !== 'boolean') {
           return this.reject(commandId, command, {
             code: 'invalid-command',
-            message: 'throttler installation mode must be installed or bypass',
+            message: 'throttler installed must be boolean',
             retryable: false,
             details: null,
           })
         }
-        changed = this.updateInstallationMode(command.value)
+        changed = this.updateInstalled(command.value)
         break
       case 'set-worker-count':
         if (!Number.isFinite(command.value)) {
@@ -526,12 +525,12 @@ export class SimulationAdapter implements LoadgenAdapter {
     return true
   }
 
-  private updateInstallationMode(value: ThrottlerInstallationMode): boolean {
+  private updateInstalled(value: boolean): boolean {
     const advanced = this.advanceToNow()
-    if (this.simulation.config.throttlerInstallationMode === value) {
+    if (this.simulation.config.throttlerInstalled === value) {
       return advanced
     }
-    this.simulation.updateConfig({ throttlerInstallationMode: value })
+    this.simulation.updateConfig({ throttlerInstalled: value })
     return true
   }
 

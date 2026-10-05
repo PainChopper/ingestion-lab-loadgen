@@ -13,7 +13,6 @@ import type {
   ChannelFlowState,
   ChannelId,
   SelectableId,
-  ThrottlerInstallationMode,
 } from '../model/loadgen'
 import { useLoadgenSnapshot } from '../hooks/useLoadgenSnapshot'
 import {
@@ -262,19 +261,15 @@ function InspectorControls({
           />
           <label className="inspector-select-control">
             <span>Valve mode</span>
-            <select
-              value={liveControls.installationMode.desired}
-              disabled={!liveControls.installationMode.available || liveControls.installationMode.phase === 'pending'}
+            <input
+              type="checkbox"
+              checked={liveControls.installed.desired}
+              disabled={!liveControls.installed.available || liveControls.installed.phase === 'pending'}
               onChange={(event) => {
-                liveControls.installationMode.preview(
-                  event.currentTarget.value as ThrottlerInstallationMode,
-                )
-                void liveControls.installationMode.commit()
+                liveControls.installed.preview(event.currentTarget.checked)
+                void liveControls.installed.commit()
               }}
-            >
-              <option value="installed">Installed</option>
-              <option value="bypass">Bypassed</option>
-            </select>
+            />
           </label>
         </div>
       )
@@ -489,14 +484,14 @@ export function LabShell({ adapter }: AdapterProps) {
     available: immediate(liveSnapshot.throttler.requestedTps),
     dispatch: (value) => adapter.dispatch({ type: 'set-requested-tps', value }),
   })
-  const installationMode = useDesiredControl<ThrottlerInstallationMode>({
-    applied: liveSnapshot.throttler.installationMode.applied ?? 'installed',
+  const installed = useDesiredControl<boolean>({
+    applied: liveSnapshot.throttler.installed.applied ?? true,
     revision: liveSnapshot.revision,
-    available: liveSnapshot.throttler.installationMode.applied !== null &&
-      liveSnapshot.throttler.installationMode.writable &&
-      liveSnapshot.throttler.installationMode.applyMode === 'immediate',
+    available: liveSnapshot.throttler.installed.applied !== null &&
+      liveSnapshot.throttler.installed.writable &&
+      liveSnapshot.throttler.installed.applyMode === 'immediate',
     dispatch: (value) => adapter.dispatch({
-      type: 'set-throttler-installation-mode', value,
+      type: 'set-throttler-installed', value,
     }),
     rejectionMessage: 'Valve mode change rejected',
     unavailableMessage: 'Valve mode change unavailable',
@@ -517,7 +512,7 @@ export function LabShell({ adapter }: AdapterProps) {
     readerWorkers,
     readBatchSize,
     requestedTps,
-    installationMode,
+    installed,
     senderWorkers,
     timeoutMs,
   }

@@ -12,20 +12,13 @@ const (
 	cmdSetReaderChannelCapacity
 	cmdSetSenderChannelCapacity
 	cmdSetRequestedTPS
-	cmdSetThrottlerInstallationMode
+	cmdSetThrottlerInstalled
 	cmdSetSenderWorkers
 )
 
-type runtimeCommandStatus int
-
-const (
-	commandAccepted runtimeCommandStatus = iota
-	commandConflict
-)
-
 type runtimeCommandReceipt struct {
-	status runtimeCommandStatus
-	err    error
+	rejected bool
+	err      error
 }
 
 type runtimeCommand struct {
@@ -33,7 +26,7 @@ type runtimeCommand struct {
 	statusReply  chan runtimeStatus
 	receiptReply chan runtimeCommandReceipt
 	value        int
-	textValue    string
+	installed    bool
 }
 
 func (command runtimeCommand) respond(receipt runtimeCommandReceipt) {

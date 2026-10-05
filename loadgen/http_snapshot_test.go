@@ -18,7 +18,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 			ReadBatchSize:          50000, ReadTps: 123.5, RowsRead: 47,
 			SourceDirectory: "data/part", SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"},
 		},
-		Throttler:     runtimeThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, InstallationMode: throttlerInstalled},
+		Throttler:     runtimeThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, Installed: true},
 		Sender:        runtimeSenderStatus{Workers: 32},
 		ReaderChannel: runtimeChannelStatus{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, SentBatchesTotal: 2, SentTransactionsTotal: 4, ReceivedBatchesTotal: 1, ReceivedTransactionsTotal: 2, SentBatchesPerSecond: 1.5, SentTransactionsPerSecond: 3, ReceivedBatchesPerSecond: 0.5, ReceivedTransactionsPerSecond: 1},
 		SenderChannel: runtimeChannelStatus{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, SentBatchesTotal: 3, SentTransactionsTotal: 6, ReceivedBatchesTotal: 2, ReceivedTransactionsTotal: 3, SentBatchesPerSecond: 2, SentTransactionsPerSecond: 4, ReceivedBatchesPerSecond: 1.5, ReceivedTransactionsPerSecond: 2.5},
@@ -45,7 +45,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	for name, want := range map[string][]string{
 		"run":           {"elapsedMs", "state", "totalTransactions"},
 		"reader":        {"blockedWorkers", "drainingBlockedWorkers", "drainingIdleWorkers", "drainingReadingWorkers", "drainingWorkers", "idleWorkers", "liveWorkers", "readBatchSize", "readTps", "readingWorkers", "rowsRead", "sourceDirectory", "sourceError", "workers"},
-		"throttler":     {"admittedTps", "installationMode", "requestedTps"},
+		"throttler":     {"admittedTps", "installed", "requestedTps"},
 		"sender":        {"backoffWorkers", "drainingBackoffWorkers", "drainingIdleWorkers", "drainingInFlightWorkers", "drainingWorkers", "idleWorkers", "inFlightWorkers", "liveWorkers", "workers"},
 		"readerChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
 		"senderChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
@@ -63,16 +63,16 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(root["config"], &config); err != nil {
 		t.Fatalf("decode config: %v", err)
 	}
-	assertExactJSONKeys(t, config, []string{"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstallationMode", "throttlerRequestedTps"})
+	assertExactJSONKeys(t, config, []string{"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstalled", "throttlerRequestedTps"})
 	for name, want := range map[string][]string{
-		"readerReadBatchSize":       {"initial", "max", "min", "mutability", "step", "unit"},
-		"readerWorkers":             {"initial", "max", "min", "mutability", "step", "unit"},
-		"readerChannelCapacity":     {"allowed", "initial", "mutability", "unit"},
-		"senderChannelCapacity":     {"allowed", "initial", "mutability", "unit"},
-		"throttlerRequestedTps":     {"initial", "max", "min", "mutability", "step", "unit"},
-		"throttlerInstallationMode": {"allowed", "initial", "mutability"},
-		"senderWorkers":             {"initial", "max", "min", "mutability", "step", "unit"},
-		"metricsWindowMs":           {"initial", "max", "min", "mutability", "step", "unit"},
+		"readerReadBatchSize":   {"initial", "max", "min", "mutability", "step", "unit"},
+		"readerWorkers":         {"initial", "max", "min", "mutability", "step", "unit"},
+		"readerChannelCapacity": {"allowed", "initial", "mutability", "unit"},
+		"senderChannelCapacity": {"allowed", "initial", "mutability", "unit"},
+		"throttlerRequestedTps": {"initial", "max", "min", "mutability", "step", "unit"},
+		"throttlerInstalled":    {"allowed", "initial", "mutability"},
+		"senderWorkers":         {"initial", "max", "min", "mutability", "step", "unit"},
+		"metricsWindowMs":       {"initial", "max", "min", "mutability", "step", "unit"},
 	} {
 		section := map[string]json.RawMessage{}
 		if err := json.Unmarshal(config[name], &section); err != nil {
@@ -124,7 +124,7 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 			ReadBatchSize: 20, ReadTps: 21.5, RowsRead: 22, SourceDirectory: "reader-source",
 			SourceError: &readerSourceError{Category: "reader-category", Operation: "reader-operation", RelativePath: "reader-path", Message: "reader-message"},
 		},
-		Throttler: runtimeThrottlerStatus{RequestedTps: 31, AdmittedTps: 32.5, InstallationMode: throttlerBypass},
+		Throttler: runtimeThrottlerStatus{RequestedTps: 31, AdmittedTps: 32.5, Installed: false},
 		Sender: runtimeSenderStatus{
 			Workers: 41, LiveWorkers: 42, IdleWorkers: 43, InFlightWorkers: 44, BackoffWorkers: 45,
 			DrainingWorkers: 46, DrainingIdleWorkers: 47, DrainingInFlightWorkers: 48, DrainingBackoffWorkers: 49,
@@ -158,7 +158,7 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 		"drainingWorkers":16,"drainingIdleWorkers":17,"drainingReadingWorkers":18,"drainingBlockedWorkers":19,
 		"readBatchSize":20,"readTps":21.5,"rowsRead":22,"sourceDirectory":"reader-source",
 		"sourceError":{"category":"reader-category","operation":"reader-operation","relativePath":"reader-path","message":"reader-message"}},
-		"throttler":{"requestedTps":31,"admittedTps":32.5,"installationMode":"bypass"},
+		"throttler":{"requestedTps":31,"admittedTps":32.5,"installed":false},
 		"sender":{"workers":41,"liveWorkers":42,"idleWorkers":43,"inFlightWorkers":44,"backoffWorkers":45,
 		"drainingWorkers":46,"drainingIdleWorkers":47,"drainingInFlightWorkers":48,"drainingBackoffWorkers":49},
 		"readerChannel":{"capacity":51,"depthBatches":52,"bufferedTransactions":53,"blockedSenders":54,
@@ -227,6 +227,13 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	}
 	if string(run["elapsedMs"]) != "0" || string(reader["readTps"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["sourceDirectory"]) != "\"\"" || string(reader["sourceError"]) != "null" {
 		t.Errorf("idle snapshot body = %v", root)
+	}
+	var throttler map[string]json.RawMessage
+	if err := json.Unmarshal(root["throttler"], &throttler); err != nil {
+		t.Fatal(err)
+	}
+	if string(throttler["installed"]) != "false" {
+		t.Errorf("zero snapshot installed = %s, want false", throttler["installed"])
 	}
 }
 

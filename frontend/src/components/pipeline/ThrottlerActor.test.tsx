@@ -11,7 +11,6 @@ import type {
   NumericControlSnapshot,
   ChannelSnapshot,
   SelectableId,
-  ThrottlerInstallationMode,
 } from '../../model/loadgen'
 import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import { createPipelineGeometry } from './geometry'
@@ -53,8 +52,8 @@ function Harness({
   onCommand = vi.fn(),
   onSelect = vi.fn(),
   channelOverrides = {},
-  installationMode = 'installed',
-  pendingInstallationMode = null,
+  installed = true,
+  pendingInstalled = null,
   modeAccepted = true,
   onModeCommand = vi.fn(),
   orientation = 'landscape',
@@ -64,10 +63,10 @@ function Harness({
   onCommand?: (value: number) => void
   onSelect?: (id: SelectableId) => void
   channelOverrides?: Partial<ChannelSnapshot>
-  installationMode?: ThrottlerInstallationMode
-  pendingInstallationMode?: ThrottlerInstallationMode | null
+  installed?: boolean | null
+  pendingInstalled?: boolean | null
   modeAccepted?: boolean
-  onModeCommand?: (value: ThrottlerInstallationMode) => void
+  onModeCommand?: (value: boolean) => void
   orientation?: PipelineOrientation
 }) {
   const adapter = new SimulationAdapter()
@@ -77,9 +76,9 @@ function Harness({
   const [requestedApplied, setRequestedApplied] = useState(
     control.applied ?? control.min,
   )
-  const [modeApplied, setModeApplied] = useState(installationMode)
+  const [modeApplied, setModeApplied] = useState(installed)
   useEffect(() => setRequestedApplied(control.applied ?? control.min), [control.applied, control.min])
-  useEffect(() => setModeApplied(installationMode), [installationMode])
+  useEffect(() => setModeApplied(installed), [installed])
   const requestedController = useDesiredControl({
     applied: requestedApplied,
     revision,
@@ -94,9 +93,9 @@ function Harness({
     },
   })
   const modeController = useDesiredControl({
-    applied: modeApplied,
+    applied: modeApplied ?? true,
     revision,
-    available: true,
+    available: modeApplied !== null,
     dispatch: async (value) => {
       onModeCommand(value)
       if (modeAccepted) {
@@ -113,9 +112,9 @@ function Harness({
     : control.pending === null
       ? requestedController
       : { ...requestedController, desired: control.pending, phase: 'pending' as const }
-  const installationModeControl = pendingInstallationMode === null
+  const installedControl = pendingInstalled === null
     ? modeController
-    : { ...modeController, desired: pendingInstallationMode, phase: 'pending' as const }
+    : { ...modeController, desired: pendingInstalled, phase: 'pending' as const }
   const geometry = createPipelineGeometry({
     orientation,
     readerWorkers: 7,
@@ -128,15 +127,15 @@ function Harness({
         snapshot={{
           ...snapshot.throttler,
           requestedTps: { ...control, applied: requestedApplied },
-          installationMode: {
-            ...snapshot.throttler.installationMode,
+          installed: {
+            ...snapshot.throttler.installed,
             applied: modeApplied,
-            pending: pendingInstallationMode,
+            pending: pendingInstalled,
           },
         }}
         upstreamChannel={{ ...snapshot.readerChannel, ...channelOverrides }}
         requestedTpsControl={requestedTpsControl}
-        installationModeControl={installationModeControl}
+        installedControl={installedControl}
         selected={false}
         onSelect={onSelect}
         geometry={geometry.actors.throttler}
@@ -311,14 +310,14 @@ describe('ThrottlerActor valve control', () => {
     fireEvent.pointerMove(control, { clientX: 100, clientY: 45, pointerId: 2 })
     fireEvent.pointerUp(control, { clientX: 100, clientY: 45, pointerId: 2 })
     expect(onModeCommand).toHaveBeenCalledOnce()
-    expect(onModeCommand).toHaveBeenCalledWith('bypass')
+    expect(onModeCommand).toHaveBeenCalledWith(false)
   })
 
   it('reinserts the detached assembly with the opposite down-left pull', () => {
     const onModeCommand = vi.fn()
     render(
       <Harness
-        installationMode="bypass"
+        installed={false}
         onModeCommand={onModeCommand}
       />,
     )
@@ -344,14 +343,14 @@ describe('ThrottlerActor valve control', () => {
     })
 
     expect(onModeCommand).toHaveBeenCalledOnce()
-    expect(onModeCommand).toHaveBeenCalledWith('installed')
+    expect(onModeCommand).toHaveBeenCalledWith(true)
   })
 
   it('hides saved requested TPS only while bypass is applied', () => {
     const view = render(
       <Harness
         control={requestedControl({ applied: 135_000 })}
-        installationMode="bypass"
+        installed={false}
       />,
     )
     const actor = view.container.querySelector('#throttler-actor')
@@ -363,7 +362,7 @@ describe('ThrottlerActor valve control', () => {
     view.rerender(
       <Harness
         control={requestedControl({ applied: 135_000 })}
-        installationMode="installed"
+        installed={true}
       />,
     )
     expect(actor?.textContent).toContain('Requested TPS')
@@ -411,7 +410,7 @@ describe('ThrottlerActor valve control', () => {
   it('supports click and keyboard fallback once and keeps focus after rejection', async () => {
     const user = userEvent.setup()
     const onModeCommand = vi.fn()
-    render(
+    const view = render(
       <Harness
         modeAccepted={false}
         onModeCommand={onModeCommand}
@@ -429,11 +428,18 @@ describe('ThrottlerActor valve control', () => {
       expect(document.activeElement).toBe(control)
       expect(screen.getByText('Valve mode change rejected')).not.toBeNull()
     })
+    view.rerender(<Harness installed={null} onModeCommand={onModeCommand} />)
+    expect(control.getAttribute('aria-disabled')).toBe('true')
+    expect(control.getAttribute('data-applied-mode')).toBe('unavailable')
+    expect(control.getAttribute('aria-valuetext')).toBe('unavailable applied')
+    expect(view.container.querySelector('.pipeline-valve-detached-assembly--applied')).toBeNull()
+    await user.click(control)
+    expect(onModeCommand).toHaveBeenCalledOnce()
   })
 
   it('renders backend pending mode as a yellow ghost without changing applied state', () => {
     const view = render(
-      <Harness pendingInstallationMode="bypass" />,
+      <Harness pendingInstalled={false} />,
     )
     const control = screen.getByRole('button', {
       name: 'Remove throttler valve',

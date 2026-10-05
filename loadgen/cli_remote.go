@@ -70,7 +70,7 @@ const cliSetUsage = `usage:
   ingestion-lab-loadgen set reader-workers <N> [--url <url>]
   ingestion-lab-loadgen set sender-workers <N> [--url <url>]
   ingestion-lab-loadgen set requested-tps <N> [--url <url>]
-  ingestion-lab-loadgen set throttler-mode <installed|bypass> [--url <url>]`
+  ingestion-lab-loadgen set throttler-installed <true|false> [--url <url>]`
 
 type remoteSetCommand struct {
 	target        string
@@ -157,12 +157,15 @@ func newRemoteSetCommand(target, rawValue string) (remoteSetCommand, error) {
 		setCommand.requestAction = "set-sender-workers"
 	case "requested-tps":
 		setCommand.requestAction = "set-requested-tps"
-	case "throttler-mode":
-		setCommand.requestAction = "set-throttler-installation-mode"
+	case "throttler-installed":
+		setCommand.requestAction = "set-throttler-installed"
 		if rawValue == "" {
 			return setCommand, nil
 		}
-		setCommand.value = rawValue
+		if rawValue != "true" && rawValue != "false" {
+			return remoteSetCommand{}, fmt.Errorf("invalid %s value %q", target, rawValue)
+		}
+		setCommand.value = rawValue == "true"
 		return setCommand, nil
 	default:
 		return remoteSetCommand{}, fmt.Errorf("unknown set target %q", target)
@@ -312,13 +315,13 @@ func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 		if snapshot.Throttler.RequestedTps != expected {
 			return fmt.Errorf("verification snapshot throttler.requestedTps = %v, want %v", snapshot.Throttler.RequestedTps, expected)
 		}
-	case "throttler-mode":
-		expected, ok := command.value.(string)
+	case "throttler-installed":
+		expected, ok := command.value.(bool)
 		if !ok {
-			return fmt.Errorf("verification snapshot throttler-mode value has invalid type")
+			return fmt.Errorf("verification snapshot throttler-installed value has invalid type")
 		}
-		if string(snapshot.Throttler.InstallationMode) != expected {
-			return fmt.Errorf("verification snapshot throttler.installationMode = %v, want %v", snapshot.Throttler.InstallationMode, expected)
+		if snapshot.Throttler.Installed != expected {
+			return fmt.Errorf("verification snapshot throttler.installed = %v, want %v", snapshot.Throttler.Installed, expected)
 		}
 	default:
 		return fmt.Errorf("verification snapshot unknown set target %q", command.target)
@@ -384,11 +387,11 @@ func validateSnapshotKeys(root map[string]json.RawMessage) error {
 		"":              {"config", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"},
 		"run":           {"elapsedMs", "state", "totalTransactions"},
 		"reader":        {"blockedWorkers", "drainingBlockedWorkers", "drainingIdleWorkers", "drainingReadingWorkers", "drainingWorkers", "idleWorkers", "liveWorkers", "readBatchSize", "readTps", "readingWorkers", "rowsRead", "sourceDirectory", "sourceError", "workers"},
-		"throttler":     {"admittedTps", "installationMode", "requestedTps"},
+		"throttler":     {"admittedTps", "installed", "requestedTps"},
 		"sender":        {"backoffWorkers", "drainingBackoffWorkers", "drainingIdleWorkers", "drainingInFlightWorkers", "drainingWorkers", "idleWorkers", "inFlightWorkers", "liveWorkers", "workers"},
 		"readerChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
 		"senderChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
-		"config":        {"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstallationMode", "throttlerRequestedTps"},
+		"config":        {"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstalled", "throttlerRequestedTps"},
 	}
 	if err := validateExactKeys("snapshot", root, sections[""]); err != nil {
 		return err
@@ -419,8 +422,32 @@ func validateSnapshotKeys(root map[string]json.RawMessage) error {
 			return err
 		}
 	}
-	if err := validateSnapshotObjectKeys(config, "throttlerInstallationMode", []string{"allowed", "initial", "mutability"}); err != nil {
+	if err := validateSnapshotObjectKeys(config, "throttlerInstalled", []string{"allowed", "initial", "mutability"}); err != nil {
 		return err
+	}
+	var throttler map[string]json.RawMessage
+	if err := json.Unmarshal(root["throttler"], &throttler); err != nil {
+		return fmt.Errorf("decode snapshot throttler: %w", err)
+	}
+	var installedConfig map[string]json.RawMessage
+	if err := json.Unmarshal(config["throttlerInstalled"], &installedConfig); err != nil {
+		return fmt.Errorf("decode snapshot throttlerInstalled: %w", err)
+	}
+	for _, raw := range []json.RawMessage{throttler["installed"], installedConfig["initial"]} {
+		value := string(bytes.TrimSpace(raw))
+		if value != "true" && value != "false" {
+			return fmt.Errorf("decode snapshot installed value must be boolean")
+		}
+	}
+	var allowed []json.RawMessage
+	if err := json.Unmarshal(installedConfig["allowed"], &allowed); err != nil || allowed == nil {
+		return fmt.Errorf("decode snapshot throttlerInstalled.allowed must be boolean array")
+	}
+	for _, raw := range allowed {
+		value := string(bytes.TrimSpace(raw))
+		if value != "true" && value != "false" {
+			return fmt.Errorf("decode snapshot throttlerInstalled.allowed must contain only booleans")
+		}
 	}
 	if err := validateSnapshotObjectKeys(config, "logging", []string{"level", "mutability"}); err != nil {
 		return err

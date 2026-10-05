@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -15,26 +17,6 @@ type controlState struct {
 	telemetry     controlTelemetry
 	logger        *zap.Logger
 }
-
-func newControlState(cfg config, logger *zap.Logger) controlState {
-	metricsWindow := time.Duration(cfg.Metrics.WindowMS.Initial) * time.Millisecond
-	return controlState{
-		metricsWindow: metricsWindow,
-		run:           controlRunState{lifecycle: newLifecycle()},
-		config:        cfg,
-		controls: configuredControls{
-			readBatchSize:         cfg.Reader.ReadBatchSize.Initial,
-			readerWorkers:         cfg.Reader.Workers.Initial,
-			readerChannelCapacity: cfg.ReaderChannel.Capacity.Initial,
-			senderChannelCapacity: cfg.SenderChannel.Capacity.Initial,
-			requestedTPS:          cfg.Throttler.RequestedTPS.Initial,
-			installationMode:      cfg.Throttler.InstallationMode.Initial,
-			senderWorkers:         cfg.Sender.Workers.Initial,
-		},
-		logger: logger,
-	}
-}
-
 type controlRunState struct {
 	totalTransactions int64
 	elapsedBeforeRun  time.Duration
@@ -50,7 +32,7 @@ type configuredControls struct {
 	readerChannelCapacity int
 	senderChannelCapacity int
 	requestedTPS          int
-	installationMode      string
+	installed             bool
 	senderWorkers         int
 }
 
@@ -60,15 +42,384 @@ type controlTelemetry struct {
 	senderChannel channelTelemetry
 }
 
-func (state *controlState) startReaderPool(ctx context.Context, batches chan<- []Transaction, batchSize, workers int) (*readerPool, error) {
-	return startReaderPool(
-		ctx,
-		state.config.Source.Path,
-		batchSize,
-		workers,
-		batches,
-		&state.telemetry.reader,
-		&state.telemetry.readerChannel,
-		state.logger,
-	)
+func newControlState(cfg config, logger *zap.Logger) controlState {
+	metricsWindow := time.Duration(cfg.Metrics.WindowMS.Initial) * time.Millisecond
+	return controlState{
+		metricsWindow: metricsWindow,
+		run:           controlRunState{lifecycle: newLifecycle()},
+		config:        cfg,
+		controls: configuredControls{
+			readBatchSize:         cfg.Reader.ReadBatchSize.Initial,
+			readerWorkers:         cfg.Reader.Workers.Initial,
+			readerChannelCapacity: cfg.ReaderChannel.Capacity.Initial,
+			senderChannelCapacity: cfg.SenderChannel.Capacity.Initial,
+			requestedTPS:          cfg.Throttler.RequestedTPS.Initial,
+			installed:             cfg.Throttler.Installed.Initial,
+			senderWorkers:         cfg.Sender.Workers.Initial,
+		},
+		logger: logger,
+	}
+}
+
+func (state *controlState) runEventLoop(
+	ctx context.Context,
+	requests <-chan runtimeCommand,
+	metrics <-chan time.Time,
+	promMetrics *PrometheusMetrics,
+) {
+	logger := state.logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	runtime := newPipelineRuntime(state)
+	nextRuntimeSummaryAt := time.Now().Add(runtimeSummaryInterval)
+	defer func() {
+		runtime.stop()
+		state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case command, ok := <-requests:
+			if !ok {
+				return
+			}
+			switch command.kind {
+			case getRuntimeStatus:
+				command.respondStatus(state.runtimeStatusAt(runtime, time.Now()))
+			case cmdRun:
+				resuming := state.run.lifecycle.state == runStatePaused
+				if state.run.lifecycle.state == runStateIdle {
+					err := runtime.start(ctx)
+					if err != nil {
+						sourceError := sourceErrorFromStartup(err, state.config.Source.Path)
+						logger.Error("run failed to start", zap.String("event", "run_failed"), zap.String("operation", sourceError.Operation))
+						state.run.sourceError = &sourceError
+						state.run.lifecycle.faultStart()
+						command.respond(runtimeCommandReceipt{err: err})
+						continue
+					}
+				}
+				if state.run.lifecycle.state == runStateFaulted {
+					command.respond(runtimeCommandReceipt{rejected: true})
+					continue
+				}
+				if state.run.lifecycle.run() {
+					state.run.runStartedAt = time.Now()
+					if resuming {
+						state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+						state.run.pausedStatus = runtimeStatus{}
+						state.telemetry.reader.startInterval(state.run.runStartedAt)
+						state.telemetry.readerChannel.startInterval()
+						state.telemetry.senderChannel.startInterval()
+						promMetrics.actualTPS.Set(0)
+						runtime.senderPool.resumeRun()
+					} else {
+						runtime.startSender()
+					}
+					if resuming {
+						logger.Info("run resumed", zap.String("event", "run_resumed"))
+					} else {
+						logger.Info("run started", zap.String("event", "run_started"))
+					}
+				}
+				command.respond(runtimeCommandReceipt{})
+			case cmdPause:
+				if state.run.lifecycle.state != runStateRunning {
+					continue
+				}
+				runtime.senderPool.pause()
+				now := time.Now()
+				state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+				state.run.pausedStatus = state.runtimeStatusAt(runtime, now)
+				state.pauseElapsed(now)
+				state.run.lifecycle.pause()
+				logger.Info("run paused", zap.String("event", "run_paused"))
+			case cmdReset:
+				result := runtimeCommandReceipt{}
+				switch state.run.lifecycle.state {
+				case runStatePaused, runStateFaulted:
+					state.run.lifecycle.reset()
+					runtime.stop()
+					state.resetProgress(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+					state.run.lifecycle.completeReset()
+				case runStateIdle:
+					state.resetProgress(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+				default:
+					result.rejected = true
+				}
+				if !result.rejected {
+					logger.Info("run stopped", zap.String("event", "run_stopped"))
+				}
+				command.respond(result)
+			case cmdSetReadBatchSize:
+				result := runtimeCommandReceipt{}
+				if state.run.lifecycle.state != runStateIdle {
+					result.rejected = true
+				} else if !state.config.Reader.ReadBatchSize.contains(command.value) {
+					result.rejected = true
+				} else {
+					state.controls.readBatchSize = command.value
+				}
+				command.respond(result)
+			case cmdSetReaderWorkers:
+				result := runtimeCommandReceipt{}
+				if !state.config.Reader.Workers.contains(command.value) {
+					result.rejected = true
+				} else {
+					state.controls.readerWorkers = command.value
+					runtime.reconcileReader(command.value)
+				}
+				command.respond(result)
+			case cmdSetReaderChannelCapacity:
+				result := runtimeCommandReceipt{}
+				if state.run.lifecycle.state != runStateIdle ||
+					!state.config.ReaderChannel.Capacity.contains(command.value) {
+					result.rejected = true
+				} else {
+					state.controls.readerChannelCapacity = command.value
+				}
+				command.respond(result)
+			case cmdSetSenderChannelCapacity:
+				result := runtimeCommandReceipt{}
+				if state.run.lifecycle.state != runStateIdle ||
+					!state.config.SenderChannel.Capacity.contains(command.value) {
+					result.rejected = true
+				} else {
+					state.controls.senderChannelCapacity = command.value
+				}
+				command.respond(result)
+			case cmdSetRequestedTPS:
+				result := runtimeCommandReceipt{}
+				if !state.config.Throttler.RequestedTPS.contains(command.value) {
+					result.rejected = true
+				} else if state.controls.requestedTPS != command.value {
+					state.controls.requestedTPS = command.value
+					promMetrics.targetTPS.Set(float64(state.controls.requestedTPS))
+					runtime.throttler.update(state.throttlerSettings())
+					logger.Info(
+						"throttler rate changed",
+						zap.String("event", "throttler_rate_changed"),
+						zap.Int("requested_tps", command.value),
+					)
+				}
+				command.respond(result)
+			case cmdSetThrottlerInstalled:
+				result := runtimeCommandReceipt{}
+				if !state.config.Throttler.Installed.contains(command.installed) {
+					result.rejected = true
+				} else if state.controls.installed != command.installed {
+					state.controls.installed = command.installed
+					runtime.throttler.update(state.throttlerSettings())
+					logger.Info(
+						"throttler mode changed",
+						zap.String("event", "throttler_mode_changed"),
+						zap.Bool("installed", command.installed),
+					)
+				}
+				command.respond(result)
+			case cmdSetSenderWorkers:
+				if !state.config.Sender.Workers.contains(command.value) {
+					command.respond(runtimeCommandReceipt{rejected: true})
+					continue
+				}
+				state.controls.senderWorkers = command.value
+				runtime.reconcileSender(command.value)
+				command.respond(runtimeCommandReceipt{})
+			}
+
+		case sourceError := <-runtime.sourceErrors():
+			if !state.run.lifecycle.fault() {
+				continue
+			}
+			state.pauseElapsed(time.Now())
+			state.run.sourceError = &sourceError
+			logger.Error("reader source failed", zap.String("event", "reader_source_failed"), zap.String("operation", sourceError.Operation), zap.String("relative_path", sourceError.RelativePath))
+			runtime.stop()
+			state.resetFaultedMeasurements(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+
+		case now := <-metrics:
+			delta := state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+			if state.run.lifecycle.state != runStatePaused {
+				state.telemetry.reader.sample(now)
+				state.telemetry.readerChannel.sample(state.metricsWindow)
+				state.telemetry.senderChannel.sample(state.metricsWindow)
+				promMetrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
+			}
+			if !now.Before(nextRuntimeSummaryAt) {
+				nextRuntimeSummaryAt = now.Add(runtimeSummaryInterval)
+				logger.Info(
+					"runtime summary",
+					runtimeSummaryFields(state.runtimeStatusAt(runtime, now))...,
+				)
+			}
+		}
+	}
+}
+
+func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Time) runtimeStatus {
+	runState := state.run.lifecycle.state
+	if runState == runStatePaused {
+		status := state.run.pausedStatus
+		status.Run.State = runState
+		status.Reader.SourceError = state.run.sourceError
+		status.Reader.Workers = state.controls.readerWorkers
+		status.Reader.ReadBatchSize = state.controls.readBatchSize
+		status.Sender.Workers = state.controls.senderWorkers
+		status.Throttler.RequestedTps = state.controls.requestedTPS
+		status.Throttler.Installed = state.controls.installed
+		return status
+	}
+	reader := state.telemetry.reader.snapshot()
+	readerPool, senderPool := runtime.snapshots()
+	readerChannel := state.telemetry.readerChannel.snapshot(now)
+	senderChannel := state.telemetry.senderChannel.snapshot(now)
+	if runState == runStateIdle || runState == runStateFaulted {
+		readerChannel.capacity = state.controls.readerChannelCapacity
+		senderChannel.capacity = state.controls.senderChannelCapacity
+	}
+
+	return runtimeStatus{
+		Run: runtimeRunStatus{
+			State:             runState,
+			TotalTransactions: state.run.totalTransactions,
+			ElapsedMs:         state.elapsedMs(now),
+		},
+		Reader: runtimeReaderStatus{
+			Workers: state.controls.readerWorkers, LiveWorkers: readerPool.liveWorkers,
+			IdleWorkers: readerPool.idleWorkers, ReadingWorkers: readerPool.readingWorkers,
+			BlockedWorkers: readerPool.blockedWorkers, DrainingWorkers: readerPool.drainingWorkers,
+			DrainingIdleWorkers:    readerPool.drainingIdleWorkers,
+			DrainingReadingWorkers: readerPool.drainingReadingWorkers,
+			DrainingBlockedWorkers: readerPool.drainingBlockedWorkers,
+			ReadBatchSize:          state.controls.readBatchSize, ReadTps: reader.readTPS,
+			RowsRead:        reader.rowsRead,
+			SourceDirectory: readerSourceDirectory(state.config.Source.Path),
+			SourceError:     state.run.sourceError,
+		},
+		Throttler: runtimeThrottlerStatus{
+			RequestedTps: state.controls.requestedTPS,
+			AdmittedTps:  senderChannel.sentTransactionsPerSecond,
+			Installed:    state.controls.installed,
+		},
+		Sender: runtimeSenderStatus{
+			Workers: state.controls.senderWorkers, LiveWorkers: senderPool.liveWorkers,
+			IdleWorkers: senderPool.idleWorkers, InFlightWorkers: senderPool.inFlightWorkers,
+			BackoffWorkers: senderPool.backoffWorkers, DrainingWorkers: senderPool.drainingWorkers,
+			DrainingIdleWorkers:     senderPool.drainingIdleWorkers,
+			DrainingInFlightWorkers: senderPool.drainingInFlightWorkers,
+			DrainingBackoffWorkers:  senderPool.drainingBackoffWorkers,
+		},
+		ReaderChannel: runtimeChannelStatus{
+			Capacity:                      readerChannel.capacity,
+			DepthBatches:                  readerChannel.depthBatches,
+			BufferedTransactions:          readerChannel.bufferedTransactions,
+			BlockedSenders:                readerChannel.blockedSenders,
+			OldestBlockedSenderMs:         readerChannel.oldestBlockedSenderMs,
+			BlockedMs:                     readerChannel.blockedMs,
+			SentBatchesTotal:              readerChannel.sentBatchesTotal,
+			SentTransactionsTotal:         readerChannel.sentTransactionsTotal,
+			ReceivedBatchesTotal:          readerChannel.receivedBatchesTotal,
+			ReceivedTransactionsTotal:     readerChannel.receivedTransactionsTotal,
+			SentBatchesPerSecond:          readerChannel.sentBatchesPerSecond,
+			SentTransactionsPerSecond:     readerChannel.sentTransactionsPerSecond,
+			ReceivedBatchesPerSecond:      readerChannel.receivedBatchesPerSecond,
+			ReceivedTransactionsPerSecond: readerChannel.receivedTransactionsPerSecond,
+		},
+		SenderChannel: runtimeChannelStatus{
+			Capacity:                      senderChannel.capacity,
+			DepthBatches:                  senderChannel.depthBatches,
+			BufferedTransactions:          senderChannel.bufferedTransactions,
+			BlockedSenders:                senderChannel.blockedSenders,
+			OldestBlockedSenderMs:         senderChannel.oldestBlockedSenderMs,
+			BlockedMs:                     senderChannel.blockedMs,
+			SentBatchesTotal:              senderChannel.sentBatchesTotal,
+			SentTransactionsTotal:         senderChannel.sentTransactionsTotal,
+			ReceivedBatchesTotal:          senderChannel.receivedBatchesTotal,
+			ReceivedTransactionsTotal:     senderChannel.receivedTransactionsTotal,
+			SentBatchesPerSecond:          senderChannel.sentBatchesPerSecond,
+			SentTransactionsPerSecond:     senderChannel.sentTransactionsPerSecond,
+			ReceivedBatchesPerSecond:      senderChannel.receivedBatchesPerSecond,
+			ReceivedTransactionsPerSecond: senderChannel.receivedTransactionsPerSecond,
+		},
+		Config: runtimeConfigStatusFromConfig(state.config),
+	}
+}
+
+func (state *controlState) throttlerSettings() throttlerSettings {
+	return throttlerSettings{
+		requestedTPS: state.controls.requestedTPS,
+		installed:    state.controls.installed,
+	}
+}
+
+func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTick *atomic.Int64, promMetrics *PrometheusMetrics) {
+	state.collectCompleted(terminallyCompletedTransactionsSinceTick, promMetrics)
+	state.telemetry.reader.reset()
+	state.telemetry.readerChannel.clearMeasurements()
+	state.telemetry.senderChannel.clearMeasurements()
+	terminallyCompletedTransactionsSinceTick.Store(0)
+	state.run.totalTransactions = 0
+	state.run.elapsedBeforeRun = 0
+	state.run.runStartedAt = time.Time{}
+	state.run.sourceError = nil
+	state.run.pausedStatus = runtimeStatus{}
+	promMetrics.actualTPS.Set(0)
+}
+
+func (state *controlState) resetFaultedMeasurements(
+	terminallyCompletedTransactionsSinceTick *atomic.Int64,
+	promMetrics *PrometheusMetrics,
+) {
+	state.collectCompleted(terminallyCompletedTransactionsSinceTick, promMetrics)
+	state.run.pausedStatus = runtimeStatus{}
+	state.telemetry.reader.reset()
+	state.telemetry.readerChannel.clearMeasurements()
+	state.telemetry.senderChannel.clearMeasurements()
+	terminallyCompletedTransactionsSinceTick.Store(0)
+	promMetrics.actualTPS.Set(0)
+}
+
+func (state *controlState) collectCompleted(
+	completed *atomic.Int64,
+	promMetrics *PrometheusMetrics,
+) int64 {
+	delta := completed.Swap(0)
+	state.run.totalTransactions += delta
+	promMetrics.transactionsTotal.Add(float64(delta))
+	return delta
+}
+
+func sourceErrorFromStartup(err error, sourcePath string) readerSourceError {
+	var sourceError readerSourceError
+	if errors.As(err, &sourceError) {
+		return sourceError
+	}
+	return readerSourceError{
+		Category:     "source",
+		Operation:    "glob",
+		RelativePath: relativeSourcePath(readerSourceDirectory(sourcePath), sourcePath),
+		Message:      err.Error(),
+	}
+}
+
+func (state *controlState) elapsedMs(now time.Time) int64 {
+	elapsed := state.run.elapsedBeforeRun
+	if state.run.lifecycle.state == runStateRunning {
+		elapsed += now.Sub(state.run.runStartedAt)
+	}
+	if elapsed < 0 {
+		return 0
+	}
+	return elapsed.Milliseconds()
+}
+
+func (state *controlState) pauseElapsed(now time.Time) {
+	if state.run.runStartedAt.IsZero() {
+		return
+	}
+	state.run.elapsedBeforeRun += now.Sub(state.run.runStartedAt)
+	state.run.runStartedAt = time.Time{}
 }

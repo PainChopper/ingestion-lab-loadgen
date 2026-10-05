@@ -40,7 +40,7 @@ interface TestWireSnapshot {
   readonly throttler: {
     readonly requestedTps: number
     readonly admittedTps: number
-    readonly installationMode: 'installed' | 'bypass'
+    readonly installed: boolean
   }
   readonly sender: {
     readonly workers: number
@@ -84,7 +84,7 @@ interface MockResponseOptions {
 const VALID_WIRE: TestWireSnapshot = {
   run: { state: 'running', elapsedMs: 12_345, totalTransactions: 42_000 },
   reader: { workers: 1, liveWorkers: 1, idleWorkers: 0, readingWorkers: 1, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0, readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, sourceDirectory: 'C:/dataset', sourceError: null },
-  throttler: { requestedTps: 200, admittedTps: 125_000.5, installationMode: 'installed' },
+  throttler: { requestedTps: 200, admittedTps: 125_000.5, installed: true },
   sender: { workers: 32, liveWorkers: 0, idleWorkers: 0, inFlightWorkers: 0, backoffWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingInFlightWorkers: 0, drainingBackoffWorkers: 0 },
   readerChannel: {
     capacity: 8, sentBatchesTotal: 11, sentTransactionsTotal: 550_000, receivedBatchesTotal: 5, receivedTransactionsTotal: 250_000,
@@ -141,9 +141,9 @@ const VALID_WIRE: TestWireSnapshot = {
       unit: 'transactions/s',
       mutability: 'immediate',
     },
-    throttlerInstallationMode: {
-      initial: 'installed',
-      allowed: ['installed', 'bypass'],
+    throttlerInstalled: {
+      initial: true,
+      allowed: [true, false],
       mutability: 'immediate',
     },
     senderWorkers: { initial: 32, min: 1, max: 32, step: 1, unit: 'workers', mutability: 'immediate' },
@@ -454,8 +454,8 @@ function expectedSnapshot(
         wire?.config.throttlerRequestedTps ?? null,
         connectionState,
       ),
-      installationMode: {
-        applied: wire?.throttler.installationMode ?? null,
+      installed: {
+        applied: wire?.throttler.installed ?? null,
         pending: null,
         applyMode: connectionState === 'connected' && wire !== null
           ? 'immediate'
@@ -743,8 +743,8 @@ const malformedCases: ReadonlyArray<{
       ...VALID_WIRE,
       config: {
         ...VALID_WIRE.config,
-        throttlerInstallationMode: {
-          ...VALID_WIRE.config.throttlerInstallationMode,
+        throttlerInstalled: {
+          ...VALID_WIRE.config.throttlerInstalled,
           unknown: true,
         },
       },
@@ -776,9 +776,44 @@ const malformedCases: ReadonlyArray<{
     name: 'unknown applied installation mode',
     result: async () => mockResponse({
       ...VALID_WIRE,
-      throttler: { ...VALID_WIRE.throttler, installationMode: 'removed' },
+      throttler: { ...VALID_WIRE.throttler, installed: 'removed' },
     }),
   },
+  ...([null, 0, 'false', 'installed', 'bypass'] as const).map((installed) => ({
+    name: `invalid installed type ${installed}`,
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      throttler: { ...VALID_WIRE.throttler, installed },
+    }),
+  })),
+  {
+    name: 'legacy throttler field',
+    result: async () => {
+      const { installed: _installed, ...throttler } = VALID_WIRE.throttler
+      return mockResponse({ ...VALID_WIRE, throttler: { ...throttler, installationMode: 'installed' } })
+    },
+  },
+  {
+    name: 'missing installed',
+    result: async () => {
+      const { installed: _installed, ...throttler } = VALID_WIRE.throttler
+      return mockResponse({ ...VALID_WIRE, throttler })
+    },
+  },
+  ...([null, 0, 'false'] as const).map((initial) => ({
+    name: `invalid installed initial ${initial}`,
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      config: { ...VALID_WIRE.config, throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, initial } },
+    }),
+  })),
+  ...([[true, true], [false, false], [true, null], [true, 0], [true, 'false']] as const).map((allowed) => ({
+    name: `invalid installed allowed ${JSON.stringify(allowed)}`,
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      config: { ...VALID_WIRE.config, throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, allowed } },
+    }),
+  })),
   { name: 'null body', result: async () => mockResponse(null) },
   { name: 'array body', result: async () => mockResponse([VALID_WIRE]) },
   {
@@ -887,11 +922,12 @@ describe('HttpAdapter', () => {
     vi.useRealTimers()
   })
 
-  it.each(['readerReadBatchSize', 'readerWorkers', 'readerChannelCapacity', 'senderChannelCapacity', 'throttlerRequestedTps', 'throttlerInstallationMode', 'senderWorkers', 'metricsWindowMs'] as const)(
+  it.each(['readerReadBatchSize', 'readerWorkers', 'readerChannelCapacity', 'senderChannelCapacity', 'throttlerRequestedTps', 'throttlerInstalled', 'senderWorkers', 'metricsWindowMs'] as const)(
     'requires initial without a legacy alias in %s and blocks stale dispatch',
     async (field) => {
       const valid = JSON.parse(JSON.stringify(VALID_WIRE))
       if (field === 'readerChannelCapacity' || field === 'senderChannelCapacity') valid.config[field].initial = 0
+      if (field === 'throttlerInstalled') valid.config[field].initial = false
       for (const shape of ['initial-only', 'legacy-only', 'both', 'missing']) {
         const wire = structuredClone(valid)
         if (shape === 'legacy-only' || shape === 'both') wire.config[field].default = wire.config[field].initial
@@ -1017,8 +1053,8 @@ describe('HttpAdapter', () => {
         applyMode: 'immediate',
       },
       admittedTps: 125_000.5,
-      installationMode: {
-        applied: 'installed',
+      installed: {
+        applied: true,
         applyMode: 'immediate',
         writable: true,
         unavailableReason: null,
@@ -1189,7 +1225,7 @@ describe('HttpAdapter', () => {
       ...pausedWire,
       reader: { ...pausedWire.reader, workers: 2 },
       sender: { ...pausedWire.sender, workers: 31 },
-      throttler: { ...pausedWire.throttler, requestedTps: 25, installationMode: 'bypass' },
+      throttler: { ...pausedWire.throttler, requestedTps: 25, installed: false },
     }
     const resumedWire: TestWireSnapshot = {
       ...appliedWire,
@@ -1212,13 +1248,13 @@ describe('HttpAdapter', () => {
     expect(pausedSnapshot.sender.workers.applyMode).toBe('immediate')
     expect(pausedSnapshot.reader.workers.applyMode).toBe('immediate')
     expect(pausedSnapshot.throttler.requestedTps.applyMode).toBe('immediate')
-    expect(pausedSnapshot.throttler.installationMode.writable).toBe(true)
+    expect(pausedSnapshot.throttler.installed.writable).toBe(true)
 
     for (const command of [
       { type: 'set-sender-workers', value: 31 },
       { type: 'set-worker-count', actor: 'reader', value: 2 },
       { type: 'set-requested-tps', value: 25 },
-      { type: 'set-throttler-installation-mode', value: 'bypass' },
+      { type: 'set-throttler-installed', value: false },
     ] as const) {
       await expect(adapter.dispatch(command)).resolves.toMatchObject({ accepted: true })
     }
@@ -1243,7 +1279,7 @@ describe('HttpAdapter', () => {
       '{"action":"set-sender-workers","value":31}',
       '{"action":"set-reader-workers","value":2}',
       '{"action":"set-requested-tps","value":25}',
-      '{"action":"set-throttler-installation-mode","value":"bypass"}',
+      '{"action":"set-throttler-installed","value":false}',
       '{"action":"run"}',
     ])
     adapter.dispose()
@@ -1697,12 +1733,15 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it.each(['idle', 'running', 'paused'] as const)(
-    'sends immediate throttler controls in $state and leaves applied state to snapshots',
-    async (runState) => {
-      const wire: TestWireSnapshot = {
+  it.each((['idle', 'running', 'paused'] as const).flatMap((runState) =>
+    [true, false].map((installed) => ({ runState, installed })),
+  ))(
+    'sends immediate throttler installed=$installed in $runState and confirms only by poll',
+    async ({ runState, installed }) => {
+      let wire: TestWireSnapshot = {
         ...withRunState(runState),
-        throttler: { ...VALID_WIRE.throttler, requestedTps: 0 },
+        throttler: { ...VALID_WIRE.throttler, requestedTps: 0, installed: !installed },
+        config: { ...VALID_WIRE.config, throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, initial: false, allowed: [false, true] } },
       }
       fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
         ? Promise.resolve(mockCommandResponse())
@@ -1721,8 +1760,8 @@ describe('HttpAdapter', () => {
       const [tpsReceipt, modeReceipt] = await Promise.all([
         adapter.dispatch({ type: 'set-requested-tps', value: 400 }),
         adapter.dispatch({
-          type: 'set-throttler-installation-mode',
-          value: 'bypass',
+          type: 'set-throttler-installed',
+          value: installed,
         }),
       ])
 
@@ -1732,11 +1771,18 @@ describe('HttpAdapter', () => {
         (init as RequestInit).body,
       )).toEqual([
         '{"action":"set-requested-tps","value":400}',
-        '{"action":"set-throttler-installation-mode","value":"bypass"}',
+        JSON.stringify({ action: 'set-throttler-installed', value: installed }),
       ])
       expect(adapter.getSnapshot().throttler).toMatchObject({
         requestedTps: { applied: 0 },
-        installationMode: { applied: 'installed' },
+        installed: { applied: !installed },
+      })
+      wire = { ...wire, throttler: { ...wire.throttler, requestedTps: 400, installed } }
+      await vi.advanceTimersByTimeAsync(1_000)
+      await flushPoll()
+      expect(adapter.getSnapshot().throttler).toMatchObject({
+        requestedTps: { applied: 400 },
+        installed: { applied: installed },
       })
       adapter.dispose()
     },
@@ -1744,7 +1790,7 @@ describe('HttpAdapter', () => {
 
   it.each([
     { type: 'set-requested-tps', value: 25 } as const,
-    { type: 'set-throttler-installation-mode', value: 'bypass' } as const,
+    { type: 'set-throttler-installed', value: false } as const,
   ])('does not send buffered $type after snapshot invalidation', async (command) => {
     const firstCommand = deferred<Response>()
     let snapshotRequests = 0
@@ -2005,7 +2051,7 @@ describe('HttpAdapter', () => {
   it('rejects every unsupported command locally while accounting for polling', async () => {
     const commands: readonly LoadgenCommand[] = [
       { type: 'set-requested-tps', value: 10_000 },
-      { type: 'set-throttler-installation-mode', value: 'bypass' },
+      { type: 'set-throttler-installed', value: false },
       { type: 'set-worker-count', actor: 'reader', value: 2 },
       { type: 'set-sender-workers', value: 3 },
       { type: 'set-http-timeout', valueMs: 500 },

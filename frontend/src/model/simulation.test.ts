@@ -9,7 +9,7 @@ const CONFIG: SimulationConfig = {
   readerWorkers: 1,
   senderWorkers: 1,
   requestedTps: 50_000,
-  throttlerInstallationMode: 'installed',
+  throttlerInstalled: true,
   readBatchSize: 5_000,
   httpTimeoutMs: 500,
   targetDelayMs: 0,
@@ -50,7 +50,7 @@ describe('FixedStepSimulation pipeline batch', () => {
       {
         ...CONFIG,
         senderWorkers: 2,
-        throttlerInstallationMode: 'bypass',
+        throttlerInstalled: false,
         readBatchSize: 1_000,
         targetDelayMs: 100,
       },

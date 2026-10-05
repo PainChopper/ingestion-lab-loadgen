@@ -1,7 +1,6 @@
 import type {
   HttpLastOutcome,
   ChannelTrend,
-  ThrottlerInstallationMode,
 } from './loadgen'
 
 export const FIXED_STEP_MS = 10
@@ -28,7 +27,7 @@ export interface SimulationConfig {
   readerWorkers: number
   senderWorkers: number
   requestedTps: number
-  throttlerInstallationMode: ThrottlerInstallationMode
+  throttlerInstalled: boolean
   readBatchSize: number
   httpTimeoutMs: number
   targetDelayMs: number
@@ -547,7 +546,7 @@ export class FixedStepSimulation {
     }
     if (
       values.requestedTps === 0 ||
-      values.throttlerInstallationMode !== undefined
+      values.throttlerInstalled !== undefined
     ) {
       this.throttlerTokens = 0
     }
@@ -852,7 +851,7 @@ export class FixedStepSimulation {
   }
 
   private refillThrottlerTokens(): void {
-    if (this.config.throttlerInstallationMode === 'bypass') {
+    if (this.config.throttlerInstalled === false) {
       this.throttlerTokens = 0
       return
     }
@@ -910,7 +909,7 @@ export class FixedStepSimulation {
 
   private receiveReaderChannel(activity: StepActivity): AdmissionResult {
     const availableBatches = this.readerChannel.depthBatches
-    const installed = this.config.throttlerInstallationMode === 'installed'
+    const installed = this.config.throttlerInstalled === true
     for (let batchIndex = 0; batchIndex < availableBatches; batchIndex += 1) {
       if (this.pendingThrottledBatch !== null) {
         const senderChannelBlocked = this.flushThrottledBatch(activity)
@@ -958,7 +957,7 @@ export class FixedStepSimulation {
           }
         }
         if (
-          this.config.throttlerInstallationMode === 'installed' &&
+          this.config.throttlerInstalled === true &&
           this.throttlerTokens < transactions
         ) {
           return {
@@ -969,7 +968,7 @@ export class FixedStepSimulation {
         }
         const batch = this.createPipelineBatch(transactions)
         this.readerChannel.handoff(batch, activity.readerChannel)
-        if (this.config.throttlerInstallationMode === 'installed') {
+        if (this.config.throttlerInstalled === true) {
           this.throttlerTokens -= transactions
         }
         this.readerTransactionCredit -= transactions

@@ -44,11 +44,11 @@ function requestedTpsControl(
   } as ThrottlerActorProps['requestedTpsControl']
 }
 
-function installationModeControl(
-  applied: 'installed' | 'bypass',
-  desired: 'installed' | 'bypass',
+function installedControl(
+  applied: boolean,
+  desired: boolean,
   phase: 'idle' | 'pending',
-): ThrottlerActorProps['installationModeControl'] {
+): ThrottlerActorProps['installedControl'] {
   return {
     applied,
     available: true,
@@ -58,14 +58,14 @@ function installationModeControl(
     preview: noop,
     commit: accept,
     cancel: noop,
-  } as ThrottlerActorProps['installationModeControl']
+  } as ThrottlerActorProps['installedControl']
 }
 
 function createArgs({
   appliedTps,
   desiredTps = appliedTps,
   requestedPhase = 'idle',
-  installationMode = 'installed',
+  installed = true,
   admittedTps = appliedTps,
   flowState = 'normal',
   displayedPressure = 0,
@@ -73,7 +73,7 @@ function createArgs({
   appliedTps: number
   desiredTps?: number
   requestedPhase?: 'idle' | 'preview'
-  installationMode?: 'installed' | 'bypass'
+  installed?: boolean
   admittedTps?: number
   flowState?: 'normal' | 'stopped' | 'connection-error'
   displayedPressure?: number
@@ -81,8 +81,8 @@ function createArgs({
   const snapshot = {
     id: 'throttler',
     requestedTps: numericControl(appliedTps, 'tx/s', 5_000),
-    installationMode: {
-      applied: installationMode,
+    installed: {
+      applied: installed,
       pending: null,
       applyMode: 'immediate',
       writable: true,
@@ -128,9 +128,9 @@ function createArgs({
       desiredTps,
       requestedPhase,
     ),
-    installationModeControl: installationModeControl(
-      installationMode,
-      installationMode,
+    installedControl: installedControl(
+      installed,
+      installed,
       'idle',
     ),
     selected: false,
@@ -172,7 +172,7 @@ function ThrottlerStory(args: ThrottlerActorProps) {
 
 type InteractiveControls = {
   requestedTps: number
-  installationMode: 'installed' | 'bypass'
+  installed: boolean
   admittedTps: number
   displayedPressure: number
   flowState: 'normal' | 'stopped' | 'connection-error'
@@ -184,9 +184,9 @@ type InteractiveRequestedTps = {
   desired: number
   phase: InteractiveControlPhase
 }
-type InteractiveInstallationMode = {
-  applied: 'installed' | 'bypass'
-  desired: 'installed' | 'bypass'
+type InteractiveInstalled = {
+  applied: boolean
+  desired: boolean
   phase: InteractiveControlPhase
 }
 
@@ -196,13 +196,13 @@ function InteractiveThrottler({ controls }: { controls: InteractiveControls }) {
     desired: controls.requestedTps,
     phase: 'idle' as const,
   }))
-  const [installationMode, setInstallationMode] = useState<InteractiveInstallationMode>(() => ({
-    applied: controls.installationMode,
-    desired: controls.installationMode,
+  const [installed, setInstalled] = useState<InteractiveInstalled>(() => ({
+    applied: controls.installed,
+    desired: controls.installed,
     phase: 'idle' as const,
   }))
   const requestedTpsRef = useRef(requestedTps.desired)
-  const installationModeRef = useRef(installationMode.desired)
+  const installedRef = useRef(installed.desired)
   const [selected, setSelected] = useState(false)
 
   const previewRequestedTps = useCallback((value: number) => {
@@ -223,29 +223,29 @@ function InteractiveThrottler({ controls }: { controls: InteractiveControls }) {
     requestedTpsRef.current = requestedTps.applied
   }, [requestedTps.applied])
 
-  const previewInstallationMode = useCallback((value: 'installed' | 'bypass') => {
-    installationModeRef.current = value
-    setInstallationMode((current) => ({ ...current, desired: value, phase: 'preview' }))
+  const previewInstalled = useCallback((value: boolean) => {
+    installedRef.current = value
+    setInstalled((current) => ({ ...current, desired: value, phase: 'preview' }))
   }, [])
-  const commitInstallationMode = useCallback(async () => {
-    const value = installationModeRef.current
-    setInstallationMode({ applied: value, desired: value, phase: 'idle' })
+  const commitInstalled = useCallback(async () => {
+    const value = installedRef.current
+    setInstalled({ applied: value, desired: value, phase: 'idle' })
     return true
   }, [])
-  const cancelInstallationMode = useCallback(() => {
-    setInstallationMode((current) => ({
+  const cancelInstalled = useCallback(() => {
+    setInstalled((current) => ({
       applied: current.applied,
       desired: current.applied,
       phase: 'idle',
     }))
-    installationModeRef.current = installationMode.applied
-  }, [installationMode.applied])
+    installedRef.current = installed.applied
+  }, [installed.applied])
 
   const args = createArgs({
     appliedTps: requestedTps.applied,
     desiredTps: requestedTps.desired,
     requestedPhase: requestedTps.phase,
-    installationMode: installationMode.applied,
+    installed: installed.applied,
     admittedTps: controls.admittedTps,
     flowState: controls.flowState,
     displayedPressure: controls.displayedPressure,
@@ -261,14 +261,14 @@ function InteractiveThrottler({ controls }: { controls: InteractiveControls }) {
     commit: commitRequestedTps,
     cancel: cancelRequestedTps,
   }
-  args.installationModeControl = {
-    ...args.installationModeControl,
-    applied: installationMode.applied,
-    desired: installationMode.desired,
-    phase: installationMode.phase,
-    preview: previewInstallationMode,
-    commit: commitInstallationMode,
-    cancel: cancelInstallationMode,
+  args.installedControl = {
+    ...args.installedControl,
+    applied: installed.applied,
+    desired: installed.desired,
+    phase: installed.phase,
+    preview: previewInstalled,
+    commit: commitInstalled,
+    cancel: cancelInstalled,
   }
 
   return <ThrottlerStory {...args} />
@@ -295,7 +295,7 @@ export const InstalledIntermediate: Story = {
 }
 
 export const BypassApplied: Story = {
-  args: createArgs({ appliedTps: 120_000, installationMode: 'bypass' }),
+  args: createArgs({ appliedTps: 120_000, installed: false }),
 }
 
 export const DesiredNotYetApplied: Story = {
@@ -309,7 +309,7 @@ export const DesiredNotYetApplied: Story = {
 export const Interactive: StoryObj<InteractiveControls> = {
   args: {
     requestedTps: 120_000,
-    installationMode: 'installed',
+    installed: true,
     admittedTps: 120_000,
     displayedPressure: 0.35,
     flowState: 'normal',
@@ -319,9 +319,8 @@ export const Interactive: StoryObj<InteractiveControls> = {
       control: { type: 'number', min: 0, max: 250_000, step: 5_000 },
       description: 'Локально применяемый requested TPS и положение крана',
     },
-    installationMode: {
-      control: 'inline-radio',
-      options: ['installed', 'bypass'],
+    installed: {
+      control: 'boolean',
     },
     admittedTps: {
       control: { type: 'number', min: 0, max: 250_000, step: 5_000 },
@@ -336,7 +335,7 @@ export const Interactive: StoryObj<InteractiveControls> = {
   },
   render: (controls) => (
     <InteractiveThrottler
-      key={`${controls.requestedTps}-${controls.installationMode}-${controls.admittedTps}-${controls.displayedPressure}-${controls.flowState}`}
+      key={`${controls.requestedTps}-${controls.installed}-${controls.admittedTps}-${controls.displayedPressure}-${controls.flowState}`}
       controls={controls}
     />
   ),

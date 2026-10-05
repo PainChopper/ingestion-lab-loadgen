@@ -9,7 +9,6 @@ import type {
   ChannelTelemetrySnapshot,
   RunState,
   ReaderSourceErrorSnapshot,
-  ThrottlerInstallationMode,
 } from '../model/loadgen'
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
 const COMMAND_ENDPOINT = '/api/loadgen/commands'
@@ -24,7 +23,7 @@ const WIRE_KEYS = Object.freeze([
 const RUN_KEYS = Object.freeze(['elapsedMs', 'state', 'totalTransactions'])
 const READER_KEYS = Object.freeze(['blockedWorkers', 'drainingBlockedWorkers', 'drainingIdleWorkers', 'drainingReadingWorkers', 'drainingWorkers', 'idleWorkers', 'liveWorkers', 'readBatchSize', 'readTps', 'readingWorkers', 'rowsRead', 'sourceDirectory', 'sourceError', 'workers'])
 const SOURCE_ERROR_KEYS = Object.freeze(['category', 'message', 'operation', 'relativePath'])
-const THROTTLER_KEYS = Object.freeze(['admittedTps', 'installationMode', 'requestedTps'])
+const THROTTLER_KEYS = Object.freeze(['admittedTps', 'installed', 'requestedTps'])
 const SENDER_KEYS = Object.freeze(['backoffWorkers', 'drainingBackoffWorkers', 'drainingIdleWorkers', 'drainingInFlightWorkers', 'drainingWorkers', 'idleWorkers', 'inFlightWorkers', 'liveWorkers', 'workers'])
 const CHANNEL_KEYS = Object.freeze([
   'blockedMs', 'blockedSenders', 'bufferedTransactions', 'capacity', 'depthBatches',
@@ -35,7 +34,7 @@ const CHANNEL_KEYS = Object.freeze([
 
 interface WireRun { readonly state: RunState; readonly totalTransactions: number; readonly elapsedMs: number }
 interface WireReader { readonly workers: number; readonly liveWorkers: number; readonly idleWorkers: number; readonly readingWorkers: number; readonly blockedWorkers: number; readonly drainingWorkers: number; readonly drainingIdleWorkers: number; readonly drainingReadingWorkers: number; readonly drainingBlockedWorkers: number; readonly readBatchSize: number; readonly readTps: number; readonly rowsRead: number; readonly sourceDirectory: string; readonly sourceError: ReaderSourceErrorSnapshot | null }
-interface WireThrottler { readonly requestedTps: number; readonly admittedTps: number; readonly installationMode: ThrottlerInstallationMode }
+interface WireThrottler { readonly requestedTps: number; readonly admittedTps: number; readonly installed: boolean }
 interface WireSender { readonly workers: number; readonly liveWorkers: number; readonly idleWorkers: number; readonly inFlightWorkers: number; readonly backoffWorkers: number; readonly drainingWorkers: number; readonly drainingIdleWorkers: number; readonly drainingInFlightWorkers: number; readonly drainingBackoffWorkers: number }
 interface WireChannelSnapshot { readonly capacity: number; readonly depthBatches: number; readonly bufferedTransactions: number; readonly blockedSenders: number; readonly oldestBlockedSenderMs: number; readonly blockedMs: number; readonly sentBatchesTotal: number; readonly sentTransactionsTotal: number; readonly receivedBatchesTotal: number; readonly receivedTransactionsTotal: number; readonly inputBatchesPerSecond: number; readonly inputTransactionsPerSecond: number; readonly outputBatchesPerSecond: number; readonly outputTransactionsPerSecond: number }
 interface WireSnapshot { readonly run: WireRun; readonly reader: WireReader; readonly throttler: WireThrottler; readonly sender: WireSender; readonly readerChannel: WireChannelSnapshot; readonly senderChannel: WireChannelSnapshot; readonly config: LoadgenConfigSnapshot }
@@ -51,7 +50,7 @@ type SupportedCommand = Extract<
       | 'set-sender-channel-capacity'
       | 'set-read-batch-size'
       | 'set-requested-tps'
-      | 'set-throttler-installation-mode'
+      | 'set-throttler-installed'
       | 'set-worker-count'
       | 'set-sender-workers'
   }
@@ -78,7 +77,7 @@ function isSupportedCommand(
     command.type === 'set-sender-channel-capacity' ||
     command.type === 'set-read-batch-size' ||
     command.type === 'set-requested-tps' ||
-    command.type === 'set-throttler-installation-mode' ||
+    command.type === 'set-throttler-installed' ||
     command.type === 'set-worker-count' ||
     command.type === 'set-sender-workers'
 }
@@ -292,8 +291,8 @@ function createSnapshot(
         wire?.config.throttlerRequestedTps ?? null,
         connectionState,
       ),
-      installationMode: {
-        applied: wire?.throttler.installationMode ?? null,
+      installed: {
+        applied: wire?.throttler.installed ?? null,
         pending: null,
         applyMode: connectionState === 'connected' && wire !== null
           ? 'immediate'
@@ -426,7 +425,7 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
     'readerReadBatchSize', 'readerWorkers',
     'senderChannelCapacity',
     'senderWorkers',
-    'throttlerInstallationMode',
+    'throttlerInstalled',
     'throttlerRequestedTps',
   ])) {
     throw new Error('snapshot config must contain exactly reader, readerChannel, senderChannel, throttler, and metrics controls')
@@ -547,18 +546,18 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
     throw new Error('snapshot throttler requested TPS config initial is invalid')
   }
 
-  const installationMode = value.throttlerInstallationMode
-  if (!isExactObject(installationMode, ['allowed', 'initial', 'mutability'])) {
+  const installed = value.throttlerInstalled
+  if (!isExactObject(installed, ['allowed', 'initial', 'mutability'])) {
     throw new Error('snapshot throttler installation mode config is invalid')
   }
   if (
-    !Array.isArray(installationMode.allowed) ||
-    installationMode.allowed.length !== 2 ||
-    installationMode.allowed[0] !== 'installed' ||
-    installationMode.allowed[1] !== 'bypass' ||
-    installationMode.initial !== 'installed' && installationMode.initial !== 'bypass' ||
-    !installationMode.allowed.includes(installationMode.initial) ||
-    installationMode.mutability !== 'immediate'
+    !Array.isArray(installed.allowed) ||
+    installed.allowed.length !== 2 ||
+    installed.allowed.some((entry) => typeof entry !== 'boolean') ||
+    new Set(installed.allowed).size !== 2 ||
+    typeof installed.initial !== 'boolean' ||
+    !installed.allowed.includes(installed.initial) ||
+    installed.mutability !== 'immediate'
   ) {
     throw new Error('snapshot throttler installation mode config is invalid')
   }
@@ -596,10 +595,10 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
       mutability: senderChannel.mutability,
     }),
     throttlerRequestedTps: Object.freeze(requestedTpsConfig),
-    throttlerInstallationMode: Object.freeze({
-      initial: installationMode.initial,
-      allowed: Object.freeze([...installationMode.allowed]),
-      mutability: installationMode.mutability,
+    throttlerInstalled: Object.freeze({
+      initial: installed.initial,
+      allowed: Object.freeze([...installed.allowed]),
+      mutability: installed.mutability,
     }),
     senderWorkers: Object.freeze(value.senderWorkers as unknown as LoadgenConfigSnapshot['senderWorkers']),
 		logging: Object.freeze(logging as unknown as LoadgenConfigSnapshot['logging']),
@@ -640,7 +639,7 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   if (!isRangeValue(reader.workers, config.readerWorkers!) || !isRangeValue(reader.readBatchSize, config.readerReadBatchSize) || !isWireNumber(reader.readTps) || !isWireInteger(reader.rowsRead) || !isWireInteger(reader.liveWorkers) || !isWireInteger(reader.idleWorkers) || !isWireInteger(reader.readingWorkers) || !isWireInteger(reader.blockedWorkers) || !isWireInteger(reader.drainingWorkers) || !isWireInteger(reader.drainingIdleWorkers) || !isWireInteger(reader.drainingReadingWorkers) || !isWireInteger(reader.drainingBlockedWorkers) || reader.liveWorkers !== reader.idleWorkers + reader.readingWorkers + reader.blockedWorkers || reader.drainingWorkers !== reader.drainingIdleWorkers + reader.drainingReadingWorkers + reader.drainingBlockedWorkers || reader.drainingIdleWorkers > reader.idleWorkers || reader.drainingReadingWorkers > reader.readingWorkers || reader.drainingBlockedWorkers > reader.blockedWorkers || ((run.state === 'idle' || run.state === 'faulted') && (reader.liveWorkers !== 0 || reader.drainingWorkers !== 0))) throw new Error('snapshot reader values are invalid')
   if (typeof reader.sourceDirectory !== 'string' || reader.sourceDirectory.length === 0) throw new Error('snapshot reader sourceDirectory is invalid')
   if (reader.sourceError !== null && (!isExactObject(reader.sourceError, SOURCE_ERROR_KEYS) || reader.sourceError.category !== 'source' || (reader.sourceError.operation !== 'glob' && reader.sourceError.operation !== 'open' && reader.sourceError.operation !== 'read' && reader.sourceError.operation !== 'close' && reader.sourceError.operation !== 'reader-close') || typeof reader.sourceError.relativePath !== 'string' || reader.sourceError.relativePath.length === 0 || reader.sourceError.relativePath.startsWith('/') || reader.sourceError.relativePath.startsWith('../') || typeof reader.sourceError.message !== 'string' || reader.sourceError.message.length === 0)) throw new Error('snapshot reader sourceError is invalid')
-  if (!isRangeValue(throttler.requestedTps, config.throttlerRequestedTps) || !isWireNumber(throttler.admittedTps) || (throttler.installationMode !== 'installed' && throttler.installationMode !== 'bypass') || !config.throttlerInstallationMode.allowed.includes(throttler.installationMode)) throw new Error('snapshot throttler values are invalid')
+  if (!isRangeValue(throttler.requestedTps, config.throttlerRequestedTps) || !isWireNumber(throttler.admittedTps) || typeof throttler.installed !== 'boolean' || !config.throttlerInstalled.allowed.includes(throttler.installed)) throw new Error('snapshot throttler values are invalid')
   if (!isRangeValue(sender.workers, config.senderWorkers) ||
     !isWireInteger(sender.liveWorkers) || !isWireInteger(sender.idleWorkers) || !isWireInteger(sender.inFlightWorkers) || !isWireInteger(sender.backoffWorkers) || !isWireInteger(sender.drainingWorkers) || !isWireInteger(sender.drainingIdleWorkers) || !isWireInteger(sender.drainingInFlightWorkers) || !isWireInteger(sender.drainingBackoffWorkers) ||
     sender.liveWorkers !== sender.idleWorkers + sender.inFlightWorkers + sender.backoffWorkers || sender.drainingWorkers !== sender.drainingIdleWorkers + sender.drainingInFlightWorkers + sender.drainingBackoffWorkers || sender.drainingIdleWorkers > sender.idleWorkers || sender.drainingInFlightWorkers > sender.inFlightWorkers || sender.drainingBackoffWorkers > sender.backoffWorkers ||
@@ -695,9 +694,9 @@ function canDispatchConfigCommand(
     return snapshot.connectionState === 'connected' && config !== null &&
       isRangeValue(command.value, config.throttlerRequestedTps)
   }
-  if (command.type === 'set-throttler-installation-mode') {
+  if (command.type === 'set-throttler-installed') {
     return snapshot.connectionState === 'connected' && config !== null &&
-      config.throttlerInstallationMode.allowed.includes(command.value)
+      config.throttlerInstalled.allowed.includes(command.value)
   }
   if (command.type === 'set-sender-workers') {
     return snapshot.connectionState === 'connected' && config !== null &&
@@ -914,7 +913,7 @@ export class HttpAdapter implements LoadgenAdapter {
           command.type === 'set-reader-channel-capacity' ||
           command.type === 'set-sender-channel-capacity' ||
           command.type === 'set-requested-tps' ||
-          command.type === 'set-throttler-installation-mode' ||
+          command.type === 'set-throttler-installed' ||
           command.type === 'set-sender-workers'
             ? { action: command.type, value: command.value }
             : command.type === 'set-worker-count' && command.actor === 'reader'

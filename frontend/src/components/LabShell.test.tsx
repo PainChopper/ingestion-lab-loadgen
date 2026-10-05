@@ -298,14 +298,14 @@ describe('LabShell', () => {
     render(<LabShell adapter={adapter} />)
 
     await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
-    const valveMode = screen.getByRole('combobox', { name: 'Valve mode' })
-    await user.selectOptions(valveMode, 'bypass')
+    const valveMode = screen.getByRole('checkbox', { name: 'Valve mode' })
+    await user.click(valveMode)
 
     await waitFor(() => {
       expect(dispatch).toHaveBeenCalledWith({
-        type: 'set-throttler-installation-mode', value: 'bypass',
+        type: 'set-throttler-installed', value: false,
       })
-      expect((valveMode as HTMLSelectElement).value).toBe('bypass')
+      expect((valveMode as HTMLInputElement).checked).toBe(false)
     })
   })
 
@@ -413,8 +413,8 @@ describe('LabShell', () => {
       name: 'Reinsert throttler valve',
     })
     expect(dispatch).toHaveBeenCalledWith({
-      type: 'set-throttler-installation-mode',
-      value: 'bypass',
+      type: 'set-throttler-installed',
+      value: false,
     })
     expect(reinsert.getAttribute('aria-pressed')).toBe('true')
     expect(document.activeElement).toBe(reinsert)
@@ -428,8 +428,8 @@ describe('LabShell', () => {
       name: 'Remove throttler valve',
     })
     expect(dispatch).toHaveBeenCalledWith({
-      type: 'set-throttler-installation-mode',
-      value: 'installed',
+      type: 'set-throttler-installed',
+      value: true,
     })
     expect(restored.getAttribute('aria-pressed')).toBe('false')
     expect(document.activeElement).toBe(restored)

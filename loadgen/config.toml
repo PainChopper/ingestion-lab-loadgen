@@ -41,9 +41,9 @@ step = 200_000
 unit = "transactions/s"
 mutability = "immediate"
 
-[throttler.installation_mode]
-initial = "installed"
-allowed = ["installed", "bypass"]
+[throttler.installed]
+initial = true
+allowed = [true, false]
 mutability = "immediate"
 
 [sender.workers]

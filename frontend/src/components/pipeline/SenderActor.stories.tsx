@@ -29,7 +29,7 @@ function liveControls(snapshot: LoadgenSnapshot): LiveControls {
     readerWorkers: desiredControl(snapshot.reader.workers.applied ?? 0),
     readBatchSize: desiredControl(snapshot.reader.readBatchSize.applied ?? 0),
     requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? 0),
-    installationMode: desiredControl(snapshot.throttler.installationMode.applied ?? 'installed'),
+    installed: desiredControl(snapshot.throttler.installed.applied ?? true),
     senderWorkers: desiredControl(snapshot.sender.workers.applied ?? 0),
     timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? 0),
   }
@@ -90,7 +90,7 @@ function snapshotFor(state: SenderState): LoadgenSnapshot {
   const readerWorkers = numericControl(2, 'workers')
   const batchSize = numericControl(100, 'rows')
   const tps = numericControl(active || draining ? 120_000 : 0, 'tx/s')
-  const mode = { applied: 'installed' as const, pending: null, applyMode: 'immediate' as const, writable: true, unavailableReason: null }
+  const mode = { applied: true as const, pending: null, applyMode: 'immediate' as const, writable: true, unavailableReason: null }
   return {
     revision: 1, adapterKind: 'simulation', connectionState: 'connected', runState,
     elapsedMs: active || draining ? 12_000 : 0,
@@ -103,7 +103,7 @@ function snapshotFor(state: SenderState): LoadgenSnapshot {
       configuredCapacityTps: 1_500, limitationReason: null, rowsRead: active || draining ? 12_000 : null,
       sourceDirectory: 'fixture source', sourceError: null, state: runState,
     },
-    throttler: { id: 'throttler', requestedTps: tps, installationMode: mode, admittedTps: attemptedTps, limitedMs: null, state: runState },
+    throttler: { id: 'throttler', requestedTps: tps, installed: mode, admittedTps: attemptedTps, limitedMs: null, state: runState },
     readerChannel: channel,
     senderChannel: { ...channel, id: 'throttler-to-sender' as const, from: 'throttler' as const, to: 'sender' as const },
     sender,

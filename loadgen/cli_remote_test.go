@@ -65,7 +65,11 @@ func TestParseSetCLI(t *testing.T) {
 		{name: "reader workers", args: []string{"set", "reader-workers", "3"}, wantTarget: "reader-workers", wantAction: "set-reader-workers", wantValue: 3, wantURL: defaultCLIBaseURL},
 		{name: "sender workers custom URL", args: []string{"set", "sender-workers", "4", "--url", "https://example.test/"}, wantTarget: "sender-workers", wantAction: "set-sender-workers", wantValue: 4, wantURL: "https://example.test"},
 		{name: "requested TPS", args: []string{"set", "requested-tps", "0"}, wantTarget: "requested-tps", wantAction: "set-requested-tps", wantValue: 0, wantURL: defaultCLIBaseURL},
-		{name: "throttler mode", args: []string{"set", "throttler-mode", "bypass"}, wantTarget: "throttler-mode", wantAction: "set-throttler-installation-mode", wantValue: "bypass", wantURL: defaultCLIBaseURL},
+		{name: "throttler mode", args: []string{"set", "throttler-installed", "false"}, wantTarget: "throttler-installed", wantAction: "set-throttler-installed", wantValue: false, wantURL: defaultCLIBaseURL},
+		{name: "throttler true", args: []string{"set", "throttler-installed", "true"}, wantTarget: "throttler-installed", wantAction: "set-throttler-installed", wantValue: true, wantURL: defaultCLIBaseURL},
+		{name: "bool alias", args: []string{"set", "throttler-installed", "1"}, wantErr: true},
+		{name: "old value", args: []string{"set", "throttler-installed", "bypass"}, wantErr: true},
+		{name: "old target", args: []string{"set", "throttler-mode", "false"}, wantErr: true},
 		{name: "set help", args: []string{"set", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
 		{name: "target help", args: []string{"set", "reader-workers", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
 		{name: "unknown target", args: []string{"set", "other", "1"}, wantErr: true},
@@ -213,7 +217,8 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		{target: "reader-workers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *runtimeStatus) { snapshot.Reader.Workers = 3 }},
 		{target: "sender-workers", requestAction: "set-sender-workers", value: 4, update: func(snapshot *runtimeStatus) { snapshot.Sender.Workers = 4 }},
 		{target: "requested-tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *runtimeStatus) { snapshot.Throttler.RequestedTps = 0 }},
-		{target: "throttler-mode", requestAction: "set-throttler-installation-mode", value: "bypass", update: func(snapshot *runtimeStatus) { snapshot.Throttler.InstallationMode = throttlerBypass }},
+		{target: "throttler-installed", requestAction: "set-throttler-installed", value: false, update: func(snapshot *runtimeStatus) { snapshot.Throttler.Installed = false }},
+		{target: "throttler-installed", requestAction: "set-throttler-installed", value: true, update: func(snapshot *runtimeStatus) { snapshot.Throttler.Installed = true }},
 	} {
 		t.Run(test.target, func(t *testing.T) {
 			snapshot := testRemoteSnapshot(t)
@@ -325,6 +330,18 @@ func TestDecodeStrictSnapshotConfigContract(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "config accepted", change: func(map[string]json.RawMessage) {}},
+		{name: "installed null", wantErr: true, change: func(root map[string]json.RawMessage) {
+			root["throttler"] = json.RawMessage(`{"requestedTps":0,"admittedTps":0,"installed":null}`)
+		}},
+		{name: "installed missing", wantErr: true, change: func(root map[string]json.RawMessage) {
+			root["throttler"] = json.RawMessage(`{"requestedTps":0,"admittedTps":0}`)
+		}},
+		{name: "installed string", wantErr: true, change: func(root map[string]json.RawMessage) {
+			root["throttler"] = json.RawMessage(`{"requestedTps":0,"admittedTps":0,"installed":"false"}`)
+		}},
+		{name: "installed number", wantErr: true, change: func(root map[string]json.RawMessage) {
+			root["throttler"] = json.RawMessage(`{"requestedTps":0,"admittedTps":0,"installed":0}`)
+		}},
 		{name: "only legacy field rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["policy"] = root["config"]; delete(root, "config") }},
 		{name: "both fields rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["policy"] = root["config"] }},
 		{name: "missing config rejected", wantErr: true, change: func(root map[string]json.RawMessage) { delete(root, "config") }},
@@ -365,10 +382,14 @@ func TestDecodeStrictSnapshotInitialContract(t *testing.T) {
 	}
 	fields := []string{
 		"readerReadBatchSize", "readerWorkers", "readerChannelCapacity", "senderChannelCapacity",
-		"throttlerRequestedTps", "throttlerInstallationMode", "senderWorkers", "metricsWindowMs",
+		"throttlerRequestedTps", "throttlerInstalled", "senderWorkers", "metricsWindowMs",
 	}
 	for _, field := range fields {
-		for _, shape := range []string{"initial-only", "legacy-only", "both", "missing"} {
+		shapes := []string{"initial-only", "legacy-only", "both", "missing"}
+		if field == "throttlerInstalled" {
+			shapes = append(shapes, "null", "string", "number", "allowed-null", "allowed-element-null", "allowed-element-string", "allowed-element-number")
+		}
+		for _, shape := range shapes {
 			t.Run(field+"/"+shape, func(t *testing.T) {
 				root := map[string]json.RawMessage{}
 				if err := json.Unmarshal(encoded, &root); err != nil {
@@ -388,6 +409,9 @@ func TestDecodeStrictSnapshotInitialContract(t *testing.T) {
 				if field == "readerChannelCapacity" || field == "senderChannelCapacity" {
 					value["initial"] = json.RawMessage(`0`)
 				}
+				if field == "throttlerInstalled" {
+					value["initial"] = json.RawMessage(`false`)
+				}
 				switch shape {
 				case "legacy-only":
 					value["default"] = value["initial"]
@@ -396,6 +420,20 @@ func TestDecodeStrictSnapshotInitialContract(t *testing.T) {
 					value["default"] = value["initial"]
 				case "missing":
 					delete(value, "initial")
+				case "null":
+					value["initial"] = json.RawMessage(`null`)
+				case "string":
+					value["initial"] = json.RawMessage(`"false"`)
+				case "number":
+					value["initial"] = json.RawMessage(`0`)
+				case "allowed-null":
+					value["allowed"] = json.RawMessage(`null`)
+				case "allowed-element-null":
+					value["allowed"] = json.RawMessage(`[true,null]`)
+				case "allowed-element-string":
+					value["allowed"] = json.RawMessage(`[true,"false"]`)
+				case "allowed-element-number":
+					value["allowed"] = json.RawMessage(`[true,0]`)
 				}
 				settings[field], err = json.Marshal(value)
 				if err != nil {

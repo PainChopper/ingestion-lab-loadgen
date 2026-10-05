@@ -16,8 +16,6 @@ export type RunState = 'idle' | 'running' | 'paused' | 'faulted'
 
 export type ApplyMode = 'immediate' | 'next-run' | 'unavailable'
 
-export type ThrottlerInstallationMode = 'installed' | 'bypass'
-
 export type ReaderLimitationReason = 'downstream-backpressure'
 
 export interface RetryPolicySnapshot {
@@ -78,7 +76,7 @@ export interface LoadgenConfigSnapshot {
   readonly senderChannelCapacity: AllowedControlConfigSnapshot
   readonly metricsWindowMs: RangeControlConfigSnapshot
   readonly throttlerRequestedTps: RangeControlConfigSnapshot
-  readonly throttlerInstallationMode: InstallationModeConfigSnapshot
+  readonly throttlerInstalled: InstalledConfigSnapshot
   readonly senderWorkers: RangeControlConfigSnapshot
 	readonly logging?: LoggingConfigSnapshot
 }
@@ -88,15 +86,15 @@ export interface LoggingConfigSnapshot {
 	readonly mutability: 'startup-only'
 }
 
-export interface InstallationModeConfigSnapshot {
-  readonly initial: ThrottlerInstallationMode
-  readonly allowed: readonly ThrottlerInstallationMode[]
+export interface InstalledConfigSnapshot {
+  readonly initial: boolean
+  readonly allowed: readonly boolean[]
   readonly mutability: string
 }
 
-export interface InstallationModeControlSnapshot {
-  readonly applied: ThrottlerInstallationMode | null
-  readonly pending: ThrottlerInstallationMode | null
+export interface InstalledControlSnapshot {
+  readonly applied: boolean | null
+  readonly pending: boolean | null
   readonly applyMode: ApplyMode
   readonly writable: boolean
   readonly unavailableReason: string | null
@@ -126,7 +124,7 @@ export interface ReaderSnapshot {
 export interface ThrottlerSnapshot {
   readonly id: 'throttler'
   readonly requestedTps: NumericControlSnapshot
-  readonly installationMode: InstallationModeControlSnapshot
+  readonly installed: InstalledControlSnapshot
   readonly admittedTps: number | null
   readonly limitedMs: number | null
   readonly state: RunState
@@ -259,8 +257,8 @@ export type LoadgenCommand =
   | { type: 'reset' }
   | { type: 'set-requested-tps'; value: number }
   | {
-      type: 'set-throttler-installation-mode'
-      value: ThrottlerInstallationMode
+      type: 'set-throttler-installed'
+      value: boolean
     }
   | { type: 'set-worker-count'; actor: 'reader'; value: number }
   | { type: 'set-sender-workers'; value: number }

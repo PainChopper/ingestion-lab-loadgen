@@ -36,7 +36,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 			return
 		}
 		strictAction := cr.Action == "set-requested-tps" ||
-			cr.Action == "set-throttler-installation-mode" ||
+			cr.Action == "set-throttler-installed" ||
 			cr.Action == "set-sender-channel-capacity" ||
 			cr.Action == "set-reader-workers" ||
 			cr.Action == "set-sender-workers"
@@ -55,7 +55,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 
 		switch cr.Action {
 		case "run":
-			if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.status == commandConflict {
+			if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.rejected {
 				w.WriteHeader(http.StatusConflict)
 			} else if result.err != nil {
 				w.Header().Set("Content-Type", "application/json")
@@ -70,7 +70,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 		case "pause":
 			requests <- runtimeCommand{kind: cmdPause}
 		case "reset":
-			if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.status == commandConflict {
+			if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.rejected {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-read-batch-size":
@@ -82,7 +82,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetReadBatchSize,
 				value: value,
-			}); result.status == commandConflict {
+			}); result.rejected {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-reader-workers":
@@ -94,7 +94,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetReaderWorkers,
 				value: value,
-			}); result.status == commandConflict {
+			}); result.rejected {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-reader-channel-capacity":
@@ -110,7 +110,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetReaderChannelCapacity,
 				value: value,
-			}); result.status == commandConflict {
+			}); result.rejected {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-sender-channel-capacity":
@@ -126,7 +126,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetSenderChannelCapacity,
 				value: value,
-			}); result.status == commandConflict {
+			}); result.rejected {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-requested-tps":
@@ -142,19 +142,19 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 			if result := executeRuntimeCommand(requests, runtimeCommand{
 				kind:  cmdSetRequestedTPS,
 				value: value,
-			}); result.status == commandConflict {
+			}); result.rejected {
 				w.WriteHeader(http.StatusConflict)
 			}
-		case "set-throttler-installation-mode":
-			var value string
-			if err := json.Unmarshal(cr.Value, &value); err != nil || !config.Throttler.InstallationMode.contains(value) {
-				http.Error(w, "Invalid throttler installation mode", http.StatusBadRequest)
+		case "set-throttler-installed":
+			var value *bool
+			if err := json.Unmarshal(cr.Value, &value); err != nil || value == nil || !config.Throttler.Installed.contains(*value) {
+				http.Error(w, "Invalid throttler installed value", http.StatusBadRequest)
 				return
 			}
 			if result := executeRuntimeCommand(requests, runtimeCommand{
-				kind:      cmdSetThrottlerInstallationMode,
-				textValue: value,
-			}); result.status == commandConflict {
+				kind:      cmdSetThrottlerInstalled,
+				installed: *value,
+			}); result.rejected {
 				w.WriteHeader(http.StatusConflict)
 			}
 		case "set-sender-workers":
@@ -174,7 +174,7 @@ func commandsHandler(requests chan<- runtimeCommand, config config, logger *zap.
 				http.Error(w, "Invalid Sender setting", http.StatusBadRequest)
 				return
 			}
-			if result := executeRuntimeCommand(requests, runtimeCommand{kind: kind, value: value}); result.status == commandConflict {
+			if result := executeRuntimeCommand(requests, runtimeCommand{kind: kind, value: value}); result.rejected {
 				w.WriteHeader(http.StatusConflict)
 			}
 		default:

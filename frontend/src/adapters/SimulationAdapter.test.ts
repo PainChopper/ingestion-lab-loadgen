@@ -46,7 +46,8 @@ describe('SimulationAdapter', () => {
     const adapter = new SimulationAdapter()
 
     await adapter.dispatch({ type: 'set-sender-workers', value: 2 })
-    await adapter.dispatch({ type: 'set-throttler-installation-mode', value: 'bypass' })
+    await adapter.dispatch({ type: 'set-throttler-installed', value: false })
+    expect(adapter.getSnapshot().throttler.installed.applied).toBe(false)
     await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
     await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(50)
@@ -60,6 +61,16 @@ describe('SimulationAdapter', () => {
       inFlightRequests: 2,
     })
     expect(adapter.getSnapshot().http.inFlightRequests).toBe(2)
+    const requestedTps = adapter.getSnapshot().throttler.requestedTps.applied
+    await adapter.dispatch({ type: 'pause' })
+    await adapter.dispatch({ type: 'reset' })
+    expect(adapter.getSnapshot().throttler).toMatchObject({
+      installed: { applied: false }, requestedTps: { applied: requestedTps },
+    })
+    await adapter.dispatch({ type: 'set-throttler-installed', value: true })
+    expect(adapter.getSnapshot().throttler).toMatchObject({
+      installed: { applied: true }, requestedTps: { applied: requestedTps },
+    })
     adapter.dispose()
   })
 })
