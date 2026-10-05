@@ -20,6 +20,9 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 				loaded.Throttler.RequestedTPS.Initial = 0
 			}
 			state := newControlState(loaded, nil)
+			if got := state.run.state; got != runStateIdle {
+				t.Fatalf("initial run state = %q, want %q", got, runStateIdle)
+			}
 			got := []int{
 				state.controls.readBatchSize, state.controls.readerWorkers,
 				state.controls.readerChannelCapacity, state.controls.senderChannelCapacity,

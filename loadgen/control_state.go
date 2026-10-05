@@ -23,7 +23,7 @@ type controlRunState struct {
 	runStartedAt      time.Time
 	sourceError       *readerSourceError
 	pausedStatus      runtimeStatus
-	lifecycle         *lifecycle
+	state             runState
 }
 
 type configuredControls struct {
@@ -46,7 +46,7 @@ func newControlState(cfg config, logger *zap.Logger) controlState {
 	metricsWindow := time.Duration(cfg.Metrics.WindowMS.Initial) * time.Millisecond
 	return controlState{
 		metricsWindow: metricsWindow,
-		run:           controlRunState{lifecycle: newLifecycle()},
+		run:           controlRunState{state: runStateIdle},
 		config:        cfg,
 		controls: configuredControls{
 			readBatchSize:         cfg.Reader.ReadBatchSize.Initial,
@@ -90,23 +90,23 @@ func (state *controlState) runEventLoop(
 			case getRuntimeStatus:
 				command.respondStatus(state.runtimeStatusAt(runtime, time.Now()))
 			case cmdRun:
-				resuming := state.run.lifecycle.state == runStatePaused
-				if state.run.lifecycle.state == runStateIdle {
+				resuming := state.run.state == runStatePaused
+				if state.run.state == runStateIdle {
 					err := runtime.start(ctx)
 					if err != nil {
 						sourceError := sourceErrorFromStartup(err, state.config.Source.Path)
 						logger.Error("run failed to start", zap.String("event", "run_failed"), zap.String("operation", sourceError.Operation))
 						state.run.sourceError = &sourceError
-						state.run.lifecycle.faultStart()
+						state.run.state.faultStart()
 						command.respond(runtimeCommandReceipt{err: err})
 						continue
 					}
 				}
-				if state.run.lifecycle.state == runStateFaulted {
+				if state.run.state == runStateFaulted {
 					command.respond(runtimeCommandReceipt{rejected: true})
 					continue
 				}
-				if state.run.lifecycle.run() {
+				if state.run.state.run() {
 					state.run.runStartedAt = time.Now()
 					if resuming {
 						state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
@@ -127,7 +127,7 @@ func (state *controlState) runEventLoop(
 				}
 				command.respond(runtimeCommandReceipt{})
 			case cmdPause:
-				if state.run.lifecycle.state != runStateRunning {
+				if state.run.state != runStateRunning {
 					continue
 				}
 				runtime.senderPool.pause()
@@ -135,16 +135,16 @@ func (state *controlState) runEventLoop(
 				state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
 				state.run.pausedStatus = state.runtimeStatusAt(runtime, now)
 				state.pauseElapsed(now)
-				state.run.lifecycle.pause()
+				state.run.state.pause()
 				logger.Info("run paused", zap.String("event", "run_paused"))
 			case cmdReset:
 				result := runtimeCommandReceipt{}
-				switch state.run.lifecycle.state {
+				switch state.run.state {
 				case runStatePaused, runStateFaulted:
-					state.run.lifecycle.reset()
+					state.run.state.reset()
 					runtime.stop()
 					state.resetProgress(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
-					state.run.lifecycle.completeReset()
+					state.run.state.completeReset()
 				case runStateIdle:
 					state.resetProgress(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
 				default:
@@ -156,7 +156,7 @@ func (state *controlState) runEventLoop(
 				command.respond(result)
 			case cmdSetReadBatchSize:
 				result := runtimeCommandReceipt{}
-				if state.run.lifecycle.state != runStateIdle {
+				if state.run.state != runStateIdle {
 					result.rejected = true
 				} else if !state.config.Reader.ReadBatchSize.contains(command.value) {
 					result.rejected = true
@@ -175,7 +175,7 @@ func (state *controlState) runEventLoop(
 				command.respond(result)
 			case cmdSetReaderChannelCapacity:
 				result := runtimeCommandReceipt{}
-				if state.run.lifecycle.state != runStateIdle ||
+				if state.run.state != runStateIdle ||
 					!state.config.ReaderChannel.Capacity.contains(command.value) {
 					result.rejected = true
 				} else {
@@ -184,7 +184,7 @@ func (state *controlState) runEventLoop(
 				command.respond(result)
 			case cmdSetSenderChannelCapacity:
 				result := runtimeCommandReceipt{}
-				if state.run.lifecycle.state != runStateIdle ||
+				if state.run.state != runStateIdle ||
 					!state.config.SenderChannel.Capacity.contains(command.value) {
 					result.rejected = true
 				} else {
@@ -231,7 +231,7 @@ func (state *controlState) runEventLoop(
 			}
 
 		case sourceError := <-runtime.sourceErrors():
-			if !state.run.lifecycle.fault() {
+			if !state.run.state.fault() {
 				continue
 			}
 			state.pauseElapsed(time.Now())
@@ -242,7 +242,7 @@ func (state *controlState) runEventLoop(
 
 		case now := <-metrics:
 			delta := state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
-			if state.run.lifecycle.state != runStatePaused {
+			if state.run.state != runStatePaused {
 				state.telemetry.reader.sample(now)
 				state.telemetry.readerChannel.sample(state.metricsWindow)
 				state.telemetry.senderChannel.sample(state.metricsWindow)
@@ -260,7 +260,7 @@ func (state *controlState) runEventLoop(
 }
 
 func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Time) runtimeStatus {
-	runState := state.run.lifecycle.state
+	runState := state.run.state
 	if runState == runStatePaused {
 		status := state.run.pausedStatus
 		status.Run.State = runState
@@ -407,7 +407,7 @@ func sourceErrorFromStartup(err error, sourcePath string) readerSourceError {
 
 func (state *controlState) elapsedMs(now time.Time) int64 {
 	elapsed := state.run.elapsedBeforeRun
-	if state.run.lifecycle.state == runStateRunning {
+	if state.run.state == runStateRunning {
 		elapsed += now.Sub(state.run.runStartedAt)
 	}
 	if elapsed < 0 {

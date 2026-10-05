@@ -23,19 +23,19 @@ func TestElapsedMsUsesRunStartAndAccumulatedTime(t *testing.T) {
 		t.Fatalf("idle elapsed = %d, want 0", got)
 	}
 
-	state.run.lifecycle.run()
+	state.run.state.run()
 	state.run.runStartedAt = start
 	if got := state.elapsedMs(start.Add(1250 * time.Millisecond)); got != 1250 {
 		t.Fatalf("running elapsed = %d, want 1250", got)
 	}
 
-	state.run.lifecycle.pause()
+	state.run.state.pause()
 	state.pauseElapsed(start.Add(1250 * time.Millisecond))
 	if got := state.elapsedMs(start.Add(10 * time.Second)); got != 1250 {
 		t.Fatalf("paused elapsed = %d, want 1250", got)
 	}
 
-	state.run.lifecycle.run()
+	state.run.state.run()
 	state.run.runStartedAt = start.Add(10 * time.Second)
 	if got := state.elapsedMs(start.Add(10*time.Second + 750*time.Millisecond)); got != 2000 {
 		t.Fatalf("resumed elapsed = %d, want 2000", got)
@@ -45,12 +45,12 @@ func TestElapsedMsUsesRunStartAndAccumulatedTime(t *testing.T) {
 func TestPausedFaultPreservesElapsedAndCollectsLateSuccessOnce(t *testing.T) {
 	state := newTestControlState(t)
 	start := time.Date(2026, time.October, 3, 12, 0, 0, 0, time.UTC)
-	state.run.lifecycle.run()
+	state.run.state.run()
 	state.run.runStartedAt = start
 	state.pauseElapsed(start.Add(time.Second))
-	state.run.lifecycle.pause()
+	state.run.state.pause()
 	state.run.pausedStatus = runtimeStatus{Run: runtimeRunStatus{ElapsedMs: 1_000}}
-	if !state.run.lifecycle.fault() {
+	if !state.run.state.fault() {
 		t.Fatal("Pause did not allow source fault")
 	}
 	state.pauseElapsed(start.Add(time.Hour))
