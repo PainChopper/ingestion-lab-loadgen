@@ -12,7 +12,6 @@ import type {
 import type {
   ChannelSnapshot,
   SelectableId,
-  ThrottlerInstallationMode,
   ThrottlerSnapshot,
 } from '../../model/loadgen'
 import type { DesiredControl } from '../../hooks/useDesiredControl'
@@ -40,7 +39,7 @@ interface ThrottlerActorProps {
   snapshot: ThrottlerSnapshot
   upstreamChannel: ChannelSnapshot
   requestedTpsControl: DesiredControl<number>
-  installationModeControl: DesiredControl<ThrottlerInstallationMode>
+  installedControl: DesiredControl<boolean>
   selected: boolean
   onSelect: (id: SelectableId) => void
   geometry: PipelineGeometry['actors']['throttler']
@@ -59,7 +58,7 @@ export function ThrottlerActor({
   snapshot,
   upstreamChannel,
   requestedTpsControl,
-  installationModeControl,
+  installedControl,
   selected,
   onSelect,
   geometry,
@@ -96,7 +95,7 @@ export function ThrottlerActor({
   const [candidateWheelPhase, setCandidateWheelPhase] = useState<number | null>(null)
   const [installationDragProgress, setInstallationDragProgress] = useState(0)
   const previousAppliedIndex = useRef(appliedIndex)
-  const previousAppliedMode = useRef(snapshot.installationMode.applied)
+  const previousAppliedMode = useRef(snapshot.installed.applied)
   const holdTimer = useRef<number | null>(null)
   const repeatTimer = useRef<number | null>(null)
   const releaseListeners = useRef<(() => void) | null>(null)
@@ -113,9 +112,9 @@ export function ThrottlerActor({
     startY: number
     moved: boolean
   } | null>(null)
-  const cancelInstallationMode = installationModeControl.cancel
-  const previewInstallationMode = installationModeControl.preview
-  const commitInstallationMode = installationModeControl.commit
+  const cancelInstalled = installedControl.cancel
+  const previewInstalled = installedControl.preview
+  const commitInstalled = installedControl.commit
   const previewRequestedTps = requestedTpsControl.preview
 
   const derivedCandidatePhase = candidateIndex === null
@@ -151,9 +150,9 @@ export function ThrottlerActor({
   const cancelInstallationPreview = useCallback(() => {
     installationDrag.current = null
     installationDragProgressRef.current = 0
-    cancelInstallationMode()
+    cancelInstalled()
     setInstallationDragProgress(0)
-  }, [cancelInstallationMode])
+  }, [cancelInstalled])
 
   useEffect(() => {
     const handleWindowBlur = () => cancelInstallationPreview()
@@ -162,14 +161,14 @@ export function ThrottlerActor({
   }, [cancelInstallationPreview])
 
   useEffect(() => {
-    if (previousAppliedMode.current === snapshot.installationMode.applied) return
-    previousAppliedMode.current = snapshot.installationMode.applied
+    if (previousAppliedMode.current === snapshot.installed.applied) return
+    previousAppliedMode.current = snapshot.installed.applied
     cancelInstallationPreview()
     if (installationFocusRequested.current) {
       installationControlRef.current?.focus()
       installationFocusRequested.current = false
     }
-  }, [cancelInstallationPreview, snapshot.installationMode.applied])
+  }, [cancelInstallationPreview, snapshot.installed.applied])
 
   const stopHold = useCallback(() => {
     if (holdTimer.current !== null) window.clearTimeout(holdTimer.current)
@@ -276,37 +275,36 @@ export function ThrottlerActor({
     if (requestDelta(delta)) void requestedTpsControl.commit()
   }
 
-  const appliedInstallationMode = snapshot.installationMode.applied
-  const metricGeometry = appliedInstallationMode === 'bypass'
+  const appliedInstalled = snapshot.installed.applied
+  const metricGeometry = appliedInstalled === false
     ? resolvedGeometry.metrics.bypass
     : resolvedGeometry.metrics.installed
-  const installationCandidate = installationModeControl.phase === 'idle'
+  const installationCandidate = installedControl.phase === 'idle'
     ? null
-    : installationModeControl.desired
-  const installationCandidateKind = installationModeControl.phase === 'idle'
+    : installedControl.desired
+  const installationCandidateKind = installedControl.phase === 'idle'
     ? null
-    : installationModeControl.phase
-  const targetInstallationMode: ThrottlerInstallationMode =
-    appliedInstallationMode === 'bypass' ? 'installed' : 'bypass'
+    : installedControl.phase
+  const targetInstalled = !appliedInstalled
   const installationControlAvailable =
-    appliedInstallationMode !== null &&
-    installationModeControl.available &&
-    installationModeControl.phase !== 'pending'
+    appliedInstalled !== null &&
+    installedControl.available &&
+    installedControl.phase !== 'pending'
 
-  const requestInstallationMode = useCallback(() => {
+  const requestInstalled = useCallback(() => {
     if (!installationControlAvailable) return
     installationFocusRequested.current = true
-    previewInstallationMode(targetInstallationMode)
-    void commitInstallationMode(targetInstallationMode).then((accepted) => {
+    previewInstalled(targetInstalled)
+    void commitInstalled(targetInstalled).then((accepted) => {
       if (accepted) return
       installationControlRef.current?.focus()
       installationFocusRequested.current = false
     })
   }, [
     installationControlAvailable,
-    commitInstallationMode,
-    previewInstallationMode,
-    targetInstallationMode,
+    commitInstalled,
+    previewInstalled,
+    targetInstalled,
   ])
 
   const handleInstallationPointerDown = (
@@ -321,7 +319,7 @@ export function ThrottlerActor({
       startY: event.clientY,
       moved: false,
     }
-    previewInstallationMode(targetInstallationMode)
+    previewInstalled(targetInstalled)
     installationDragProgressRef.current = 0
     setInstallationDragProgress(0)
     event.currentTarget.setPointerCapture?.(event.pointerId)
@@ -336,7 +334,7 @@ export function ThrottlerActor({
     event.stopPropagation()
     const dx = event.clientX - drag.startX
     const dy = event.clientY - drag.startY
-    const projection = appliedInstallationMode === 'bypass'
+    const projection = appliedInstalled === false
       ? Math.max(dy, (-dx + dy) / Math.sqrt(2))
       : Math.max(-dy, (dx - dy) / Math.sqrt(2))
     if (Math.hypot(dx, dy) >= 4) drag.moved = true
@@ -360,7 +358,7 @@ export function ThrottlerActor({
     if (!drag.moved) return
     suppressInstallationClick.current = true
     if (installationDragProgressRef.current >= 1) {
-      requestInstallationMode()
+      requestInstalled()
     } else {
       cancelInstallationPreview()
     }
@@ -371,7 +369,7 @@ export function ThrottlerActor({
       suppressInstallationClick.current = false
       return
     }
-    requestInstallationMode()
+    requestInstalled()
   }
 
   const handleInstallationKeyDown = (event: KeyboardEvent<SVGGElement>) => {
@@ -384,7 +382,7 @@ export function ThrottlerActor({
     if (event.key !== 'Enter' && event.key !== ' ' || event.repeat) return
     event.preventDefault()
     event.stopPropagation()
-    requestInstallationMode()
+    requestInstalled()
   }
 
   const appliedGateY = valvePistonCenterY(appliedIndex)
@@ -500,8 +498,8 @@ export function ThrottlerActor({
   )
 
   const installationStatus = installationCandidate === null
-    ? `${appliedInstallationMode ?? 'unavailable'} applied`
-    : `${installationCandidate} ${installationCandidateKind}; ${appliedInstallationMode ?? 'unavailable'} applied`
+    ? `${appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'} applied`
+    : `${installationCandidate ? 'installed' : 'bypass'} ${installationCandidateKind}; ${appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'} applied`
 
   return (
     <g transform={actorTransform} data-pipeline-orientation={orientation}>
@@ -592,7 +590,7 @@ export function ThrottlerActor({
           </>
         )}
 
-        {appliedInstallationMode === 'installed' && (
+        {appliedInstalled === true && (
           <>
             <text
               x={resolvedGeometry.metrics.installed.requested.caption.x}
@@ -635,14 +633,14 @@ export function ThrottlerActor({
           {formatRate(snapshot.admittedTps)}
         </text>
 
-        {appliedInstallationMode === 'installed' && (
+        {appliedInstalled === true && (
           <>
             <rect x="424" y="361" width="12" height="12" rx="1" className="pipeline-valve-neck" />
             <line x1="430" y1="373" x2="430" y2="398" className="pipeline-valve-stem" />
             {renderGate(appliedGateY, 'pipeline-valve-gate', 'applied')}
           </>
         )}
-        {appliedInstallationMode === 'installed' &&
+        {appliedInstalled === true &&
           candidateGateY !== null &&
           candidateIndex !== null &&
           candidateIndex !== appliedIndex && (
@@ -679,7 +677,7 @@ export function ThrottlerActor({
           data-axis-ratio={VALVE_APERTURE.perspectiveRatio.toFixed(2)}
         />
 
-        {appliedInstallationMode === 'installed' && (
+        {appliedInstalled === true && (
           <g
             className={`pipeline-valve-control${adjustable ? '' : ' pipeline-valve-control--disabled'}`}
             role="slider"
@@ -767,12 +765,12 @@ export function ThrottlerActor({
           </g>
         )}
 
-        {appliedInstallationMode === 'bypass' && renderDetachedAssembly(
+        {appliedInstalled === false && renderDetachedAssembly(
           'pipeline-valve-detached-assembly pipeline-valve-detached-assembly--applied',
         )}
 
-        {installationCandidate === 'bypass' &&
-          appliedInstallationMode === 'installed' && (
+        {installationCandidate === false &&
+          appliedInstalled === true && (
           <>
             {renderDetachedAssembly(
               `pipeline-valve-installation-ghost pipeline-valve-installation-ghost--${installationCandidateKind}`,
@@ -783,8 +781,8 @@ export function ThrottlerActor({
             />
           </>
         )}
-        {installationCandidate === 'installed' &&
-          appliedInstallationMode === 'bypass' && (
+        {installationCandidate === true &&
+          appliedInstalled === false && (
           <>
             <g className={`pipeline-valve-installation-ghost pipeline-valve-installation-ghost--${installationCandidateKind}`}>
               {renderGate(appliedGateY, 'pipeline-valve-gate', 'applied')}
@@ -804,13 +802,13 @@ export function ThrottlerActor({
           className={`pipeline-valve-installation-control${installationControlAvailable ? '' : ' pipeline-valve-installation-control--disabled'}`}
           role="button"
           tabIndex={0}
-          aria-label={appliedInstallationMode === 'bypass'
+          aria-label={appliedInstalled === false
             ? 'Reinsert throttler valve'
             : 'Remove throttler valve'}
-          aria-pressed={appliedInstallationMode === 'bypass'}
+          aria-pressed={appliedInstalled === false}
           aria-valuetext={installationStatus}
           aria-disabled={!installationControlAvailable}
-          data-applied-mode={appliedInstallationMode ?? 'unavailable'}
+          data-applied-mode={appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'}
           data-candidate-mode={installationCandidate ?? ''}
           data-candidate-kind={installationCandidateKind ?? ''}
           data-drag-progress={installationDragProgress.toFixed(2)}
@@ -825,7 +823,7 @@ export function ThrottlerActor({
           }}
           onBlur={cancelInstallationPreview}
         >
-          {appliedInstallationMode === 'installed' && (
+          {appliedInstalled === true && (
             <rect
               x={VALVE_INSTALLATION_CONTROL.installedTarget.x}
               y={VALVE_INSTALLATION_CONTROL.installedTarget.y}
@@ -836,7 +834,7 @@ export function ThrottlerActor({
               data-installation-grip="wheel"
             />
           )}
-          {appliedInstallationMode === 'bypass' ? (
+          {appliedInstalled === false ? (
             <rect
               x={VALVE_INSTALLATION_CONTROL.bypassTarget.x}
               y={VALVE_INSTALLATION_CONTROL.bypassTarget.y}
@@ -856,16 +854,16 @@ export function ThrottlerActor({
             />
           )}
           <rect
-            x={appliedInstallationMode === 'bypass'
+            x={appliedInstalled === false
               ? VALVE_INSTALLATION_CONTROL.bypassTarget.x
               : VALVE_INSTALLATION_CONTROL.installedTarget.x}
-            y={appliedInstallationMode === 'bypass'
+            y={appliedInstalled === false
               ? VALVE_INSTALLATION_CONTROL.bypassTarget.y
               : VALVE_INSTALLATION_CONTROL.installedTarget.y}
-            width={appliedInstallationMode === 'bypass'
+            width={appliedInstalled === false
               ? VALVE_INSTALLATION_CONTROL.bypassTarget.width
               : VALVE_INSTALLATION_CONTROL.installedTarget.width}
-            height={appliedInstallationMode === 'bypass'
+            height={appliedInstalled === false
               ? VALVE_INSTALLATION_CONTROL.bypassTarget.height
               : VALVE_INSTALLATION_CONTROL.installedTarget.height}
             rx="10"
@@ -874,22 +872,22 @@ export function ThrottlerActor({
         </g>
 
         <text x="430" y="454" textAnchor="middle" className="pipeline-valve-opening-label">
-          {appliedInstallationMode === 'bypass'
+          {appliedInstalled === false
             ? 'BYPASS · APPLIED'
             : `${openingPercent(appliedIndex)}% OPEN`}
         </text>
         <text x="430" y="468" textAnchor="middle" className="pipeline-valve-readonly-label">
-          {appliedInstallationMode === 'bypass'
+          {appliedInstalled === false
             ? `${openingPercent(appliedIndex)}% SAVED · THROTTLE IGNORED`
             : !adjustable
               ? snapshot.requestedTps.applyMode === 'unavailable'
                 ? 'UNAVAILABLE'
                 : 'READ ONLY'
               : installationCandidateKind === 'pending'
-                ? `${targetInstallationMode.toUpperCase()} PENDING`
+                ? `${targetInstalled ? 'INSTALLED' : 'BYPASS'} PENDING`
                 : ''}
         </text>
-        {installationModeControl.error !== null && (
+        {installedControl.error !== null && (
           <text
             x="430"
             y="486"
@@ -897,7 +895,7 @@ export function ThrottlerActor({
             className="pipeline-valve-installation-error"
             role="status"
           >
-            {installationModeControl.error}
+            {installedControl.error}
           </text>
         )}
       </g>

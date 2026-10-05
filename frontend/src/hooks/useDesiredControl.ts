@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ThrottlerInstallationMode } from '../model/loadgen'
 
 export type DesiredControlPhase = 'idle' | 'preview' | 'pending'
 
@@ -18,7 +17,7 @@ export interface LiveControls {
   readerWorkers: DesiredControl<number>
   readBatchSize: DesiredControl<number>
   requestedTps: DesiredControl<number>
-  installationMode: DesiredControl<ThrottlerInstallationMode>
+  installed: DesiredControl<boolean>
   senderWorkers: DesiredControl<number>
   timeoutMs: DesiredControl<number>
 }

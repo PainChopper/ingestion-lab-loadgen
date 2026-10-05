@@ -22,7 +22,7 @@ func TestFormatRuntimeStatusCard(t *testing.T) {
 			DrainingWorkers: 1, ReadTps: 12.34, RowsRead: 99,
 			SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt"},
 		},
-		Throttler:     runtimeThrottlerStatus{RequestedTps: 100, AdmittedTps: 9.87, InstallationMode: throttlerInstalled},
+		Throttler:     runtimeThrottlerStatus{RequestedTps: 100, AdmittedTps: 9.87, Installed: true},
 		ReaderChannel: runtimeChannelStatus{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, SentTransactionsPerSecond: 1.25, ReceivedTransactionsPerSecond: 2.5},
 		SenderChannel: runtimeChannelStatus{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, SentTransactionsPerSecond: 3.75, ReceivedTransactionsPerSecond: 4.5},
 		Sender:        runtimeSenderStatus{Workers: 5, LiveWorkers: 4, InFlightWorkers: 2, IdleWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
@@ -36,7 +36,7 @@ func TestFormatRuntimeStatusCard(t *testing.T) {
 		"Throttler\n" +
 		"Requested TPS:            100\n" +
 		"Admitted TPS:             9.9\n" +
-		"Mode:                     installed\n\n" +
+		"Installed:                true\n\n" +
 		"Reader\n" +
 		"Workers:                  configured=3 live=2 reading=1 idle=1 blocked=0 draining=1\n" +
 		"Read TPS:                 12.3\n" +
@@ -73,7 +73,6 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 				Message:      "message\n\x1b[0m",
 			},
 		},
-		Throttler: runtimeThrottlerStatus{InstallationMode: "mode\n\x1b"},
 	}
 
 	got := formatRuntimeStatusCard(status)
@@ -84,7 +83,7 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 	}
 	if strings.Count(got, "\n") != strings.Count(formatRuntimeStatusCard(runtimeStatus{
 		Run:       runtimeRunStatus{State: runStateRunning},
-		Throttler: runtimeThrottlerStatus{InstallationMode: throttlerInstalled},
+		Throttler: runtimeThrottlerStatus{Installed: true},
 	}), "\n") || !strings.HasSuffix(got, "\n") {
 		t.Fatalf("card layout changed or has no final newline: %q", got)
 	}
@@ -92,7 +91,6 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 		`State:                    running\x0a\x1b[2J`,
 		`Source:                   source\x0d\x0a\x1b[31m`,
 		`Source error:             category\x00/operation\x09 path\x7f: message\x0a\x1b[0m`,
-		`Mode:                     mode\x0a\x1b`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("card missing sanitized value %q: %q", want, got)
@@ -205,7 +203,7 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopContext(context.Background(), requests, metrics, NewPrometheusMetrics())
+		state.runEventLoop(context.Background(), requests, metrics, NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() {
 		close(requests)
@@ -218,7 +216,7 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 
 	reply := make(chan runtimeCommandReceipt, 1)
 	requests <- runtimeCommand{kind: cmdRun, receiptReply: reply}
-	if result := <-reply; result.status != commandAccepted || result.err != nil {
+	if result := <-reply; result.rejected || result.err != nil {
 		t.Fatalf("run = %+v", result)
 	}
 	output.Reset()

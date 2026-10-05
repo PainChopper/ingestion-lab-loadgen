@@ -35,11 +35,15 @@ func (runtime *pipelineRuntime) start(ctx context.Context) error {
 	runtime.state.telemetry.senderChannel.start(runtime.senderBatches, runtime.state.controls.readBatchSize)
 	runtime.state.telemetry.senderChannel.clearMeasurements()
 
-	started, err := runtime.state.startReaderPool(
+	started, err := startReaderPool(
 		runtime.runContext,
-		runtime.readerBatches,
+		runtime.state.config.Source.Path,
 		runtime.state.controls.readBatchSize,
 		runtime.state.controls.readerWorkers,
+		runtime.readerBatches,
+		&runtime.state.telemetry.reader,
+		&runtime.state.telemetry.readerChannel,
+		runtime.state.logger,
 	)
 	if err != nil {
 		runtime.cancelRun()

@@ -42,7 +42,7 @@ func TestReaderChannelCapacityValidation(t *testing.T) {
 					if command.kind != cmdSetReaderChannelCapacity {
 						t.Errorf("command kind = %v, want reader channel capacity", command.kind)
 					}
-					command.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
+					command.receiptReply <- runtimeCommandReceipt{}
 				case <-time.After(time.Second):
 					t.Fatal("valid command was not dispatched")
 				}
@@ -72,7 +72,7 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				state.eventLoopContext(
+				state.runEventLoop(
 					context.Background(),
 					requests,
 					metrics,
@@ -91,42 +91,42 @@ func TestReaderChannelCapacityIdleOnlyAppliesToReaderAndPersistsAfterReset(t *te
 				t.Helper()
 				return requestRuntimeStatus(control)
 			}
-			execute := func(command runtimeCommand, want runtimeCommandStatus) {
+			execute := func(command runtimeCommand, wantRejected bool) {
 				t.Helper()
-				if result := executeRuntimeCommand(control, command); result.status != want {
-					t.Fatalf("command %+v = %+v, want status %d", command, result, want)
+				if result := executeRuntimeCommand(control, command); result.rejected != wantRejected {
+					t.Fatalf("command %+v = %+v, want rejected %t", command, result, wantRejected)
 				}
 			}
 
 			if got := snapshot().ReaderChannel.Capacity; got != state.config.ReaderChannel.Capacity.Initial {
 				t.Fatalf("initial capacity = %d, want %d", got, state.config.ReaderChannel.Capacity.Initial)
 			}
-			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: capacity}, commandAccepted)
+			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: capacity}, false)
 			if got := snapshot().ReaderChannel.Capacity; got != capacity {
 				t.Fatalf("idle capacity = %d, want %d", got, capacity)
 			}
 
-			if result := executeRuntimeCommand(control, runtimeCommand{kind: cmdSetReaderChannelCapacity, value: 3}); result.status != commandConflict {
-				t.Fatalf("invalid direct command status = %d, want conflict", result.status)
+			if result := executeRuntimeCommand(control, runtimeCommand{kind: cmdSetReaderChannelCapacity, value: 3}); !result.rejected {
+				t.Fatalf("invalid direct command rejected = %t, want true", result.rejected)
 			}
-			execute(runtimeCommand{kind: cmdRun}, commandAccepted)
+			execute(runtimeCommand{kind: cmdRun}, false)
 			if got := cap(state.telemetry.readerChannel.batches); got != capacity {
 				t.Fatalf("actual Reader capacity = %d, want %d", got, capacity)
 			}
 			if got := snapshot(); got.ReaderChannel.Capacity != capacity || got.Run.State != runStateRunning {
 				t.Fatalf("running snapshot = %+v", got)
 			}
-			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: 4}, commandConflict)
+			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: 4}, true)
 			control <- runtimeCommand{kind: cmdPause}
 			if got := snapshot().Run.State; got != runStatePaused {
 				t.Fatalf("state after Pause = %s", got)
 			}
-			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: 4}, commandConflict)
-			execute(runtimeCommand{kind: cmdReset}, commandAccepted)
+			execute(runtimeCommand{kind: cmdSetReaderChannelCapacity, value: 4}, true)
+			execute(runtimeCommand{kind: cmdReset}, false)
 			if got := snapshot(); got.ReaderChannel.Capacity != capacity || got.Run.State != runStateIdle {
 				t.Fatalf("reset snapshot = %+v", got)
 			}
-			execute(runtimeCommand{kind: cmdRun}, commandAccepted)
+			execute(runtimeCommand{kind: cmdRun}, false)
 			if got := cap(state.telemetry.readerChannel.batches); got != capacity {
 				t.Fatalf("actual Reader capacity = %d, want %d", got, capacity)
 			}

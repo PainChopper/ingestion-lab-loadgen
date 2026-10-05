@@ -16,10 +16,6 @@ func newLifecycle() *lifecycle {
 	return &lifecycle{state: runStateIdle}
 }
 
-func (lifecycle *lifecycle) currentState() runState {
-	return lifecycle.state
-}
-
 func (lifecycle *lifecycle) run() bool {
 	if lifecycle.state == runStateIdle || lifecycle.state == runStatePaused {
 		lifecycle.state = runStateRunning

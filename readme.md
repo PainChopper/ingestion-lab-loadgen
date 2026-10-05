@@ -13,7 +13,7 @@ Reader → Reader Channel → Throttler → Sender Channel → Sender
 - lifecycle `idle` → `running` → `paused` с командами Run, Pause и Reset;
 - чтение Parquet и сборка Reader batch-ей;
 - две настраиваемые очереди между стадиями;
-- batch-atomic Throttler с настройкой TPS и режимом `installed` / `bypass`;
+- batch-atomic Throttler с настройкой TPS и переключателем `installed: true/false`;
 - HTTP snapshot с реальными telemetry очередей и config;
 - React-лаборатория, которая подключается к backend через HTTP;
 - Prometheus metrics и стандартные `pprof` endpoints.
@@ -58,9 +58,9 @@ Vite проксирует `/api` на backend. Интерфейс доступе
 | `[readerChannel.capacity]` | capacity очереди Reader → Throttler | только в `idle` |
 | `[senderChannel.capacity]` | capacity очереди Throttler → Sender | только в `idle` |
 | `[throttler.requested_tps]` | запрошенный предел TPS | сразу |
-| `[throttler.installation_mode]` | `installed` или `bypass` | сразу |
+| `[throttler.installed]` | `true` или `false` | сразу |
 
-`0` для capacity означает небуферизованный Go channel. `0 TPS` в режиме `installed` удерживает batch; `bypass` пропускает ограничение. Throttler работает целыми batch-ами: перед отправкой batch ожидает расчётный интервал `размер batch / TPS`.
+`0` для capacity означает небуферизованный Go channel. `0 TPS` при `installed=true` удерживает batch; `installed=false` пропускает ограничение. Throttler работает целыми batch-ами: перед отправкой batch ожидает расчётный интервал `размер batch / TPS`.
 
 Актуальный пример находится в [loadgen/config.toml](loadgen/config.toml). Подробности формата и validation описаны в [docs/configuration.md](docs/configuration.md); этот документ пока требует синхронизации с полным набором текущих разделов конфигурации.
 
@@ -97,7 +97,7 @@ config
 - `set-reader-channel-capacity`;
 - `set-sender-channel-capacity`;
 - `set-requested-tps`;
-- `set-throttler-installation-mode`.
+- `set-throttler-installed`.
 
 Команды, изменяющие idle-only настройки во время Run или Pause, получают `409 Conflict`. Некорректные значения получают `400 Bad Request`.
 
@@ -131,3 +131,5 @@ npm run build
 ```
 
 Roadmap и принятые технические решения находятся в [docs/plans/roadmaps/backend-lab-integration-plan.md](docs/plans/roadmaps/backend-lab-integration-plan.md). Старые исследовательские отчёты могут описывать предыдущие этапы проекта и не заменяют этот README или текущий код.
+
+Настройка throttler использует bool: `[throttler.installed]`, `initial = true`, `allowed = [true, false]`, `mutability = "immediate"`. `true` включает ограничение TPS (при TPS=0 ожидает), `false` включает bypass, сохраняя запрошенный TPS. HTTP-команда: `{"action":"set-throttler-installed","value":false}`. CLI: `set throttler-installed <true|false>`. Snapshot публикует `throttler.installed` и `config.throttlerInstalled` с булевыми initial/allowed; прежние строковые значения и имена не принимаются.

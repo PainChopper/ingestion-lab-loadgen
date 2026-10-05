@@ -29,7 +29,7 @@ func TestStartThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	stage.start(context.Background(), throttlerSettings{mode: throttlerBypass})
+	stage.start(context.Background(), throttlerSettings{installed: false})
 	for index, batch := range want {
 		select {
 		case got, ok := <-senderBatches:
@@ -68,7 +68,7 @@ func TestStartThrottlerCancelWhileWaitingForInput(t *testing.T) {
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	stage.start(ctx, throttlerSettings{mode: throttlerBypass})
+	stage.start(ctx, throttlerSettings{installed: false})
 	cancel()
 	waitForThrottlerDone(t, stage.done)
 	select {
@@ -95,7 +95,7 @@ func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	stage.start(ctx, throttlerSettings{mode: throttlerBypass})
+	stage.start(ctx, throttlerSettings{installed: false})
 	deadline := time.After(time.Second)
 	for telemetry.snapshot(time.Now()).receivedBatchesTotal != 1 {
 		select {
@@ -140,7 +140,7 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	stage.start(ctx, throttlerSettings{mode: throttlerBypass})
+	stage.start(ctx, throttlerSettings{installed: false})
 	waitForBlockedSender(t, senderChannel)
 	time.Sleep(5 * time.Millisecond)
 	before := senderChannel.snapshot(time.Now())
@@ -183,9 +183,9 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	stage.start(ctx, throttlerSettings{mode: throttlerBypass})
+	stage.start(ctx, throttlerSettings{installed: false})
 	waitForBlockedSender(t, senderChannel)
-	stage.update(throttlerSettings{mode: throttlerInstalled, requestedTPS: 0})
+	stage.update(throttlerSettings{installed: true, requestedTPS: 0})
 	waitForBlockedSenders(t, senderChannel, 0)
 	paused := senderChannel.snapshot(time.Now())
 	if paused.blockedSenders != 0 || paused.sentBatchesTotal != 0 || paused.sentTransactionsTotal != 0 {
@@ -195,7 +195,7 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 	if got := senderChannel.snapshot(time.Now()); got.sentTransactionsPerSecond != 0 {
 		t.Fatalf("Sender sent rate after zero TPS = %v, want 0", got.sentTransactionsPerSecond)
 	}
-	stage.update(throttlerSettings{mode: throttlerBypass})
+	stage.update(throttlerSettings{installed: false})
 	if batch := <-senderBatches; len(batch) != 1 || batch[0].ClientID != "held" {
 		t.Fatalf("retained batch after zero TPS = %v", batch)
 	}
@@ -236,7 +236,7 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 				readerBatches: readerBatches,
 				senderBatches: senderBatches,
 			}
-			stage.start(ctx, throttlerSettings{requestedTPS: 25, mode: throttlerInstalled})
+			stage.start(ctx, throttlerSettings{requestedTPS: 25, installed: true})
 			select {
 			case batch := <-senderBatches:
 				if len(batch) != test.batchSize {
@@ -258,8 +258,8 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 		name     string
 		settings throttlerSettings
 	}{
-		{name: "positive TPS", settings: throttlerSettings{requestedTPS: 400, mode: throttlerInstalled}},
-		{name: "bypass", settings: throttlerSettings{requestedTPS: 0, mode: throttlerBypass}},
+		{name: "positive TPS", settings: throttlerSettings{requestedTPS: 400, installed: true}},
+		{name: "bypass", settings: throttlerSettings{requestedTPS: 0, installed: false}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -276,7 +276,7 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 				readerBatches: readerBatches,
 				senderBatches: senderBatches,
 			}
-			stage.start(ctx, throttlerSettings{requestedTPS: 0, mode: throttlerInstalled})
+			stage.start(ctx, throttlerSettings{requestedTPS: 0, installed: true})
 			select {
 			case <-senderBatches:
 				t.Fatal("zero TPS forwarded a batch")
@@ -317,7 +317,7 @@ func TestStartThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
 		readerBatches: readerBatches,
 		senderBatches: senderBatches,
 	}
-	stage.start(ctx, throttlerSettings{requestedTPS: 25, mode: throttlerInstalled})
+	stage.start(ctx, throttlerSettings{requestedTPS: 25, installed: true})
 	time.Sleep(120 * time.Millisecond)
 	select {
 	case batch := <-senderBatches:

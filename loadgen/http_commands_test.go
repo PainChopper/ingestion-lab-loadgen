@@ -39,7 +39,7 @@ func TestCommandsHandlerDispatches(t *testing.T) {
 				t.Fatal("command was not dispatched")
 			}
 			if test.expectedKind == cmdRun || test.expectedKind == cmdReset {
-				cmd.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
+				cmd.receiptReply <- runtimeCommandReceipt{}
 			}
 			select {
 			case <-done:
@@ -147,10 +147,11 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 
 func TestThrottlerCommandValidation(t *testing.T) {
 	tests := []struct {
-		name string
-		body string
-		want int
-		kind runtimeCommandKind
+		name      string
+		body      string
+		want      int
+		kind      runtimeCommandKind
+		installed bool
 	}{
 		{name: "TPS missing", body: `{"action":"set-requested-tps"}`, want: http.StatusBadRequest},
 		{name: "TPS null", body: `{"action":"set-requested-tps","value":null}`, want: http.StatusBadRequest},
@@ -161,16 +162,21 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "TPS over max", body: `{"action":"set-requested-tps","value":4100000}`, want: http.StatusBadRequest},
 		{name: "TPS extra field", body: `{"action":"set-requested-tps","value":100,"other":1}`, want: http.StatusBadRequest},
 		{name: "TPS trailing JSON", body: `{"action":"set-requested-tps","value":100}{}`, want: http.StatusBadRequest},
-		{name: "mode missing", body: `{"action":"set-throttler-installation-mode"}`, want: http.StatusBadRequest},
-		{name: "mode null", body: `{"action":"set-throttler-installation-mode","value":null}`, want: http.StatusBadRequest},
-		{name: "mode number", body: `{"action":"set-throttler-installation-mode","value":1}`, want: http.StatusBadRequest},
-		{name: "mode unknown", body: `{"action":"set-throttler-installation-mode","value":"other"}`, want: http.StatusBadRequest},
-		{name: "mode extra field", body: `{"action":"set-throttler-installation-mode","value":"bypass","other":1}`, want: http.StatusBadRequest},
+		{name: "mode missing", body: `{"action":"set-throttler-installed"}`, want: http.StatusBadRequest},
+		{name: "mode null", body: `{"action":"set-throttler-installed","value":null}`, want: http.StatusBadRequest},
+		{name: "mode number", body: `{"action":"set-throttler-installed","value":1}`, want: http.StatusBadRequest},
+		{name: "mode unknown", body: `{"action":"set-throttler-installed","value":"other"}`, want: http.StatusBadRequest},
+		{name: "old installed string", body: `{"action":"set-throttler-installed","value":"installed"}`, want: http.StatusBadRequest},
+		{name: "old bypass string", body: `{"action":"set-throttler-installed","value":"bypass"}`, want: http.StatusBadRequest},
+		{name: "quoted bool", body: `{"action":"set-throttler-installed","value":"false"}`, want: http.StatusBadRequest},
+		{name: "legacy action", body: `{"action":"set-throttler-installation-mode","value":false}`, want: http.StatusBadRequest},
+		{name: "installed trailing JSON", body: `{"action":"set-throttler-installed","value":false}{}`, want: http.StatusBadRequest},
+		{name: "mode extra field", body: `{"action":"set-throttler-installed","value":"bypass","other":1}`, want: http.StatusBadRequest},
 		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
 		{name: "TPS initial", body: `{"action":"set-requested-tps","value":2000000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
 		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
-		{name: "mode installed", body: `{"action":"set-throttler-installation-mode","value":"installed"}`, want: http.StatusOK, kind: cmdSetThrottlerInstallationMode},
-		{name: "mode bypass", body: `{"action":"set-throttler-installation-mode","value":"bypass"}`, want: http.StatusOK, kind: cmdSetThrottlerInstallationMode},
+		{name: "mode installed", body: `{"action":"set-throttler-installed","value":true}`, want: http.StatusOK, kind: cmdSetThrottlerInstalled, installed: true},
+		{name: "mode bypass", body: `{"action":"set-throttler-installed","value":false}`, want: http.StatusOK, kind: cmdSetThrottlerInstalled},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -189,7 +195,10 @@ func TestThrottlerCommandValidation(t *testing.T) {
 					if command.kind != test.kind {
 						t.Errorf("command kind = %v, want %v", command.kind, test.kind)
 					}
-					command.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
+					if command.kind == cmdSetThrottlerInstalled && command.installed != test.installed {
+						t.Errorf("installed = %t, want %t", command.installed, test.installed)
+					}
+					command.receiptReply <- runtimeCommandReceipt{}
 				case <-time.After(time.Second):
 					t.Fatal("valid command was not dispatched")
 				}
@@ -293,7 +302,7 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 					if command.kind != cmdSetReaderWorkers || command.value != test.value {
 						t.Errorf("command = %+v, want Reader workers %d", command, test.value)
 					}
-					command.receiptReply <- runtimeCommandReceipt{status: commandAccepted}
+					command.receiptReply <- runtimeCommandReceipt{}
 				case <-time.After(time.Second):
 					t.Fatal("valid Reader command was not dispatched")
 				}

@@ -51,7 +51,7 @@ func testConfigContents() string {
 		"[readerChannel.capacity]", "initial = 2", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
 		"", "[senderChannel.capacity]", "initial = 0", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
 		"", "[throttler.requested_tps]", "initial = 2000000", "min = 0", "max = 4000000", "step = 200000", "unit = \"transactions/s\"", "mutability = \"immediate\"",
-		"", "[throttler.installation_mode]", "initial = \"installed\"", "allowed = [\"installed\", \"bypass\"]", "mutability = \"immediate\"",
+		"", "[throttler.installed]", "initial = true", "allowed = [true, false]", "mutability = \"immediate\"",
 		"", "[sender.workers]", "initial = 32", "min = 1", "max = 32", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"",
 		"", "[sender.api]", "url = \"http://127.0.0.1:8080/internal/test/ingest\"", "mutability = \"startup-only\"",
 		"", "[sender.retry]", "delays_ms = [250, 500, 1000, 2000, 5000]", "jitter_percent = 20", "mutability = \"startup-only\"",
@@ -66,7 +66,7 @@ func TestLoadConfigInitialContract(t *testing.T) {
 		{section: "reader.read_batch_size", value: "1000"}, {section: "reader.workers", value: "1"},
 		{section: "readerChannel.capacity", value: "2"}, {section: "senderChannel.capacity", value: "0"},
 		{section: "throttler.requested_tps", value: "2000000"},
-		{section: "throttler.installation_mode", value: `"installed"`},
+		{section: "throttler.installed", value: "true"},
 		{section: "sender.workers", value: "32"}, {section: "metrics.window_ms", value: "1000"},
 	}
 	for _, field := range fields {
@@ -82,6 +82,9 @@ func TestLoadConfigInitialContract(t *testing.T) {
 					replacement += "default = " + field.value + "\n"
 				case "missing":
 					replacement = ""
+				}
+				if field.section == "throttler.installed" && shape == "initial-only" {
+					replacement = "initial = false\n"
 				}
 				input := strings.Replace(contents, prefix+line, prefix+replacement, 1)
 				if shape != "initial-only" && input == contents {
@@ -193,9 +196,9 @@ func TestLoadConfigRequiresExplicitConfigFields(t *testing.T) {
 		{name: "requested TPS step", old: "max = 4000000\nstep = 200000\n", new: "max = 4000000\n"},
 		{name: "requested TPS unit", old: "step = 200000\nunit = \"transactions/s\"\n", new: "step = 200000\n"},
 		{name: "requested TPS mutability", old: "unit = \"transactions/s\"\nmutability = \"immediate\"\n", new: "unit = \"transactions/s\"\n"},
-		{name: "installation mode initial", old: "[throttler.installation_mode]\ninitial = \"installed\"\n", new: "[throttler.installation_mode]\n"},
-		{name: "installation mode allowed", old: "initial = \"installed\"\nallowed = [\"installed\", \"bypass\"]\n", new: "initial = \"installed\"\n"},
-		{name: "installation mode mutability", old: "allowed = [\"installed\", \"bypass\"]\nmutability = \"immediate\"", new: "allowed = [\"installed\", \"bypass\"]\n"},
+		{name: "installation mode initial", old: "[throttler.installed]\ninitial = true\n", new: "[throttler.installed]\n"},
+		{name: "installation mode allowed", old: "initial = true\nallowed = [true, false]\n", new: "initial = true\n"},
+		{name: "installation mode mutability", old: "allowed = [true, false]\nmutability = \"immediate\"", new: "allowed = [true, false]\n"},
 	}
 
 	for _, test := range tests {
@@ -323,9 +326,9 @@ func TestThrottlerConfigUsesApprovedProfile(t *testing.T) {
 	if len(values) != 21 || !requested.contains(requested.Initial) {
 		t.Fatalf("requested TPS grid = %d values, initial valid = %t", len(values), requested.contains(requested.Initial))
 	}
-	mode := loaded.Throttler.InstallationMode
-	if mode.Initial != throttlerInstalled || !mode.contains(throttlerInstalled) ||
-		!mode.contains(throttlerBypass) || mode.Mutability != immediate {
+	mode := loaded.Throttler.Installed
+	if mode.Initial != true || !mode.contains(true) ||
+		!mode.contains(false) || mode.Mutability != immediate {
 		t.Fatalf("installation mode config = %+v", mode)
 	}
 }
@@ -397,7 +400,7 @@ func TestCheckedInConfigLoadsApprovedThrottlerProfile(t *testing.T) {
 	if loaded.Reader.ReadBatchSize.Initial != 1_000 ||
 		loaded.Throttler.RequestedTPS.Initial != 2_000_000 || loaded.Throttler.RequestedTPS.Min != 0 ||
 		loaded.Throttler.RequestedTPS.Max != 4_000_000 || loaded.Throttler.RequestedTPS.Step != 200_000 ||
-		loaded.Throttler.InstallationMode.Initial != throttlerInstalled {
+		loaded.Throttler.Installed.Initial != true {
 		t.Fatalf("checked-in throttler config = %+v", loaded.Throttler)
 	}
 }
@@ -410,15 +413,20 @@ func TestLoadConfigRejectsInvalidThrottlerConfig(t *testing.T) {
 		wantError string
 	}{
 		{name: "missing TPS initial", old: "[throttler.requested_tps]\ninitial = 2000000", new: "[throttler.requested_tps]"},
-		{name: "missing mode allowed", old: "allowed = [\"installed\", \"bypass\"]", new: ""},
-		{name: "unknown key", old: "[throttler.installation_mode]", new: "[throttler.installation_mode]\nextra = true"},
+		{name: "missing mode allowed", old: "allowed = [true, false]", new: ""},
+		{name: "unknown key", old: "[throttler.installed]", new: "[throttler.installed]\nextra = true"},
 		{name: "negative minimum", old: "min = 0", new: "min = -100"},
 		{name: "initial above maximum", old: "initial = 2000000", new: "initial = 4400000", wantError: "throttler.requested_tps: initial=4400000 is outside range min=0 max=4000000 (step=200000)"},
 		{name: "off grid initial", old: "initial = 2000000", new: "initial = 2000001", wantError: "throttler.requested_tps: initial=2000001 is not aligned to step=200000 from min=0 (max=4000000)"},
 		{name: "invalid unit", old: "unit = \"transactions/s\"", new: "unit = \"batches/s\""},
 		{name: "invalid mutability", old: "[throttler.requested_tps]\ninitial = 2000000\nmin = 0\nmax = 4000000\nstep = 200000\nunit = \"transactions/s\"\nmutability = \"immediate\"", new: "[throttler.requested_tps]\ninitial = 2000000\nmin = 0\nmax = 4000000\nstep = 200000\nunit = \"transactions/s\"\nmutability = \"idle-only\""},
-		{name: "duplicate mode", old: "[\"installed\", \"bypass\"]", new: "[\"installed\", \"installed\"]"},
-		{name: "unknown mode", old: "initial = \"installed\"\nallowed", new: "initial = \"unknown\"\nallowed"},
+		{name: "duplicate mode", old: "[true, false]", new: "[true, true]"},
+		{name: "quoted boolean", old: "[throttler.installed]\ninitial = true", new: "[throttler.installed]\ninitial = \"false\""},
+		{name: "number boolean", old: "[throttler.installed]\ninitial = true", new: "[throttler.installed]\ninitial = 1"},
+		{name: "quoted allowed", old: "allowed = [true, false]", new: "allowed = [\"true\", \"false\"]"},
+		{name: "numeric allowed", old: "allowed = [true, false]", new: "allowed = [1, 0]"},
+		{name: "legacy section", old: "[throttler.installed]", new: "[throttler.installation_mode]"},
+		{name: "unknown mode", old: "initial = true\nallowed", new: "initial = \"unknown\"\nallowed"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { NumericControlSnapshot } from '../../model/loadgen'
 import {
+  effectiveValveOpeningIndex,
   getValveWheelKnobs,
   getValveTargets,
   nextWheelPhase,
@@ -42,6 +43,9 @@ describe('throttler valve mapping', () => {
     expect(valueToOpeningIndex(-1, control(), targets)).toBe(0)
     expect(valueToOpeningIndex(35_000, control(), targets)).toBe(1)
     expect(valueToOpeningIndex(250_001, control(), targets)).toBe(11)
+    expect(effectiveValveOpeningIndex(false, control({ applied: 25_000 }))).toBe(11)
+    expect(effectiveValveOpeningIndex(true, control({ applied: 25_000 }))).toBe(1)
+    expect(effectiveValveOpeningIndex(null, control({ applied: 25_000 }))).toBe(1)
   })
 
   it('keeps the 12-stop current TPS config mapping', () => {

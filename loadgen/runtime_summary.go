@@ -36,7 +36,7 @@ func formatRuntimeStatusCard(status runtimeStatus) string {
 	fmt.Fprintf(&card, "Throttler\n")
 	fmt.Fprintf(&card, "Requested TPS:            %d\n", status.Throttler.RequestedTps)
 	fmt.Fprintf(&card, "Admitted TPS:             %.1f\n", status.Throttler.AdmittedTps)
-	fmt.Fprintf(&card, "Mode:                     %s\n\n", sanitizeRuntimeStatusValue(status.Throttler.InstallationMode))
+	fmt.Fprintf(&card, "Installed:                %t\n\n", status.Throttler.Installed)
 	fmt.Fprintf(&card, "Reader\n")
 	fmt.Fprintf(
 		&card,
@@ -132,7 +132,7 @@ func runtimeSummaryFields(status runtimeStatus) []zap.Field {
 		zap.Int("reader_draining_workers", status.Reader.DrainingWorkers),
 		zap.Int("throttler_requested_tps", status.Throttler.RequestedTps),
 		zap.Float64("throttler_admitted_tps", status.Throttler.AdmittedTps),
-		zap.String("throttler_mode", status.Throttler.InstallationMode),
+		zap.Bool("installed", status.Throttler.Installed),
 		zap.Int("reader_channel_capacity", status.ReaderChannel.Capacity),
 		zap.Int("reader_channel_depth_batches", status.ReaderChannel.DepthBatches),
 		zap.Int("reader_channel_buffered_transactions", status.ReaderChannel.BufferedTransactions),

@@ -13,7 +13,7 @@ const cliUsage = `usage:
   ingestion-lab-loadgen set reader-workers <N> [--url <url>]
   ingestion-lab-loadgen set sender-workers <N> [--url <url>]
   ingestion-lab-loadgen set requested-tps <N> [--url <url>]
-  ingestion-lab-loadgen set throttler-mode <installed|bypass> [--url <url>]`
+  ingestion-lab-loadgen set throttler-installed <true|false> [--url <url>]`
 
 type cliCommand struct {
 	configPath    string

@@ -1,6 +1,5 @@
 import type {
   NumericControlSnapshot,
-  ThrottlerInstallationMode,
 } from '../../model/loadgen'
 
 export const OPENING_POSITION_COUNT = 12
@@ -148,10 +147,10 @@ export function valueToOpeningIndex(
 }
 
 export function effectiveValveOpeningIndex(
-  installationMode: ThrottlerInstallationMode | null,
+  installed: boolean | null,
   control: NumericControlSnapshot,
 ): number {
-  return installationMode === 'bypass'
+  return installed === false
     ? OPENING_POSITION_COUNT - 1
     : valueToOpeningIndex(control.applied, control)
 }

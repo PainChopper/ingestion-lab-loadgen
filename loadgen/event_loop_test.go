@@ -87,7 +87,12 @@ func TestRunEventLoopStopsWhenApplicationContextIsCanceled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, make(chan runtimeCommand), make(chan time.Time), NewPrometheusMetrics())
+		state.runEventLoop(
+			ctx,
+			make(chan runtimeCommand),
+			make(chan time.Time),
+			NewPrometheusMetrics(),
+		)
 	}()
 
 	cancel()
@@ -187,7 +192,7 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopContext(context.Background(), requests, metrics, promMetrics)
+		state.runEventLoop(context.Background(), requests, metrics, promMetrics)
 	}()
 	defer func() { close(requests); <-done }()
 	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {
@@ -219,7 +224,7 @@ func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
 		gaugeValue(t, promMetrics.actualTPS) != 10 {
 		t.Fatalf("paused measurements/gauge changed: %+v TPS=%v", paused, gaugeValue(t, promMetrics.actualTPS))
 	}
-	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 2_400_000}); result.status != commandAccepted {
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 2_400_000}); result.rejected {
 		t.Fatalf("set TPS = %+v", result)
 	}
 	if got := gaugeValue(t, promMetrics.targetTPS); got != 2_400_000 {
@@ -240,7 +245,7 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopContext(context.Background(), requests, metrics, NewPrometheusMetrics())
+		state.runEventLoop(context.Background(), requests, metrics, NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() {
 		close(requests)
@@ -256,7 +261,7 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 		{kind: cmdSetSenderWorkers, value: 3, receiptReply: reply},
 	} {
 		requests <- command
-		if result := <-reply; result.status != commandAccepted {
+		if result := <-reply; result.rejected {
 			t.Fatalf("Sender setting = %+v", result)
 		}
 	}
@@ -273,19 +278,19 @@ func TestSenderSnapshotKeepsAppliedControlsAcrossLifecycle(t *testing.T) {
 	}
 	assertSender(runStateIdle, 0)
 	requests <- runtimeCommand{kind: cmdRun, receiptReply: reply}
-	if result := <-reply; result.status != commandAccepted {
+	if result := <-reply; result.rejected {
 		t.Fatalf("Run = %+v", result)
 	}
 	assertSender(runStateRunning, 3)
 	requests <- runtimeCommand{kind: cmdPause}
 	assertSender(runStatePaused, 3)
-	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetSenderWorkers, value: 7}); result.status != commandAccepted {
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetSenderWorkers, value: 7}); result.rejected {
 		t.Fatalf("paused Sender workers = %+v", result)
 	}
 	if got := requestRuntimeStatus(requests).Sender; got.Workers != 7 || got.LiveWorkers != 3 {
 		t.Fatalf("paused live controls/frozen categories = %+v", got)
 	}
-	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.status != commandAccepted {
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.rejected {
 		t.Fatalf("Reset = %+v", result)
 	}
 	if got := requestRuntimeStatus(requests).Sender; got.Workers != 7 || got.LiveWorkers != 0 {
@@ -334,7 +339,7 @@ func configureFaultedChannelCapacities(
 		{kind: cmdSetSenderChannelCapacity, capacity: 8},
 	} {
 		requests <- runtimeCommand{kind: setting.kind, value: setting.capacity, receiptReply: reply}
-		if result := <-reply; result.status != commandAccepted {
+		if result := <-reply; result.rejected {
 			t.Fatalf("set capacity %v = %+v", setting.kind, result)
 		}
 	}
@@ -350,7 +355,7 @@ func TestRunFailureFaultsAndResetClearsSourceError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopContext(context.Background(), requests, metrics, NewPrometheusMetrics())
+		state.runEventLoop(context.Background(), requests, metrics, NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() { close(requests); <-done })
 	reply := make(chan runtimeCommandReceipt, 1)
@@ -365,10 +370,10 @@ func TestRunFailureFaultsAndResetClearsSourceError(t *testing.T) {
 			t.Fatalf("startup snapshot = %+v", snapshot)
 		}
 		assertFaultedChannelSnapshot(t, snapshot, 4, 8)
-		if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.status != commandConflict {
+		if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); !result.rejected {
 			t.Fatalf("Run while faulted = %+v", result)
 		}
-		if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.status != commandAccepted {
+		if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.rejected {
 			t.Fatalf("Reset = %+v", result)
 		}
 		if snapshot := requestRuntimeStatus(requests); snapshot.Run.State != runStateIdle || snapshot.Reader.SourceError != nil {
@@ -395,7 +400,7 @@ func TestRuntimeSourceErrorResetClearsFaultedSnapshot(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopContext(context.Background(), requests, make(chan time.Time), NewPrometheusMetrics())
+		state.runEventLoop(context.Background(), requests, make(chan time.Time), NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() { close(requests); <-done })
 	reply := make(chan runtimeCommandReceipt, 1)
@@ -419,7 +424,7 @@ func TestRuntimeSourceErrorResetClearsFaultedSnapshot(t *testing.T) {
 		case <-time.After(time.Millisecond):
 		}
 	}
-	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.status != commandAccepted {
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.rejected {
 		t.Fatalf("Reset = %+v", result)
 	}
 	if snapshot := requestRuntimeStatus(requests); snapshot.Run.State != runStateIdle || snapshot.Reader.SourceError != nil {
@@ -449,7 +454,12 @@ func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testi
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, requests, make(chan time.Time), NewPrometheusMetrics())
+		state.runEventLoop(
+			ctx,
+			requests,
+			make(chan time.Time),
+			NewPrometheusMetrics(),
+		)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -457,7 +467,7 @@ func TestRunEventLoopFaultsOnCorruptParquetAndPreservesWorkerDiagnostic(t *testi
 	})
 	reply := make(chan runtimeCommandReceipt, 1)
 	requests <- runtimeCommand{kind: cmdRun, receiptReply: reply}
-	if result := <-reply; result.status != commandAccepted {
+	if result := <-reply; result.rejected {
 		t.Fatalf("Run = %+v", result)
 	}
 	var snapshot runtimeStatus
@@ -491,7 +501,12 @@ func TestRunEventLoopFaultsBeforeWorkersForUnavailableSourceDirectory(t *testing
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(ctx, requests, make(chan time.Time), NewPrometheusMetrics())
+		state.runEventLoop(
+			ctx,
+			requests,
+			make(chan time.Time),
+			NewPrometheusMetrics(),
+		)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -552,7 +567,7 @@ func TestPauseKeepsInFlightHTTPAndProcessesCommandsUntilRun(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopContext(context.Background(), requests, metrics, NewPrometheusMetrics())
+		state.runEventLoop(context.Background(), requests, metrics, NewPrometheusMetrics())
 	}()
 	defer func() { close(requests); <-done }()
 	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {
@@ -567,7 +582,7 @@ func TestPauseKeepsInFlightHTTPAndProcessesCommandsUntilRun(t *testing.T) {
 	if before.Sender.InFlightWorkers != 1 {
 		t.Fatalf("Pause snapshot = %+v", before.Sender)
 	}
-	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 0}); result.status != commandAccepted {
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 0}); result.rejected {
 		t.Fatalf("setting with pending HTTP = %+v", result)
 	}
 	metrics <- time.Now()
@@ -582,7 +597,7 @@ func TestPauseKeepsInFlightHTTPAndProcessesCommandsUntilRun(t *testing.T) {
 
 func TestPipelineRuntimeStopJoinsStagesClearsProgressAndStartsFreshRun(t *testing.T) {
 	state := newTestControlState(t)
-	state.controls.installationMode = throttlerBypass
+	state.controls.installed = false
 	runtime := newPipelineRuntime(&state)
 	t.Cleanup(runtime.stop)
 	if err := runtime.start(context.Background()); err != nil {
@@ -612,7 +627,7 @@ func TestPipelineRuntimeStopJoinsStagesClearsProgressAndStartsFreshRun(t *testin
 	if got := runtime.terminallyCompletedTransactionsSinceTick.Load(); got != 1 {
 		t.Fatalf("completed transactions = %d, want 1", got)
 	}
-	state.controls.installationMode = throttlerInstalled
+	state.controls.installed = true
 	state.controls.requestedTPS = 0
 	runtime.throttler.update(state.throttlerSettings())
 	readerBatches <- []Transaction{{ClientID: "old-held"}}
@@ -654,7 +669,7 @@ func TestPipelineRuntimeStopJoinsStagesClearsProgressAndStartsFreshRun(t *testin
 	if runtime.terminallyCompletedTransactionsSinceTick.Load() != 0 || state.run.totalTransactions != 0 {
 		t.Fatal("reset retained progress")
 	}
-	state.controls.installationMode = throttlerBypass
+	state.controls.installed = false
 	if err := runtime.start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -692,7 +707,7 @@ func TestResetDuringRunReturnsConflictAndPreservesPipeline(t *testing.T) {
 	harness.command(t, cmdRun)
 	reader := harness.nextReader(t)
 	sender := harness.nextSender(t)
-	if result := executeRuntimeCommand(harness.requests, runtimeCommand{kind: cmdReset}); result.status != commandConflict {
+	if result := executeRuntimeCommand(harness.requests, runtimeCommand{kind: cmdReset}); !result.rejected {
 		t.Fatalf("Reset during Run = %+v", result)
 	}
 	waitForState(t, harness.requests, runStateRunning)
@@ -708,7 +723,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopContext(
+		state.runEventLoop(
 			context.Background(),
 			requests,
 			metrics,
@@ -771,8 +786,8 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 	waitForState(t, requests, runStatePaused)
 	resetReply := make(chan runtimeCommandReceipt, 1)
 	requests <- runtimeCommand{kind: cmdReset, receiptReply: resetReply}
-	if result := <-resetReply; result.status != commandAccepted {
-		t.Fatalf("Reset status = %v, want accepted", result.status)
+	if result := <-resetReply; result.rejected {
+		t.Fatalf("Reset rejected = %t, want false", result.rejected)
 	}
 	requests <- runtimeCommand{kind: getRuntimeStatus, statusReply: statusReply}
 	snapshot = <-statusReply
@@ -790,7 +805,7 @@ func TestReaderMeasurementsSurvivePauseAndClearOnReset(t *testing.T) {
 
 func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	requests, metrics := startEventLoopForTest(t)
-	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 0}); result.status != commandAccepted {
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 0}); result.rejected {
 		t.Fatalf("zero TPS = %+v", result)
 	}
 	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {
@@ -801,7 +816,7 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	if got := requestRuntimeStatus(requests); got.Run.TotalTransactions != 0 || got.Throttler.RequestedTps != 0 {
 		t.Fatalf("zero TPS snapshot = %+v", got)
 	}
-	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetThrottlerInstallationMode, textValue: throttlerBypass}); result.status != commandAccepted {
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdSetThrottlerInstalled, installed: false}); result.rejected {
 		t.Fatalf("bypass = %+v", result)
 	}
 	deadline := time.After(time.Second)
@@ -814,8 +829,8 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	}
 	requests <- runtimeCommand{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
-	for _, command := range []runtimeCommand{{kind: cmdSetRequestedTPS, value: 400_000}, {kind: cmdSetThrottlerInstallationMode, textValue: throttlerInstalled}} {
-		if result := executeRuntimeCommand(requests, command); result.status != commandAccepted {
+	for _, command := range []runtimeCommand{{kind: cmdSetRequestedTPS, value: 400_000}, {kind: cmdSetThrottlerInstalled, installed: true}} {
+		if result := executeRuntimeCommand(requests, command); result.rejected {
 			t.Fatalf("paused setting = %+v", result)
 		}
 	}
@@ -829,10 +844,10 @@ func TestThrottlerControlsApplyImmediatelyAndPersistThroughReset(t *testing.T) {
 	}
 	requests <- runtimeCommand{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
-	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.status != commandAccepted {
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.rejected {
 		t.Fatalf("Reset = %+v", result)
 	}
-	if got := requestRuntimeStatus(requests); got.Run.State != runStateIdle || got.Run.TotalTransactions != 0 || got.Throttler.RequestedTps != 400_000 || got.Throttler.InstallationMode != throttlerInstalled || got.Config.ThrottlerRequestedTPS.Initial != 2_000_000 {
+	if got := requestRuntimeStatus(requests); got.Run.State != runStateIdle || got.Run.TotalTransactions != 0 || got.Throttler.RequestedTps != 400_000 || got.Throttler.Installed != true || got.Config.ThrottlerRequestedTPS.Initial != 2_000_000 {
 		t.Fatalf("reset settings = %+v", got)
 	}
 }
@@ -841,12 +856,12 @@ func TestResetWhileZeroTPSHoldsBatchCompletes(t *testing.T) {
 	requests, _ := startEventLoopForTest(t)
 	reply := make(chan runtimeCommandReceipt, 1)
 	requests <- runtimeCommand{kind: cmdSetRequestedTPS, value: 0, receiptReply: reply}
-	if result := <-reply; result.status != commandAccepted {
-		t.Fatalf("set zero TPS status = %v", result.status)
+	if result := <-reply; result.rejected {
+		t.Fatalf("set zero TPS rejected = %t", result.rejected)
 	}
 	requests <- runtimeCommand{kind: cmdRun, receiptReply: reply}
-	if result := <-reply; result.status != commandAccepted {
-		t.Fatalf("Run status = %v", result.status)
+	if result := <-reply; result.rejected {
+		t.Fatalf("Run rejected = %t", result.rejected)
 	}
 	waitForReaderReceives(t, requests, 1)
 	requests <- runtimeCommand{kind: cmdPause}
@@ -854,8 +869,8 @@ func TestResetWhileZeroTPSHoldsBatchCompletes(t *testing.T) {
 	requests <- runtimeCommand{kind: cmdReset, receiptReply: reply}
 	select {
 	case result := <-reply:
-		if result.status != commandAccepted {
-			t.Fatalf("Reset status = %v", result.status)
+		if result.rejected {
+			t.Fatalf("Reset rejected = %t", result.rejected)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Reset blocked while zero TPS held a batch")
@@ -909,7 +924,7 @@ func TestSenderChannelTelemetryFollowsWindowPauseRunAndReset(t *testing.T) {
 	}
 	requests <- runtimeCommand{kind: cmdPause}
 	waitForState(t, requests, runStatePaused)
-	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.status != commandAccepted {
+	if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdReset}); result.rejected {
 		t.Fatalf("Reset = %+v", result)
 	}
 	reset := requestRuntimeStatus(requests)
@@ -929,7 +944,7 @@ func startEventLoopForTest(t *testing.T) (chan runtimeCommand, chan time.Time) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopContext(context.Background(), requests, metrics, NewPrometheusMetrics())
+		state.runEventLoop(context.Background(), requests, metrics, NewPrometheusMetrics())
 	}()
 	t.Cleanup(func() { close(requests); <-done })
 	return requests, metrics
@@ -1070,7 +1085,7 @@ func TestEventLoopResetDrainsQueuedReaderBatch(t *testing.T) {
 			}))
 			defer server.Close()
 			harness.state.config.Sender.API.URL = server.URL
-			if result := executeRuntimeCommand(harness.requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 0}); result.status != commandAccepted {
+			if result := executeRuntimeCommand(harness.requests, runtimeCommand{kind: cmdSetRequestedTPS, value: 0}); result.rejected {
 				t.Fatalf("zero TPS = %+v", result)
 			}
 			harness.setCapacity(t, cmdSetReaderChannelCapacity, capacity)
@@ -1104,7 +1119,7 @@ func TestEventLoopResetDrainsQueuedReaderBatch(t *testing.T) {
 			if harness.nextReader(t) == reader || harness.nextSender(t) == sender {
 				t.Fatal("Reset reused queues")
 			}
-			if result := executeRuntimeCommand(harness.requests, runtimeCommand{kind: cmdSetThrottlerInstallationMode, textValue: throttlerBypass}); result.status != commandAccepted {
+			if result := executeRuntimeCommand(harness.requests, runtimeCommand{kind: cmdSetThrottlerInstalled, installed: false}); result.rejected {
 				t.Fatalf("bypass = %+v", result)
 			}
 			select {
@@ -1162,7 +1177,7 @@ func startActualChannelEventLoopForTest(t *testing.T) actualChannelEventLoopHarn
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.eventLoopContext(context.Background(), requests, metrics, NewPrometheusMetrics())
+		state.runEventLoop(context.Background(), requests, metrics, NewPrometheusMetrics())
 	}()
 	stopped := false
 	stop := func() {
@@ -1190,7 +1205,7 @@ func (h actualChannelEventLoopHarness) command(t *testing.T, kind runtimeCommand
 	}
 	reply := make(chan runtimeCommandReceipt, 1)
 	h.requests <- runtimeCommand{kind: kind, receiptReply: reply}
-	if result := <-reply; result.status != commandAccepted || result.err != nil {
+	if result := <-reply; result.rejected || result.err != nil {
 		t.Fatalf("command %v = %+v, want accepted", kind, result)
 	}
 }
@@ -1199,7 +1214,7 @@ func (h actualChannelEventLoopHarness) setCapacity(t *testing.T, kind runtimeCom
 	t.Helper()
 	reply := make(chan runtimeCommandReceipt, 1)
 	h.requests <- runtimeCommand{kind: kind, value: capacity, receiptReply: reply}
-	if result := <-reply; result.status != commandAccepted {
+	if result := <-reply; result.rejected {
 		t.Fatalf("set capacity command %v = %+v, want accepted", kind, result)
 	}
 }

@@ -13,7 +13,7 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 			loaded.Reader.Workers.Initial = 3
 			loaded.Sender.Workers.Initial = 7
 			loaded.SenderChannel.Capacity.Initial = 4
-			loaded.Throttler.InstallationMode.Initial = throttlerBypass
+			loaded.Throttler.Installed.Initial = false
 			if name == "zero initial values" {
 				loaded.ReaderChannel.Capacity.Initial = 0
 				loaded.SenderChannel.Capacity.Initial = 0
@@ -33,8 +33,8 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 			if !slices.Equal(got, want) {
 				t.Fatalf("initial controls = %v, want %v", got, want)
 			}
-			if got := state.controls.installationMode; got != loaded.Throttler.InstallationMode.Initial {
-				t.Fatalf("initial mode = %q, want %q", got, loaded.Throttler.InstallationMode.Initial)
+			if got := state.controls.installed; got != loaded.Throttler.Installed.Initial {
+				t.Fatalf("initial installed = %t, want %t", got, loaded.Throttler.Installed.Initial)
 			}
 		})
 	}

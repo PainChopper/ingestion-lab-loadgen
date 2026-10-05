@@ -7,7 +7,7 @@ import (
 
 type throttlerSettings struct {
 	requestedTPS int
-	mode         string
+	installed    bool
 }
 
 type throttler struct {
@@ -52,7 +52,7 @@ func (t *throttler) forwardBatch(
 	senderChannel := t.senderChannel
 	waitStarted := time.Now()
 	for {
-		if settings.mode == throttlerInstalled && settings.requestedTPS == 0 {
+		if settings.installed && settings.requestedTPS == 0 {
 			select {
 			case <-ctx.Done():
 				return false
@@ -63,7 +63,7 @@ func (t *throttler) forwardBatch(
 			continue
 		}
 
-		if settings.mode == throttlerInstalled {
+		if settings.installed {
 			interval := time.Duration(len(batch)) * time.Second / time.Duration(settings.requestedTPS)
 			if remaining := interval - time.Since(waitStarted); remaining > 0 {
 				timer := time.NewTimer(remaining)

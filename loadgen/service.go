@@ -35,7 +35,12 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	eventLoopDone := make(chan struct{})
 	go func() {
 		defer close(eventLoopDone)
-		state.runEventLoop(serviceCtx, requests, metrics.ticks, metrics.prometheusMetrics)
+		state.runEventLoop(
+			serviceCtx,
+			requests,
+			metrics.ticks,
+			metrics.prometheusMetrics,
+		)
 	}()
 	if runAfterStart {
 		if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {
@@ -45,7 +50,7 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 			shutdownHTTPServer(shutdownCtx, server, serverDone, logger)
 			<-eventLoopDone
 			return fmt.Errorf("start run: %w", result.err)
-		} else if result.status == commandConflict {
+		} else if result.rejected {
 			stopService()
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
 			defer cancel()

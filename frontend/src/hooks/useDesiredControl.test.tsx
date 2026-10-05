@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { useDesiredControl } from './useDesiredControl'
 
 describe('useDesiredControl', () => {
-  it('keeps accepted desired pending through stale snapshots until an exact newer snapshot', async () => {
+  it('keeps accepted false desired pending through stale snapshots until an exact newer snapshot', async () => {
     const dispatch = vi.fn().mockResolvedValue({ accepted: true })
     const view = renderHook(
       ({ applied, revision }) => useDesiredControl({
@@ -12,20 +12,20 @@ describe('useDesiredControl', () => {
         available: true,
         dispatch,
       }),
-      { initialProps: { applied: 4, revision: 10 } },
+      { initialProps: { applied: true, revision: 10 } },
     )
 
-    act(() => view.result.current.preview(7))
-    expect(view.result.current).toMatchObject({ desired: 7, phase: 'preview' })
+    act(() => view.result.current.preview(false))
+    expect(view.result.current).toMatchObject({ desired: false, phase: 'preview' })
     await act(async () => { await view.result.current.commit() })
     expect(dispatch).toHaveBeenCalledOnce()
-    expect(dispatch).toHaveBeenCalledWith(7)
-    expect(view.result.current).toMatchObject({ desired: 7, phase: 'pending' })
+    expect(dispatch).toHaveBeenCalledWith(false)
+    expect(view.result.current).toMatchObject({ desired: false, phase: 'pending' })
 
-    view.rerender({ applied: 4, revision: 11 })
-    expect(view.result.current).toMatchObject({ desired: 7, phase: 'pending' })
-    view.rerender({ applied: 7, revision: 11 })
-    expect(view.result.current).toMatchObject({ desired: 7, phase: 'idle' })
+    view.rerender({ applied: true, revision: 11 })
+    expect(view.result.current).toMatchObject({ desired: false, phase: 'pending' })
+    view.rerender({ applied: false, revision: 11 })
+    expect(view.result.current).toMatchObject({ desired: false, phase: 'idle' })
   })
 
   it('rolls rejected and unavailable commands back to the latest applied value', async () => {
