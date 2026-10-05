@@ -46,6 +46,7 @@ func newTestControlState(t *testing.T) controlState {
 func testConfigContents() string {
 	return strings.Join([]string{
 		"schema_version = 2", "", "[source]", "path = 'C:\\dataset\\*.parquet'", "unit = \"glob-pattern\"", "mutability = \"startup-only\"", "",
+		"[http]", "addr = \"127.0.0.1:8080\"", "",
 		"[reader.read_batch_size]", "initial = 1000", "min = 1000", "max = 100000", "step = 1000", "unit = \"transactions\"", "mutability = \"idle-only\"", "",
 		"[reader.workers]", "initial = 1", "min = 1", "max = 7", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"", "",
 		"[readerChannel.capacity]", "initial = 2", "allowed = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]", "unit = \"batches\"", "mutability = \"idle-only\"",
@@ -145,6 +146,65 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 	}
 }
 
+func TestLoadConfigValidatesHTTPAddress(t *testing.T) {
+	section := "[http]\naddr = \"127.0.0.1:8080\"\n"
+	tests := []struct {
+		name           string
+		addr           string
+		missingSection bool
+		missingAddr    bool
+		wantErr        bool
+	}{
+		{name: "example", addr: "127.0.0.1:8080"},
+		{name: "hostname", addr: "localhost:8081"},
+		{name: "IPv6", addr: "[::1]:8081"},
+		{name: "minimum port no DNS", addr: "host.example.test:1"},
+		{name: "maximum port", addr: "127.0.0.1:65535"},
+		{name: "missing section", missingSection: true, wantErr: true},
+		{name: "missing addr", missingAddr: true, wantErr: true},
+		{name: "empty", wantErr: true},
+		{name: "missing port", addr: "127.0.0.1", wantErr: true},
+		{name: "empty host", addr: ":8081", wantErr: true},
+		{name: "empty port", addr: "127.0.0.1:", wantErr: true},
+		{name: "zero port", addr: "127.0.0.1:0", wantErr: true},
+		{name: "port overflow", addr: "127.0.0.1:65536", wantErr: true},
+		{name: "negative port", addr: "127.0.0.1:-1", wantErr: true},
+		{name: "signed port", addr: "127.0.0.1:+1", wantErr: true},
+		{name: "named port", addr: "127.0.0.1:http", wantErr: true},
+		{name: "unbracketed IPv6", addr: "::1:8081", wantErr: true},
+		{name: "URL", addr: "http://127.0.0.1:8081", wantErr: true},
+		{name: "path", addr: "localhost/path:8081", wantErr: true},
+		{name: "whitespace host", addr: " :8081", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			replacement := fmt.Sprintf("[http]\naddr = %q\n", test.addr)
+			if test.missingSection {
+				replacement = ""
+			} else if test.missingAddr {
+				replacement = "[http]\n"
+			}
+			contents := strings.Replace(testConfigContents(), section, replacement, 1)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := loadConfig(path)
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "http.addr") {
+					t.Fatalf("loadConfig error = %v, want http.addr error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.HTTP.Addr != test.addr {
+				t.Fatalf("HTTP addr = %q, want %q", loaded.HTTP.Addr, test.addr)
+			}
+		})
+	}
+}
 func TestLoadConfigRejectsInvalidConfiguration(t *testing.T) {
 	tests := []struct{ name, contents string }{
 		{name: "unknown top-level key", contents: testConfigContents() + "\nunknown = true\n"},

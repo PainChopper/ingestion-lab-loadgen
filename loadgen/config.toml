@@ -1,5 +1,8 @@
 schema_version = 2
 
+[http]
+addr = "127.0.0.1:8080"
+
 [source]
 path = 'D:\.DEV\ingestion-lab\ingestion-lab\data\MBD-mini\trx\fold=*\*.parquet'
 unit = "glob-pattern"

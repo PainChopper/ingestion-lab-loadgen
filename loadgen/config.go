@@ -3,9 +3,12 @@ package main
 import (
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -36,6 +39,7 @@ const (
 
 type config struct {
 	SchemaVersion int                 `mapstructure:"schema_version"`
+	HTTP          httpConfig          `mapstructure:"http"`
 	Source        sourceConfig        `mapstructure:"source"`
 	Reader        readerConfig        `mapstructure:"reader"`
 	ReaderChannel readerChannelConfig `mapstructure:"readerChannel"`
@@ -44,6 +48,10 @@ type config struct {
 	Sender        senderConfig        `mapstructure:"sender"`
 	Metrics       metricsConfig       `mapstructure:"metrics"`
 	Logging       loggingConfig       `mapstructure:"logging"`
+}
+
+type httpConfig struct {
+	Addr string `mapstructure:"addr"`
 }
 
 type sourceConfig struct {
@@ -130,6 +138,9 @@ func loadConfig(configPath string) (config, error) {
 	if err := viperConfig.ReadInConfig(); err != nil {
 		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
 	}
+	if !viperConfig.IsSet("http.addr") {
+		return config{}, fmt.Errorf("http.addr is required")
+	}
 	if _, ok := viperConfig.Get("throttler.installed.initial").(bool); !ok {
 		return config{}, fmt.Errorf("throttler.installed.initial must be boolean")
 	}
@@ -158,6 +169,9 @@ func loadConfig(configPath string) (config, error) {
 func (p config) validate() error {
 	if p.SchemaVersion != configSchemaVersion {
 		return fmt.Errorf("schema_version must be %d", configSchemaVersion)
+	}
+	if err := p.HTTP.validate(); err != nil {
+		return fmt.Errorf("http.addr: %w", err)
 	}
 	if p.Source.Path == "" || !filepath.IsAbs(p.Source.Path) {
 		return fmt.Errorf("source.path must be an absolute path")
@@ -194,6 +208,21 @@ func (p config) validate() error {
 	}
 	if err := p.Logging.validate(); err != nil {
 		return fmt.Errorf("logging: %w", err)
+	}
+	return nil
+}
+
+func (p httpConfig) validate() error {
+	host, rawPort, err := net.SplitHostPort(p.Addr)
+	if err != nil {
+		return fmt.Errorf("must be host:port: %w", err)
+	}
+	if host == "" || strings.ContainsAny(host, " \t\r\n/\\?#") {
+		return fmt.Errorf("host must be non-empty and contain no whitespace or URL path")
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil || strings.Trim(rawPort, "0123456789") != "" || port < 1 || port > 65535 {
+		return fmt.Errorf("port must be numeric and between 1 and 65535")
 	}
 	return nil
 }
