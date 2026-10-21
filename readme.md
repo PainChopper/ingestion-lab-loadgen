@@ -1,137 +1,155 @@
-# ingestion-lab-loadgen
+# Ingestion Lab
 
-`ingestion-lab-loadgen` — управляемая лаборатория нагрузки для экспериментов с ingestion pipeline. Она читает транзакции из Parquet, собирает их в batch-и, ограничивает поток в Throttler и передаёт дальше в Sender stage.
+Работающий генератор нагрузки на Go с панелью управления на React. Читает транзакции из Parquet, ограничивает скорость обработки и отправляет JSON-пакеты в HTTP endpoint. Интерфейс показывает состояние запуска, пропускную способность, заполненность очередей, настройки воркеров и результаты доставки.
 
-Проект нужен не для имитации «реалистичного» HTTP-клиента, а для воспроизводимого наблюдения за pipeline: состоянием запуска, скоростью, очередями, backpressure и применёнными настройками.
+[Демонстрация](https://painchopper.github.io/ingestion-lab-loadgen/) · [Backend на Go](loadgen/) · [Интерфейс на React](frontend/)
+
+## Что уже реализовано
+
+Сквозной pipeline работает: чтение данных, ограничение скорости, настоящая HTTP-отправка, повторные попытки и подключённый к backend интерфейс. HTTP Sender уже реализован, это не будущий этап roadmap.
+
+Публичное демо работает на эмуляции, чтобы можно было изучить интерфейс без запуска backend и генерации сетевой нагрузки. Для работы с настоящим pipeline запусти проект локально в backend-режиме.
 
 ```text
-Reader → Reader Channel → Throttler → Sender Channel → Sender
+Parquet → Reader workers → Reader queue → Throttler → Sender queue → Sender workers → HTTP target
 ```
 
-## Что уже работает
+- Запуск, пауза и сброс через UI, HTTP API и CLI.
+- Чтение Parquet, настройка размера пакетов и количества Reader/Sender-воркеров.
+- Две настраиваемые очереди и ограничение TPS целыми пакетами с возможностью отключения.
+- HTTP POST с JSON-пакетами, повторные попытки с задержками и jitter, обработка отмены.
+- Встроенный HTTP-приёмник для локальных экспериментов.
+- Снимки состояния backend: скорости, счётчики, заполненность очередей и применённые настройки.
+- Метрики Prometheus и стандартные endpoints Go `pprof`.
+- Интерфейс на React/TypeScript и Vite, Storybook для разработки UI-компонентов.
+- Автоматизированные тесты Go и тесты интерфейса на Vitest и Testing Library.
 
-- lifecycle `idle` → `running` → `paused` с командами Run, Pause и Reset;
-- чтение Parquet и сборка Reader batch-ей;
-- две настраиваемые очереди между стадиями;
-- batch-atomic Throttler с настройкой TPS и переключателем `installed: true/false`;
-- HTTP snapshot с реальными telemetry очередей и config;
-- React-лаборатория, которая подключается к backend через HTTP;
-- Prometheus metrics и стандартные `pprof` endpoints.
+Проект разрабатывается с AI-ассистентами. Инженерные решения, проверка кода и приёмка результата остаются за автором.
 
-## Быстрый запуск
+## Запуск на Linux
 
-Нужен Go 1.27 и Node.js для frontend.
+Потребуются Go 1.27 и Node.js 24 с npm. Для backend-режима нужны совместимые данные транзакций в Parquet; сам датасет в репозиторий не включён.
 
-```powershell
-# из корня репозитория
-Set-Location loadgen
+### Backend
+
+Из корня репозитория:
+
+```bash
+cd loadgen
+```
+
+Перед запуском отредактируй `config.toml`: задай в `[source].path` абсолютный glob-путь к своему датасету, например:
+
+```toml
+[source]
+path = '/home/user/datasets/transactions/fold=*/*.parquet'
+unit = "glob-pattern"
+mutability = "startup-only"
+```
+
+Затем запусти сервер:
+
+```bash
 go run .
 ```
 
-По умолчанию процесс читает `config.toml`. Другой TOML-файл можно передать единственным аргументом:
+По умолчанию читается `config.toml` из текущего каталога. Другой файл можно указать явно:
 
-```powershell
-Set-Location loadgen
-go run . D:\path\to\config.toml
+```bash
+go run . serve --config /home/user/config/loadgen.toml
 ```
 
-Адрес backend задаётся обязательным `http.addr` в TOML; пример использует `127.0.0.1:8080`. Для сервера на `127.0.0.1:8081` вызывай remote CLI с `snapshot --url http://127.0.0.1:8081` и отдельно меняй `sender.api.url`, если нагрузка направлена на встроенный ресивер.
+В конфигурации из репозитория сервер слушает `127.0.0.1:8080`, а Sender направлен на встроенный приёмник `http://127.0.0.1:8080/internal/test/ingest`. Путь приёмника определяется по `sender.api.url`; если путь отсутствует, используется `/`. Служебные маршруты API, метрик и диагностики нельзя использовать для приёмника.
 
-Путь встроенного ресивера задаётся `sender.api.url` при запуске: URL с `/test/receive` регистрирует этот путь, URL без пути — `/`. Sender сохраняет полный URL и параметры запроса; служебные API/metrics/developer/pprof маршруты нельзя использовать как путь ресивера.
+### Интерфейс с подключённым backend
 
-Для интерфейса в отдельном терминале:
+В другом терминале, из корня репозитория:
 
-```powershell
-Set-Location frontend
-npm install
+```bash
+cd frontend
+npm ci
 npm run dev:backend
 ```
 
-Vite проксирует `/api` на backend. Интерфейс доступен по адресу, который напечатает Vite; обычно это `http://localhost:5173/ingestion-lab-loadgen/`.
+Vite проксирует `/api` на `http://127.0.0.1:8080`. Открой адрес из вывода Vite, обычно `http://localhost:5173/ingestion-lab-loadgen/`.
 
-## Конфигурация
+### Интерфейс в режиме эмуляции
 
-Конфигурация — один строго валидируемый TOML-файл. Неизвестные и отсутствующие поля завершают запуск с ошибкой; явные допустимые нули, например capacity `0`, разрешены.
+Для знакомства с интерфейсом без backend и датасета:
 
-| Раздел | Назначение | Когда меняется |
-| --- | --- | --- |
-| `[source]` | абсолютный glob-путь к Parquet | только до запуска |
-| `[reader.read_batch_size]` | размер batch Reader | только в `idle` |
-| `[readerChannel.capacity]` | capacity очереди Reader → Throttler | только в `idle` |
-| `[senderChannel.capacity]` | capacity очереди Throttler → Sender | только в `idle` |
-| `[throttler.requested_tps]` | запрошенный предел TPS | сразу |
-| `[throttler.installed]` | `true` или `false` | сразу |
-
-`0` для capacity означает небуферизованный Go channel. `0 TPS` при `installed=true` удерживает batch; `installed=false` пропускает ограничение. Throttler работает целыми batch-ами: перед отправкой batch ожидает расчётный интервал `размер batch / TPS`.
-
-Актуальный пример находится в [loadgen/config.toml](loadgen/config.toml). Подробности формата и validation описаны в [docs/configuration.md](docs/configuration.md); этот документ пока требует синхронизации с полным набором текущих разделов конфигурации.
-
-## HTTP API
-
-### Snapshot
-
-`GET /api/loadgen/snapshot` возвращает строгое дерево состояния:
-
-```text
-run
-reader
-throttler
-sender
-readerChannel
-senderChannel
-config
+```bash
+cd frontend
+npm ci
+npm run dev
 ```
 
-В нём есть состояние запуска, применённые настройки, скорости, счётчики, заполненность и ожидания обеих очередей. Полный shape фиксируется тестами в [http_snapshot.go](http_snapshot.go).
+### Управление через CLI
 
-### Команды
+Из каталога `loadgen/`, когда backend уже запущен:
 
-`POST /api/loadgen/commands` принимает JSON вида:
+```bash
+go run . snapshot --url http://127.0.0.1:8080
+go run . run --url http://127.0.0.1:8080
+go run . pause --url http://127.0.0.1:8080
+go run . reset --url http://127.0.0.1:8080
+go run . set requested-tps 2000 --url http://127.0.0.1:8080
+```
+
+## Конфигурация и доставка
+
+Актуальный образец конфигурации: [loadgen/config.toml](loadgen/config.toml). Неизвестные и отсутствующие поля отклоняются при запуске. Явные допустимые нулевые значения поддерживаются.
+
+| Параметр | Назначение | Когда изменяется |
+| --- | --- | --- |
+| `http.addr` | Адрес HTTP-сервера | При запуске |
+| `source.path` | Абсолютный glob-путь к Parquet | При запуске |
+| `reader.read_batch_size` | Число транзакций в пакете Reader | В состоянии idle |
+| `reader.workers`, `sender.workers` | Количество воркеров | Во время работы |
+| `readerChannel.capacity`, `senderChannel.capacity` | Вместимость очередей в пакетах | В состоянии idle |
+| `throttler.requested_tps` | Запрошенная скорость транзакций | Во время работы |
+| `throttler.installed` | Включение ограничения скорости | Во время работы |
+| `sender.api.url` | HTTP endpoint доставки | При запуске |
+| `sender.retry` | Задержки повторных попыток и jitter | При запуске |
+
+Вместимость `0` означает небуферизованный Go channel. При включённом Throttler значение `0 TPS` удерживает пакеты; отключение Throttler снимает ограничение. Ограничение работает целыми пакетами: задержка рассчитывается по размеру пакета и запрошенному TPS. Вместимость очередей во время активного запуска не меняется.
+
+HTTP Sender отправляет JSON-массив с `Content-Type: application/json` и считает успешным ответ `204 No Content`. Неуспешные попытки повторяются по настроенному расписанию задержек. После последнего интервала повторные попытки продолжаются с этой задержкой до успеха или отмены. Это управляемая лаборатория ingestion pipeline, а не универсальный инструмент имитации браузеров или нагрузки на произвольные протоколы.
+
+## HTTP API и наблюдаемость
+
+- `GET /api/loadgen/snapshot`: состояние запуска, телеметрия стадий и очередей, конфигурация.
+- `POST /api/loadgen/commands`: управление запуском и настройками.
+- `GET /metrics`: метрики Prometheus.
+- `/debug/pprof/`: профилирование Go.
+
+Пример тела команды:
 
 ```json
-{ "action": "set-requested-tps", "value": 2000 }
+{"action":"set-requested-tps","value":2000}
 ```
 
-Поддерживаемые действия:
+Поддерживаются `run`, `pause`, `reset`, `set-read-batch-size`, `set-reader-workers`, `set-sender-workers`, `set-reader-channel-capacity`, `set-sender-channel-capacity`, `set-requested-tps` и `set-throttler-installed`.
 
-- `run`, `pause`, `reset`;
-- `set-read-batch-size`;
-- `set-reader-channel-capacity`;
-- `set-sender-channel-capacity`;
-- `set-requested-tps`;
-- `set-throttler-installed`.
+Изменения idle-only параметров во время активного запуска отклоняются. Некорректные значения получают `400 Bad Request`, конфликты состояния получают `409 Conflict`. Интерфейс в backend-режиме показывает реальные снимки состояния, а не эмулированную телеметрию.
 
-Команды, изменяющие idle-only настройки во время Run или Pause, получают `409 Conflict`. Некорректные значения получают `400 Bad Request`.
+## Тесты и разработка компонентов
 
-## Наблюдаемость
+Проверки backend из каталога `loadgen/`:
 
-- `GET /metrics` — Prometheus metrics;
-- `/debug/pprof/` — Go pprof;
-- frontend показывает тот же HTTP snapshot, а не собственную оценку backend telemetry.
-
-## Текущие границы проекта
-
-Sender stage пока потребляет batch-и внутри процесса; настоящая отправка в HTTP target — следующий крупный этап roadmap. Поэтому лаборатория уже измеряет и управляет pipeline до Sender, но ещё не является готовым нагрузочным HTTP-клиентом.
-
-Настройки capacity применяются к следующему Run. Live resize уже работающего Go channel не реализован: обычный channel имеет неизменяемую capacity.
-
-## Разработка
-
-```powershell
-# backend
-Set-Location loadgen
+```bash
 go test ./...
 go test -race ./...
 go vet ./...
 go build ./...
+```
 
-# frontend
-Set-Location frontend
+Проверки frontend из каталога `frontend/`:
+
+```bash
 npm test
 npm run lint
 npm run build
+npm run storybook
 ```
 
-Roadmap и принятые технические решения находятся в [docs/plans/roadmaps/backend-lab-integration-plan.md](docs/plans/roadmaps/backend-lab-integration-plan.md). Старые исследовательские отчёты могут описывать предыдущие этапы проекта и не заменяют этот README или текущий код.
-
-Настройка throttler использует bool: `[throttler.installed]`, `initial = true`, `allowed = [true, false]`, `mutability = "immediate"`. `true` включает ограничение TPS (при TPS=0 ожидает), `false` включает bypass, сохраняя запрошенный TPS. HTTP-команда: `{"action":"set-throttler-installed","value":false}`. CLI: `set throttler-installed <true|false>`. Snapshot публикует `throttler.installed` и `config.throttlerInstalled` с булевыми initial/allowed; прежние строковые значения и имена не принимаются.
+В репозитории также находится отдельный [модуль receiver](receiver/). Исторические планы и исследования в `docs/` могут описывать предыдущие этапы; текущую работающую реализацию описывают этот README и код проекта.
