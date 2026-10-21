@@ -1,44 +1,44 @@
 # Ingestion Lab
 
-Работающий генератор нагрузки на Go с панелью управления на React. Читает транзакции из Parquet, ограничивает скорость обработки и отправляет JSON-пакеты в HTTP endpoint. Интерфейс показывает состояние запуска, пропускную способность, заполненность очередей, настройки воркеров и результаты доставки.
+A working load generator built in Go with a React control panel. It reads transactions from Parquet files, controls the processing rate, and delivers JSON batches to an HTTP endpoint. The UI displays run status, throughput, queue occupancy, worker settings, and delivery results.
 
-[Демонстрация](https://painchopper.github.io/ingestion-lab-loadgen/) · [Backend на Go](loadgen/) · [Интерфейс на React](frontend/)
+[Live demo](https://painchopper.github.io/ingestion-lab-loadgen/) · [Go backend](loadgen/) · [React frontend](frontend/)
 
-## Что уже реализовано
+## Current capabilities
 
-Сквозной pipeline работает: чтение данных, ограничение скорости, настоящая HTTP-отправка, повторные попытки и подключённый к backend интерфейс. HTTP Sender уже реализован, это не будущий этап roadmap.
+The end-to-end pipeline is implemented: data reading, rate limiting, real HTTP delivery, retries, and a backend-connected UI. The HTTP Sender is part of the current implementation, not a future roadmap item.
 
-Публичное демо работает на эмуляции, чтобы можно было изучить интерфейс без запуска backend и генерации сетевой нагрузки. Для работы с настоящим pipeline запусти проект локально в backend-режиме.
+The public demo uses simulation so you can explore the interface without running the backend or generating network load. To use the real pipeline, run the project locally in backend mode.
 
 ```text
 Parquet → Reader workers → Reader queue → Throttler → Sender queue → Sender workers → HTTP target
 ```
 
-- Запуск, пауза и сброс через UI, HTTP API и CLI.
-- Чтение Parquet, настройка размера пакетов и количества Reader/Sender-воркеров.
-- Две настраиваемые очереди и ограничение TPS целыми пакетами с возможностью отключения.
-- HTTP POST с JSON-пакетами, повторные попытки с задержками и jitter, обработка отмены.
-- Встроенный HTTP-приёмник для локальных экспериментов.
-- Снимки состояния backend: скорости, счётчики, заполненность очередей и применённые настройки.
-- Метрики Prometheus и стандартные endpoints Go `pprof`.
-- Интерфейс на React/TypeScript и Vite, Storybook для разработки UI-компонентов.
-- Автоматизированные тесты Go и тесты интерфейса на Vitest и Testing Library.
+- Start, pause, and reset runs through the UI, HTTP API, or CLI.
+- Read Parquet files with configurable batch sizes and Reader/Sender worker counts.
+- Two configurable queues and optional batch-level transaction rate limiting (TPS).
+- HTTP POST delivery of JSON batches, retries with delays and jitter, and cancellation handling.
+- A built-in HTTP receiver for local experiments.
+- Backend snapshots with rates, counters, queue occupancy, and applied settings.
+- Prometheus metrics and standard Go `pprof` endpoints.
+- A React/TypeScript frontend built with Vite, plus Storybook for UI component development.
+- Automated Go tests and frontend tests using Vitest and Testing Library.
 
-Проект разрабатывается с AI-ассистентами. Инженерные решения, проверка кода и приёмка результата остаются за автором.
+The project is developed with AI assistance. The author remains responsible for engineering decisions, code review, and acceptance of the final work.
 
-## Запуск на Linux
+## Running on Linux
 
-Потребуются Go 1.27 и Node.js 24 с npm. Для backend-режима нужны совместимые данные транзакций в Parquet; сам датасет в репозиторий не включён.
+Requires Go 1.27 and Node.js 24 with npm. Backend mode requires compatible transaction data in Parquet format; the dataset is not included in the repository.
 
 ### Backend
 
-Из корня репозитория:
+From the repository root:
 
 ```bash
 cd loadgen
 ```
 
-Перед запуском отредактируй `config.toml`: задай в `[source].path` абсолютный glob-путь к своему датасету, например:
+Before starting, edit `config.toml` and set `[source].path` to an absolute glob pattern for your dataset, for example:
 
 ```toml
 [source]
@@ -47,23 +47,23 @@ unit = "glob-pattern"
 mutability = "startup-only"
 ```
 
-Затем запусти сервер:
+Then start the server:
 
 ```bash
 go run .
 ```
 
-По умолчанию читается `config.toml` из текущего каталога. Другой файл можно указать явно:
+By default, the server reads `config.toml` from the current directory. To use a different file:
 
 ```bash
 go run . serve --config /home/user/config/loadgen.toml
 ```
 
-В конфигурации из репозитория сервер слушает `127.0.0.1:8080`, а Sender направлен на встроенный приёмник `http://127.0.0.1:8080/internal/test/ingest`. Путь приёмника определяется по `sender.api.url`; если путь отсутствует, используется `/`. Служебные маршруты API, метрик и диагностики нельзя использовать для приёмника.
+With the configuration included in the repository, the server listens on `127.0.0.1:8080` and the Sender targets the built-in receiver at `http://127.0.0.1:8080/internal/test/ingest`. The receiver path is derived from `sender.api.url`; if no path is specified, it defaults to `/`. Reserved API, metrics, and diagnostics routes cannot be used as receiver paths.
 
-### Интерфейс с подключённым backend
+### Backend-connected UI
 
-В другом терминале, из корня репозитория:
+In another terminal, from the repository root:
 
 ```bash
 cd frontend
@@ -71,11 +71,11 @@ npm ci
 npm run dev:backend
 ```
 
-Vite проксирует `/api` на `http://127.0.0.1:8080`. Открой адрес из вывода Vite, обычно `http://localhost:5173/ingestion-lab-loadgen/`.
+Vite proxies `/api` to `http://127.0.0.1:8080`. Open the URL printed by Vite, usually `http://localhost:5173/ingestion-lab-loadgen/`.
 
-### Интерфейс в режиме эмуляции
+### Simulation mode
 
-Для знакомства с интерфейсом без backend и датасета:
+To explore the UI without a backend or dataset:
 
 ```bash
 cd frontend
@@ -83,9 +83,9 @@ npm ci
 npm run dev
 ```
 
-### Управление через CLI
+### CLI controls
 
-Из каталога `loadgen/`, когда backend уже запущен:
+From the `loadgen/` directory, with the backend already running:
 
 ```bash
 go run . snapshot --url http://127.0.0.1:8080
@@ -95,46 +95,46 @@ go run . reset --url http://127.0.0.1:8080
 go run . set requested-tps 2000 --url http://127.0.0.1:8080
 ```
 
-## Конфигурация и доставка
+## Configuration and delivery
 
-Актуальный образец конфигурации: [loadgen/config.toml](loadgen/config.toml). Неизвестные и отсутствующие поля отклоняются при запуске. Явные допустимые нулевые значения поддерживаются.
+See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. Unknown or missing fields are rejected at startup. Explicit zero values are supported where valid.
 
-| Параметр | Назначение | Когда изменяется |
+| Setting | Purpose | When it can be changed |
 | --- | --- | --- |
-| `http.addr` | Адрес HTTP-сервера | При запуске |
-| `source.path` | Абсолютный glob-путь к Parquet | При запуске |
-| `reader.read_batch_size` | Число транзакций в пакете Reader | В состоянии idle |
-| `reader.workers`, `sender.workers` | Количество воркеров | Во время работы |
-| `readerChannel.capacity`, `senderChannel.capacity` | Вместимость очередей в пакетах | В состоянии idle |
-| `throttler.requested_tps` | Запрошенная скорость транзакций | Во время работы |
-| `throttler.installed` | Включение ограничения скорости | Во время работы |
-| `sender.api.url` | HTTP endpoint доставки | При запуске |
-| `sender.retry` | Задержки повторных попыток и jitter | При запуске |
+| `http.addr` | HTTP server address | At startup |
+| `source.path` | Absolute glob pattern for Parquet files | At startup |
+| `reader.read_batch_size` | Transactions per Reader batch | While idle |
+| `reader.workers`, `sender.workers` | Worker counts | At runtime |
+| `readerChannel.capacity`, `senderChannel.capacity` | Queue capacity in batches | While idle |
+| `throttler.requested_tps` | Requested transaction rate | At runtime |
+| `throttler.installed` | Enable or disable rate limiting | At runtime |
+| `sender.api.url` | HTTP delivery endpoint | At startup |
+| `sender.retry` | Retry delays and jitter | At startup |
 
-Вместимость `0` означает небуферизованный Go channel. При включённом Throttler значение `0 TPS` удерживает пакеты; отключение Throttler снимает ограничение. Ограничение работает целыми пакетами: задержка рассчитывается по размеру пакета и запрошенному TPS. Вместимость очередей во время активного запуска не меняется.
+A capacity of `0` means an unbuffered Go channel. With the Throttler enabled, `0 TPS` holds batches; disabling the Throttler removes the rate limit. Rate limiting operates on whole batches: the delay is calculated from the batch size and requested TPS. Queue capacity cannot be changed during an active run.
 
-HTTP Sender отправляет JSON-массив с `Content-Type: application/json` и считает успешным ответ `204 No Content`. Неуспешные попытки повторяются по настроенному расписанию задержек. После последнего интервала повторные попытки продолжаются с этой задержкой до успеха или отмены. Это управляемая лаборатория ingestion pipeline, а не универсальный инструмент имитации браузеров или нагрузки на произвольные протоколы.
+The HTTP Sender posts a JSON array with `Content-Type: application/json` and treats `204 No Content` as success. Failed attempts are retried according to the configured delay schedule. Once the final interval is reached, retries continue at that delay until delivery succeeds or is cancelled. This is a controllable ingestion pipeline lab, not a general-purpose browser simulator or a load-testing tool for arbitrary protocols.
 
-## HTTP API и наблюдаемость
+## HTTP API and observability
 
-- `GET /api/loadgen/snapshot`: состояние запуска, телеметрия стадий и очередей, конфигурация.
-- `POST /api/loadgen/commands`: управление запуском и настройками.
-- `GET /metrics`: метрики Prometheus.
-- `/debug/pprof/`: профилирование Go.
+- `GET /api/loadgen/snapshot`: run status, stage and queue telemetry, and configuration.
+- `POST /api/loadgen/commands`: run controls and settings.
+- `GET /metrics`: Prometheus metrics.
+- `/debug/pprof/`: Go profiling.
 
-Пример тела команды:
+Example command body:
 
 ```json
 {"action":"set-requested-tps","value":2000}
 ```
 
-Поддерживаются `run`, `pause`, `reset`, `set-read-batch-size`, `set-reader-workers`, `set-sender-workers`, `set-reader-channel-capacity`, `set-sender-channel-capacity`, `set-requested-tps` и `set-throttler-installed`.
+Supported actions: `run`, `pause`, `reset`, `set-read-batch-size`, `set-reader-workers`, `set-sender-workers`, `set-reader-channel-capacity`, `set-sender-channel-capacity`, `set-requested-tps`, and `set-throttler-installed`.
 
-Изменения idle-only параметров во время активного запуска отклоняются. Некорректные значения получают `400 Bad Request`, конфликты состояния получают `409 Conflict`. Интерфейс в backend-режиме показывает реальные снимки состояния, а не эмулированную телеметрию.
+Changes to idle-only settings are rejected during an active run. Invalid values receive `400 Bad Request`; state conflicts receive `409 Conflict`. In backend mode, the UI displays actual backend snapshots rather than simulated telemetry.
 
-## Тесты и разработка компонентов
+## Tests and component development
 
-Проверки backend из каталога `loadgen/`:
+Backend checks, from the `loadgen/` directory:
 
 ```bash
 go test ./...
@@ -143,7 +143,7 @@ go vet ./...
 go build ./...
 ```
 
-Проверки frontend из каталога `frontend/`:
+Frontend checks, from the `frontend/` directory:
 
 ```bash
 npm test
@@ -152,4 +152,4 @@ npm run build
 npm run storybook
 ```
 
-В репозитории также находится отдельный [модуль receiver](receiver/). Исторические планы и исследования в `docs/` могут описывать предыдущие этапы; текущую работающую реализацию описывают этот README и код проекта.
+The repository also contains a separate [receiver module](receiver/). Historical plans and research in `docs/` may describe earlier stages; this README and the source code describe the current working implementation.
