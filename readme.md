@@ -92,7 +92,7 @@ go run . snapshot --url http://127.0.0.1:8080
 go run . run --url http://127.0.0.1:8080
 go run . pause --url http://127.0.0.1:8080
 go run . reset --url http://127.0.0.1:8080
-go run . set requested-tps 2000 --url http://127.0.0.1:8080
+go run . set requested-tps 200000 --url http://127.0.0.1:8080
 ```
 
 ## Configuration and delivery
@@ -109,7 +109,7 @@ See [loadgen/config.toml](loadgen/config.toml) for the current configuration exa
 | `throttler.requested_tps` | Requested transaction rate | At runtime |
 | `throttler.installed` | Enable or disable rate limiting | At runtime |
 | `sender.api.url` | HTTP delivery endpoint | At startup |
-| `sender.retry` | Retry delays and jitter | At startup |
+| `sender.retry` | Configurable retry delays; jitter is fixed at 20% | At startup |
 
 A capacity of `0` means an unbuffered Go channel. With the Throttler enabled, `0 TPS` holds batches; disabling the Throttler removes the rate limit. Rate limiting operates on whole batches: the delay is calculated from the batch size and requested TPS. Queue capacity cannot be changed during an active run.
 
@@ -125,7 +125,7 @@ The HTTP Sender posts a JSON array with `Content-Type: application/json` and tre
 Example command body:
 
 ```json
-{"action":"set-requested-tps","value":2000}
+{"action":"set-requested-tps","value":200000}
 ```
 
 Supported actions: `run`, `pause`, `reset`, `set-read-batch-size`, `set-reader-workers`, `set-sender-workers`, `set-reader-channel-capacity`, `set-sender-channel-capacity`, `set-requested-tps`, and `set-throttler-installed`.
