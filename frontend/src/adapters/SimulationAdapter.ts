@@ -314,13 +314,13 @@ export class SimulationAdapter implements LoadgenAdapter {
   private readonly state: AdapterState = { revision: 0, runState: 'idle' }
   private readonly simulation = new FixedStepSimulation(
     {
-      readerWorkers: 4,
+      readerWorkers: 5,
       senderWorkers: 3,
       requestedTps: 120_000,
       throttlerInstalled: true,
-      readBatchSize: 25_000,
+      readBatchSize: 1_000,
       httpTimeoutMs: 500,
-      targetDelayMs: 40,
+      targetDelayMs: 100,
       targetErrorRatePercent: 2,
     },
     4,
