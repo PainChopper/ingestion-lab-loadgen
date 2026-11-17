@@ -1,4 +1,4 @@
-# SEC2.4 — idle-only capacity readerChannel
+# SEC2.4 — настройка ёмкости Reader Channel в режиме ожидания
 
 Статус: завершено и принято.
 

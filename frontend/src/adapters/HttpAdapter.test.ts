@@ -103,19 +103,19 @@ const VALID_WIRE: TestWireSnapshot = {
       max: 100_000,
       step: 1_000,
       unit: 'transactions',
-      mutability: 'idle-only',
+      mutability: 'startup-only',
     },
     readerChannelCapacity: {
       initial: 2,
       allowed: [0, 1, 2, 8, 16, 64, 8_192],
       unit: 'batches',
-      mutability: 'idle-only',
+      mutability: 'startup-only',
     },
     senderChannelCapacity: {
       initial: 0,
       allowed: [0, 1, 2, 8, 16, 64, 8_192],
       unit: 'batches',
-      mutability: 'idle-only',
+      mutability: 'startup-only',
     },
     readerWorkers: {
       initial: 1,
@@ -155,10 +155,10 @@ function withRunState(state: RunState): TestWireSnapshot {
   return {
     ...VALID_WIRE,
     run: { ...VALID_WIRE.run, state },
-    reader: state === 'idle'
+    reader: state === 'starting'
       ? { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0 }
       : VALID_WIRE.reader,
-    sender: state === 'paused'
+    sender: state === 'stopping'
       ? { ...VALID_WIRE.sender, liveWorkers: 32, idleWorkers: 28, inFlightWorkers: 3, backoffWorkers: 1, drainingWorkers: 3, drainingIdleWorkers: 1, drainingInFlightWorkers: 1, drainingBackoffWorkers: 1 }
       : VALID_WIRE.sender,
   }
@@ -262,8 +262,6 @@ function control(
 function readBatchSizeControl(
   value: number | null,
   config: LoadgenConfigSnapshot['readerReadBatchSize'] | null,
-  connectionState: ConnectionState,
-  runState: RunState,
 ): NumericControlSnapshot {
   if (config === null) return control('transactions')
 
@@ -275,16 +273,14 @@ function readBatchSizeControl(
     max: config.max,
     step: config.step,
     unit: config.unit,
-    applyMode: connectionState === 'connected' && runState === 'idle'
-      ? 'immediate'
-      : 'unavailable',
+    applyMode: 'unavailable',
   }
 }
 
 function requestedTpsControl(
   value: number | null,
   config: LoadgenConfigSnapshot['throttlerRequestedTps'] | null,
-  connectionState: ConnectionState,
+  writable: boolean,
 ): NumericControlSnapshot {
   if (config === null) return control('transactions/s')
 
@@ -296,8 +292,16 @@ function requestedTpsControl(
     max: config.max,
     step: config.step,
     unit: config.unit,
-    applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
+    applyMode: writable ? 'immediate' : 'unavailable',
   }
+}
+
+function capacitySnapshot(
+  applied: number | null = null,
+  min = 0,
+  max = 0,
+): ChannelTelemetrySnapshot['capacity'] {
+  return { applied, min, max, step: 1, unit: 'batches' }
 }
 
 function neutralChannel(
@@ -309,7 +313,7 @@ function neutralChannel(
     id,
     from,
     to,
-    capacity: control('batches'),
+    capacity: capacitySnapshot(),
     sentBatchesTotal: 0,
     sentTransactionsTotal: 0,
     receivedBatchesTotal: 0,
@@ -334,7 +338,6 @@ function neutralChannel(
 
 function readerChannel(
   wire: TestWireSnapshot | null,
-  connectionState: ConnectionState,
 ): ChannelTelemetrySnapshot {
   const channel = neutralChannel(
     'reader-to-throttler',
@@ -345,14 +348,11 @@ function readerChannel(
 
   return {
     ...channel,
-    capacity: {
-      ...control('batches', wire.readerChannel.capacity),
-      min: wire.config.readerChannelCapacity.allowed[0]!,
-      max: wire.config.readerChannelCapacity.allowed.at(-1)!,
-      applyMode: connectionState === 'connected' && wire.run.state === 'idle'
-        ? 'immediate'
-        : 'unavailable',
-    },
+    capacity: capacitySnapshot(
+      wire.readerChannel.capacity,
+      wire.config.readerChannelCapacity.allowed[0]!,
+      wire.config.readerChannelCapacity.allowed.at(-1)!,
+    ),
     depthBatches: wire.readerChannel.depthBatches, bufferedTransactions: wire.readerChannel.bufferedTransactions,
     sentBatchesTotal: wire.readerChannel.sentBatchesTotal, sentTransactionsTotal: wire.readerChannel.sentTransactionsTotal,
     receivedBatchesTotal: wire.readerChannel.receivedBatchesTotal, receivedTransactionsTotal: wire.readerChannel.receivedTransactionsTotal,
@@ -366,7 +366,6 @@ function readerChannel(
 
 function senderChannel(
   wire: TestWireSnapshot | null,
-  connectionState: ConnectionState,
 ): ChannelTelemetrySnapshot {
   const channel = neutralChannel(
     'throttler-to-sender',
@@ -377,14 +376,11 @@ function senderChannel(
 
   return {
     ...channel,
-    capacity: {
-      ...control('batches', wire.senderChannel.capacity),
-      min: wire.config.senderChannelCapacity.allowed[0]!,
-      max: wire.config.senderChannelCapacity.allowed.at(-1)!,
-      applyMode: connectionState === 'connected' && wire.run.state === 'idle'
-        ? 'immediate'
-        : 'unavailable',
-    },
+    capacity: capacitySnapshot(
+      wire.senderChannel.capacity,
+      wire.config.senderChannelCapacity.allowed[0]!,
+      wire.config.senderChannelCapacity.allowed.at(-1)!,
+    ),
     depthBatches: wire.senderChannel.depthBatches, bufferedTransactions: wire.senderChannel.bufferedTransactions,
     sentBatchesTotal: wire.senderChannel.sentBatchesTotal, sentTransactionsTotal: wire.senderChannel.sentTransactionsTotal,
     receivedBatchesTotal: wire.senderChannel.receivedBatchesTotal, receivedTransactionsTotal: wire.senderChannel.receivedTransactionsTotal,
@@ -402,6 +398,7 @@ function expectedSnapshot(
   wire: TestWireSnapshot | null = null,
 ): LoadgenTelemetrySnapshot {
   const runState = wire?.run.state ?? 'idle'
+  const writable = connectionState === 'connected' && runState === 'running'
 
   return {
     revision,
@@ -423,7 +420,7 @@ function expectedSnapshot(
             max: wire.config.readerWorkers!.max,
             step: wire.config.readerWorkers!.step,
             unit: wire.config.readerWorkers!.unit,
-            applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
+            applyMode: writable ? 'immediate' : 'unavailable',
           },
       liveWorkers: wire?.reader.liveWorkers ?? 0,
       drainingWorkers: wire?.reader.drainingWorkers ?? 0,
@@ -436,8 +433,6 @@ function expectedSnapshot(
       readBatchSize: readBatchSizeControl(
         wire?.reader.readBatchSize ?? null,
         wire?.config.readerReadBatchSize ?? null,
-        connectionState,
-        runState,
       ),
       readTps: wire?.reader.readTps ?? null,
       configuredCapacityTps: null,
@@ -452,28 +447,24 @@ function expectedSnapshot(
       requestedTps: requestedTpsControl(
         wire?.throttler.requestedTps ?? null,
         wire?.config.throttlerRequestedTps ?? null,
-        connectionState,
+        writable,
       ),
       installed: {
         applied: wire?.throttler.installed ?? null,
         pending: null,
-        applyMode: connectionState === 'connected' && wire !== null
-          ? 'immediate'
-          : 'unavailable',
-        writable: connectionState === 'connected' && wire !== null,
-        unavailableReason: connectionState === 'connected' && wire !== null
-          ? null
-          : 'Недоступно в HTTP snapshot mode',
+        applyMode: writable ? 'immediate' : 'unavailable',
+        writable,
+        unavailableReason: writable ? null : 'Unavailable in HTTP mode',
       },
       admittedTps: wire?.throttler.admittedTps ?? null,
       limitedMs: null,
       state: runState,
     },
-    readerChannel: readerChannel(wire, connectionState),
-    senderChannel: senderChannel(wire, connectionState),
+    readerChannel: readerChannel(wire),
+    senderChannel: senderChannel(wire),
     sender: {
       id: 'sender',
-      workers: wire ? { ...control('workers', wire.sender.workers), min: 1, max: 32, step: 1, applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable' } : control('workers'),
+      workers: wire ? { ...control('workers', wire.sender.workers), min: 1, max: 32, step: 1, applyMode: writable ? 'immediate' : 'unavailable' } : control('workers'),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
       idleWorkers: wire?.sender.idleWorkers ?? 0,
@@ -690,10 +681,10 @@ const malformedCases: ReadonlyArray<{
       sender: { ...VALID_WIRE.sender, inFlightWorkers: 'one' },
     }),
   },
-  ...(['idle', 'faulted'] as const).map((state) => ({
+  ...(['starting'] as const).map((state) => ({
     name: `live Sender in ${state}`,
     result: async () => mockResponse({
-      ...withRunState('idle'),
+      ...withRunState('starting'),
       run: { ...VALID_WIRE.run, state },
       sender: { ...VALID_WIRE.sender, liveWorkers: 1, idleWorkers: 1, drainingWorkers: 1, drainingIdleWorkers: 1 },
     }),
@@ -708,9 +699,9 @@ const malformedCases: ReadonlyArray<{
     { drainingInFlightWorkers: 4, drainingWorkers: 6 },
     { drainingBackoffWorkers: 2, drainingWorkers: 4 },
   ] as const).map((sender, index) => ({
-    name: `invalid paused Sender partition ${index}`,
+    name: `invalid stopping Sender partition ${index}`,
     result: async () => {
-      const wire = withRunState('paused')
+      const wire = withRunState('stopping')
       return mockResponse({ ...wire, sender: { ...wire.sender, ...sender } })
     },
   })),
@@ -816,10 +807,10 @@ const malformedCases: ReadonlyArray<{
   })),
   { name: 'null body', result: async () => mockResponse(null) },
   { name: 'array body', result: async () => mockResponse([VALID_WIRE]) },
-  {
-    name: 'invalid runState',
-    result: async () => mockResponse({ ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'resetting' } }),
-  },
+  ...['idle', 'paused', 'resetting'].map((state) => ({
+    name: 'obsolete run state ' + state,
+    result: async () => mockResponse({ ...VALID_WIRE, run: { ...VALID_WIRE.run, state } }),
+  })),
   {
     name: 'numeric string',
     result: async () => mockResponse({
@@ -962,6 +953,18 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
+  it.each(['readerReadBatchSize', 'readerChannelCapacity', 'senderChannelCapacity'] as const)(
+    'rejects invalid mutability in %s',
+    async (field) => {
+      const config = { ...VALID_WIRE.config, [field]: { ...VALID_WIRE.config[field], mutability: 'unsupported-mode' } }
+      fetchMock.mockResolvedValueOnce(mockResponse({ ...VALID_WIRE, config }))
+      const adapter = new HttpAdapter()
+      await flushPoll()
+      expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'error', config: null })
+      adapter.dispose()
+    },
+  )
+
   it.each(['legacy-only', 'both', 'missing', 'null', 'invalid'] as const)(
     'rejects %s config contract and blocks stale dispatch',
     async (shape) => {
@@ -1062,7 +1065,7 @@ describe('HttpAdapter', () => {
     })
     expect(snapshot.readerChannel).toEqual({
       ...neutralChannel('reader-to-throttler', 'reader', 'throttler'),
-      capacity: { ...control('batches', 8), min: 0, max: 8_192 },
+      capacity: capacitySnapshot(8, 0, 8_192),
       depthBatches: 6,
       bufferedTransactions: 300_000,
       sentBatchesTotal: 11,
@@ -1082,7 +1085,7 @@ describe('HttpAdapter', () => {
     })
     expect(snapshot.senderChannel).toEqual({
       ...neutralChannel('throttler-to-sender', 'throttler', 'sender'),
-      capacity: { ...control('batches', 0), min: 0, max: 8_192 },
+      capacity: capacitySnapshot(0, 0, 8_192),
       depthBatches: 0,
       bufferedTransactions: 0,
       sentBatchesTotal: 7,
@@ -1105,7 +1108,7 @@ describe('HttpAdapter', () => {
   })
 
   it.each([0, 1, 2, 8_192])(
-    'maps readerChannel capacity %i to the discrete HTTP control range',
+    'maps readerChannel capacity %i to read-only telemetry',
     async (readerChannelCapacity) => {
       const wire = { ...VALID_WIRE, readerChannel: { ...VALID_WIRE.readerChannel, capacity: readerChannelCapacity } }
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
@@ -1113,29 +1116,20 @@ describe('HttpAdapter', () => {
 
       await flushPoll()
 
-      expect(adapter.getSnapshot().readerChannel.capacity).toEqual({
-        applied: readerChannelCapacity,
-        preview: null,
-        pending: null,
-        min: 0,
-        max: 8_192,
-        step: 1,
-        unit: 'batches',
-        applyMode: 'unavailable',
-      })
+      expect(adapter.getSnapshot().readerChannel.capacity)
+        .toEqual(capacitySnapshot(readerChannelCapacity, 0, 8_192))
       adapter.dispose()
     },
   )
 
-  it('maps reset reader metrics as zero values', async () => {
-    const resetWire: TestWireSnapshot = {
-      ...VALID_WIRE,
-      run: { ...VALID_WIRE.run, state: 'idle' },
+  it('maps startup reader metrics as zero values', async () => {
+    const startingWire: TestWireSnapshot = {
+      ...withRunState('starting'),
       reader: { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0, readTps: 0, rowsRead: 0 },
       throttler: { ...VALID_WIRE.throttler, admittedTps: 0 },
       senderChannel: { ...VALID_WIRE.senderChannel, sentBatchesTotal: 0, sentTransactionsTotal: 0, receivedBatchesTotal: 0, receivedTransactionsTotal: 0, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 0, inputBatchesPerSecond: 0, inputTransactionsPerSecond: 0, outputBatchesPerSecond: 0, outputTransactionsPerSecond: 0 },
     }
-    fetchMock.mockResolvedValueOnce(mockResponse(resetWire))
+    fetchMock.mockResolvedValueOnce(mockResponse(startingWire))
     const adapter = new HttpAdapter()
 
     await flushPoll()
@@ -1143,16 +1137,11 @@ describe('HttpAdapter', () => {
     expect(adapter.getSnapshot().reader).toMatchObject({
       readTps: 0,
       rowsRead: 0,
-      state: 'idle',
+      state: 'starting',
     })
     expect(adapter.getSnapshot().throttler.admittedTps).toBe(0)
     expect(adapter.getSnapshot().senderChannel).toMatchObject({
-      capacity: {
-        ...control('batches', 0),
-        min: 0,
-        max: 8_192,
-        applyMode: 'immediate',
-      },
+      capacity: capacitySnapshot(0, 0, 8_192),
       depthBatches: 0,
       bufferedTransactions: 0,
       sentBatchesTotal: 0,
@@ -1189,7 +1178,7 @@ describe('HttpAdapter', () => {
   it('clears telemetry on failure and recovers on success', async () => {
     const recoveredWire: TestWireSnapshot = {
       ...VALID_WIRE,
-      run: { ...VALID_WIRE.run, state: 'paused', elapsedMs: 67_890, totalTransactions: 84_000 },
+      run: { ...VALID_WIRE.run, state: 'running', elapsedMs: 67_890, totalTransactions: 84_000 },
       reader: { ...VALID_WIRE.reader, workers: 2, liveWorkers: 2, idleWorkers: 1, readingWorkers: 1, readTps: 2_000, readBatchSize: 25_000, rowsRead: 28_000 },
       sender: { ...VALID_WIRE.sender, workers: 3, liveWorkers: 3, idleWorkers: 1, inFlightWorkers: 1, backoffWorkers: 1 },
       readerChannel: { ...VALID_WIRE.readerChannel, capacity: 16, depthBatches: 4, bufferedTransactions: 100_000, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 2_000 },
@@ -1215,75 +1204,26 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('keeps frozen live Sender telemetry connected through Pause, controls and Resume', async () => {
-    const pausedWire = withRunState('paused')
-    const runningWire: TestWireSnapshot = {
-      ...pausedWire,
-      run: { ...pausedWire.run, state: 'running' },
-    }
-    const appliedWire: TestWireSnapshot = {
-      ...pausedWire,
-      reader: { ...pausedWire.reader, workers: 2 },
-      sender: { ...pausedWire.sender, workers: 31 },
-      throttler: { ...pausedWire.throttler, requestedTps: 25, installed: false },
-    }
-    const resumedWire: TestWireSnapshot = {
-      ...appliedWire,
-      run: { state: 'running', elapsedMs: 13_345, totalTransactions: 43_000 },
-      sender: { ...VALID_WIRE.sender, workers: 31, liveWorkers: 31, idleWorkers: 31 },
-    }
-    const polls = [runningWire, pausedWire, appliedWire, resumedWire]
-    let pollIndex = 0
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? Promise.resolve(mockCommandResponse())
-      : Promise.resolve(mockResponse(polls[pollIndex++])))
-    const adapter = new HttpAdapter()
-    await flushPoll()
+  it.each(['starting', 'stopping', 'faulted'] as const)(
+    'disables live changes in %s and preserves observed values',
+    async (state) => {
+      const wire = withRunState(state)
+      fetchMock.mockResolvedValueOnce(mockResponse(wire))
+      const adapter = new HttpAdapter()
+      await flushPoll()
 
-    await expect(adapter.dispatch({ type: 'pause' })).resolves.toMatchObject({ accepted: true })
-    await vi.advanceTimersByTimeAsync(1_000)
-    await flushPoll()
-    const pausedSnapshot = adapter.getSnapshot()
-    expect(pausedSnapshot).toEqual(expectedSnapshot(2, 'connected', pausedWire))
-    expect(pausedSnapshot.sender.workers.applyMode).toBe('immediate')
-    expect(pausedSnapshot.reader.workers.applyMode).toBe('immediate')
-    expect(pausedSnapshot.throttler.requestedTps.applyMode).toBe('immediate')
-    expect(pausedSnapshot.throttler.installed.writable).toBe(true)
-
-    for (const command of [
-      { type: 'set-sender-workers', value: 31 },
-      { type: 'set-worker-count', actor: 'reader', value: 2 },
-      { type: 'set-requested-tps', value: 25 },
-      { type: 'set-throttler-installed', value: false },
-    ] as const) {
-      await expect(adapter.dispatch(command)).resolves.toMatchObject({ accepted: true })
-    }
-    await vi.advanceTimersByTimeAsync(1_000)
-    await flushPoll()
-    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(3, 'connected', appliedWire))
-    expect(adapter.getSnapshot().sender).toMatchObject({
-      workers: { applied: 31 },
-      liveWorkers: 32,
-      inFlightWorkers: 3,
-      backoffWorkers: 1,
-      drainingWorkers: 3,
-    })
-
-    await expect(adapter.dispatch({ type: 'run' })).resolves.toMatchObject({ accepted: true })
-    expect(adapter.getSnapshot().runState).toBe('paused')
-    await vi.advanceTimersByTimeAsync(1_000)
-    await flushPoll()
-    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(4, 'connected', resumedWire))
-    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
-      '{"action":"pause"}',
-      '{"action":"set-sender-workers","value":31}',
-      '{"action":"set-reader-workers","value":2}',
-      '{"action":"set-requested-tps","value":25}',
-      '{"action":"set-throttler-installed","value":false}',
-      '{"action":"run"}',
-    ])
-    adapter.dispose()
-  })
+      const snapshot = adapter.getSnapshot()
+      expect(snapshot).toEqual(expectedSnapshot(1, 'connected', wire))
+      expect(snapshot.reader.workers.applyMode).toBe('unavailable')
+      expect(snapshot.sender.workers.applyMode).toBe('unavailable')
+      expect(snapshot.throttler.requestedTps.applyMode).toBe('unavailable')
+      expect(snapshot.throttler.installed.writable).toBe(false)
+      await expect(adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 2 }))
+        .resolves.toMatchObject({ accepted: false })
+      expect(commandFetchCalls()).toHaveLength(0)
+      adapter.dispose()
+    },
+  )
 
   it('polls immediately and on free one-second ticks without overlap', async () => {
     const first = deferred<Response>()
@@ -1368,270 +1308,7 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it.each([
-    { type: 'run' },
-    { type: 'pause' },
-    { type: 'reset' },
-  ] as const)(
-    'maps $type to the exact command POST request',
-    async (command) => {
-      fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-        ? Promise.resolve(mockCommandResponse())
-        : Promise.resolve(mockResponse(VALID_WIRE)))
-      const adapter = new HttpAdapter()
-
-      await flushPoll()
-
-      await adapter.dispatch(command)
-
-      expect(snapshotFetchCalls()).toHaveLength(1)
-      expect(commandFetchCalls()).toHaveLength(1)
-      const [input, init] = commandFetchCalls()[0]!
-      expect(input).toBe(COMMAND_ENDPOINT)
-      expect(init).toEqual({
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: command.type }),
-      })
-      expect(Object.keys(init as RequestInit).sort())
-        .toEqual(['body', 'headers', 'method'])
-      expect((init as RequestInit).signal).toBeUndefined()
-      expect((init as RequestInit).headers).not.toHaveProperty('Accept')
-      adapter.dispose()
-    },
-  )
-
-  it('sends an idle read batch size through the command channel without updating the snapshot', async () => {
-    const idleWire = withRunState('idle')
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? Promise.resolve(mockCommandResponse())
-      : Promise.resolve(mockResponse(idleWire)))
-    const adapter = new HttpAdapter()
-
-    await flushPoll()
-    const snapshot = adapter.getSnapshot()
-    expect(snapshot.reader.readBatchSize).toEqual({
-      applied: 50_000,
-      preview: null,
-      pending: null,
-      min: 1_000,
-      max: 100_000,
-      step: 1_000,
-      unit: 'transactions',
-      applyMode: 'immediate',
-    })
-
-    const receipt = await adapter.dispatch({
-      type: 'set-read-batch-size',
-      value: 25_000,
-    })
-
-    expect(receipt).toMatchObject({
-      accepted: true,
-      commandType: 'set-read-batch-size',
-      applyMode: 'immediate',
-      snapshotRevision: 1,
-      error: null,
-    })
-    expect(commandFetchCalls()).toHaveLength(1)
-    expect(commandFetchCalls()[0]?.[1]).toMatchObject({
-      body: '{"action":"set-read-batch-size","value":25000}',
-    })
-    expect(adapter.getSnapshot()).toBe(snapshot)
-    expect(adapter.getSnapshot().reader.readBatchSize.applied).toBe(50_000)
-    adapter.dispose()
-  })
-
-  it.each([{ type: 'run' }, { type: 'pause' }] as const)(
-    'does not dispatch $type from a stale snapshot after config decoding fails',
-    async (command) => {
-      const invalidConfigWire = {
-        ...VALID_WIRE,
-        config: {
-          ...VALID_WIRE.config,
-          readerReadBatchSize: {
-            ...VALID_WIRE.config.readerReadBatchSize,
-            step: 0,
-          },
-        },
-      }
-      fetchMock
-        .mockResolvedValueOnce(mockResponse(VALID_WIRE))
-        .mockResolvedValueOnce(mockResponse(invalidConfigWire))
-      const adapter = new HttpAdapter()
-
-      await flushPoll()
-      await vi.advanceTimersByTimeAsync(1_000)
-      await flushPoll()
-
-      expect(adapter.getSnapshot()).toMatchObject({
-        connectionState: 'error',
-        config: null,
-      })
-      const receipt = await adapter.dispatch(command)
-      expect(receipt).toMatchObject({
-        accepted: false,
-        error: { code: 'unavailable', retryable: false },
-      })
-      expect(commandFetchCalls()).toHaveLength(0)
-      adapter.dispose()
-    },
-  )
-
-  it.each([
-    { state: 'running' as const, value: 25_000 },
-    { state: 'paused' as const, value: 25_000 },
-    { state: 'idle' as const, value: 999 },
-    { state: 'idle' as const, value: 1_001 },
-    { state: 'idle' as const, value: 100_001 },
-  ])(
-    'rejects read batch size $value locally in $state',
-    async ({ state, value }) => {
-      const wire = withRunState(state)
-      fetchMock.mockResolvedValueOnce(mockResponse(wire))
-      const adapter = new HttpAdapter()
-
-      await flushPoll()
-      const receipt = await adapter.dispatch({
-        type: 'set-read-batch-size',
-        value,
-      })
-
-      expect(receipt).toMatchObject({
-        accepted: false,
-        applyMode: 'unavailable',
-        error: { code: 'unavailable', retryable: false },
-      })
-      expect(commandFetchCalls()).toHaveLength(0)
-      expect(adapter.getSnapshot().reader.readBatchSize).toMatchObject({
-        applied: 50_000,
-        applyMode: state === 'idle' ? 'immediate' : 'unavailable',
-      })
-      adapter.dispose()
-    },
-  )
-
-  it('sends an idle readerChannel capacity through the existing command channel', async () => {
-    const idleWire: TestWireSnapshot = {
-      ...VALID_WIRE,
-      run: { ...VALID_WIRE.run, state: 'idle' },
-      reader: { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0 },
-      readerChannel: { ...VALID_WIRE.readerChannel, capacity: 2 },
-    }
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? Promise.resolve(mockCommandResponse())
-      : Promise.resolve(mockResponse(idleWire)))
-    const adapter = new HttpAdapter()
-
-    await flushPoll()
-    expect(adapter.getSnapshot().readerChannel.capacity).toEqual({
-      applied: 2,
-      preview: null,
-      pending: null,
-      min: 0,
-      max: 8_192,
-      step: 1,
-      unit: 'batches',
-      applyMode: 'immediate',
-    })
-
-    const receipt = await adapter.dispatch({
-      type: 'set-reader-channel-capacity',
-      value: 8_192,
-    })
-
-    expect(receipt).toMatchObject({
-      accepted: true,
-      commandType: 'set-reader-channel-capacity',
-      applyMode: 'immediate',
-      snapshotRevision: 1,
-      error: null,
-    })
-    expect(commandFetchCalls()).toHaveLength(1)
-    expect(commandFetchCalls()[0]?.[1]).toMatchObject({
-      body: '{"action":"set-reader-channel-capacity","value":8192}',
-    })
-    adapter.dispose()
-  })
-
-  it('sends an idle senderChannel capacity through the existing command channel', async () => {
-    const idleWire: TestWireSnapshot = {
-      ...VALID_WIRE,
-      run: { ...VALID_WIRE.run, state: 'idle' },
-      reader: { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0 },
-      senderChannel: { ...VALID_WIRE.senderChannel, capacity: 0 },
-    }
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? Promise.resolve(mockCommandResponse())
-      : Promise.resolve(mockResponse(idleWire)))
-    const adapter = new HttpAdapter()
-
-    await flushPoll()
-    expect(adapter.getSnapshot().senderChannel.capacity).toEqual({
-      applied: 0,
-      preview: null,
-      pending: null,
-      min: 0,
-      max: 8_192,
-      step: 1,
-      unit: 'batches',
-      applyMode: 'immediate',
-    })
-
-    const receipt = await adapter.dispatch({
-      type: 'set-sender-channel-capacity',
-      value: 8_192,
-    })
-
-    expect(receipt).toMatchObject({
-      accepted: true,
-      commandType: 'set-sender-channel-capacity',
-      applyMode: 'immediate',
-      snapshotRevision: 1,
-      error: null,
-    })
-    expect(commandFetchCalls()).toHaveLength(1)
-    expect(commandFetchCalls()[0]?.[1]).toMatchObject({
-      body: '{"action":"set-sender-channel-capacity","value":8192}',
-    })
-    expect(adapter.getSnapshot().senderChannel.capacity.applied).toBe(0)
-    adapter.dispose()
-  })
-
-  it('serializes idle senderChannel capacity commands', async () => {
-    const commandResponse = deferred<Response>()
-    const idleWire = withRunState('idle')
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? commandResponse.promise
-      : Promise.resolve(mockResponse(idleWire)))
-    const adapter = new HttpAdapter()
-
-    await flushPoll()
-    const first = adapter.dispatch({
-      type: 'set-sender-channel-capacity',
-      value: 1,
-    })
-    const second = adapter.dispatch({
-      type: 'set-sender-channel-capacity',
-      value: 2,
-    })
-    await Promise.resolve()
-    expect(commandFetchCalls()).toHaveLength(1)
-
-    commandResponse.resolve(mockCommandResponse())
-    await first
-    await Promise.resolve()
-    expect(commandFetchCalls()).toHaveLength(2)
-    await second
-    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body))
-      .toEqual([
-        '{"action":"set-sender-channel-capacity","value":1}',
-        '{"action":"set-sender-channel-capacity","value":2}',
-      ])
-    adapter.dispose()
-  })
-
-  it.each(['idle', 'running', 'paused'] as const)(
+  it.each(['running'] as const)(
     'sends exact immediate Sender commands in %s and reads applied values from the next snapshot',
     async (runState) => {
       const firstWire = withRunState(runState)
@@ -1689,7 +1366,7 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it.each(['idle', 'running', 'paused'] as const)(
+  it.each(['running'] as const)(
     'sends exact Reader worker commands in %s and reads each applied value from the next snapshot',
     async (runState) => {
       const firstWire = withRunState(runState)
@@ -1733,13 +1410,11 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it.each((['idle', 'running', 'paused'] as const).flatMap((runState) =>
-    [true, false].map((installed) => ({ runState, installed })),
-  ))(
-    'sends immediate throttler installed=$installed in $runState and confirms only by poll',
-    async ({ runState, installed }) => {
+  it.each([true, false])(
+    'sends immediate throttler installed=%s and confirms only by poll',
+    async (installed) => {
       let wire: TestWireSnapshot = {
-        ...withRunState(runState),
+        ...VALID_WIRE,
         throttler: { ...VALID_WIRE.throttler, requestedTps: 0, installed: !installed },
         config: { ...VALID_WIRE.config, throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, initial: false, allowed: [false, true] } },
       }
@@ -1822,212 +1497,28 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it.each([
-    { state: 'running' as const, value: 2 },
-    { state: 'paused' as const, value: 2 },
-    { state: 'idle' as const, value: 3 },
-  ])(
-    'rejects readerChannel capacity $value locally in $state',
-    async ({ state, value }) => {
-      const wire = withRunState(state)
-      fetchMock.mockResolvedValueOnce(mockResponse(wire))
-      const adapter = new HttpAdapter()
-
-      await flushPoll()
-      const receipt = await adapter.dispatch({
-        type: 'set-reader-channel-capacity',
-        value,
-      })
-
-      expect(receipt).toMatchObject({
-        accepted: false,
-        applyMode: 'unavailable',
-        error: { code: 'unavailable', retryable: false },
-      })
-      expect(commandFetchCalls()).toHaveLength(0)
-      expect(adapter.getSnapshot().readerChannel.capacity).toMatchObject({
-        applied: 8,
-        applyMode: state === 'idle' ? 'immediate' : 'unavailable',
-      })
-      adapter.dispose()
-    },
-  )
-
-  it('rejects senderChannel capacity while the adapter has no connected snapshot', async () => {
-    fetchMock.mockResolvedValueOnce(mockResponse({
-      ...VALID_WIRE,
-      config: (() => {
-        const { senderChannelCapacity: _senderChannel, ...config } = VALID_WIRE.config
-        return config
-      })(),
-    }))
-    const adapter = new HttpAdapter()
-
-    await flushPoll()
-    expect(adapter.getSnapshot().connectionState).toBe('error')
-    const receipt = await adapter.dispatch({
-      type: 'set-sender-channel-capacity',
-      value: 1,
-    })
-
-    expect(receipt).toMatchObject({
-      accepted: false,
-      error: { code: 'unavailable', retryable: false },
-    })
-    expect(commandFetchCalls()).toHaveLength(0)
-    adapter.dispose()
-  })
-
-  it('does not send a buffered readerChannel capacity after the snapshot enters Run', async () => {
-    const idleWire = {
-      ...withRunState('idle'),
-      readerChannel: { ...VALID_WIRE.readerChannel, capacity: 2 },
-    }
-    const runningWire: TestWireSnapshot = {
-      ...VALID_WIRE,
-      run: { ...VALID_WIRE.run, state: 'running' },
-    }
-    const runResponse = deferred<Response>()
-    let snapshotRequests = 0
-    fetchMock.mockImplementation((input) => {
-      if (input === COMMAND_ENDPOINT) return runResponse.promise
-
-      snapshotRequests += 1
-      return Promise.resolve(mockResponse(
-        snapshotRequests === 1 ? idleWire : runningWire,
-      ))
-    })
-    const adapter = new HttpAdapter()
-
-    await flushPoll()
-    expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'connected', runState: 'idle' })
-    const runReceipt = adapter.dispatch({ type: 'run' })
-    await Promise.resolve()
-    let capacitySettled = false
-    const capacityReceipt = adapter.dispatch({
-      type: 'set-reader-channel-capacity',
-      value: 8,
-    }).then((receipt) => {
-      capacitySettled = true
-      return receipt
-    })
-    await flushPoll()
-    expect(capacitySettled).toBe(false)
-    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body))
-      .toEqual(['{"action":"run"}'])
-
-    await vi.advanceTimersByTimeAsync(1_000)
-    await flushPoll()
-    expect(adapter.getSnapshot().runState).toBe('running')
-
-    runResponse.resolve(mockCommandResponse())
-    await expect(runReceipt).resolves.toMatchObject({ accepted: true })
-    await expect(capacityReceipt).resolves.toMatchObject({
-      accepted: false,
-      error: { code: 'unavailable', retryable: false },
-    })
-    expect(commandFetchCalls()).toHaveLength(1)
-    adapter.dispose()
-  })
-
-  it.each([
-    { state: 'running' as const, value: 2 },
-    { state: 'paused' as const, value: 2 },
-    { state: 'idle' as const, value: 3 },
-  ])(
-    'rejects senderChannel capacity $value locally in $state',
-    async ({ state, value }) => {
-      const wire = withRunState(state)
-      fetchMock.mockResolvedValueOnce(mockResponse(wire))
-      const adapter = new HttpAdapter()
-
-      await flushPoll()
-      const receipt = await adapter.dispatch({
-        type: 'set-sender-channel-capacity',
-        value,
-      })
-
-      expect(receipt).toMatchObject({
-        accepted: false,
-        applyMode: 'unavailable',
-        error: { code: 'unavailable', retryable: false },
-      })
-      expect(commandFetchCalls()).toHaveLength(0)
-      expect(adapter.getSnapshot().senderChannel.capacity).toMatchObject({
-        applied: 0,
-        applyMode: state === 'idle' ? 'immediate' : 'unavailable',
-      })
-      adapter.dispose()
-    },
-  )
-
-  it('does not send a buffered senderChannel capacity after the snapshot enters Pause', async () => {
-    const idleWire = withRunState('idle')
-    const pausedWire = withRunState('paused')
-    const pauseResponse = deferred<Response>()
-    let snapshotRequests = 0
-    fetchMock.mockImplementation((input) => {
-      if (input === COMMAND_ENDPOINT) return pauseResponse.promise
-
-      snapshotRequests += 1
-      return Promise.resolve(mockResponse(
-        snapshotRequests === 1 ? idleWire : pausedWire,
-      ))
-    })
-    const adapter = new HttpAdapter()
-
-    await flushPoll()
-    expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'connected', runState: 'idle' })
-    const pauseReceipt = adapter.dispatch({ type: 'pause' })
-    await Promise.resolve()
-    let capacitySettled = false
-    const capacityReceipt = adapter.dispatch({
-      type: 'set-sender-channel-capacity',
-      value: 8,
-    }).then((receipt) => {
-      capacitySettled = true
-      return receipt
-    })
-    await flushPoll()
-    expect(capacitySettled).toBe(false)
-    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body))
-      .toEqual(['{"action":"pause"}'])
-
-    await vi.advanceTimersByTimeAsync(1_000)
-    await flushPoll()
-    expect(adapter.getSnapshot().runState).toBe('paused')
-
-    pauseResponse.resolve(mockCommandResponse())
-    await expect(pauseReceipt).resolves.toMatchObject({ accepted: true })
-    await expect(capacityReceipt).resolves.toMatchObject({
-      accepted: false,
-      error: { code: 'unavailable', retryable: false },
-    })
-    expect(commandFetchCalls()).toHaveLength(1)
-    adapter.dispose()
-  })
-
   it('accepts 204 without a response body and leaves snapshot authority intact', async () => {
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? Promise.resolve(mockCommandResponse(204))
-      : pendingResponse())
+      : Promise.resolve(mockResponse(VALID_WIRE)))
     const adapter = new HttpAdapter()
+    await flushPoll()
     const initial = adapter.getSnapshot()
 
-    const receipt = await adapter.dispatch({ type: 'run' })
+    const receipt = await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
 
     expect(receipt).toEqual({
       commandId: 'http-local-1',
-      commandType: 'run',
+      commandType: 'set-sender-workers',
       accepted: true,
       applyMode: 'immediate',
       appliedAtMs: NOW_MS,
-      snapshotRevision: 0,
+      snapshotRevision: 1,
       error: null,
     })
     expectDeepFrozen(receipt)
     expect(adapter.getSnapshot()).toBe(initial)
-    expect(adapter.getSnapshot().runState).toBe('idle')
+    expect(adapter.getSnapshot().runState).toBe('running')
     adapter.dispose()
   })
 
@@ -2035,10 +1526,11 @@ describe('HttpAdapter', () => {
     const { response, accessors } = responseWithThrowingRepresentation(299)
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? Promise.resolve(response)
-      : pendingResponse())
+      : Promise.resolve(mockResponse(VALID_WIRE)))
     const adapter = new HttpAdapter()
+    await flushPoll()
 
-    const receipt = await adapter.dispatch({ type: 'pause' })
+    const receipt = await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
 
     expect(receipt.accepted).toBe(true)
     expect(receipt.appliedAtMs).toBe(NOW_MS)
@@ -2048,93 +1540,32 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('rejects every unsupported command locally while accounting for polling', async () => {
-    const commands: readonly LoadgenCommand[] = [
-      { type: 'set-requested-tps', value: 10_000 },
-      { type: 'set-throttler-installed', value: false },
-      { type: 'set-worker-count', actor: 'reader', value: 2 },
-      { type: 'set-sender-workers', value: 3 },
-      { type: 'set-http-timeout', valueMs: 500 },
-    ]
+  it('rejects an unknown command locally while accounting for polling', async () => {
+    const command = { type: 'unknown' } as unknown as LoadgenCommand
     const adapter = new HttpAdapter()
     const initial = adapter.getSnapshot()
 
-    for (const [index, command] of commands.entries()) {
-      const receipt = await adapter.dispatch(command)
-      expect(receipt).toEqual({
-        commandId: `http-local-${index + 1}`,
-        commandType: command.type,
-        accepted: false,
-        applyMode: 'unavailable',
-        appliedAtMs: null,
-        snapshotRevision: 0,
-        error: {
-          code: 'unavailable',
-          message: 'command is not available in the HTTP adapter',
-          retryable: false,
-          details: null,
-        },
-      })
-      expect(Object.isFrozen(receipt)).toBe(true)
-      expect(Object.isFrozen(receipt.error)).toBe(true)
-      expect(adapter.getSnapshot()).toBe(initial)
-    }
-
-    expect(snapshotFetchCalls()).toHaveLength(1)
-    expect(commandFetchCalls()).toHaveLength(0)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    adapter.dispose()
-  })
-
-  it('maps an HTTP 422 start error into a nonretryable unavailable receipt', async () => {
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? Promise.resolve(mockResponse(
-        { error: 'producer is unavailable' },
-        { status: 422 },
-      ))
-      : pendingResponse())
-    const adapter = new HttpAdapter()
-
-    const receipt = await adapter.dispatch({ type: 'run' })
-
+    const receipt = await adapter.dispatch(command)
     expect(receipt).toEqual({
       commandId: 'http-local-1',
-      commandType: 'run',
+      commandType: command.type,
       accepted: false,
       applyMode: 'unavailable',
       appliedAtMs: null,
       snapshotRevision: 0,
       error: {
         code: 'unavailable',
-        message: 'producer is unavailable',
+        message: 'command is not available in the HTTP adapter',
         retryable: false,
         details: null,
       },
     })
-    expectDeepFrozen(receipt)
-    adapter.dispose()
-  })
-
-  it.each([
-    mockResponse({}, { status: 422 }),
-    mockResponse({ error: '' }, { status: 422 }),
-    mockResponse(null, { status: 422, jsonError: new SyntaxError() }),
-  ])('keeps the HTTP status message for a malformed 422 error body', async (response) => {
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? Promise.resolve(response)
-      : pendingResponse())
-    const adapter = new HttpAdapter()
-
-    const receipt = await adapter.dispatch({ type: 'run' })
-
-    expect(receipt).toMatchObject({
-      accepted: false,
-      error: {
-        code: 'unavailable',
-        message: 'command request failed with HTTP status 422',
-        retryable: false,
-      },
-    })
+    expect(Object.isFrozen(receipt)).toBe(true)
+    expect(Object.isFrozen(receipt.error)).toBe(true)
+    expect(adapter.getSnapshot()).toBe(initial)
+    expect(snapshotFetchCalls()).toHaveLength(1)
+    expect(commandFetchCalls()).toHaveLength(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     adapter.dispose()
   })
 
@@ -2147,19 +1578,20 @@ describe('HttpAdapter', () => {
       const { response, accessors } = responseWithThrowingRepresentation(status)
       fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
         ? Promise.resolve(response)
-        : pendingResponse())
+        : Promise.resolve(mockResponse(VALID_WIRE)))
       const adapter = new HttpAdapter()
-      const initial = adapter.getSnapshot()
+      await flushPoll()
+    const initial = adapter.getSnapshot()
 
-      const receipt = await adapter.dispatch({ type: 'reset' })
+      const receipt = await adapter.dispatch({ type: 'set-throttler-installed', value: false })
 
       expect(receipt).toEqual({
         commandId: 'http-local-1',
-        commandType: 'reset',
+        commandType: 'set-throttler-installed',
         accepted: false,
         applyMode: 'unavailable',
         appliedAtMs: null,
-        snapshotRevision: 0,
+        snapshotRevision: 1,
         error: {
           code: 'unavailable',
           message: `command request failed with HTTP status ${status}`,
@@ -2180,19 +1612,20 @@ describe('HttpAdapter', () => {
   it('maps a network failure without leaking details or retrying', async () => {
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? Promise.reject(new TypeError('secret transport detail'))
-      : pendingResponse())
+      : Promise.resolve(mockResponse(VALID_WIRE)))
     const adapter = new HttpAdapter()
+    await flushPoll()
     const initial = adapter.getSnapshot()
 
-    const receipt = await adapter.dispatch({ type: 'run' })
+    const receipt = await adapter.dispatch({ type: 'set-requested-tps', value: 25 })
 
     expect(receipt).toEqual({
       commandId: 'http-local-1',
-      commandType: 'run',
+      commandType: 'set-requested-tps',
       accepted: false,
       applyMode: 'unavailable',
       appliedAtMs: null,
-      snapshotRevision: 0,
+      snapshotRevision: 1,
       error: {
         code: 'unavailable',
         message: 'command request failed due to a network error',
@@ -2210,11 +1643,11 @@ describe('HttpAdapter', () => {
     const adapter = new HttpAdapter()
     adapter.dispose()
 
-    const receipt = await adapter.dispatch({ type: 'pause' })
+    const receipt = await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
 
     expect(receipt).toEqual({
       commandId: 'http-local-1',
-      commandType: 'pause',
+      commandType: 'set-sender-workers',
       accepted: false,
       applyMode: 'unavailable',
       appliedAtMs: null,
@@ -2235,37 +1668,36 @@ describe('HttpAdapter', () => {
     const inFlight = deferred<Response>()
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? inFlight.promise
-      : pendingResponse())
+      : Promise.resolve(mockResponse(VALID_WIRE)))
     const adapter = new HttpAdapter()
-    const run = adapter.dispatch({ type: 'run' })
     await flushPoll()
-    const pause = adapter.dispatch({ type: 'pause' })
-    const reset = adapter.dispatch({ type: 'reset' })
-    const pollInit = snapshotFetchCalls()[0]?.[1] as RequestInit
+    const first = adapter.dispatch({ type: 'set-requested-tps', value: 25 })
+    await flushPoll()
+    const second = adapter.dispatch({ type: 'set-sender-workers', value: 7 })
+    const third = adapter.dispatch({ type: 'set-throttler-installed', value: false })
     const commandInit = commandFetchCalls()[0]?.[1] as RequestInit
 
     expect(commandFetchCalls()).toHaveLength(1)
     adapter.dispose()
-    expect(pollInit.signal?.aborted).toBe(true)
     expect(commandInit.signal).toBeUndefined()
     inFlight.resolve(mockCommandResponse(204))
 
-    const [runReceipt, pauseReceipt, resetReceipt] = await Promise.all([
-      run,
-      pause,
-      reset,
+    const [firstReceipt, secondReceipt, thirdReceipt] = await Promise.all([
+      first,
+      second,
+      third,
     ])
-    expect(runReceipt).toMatchObject({
+    expect(firstReceipt).toMatchObject({
       commandId: 'http-local-1',
       accepted: true,
       error: null,
     })
-    expect(pauseReceipt).toMatchObject({
+    expect(secondReceipt).toMatchObject({
       commandId: 'http-local-2',
       accepted: false,
       error: { code: 'disposed', retryable: false },
     })
-    expect(resetReceipt).toMatchObject({
+    expect(thirdReceipt).toMatchObject({
       commandId: 'http-local-3',
       accepted: false,
       error: { code: 'disposed', retryable: false },
@@ -2273,7 +1705,7 @@ describe('HttpAdapter', () => {
     expect(commandFetchCalls()).toHaveLength(1)
   })
 
-  it('serializes lifecycle commands in FIFO order and continues after failure', async () => {
+  it('serializes live commands in FIFO order and continues after failure', async () => {
     const responses = [
       deferred<Response>(),
       deferred<Response>(),
@@ -2282,32 +1714,33 @@ describe('HttpAdapter', () => {
     let responseIndex = 0
     fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
       ? responses[responseIndex++]!.promise
-      : pendingResponse())
+      : Promise.resolve(mockResponse(VALID_WIRE)))
     const adapter = new HttpAdapter()
 
+    await flushPoll()
     const receipts = [
-      adapter.dispatch({ type: 'run' }),
-      adapter.dispatch({ type: 'pause' }),
-      adapter.dispatch({ type: 'reset' }),
+      adapter.dispatch({ type: 'set-requested-tps', value: 25 }),
+      adapter.dispatch({ type: 'set-sender-workers', value: 7 }),
+      adapter.dispatch({ type: 'set-throttler-installed', value: false }),
     ]
     await flushPoll()
     expect(commandFetchCalls()).toHaveLength(1)
     expect(commandFetchCalls()[0]?.[1]).toMatchObject({
-      body: '{"action":"run"}',
+      body: '{"action":"set-requested-tps","value":25}',
     })
 
     responses[0].resolve(mockCommandResponse(204))
     await flushPoll()
     expect(commandFetchCalls()).toHaveLength(2)
     expect(commandFetchCalls()[1]?.[1]).toMatchObject({
-      body: '{"action":"pause"}',
+      body: '{"action":"set-sender-workers","value":7}',
     })
 
     responses[1].resolve(mockCommandResponse(503))
     await flushPoll()
     expect(commandFetchCalls()).toHaveLength(3)
     expect(commandFetchCalls()[2]?.[1]).toMatchObject({
-      body: '{"action":"reset"}',
+      body: '{"action":"set-throttler-installed","value":false}',
     })
 
     responses[2].resolve(mockCommandResponse(204))
@@ -2325,79 +1758,54 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('runs polling beside POST while snapshots remain lifecycle authority', async () => {
-    const firstPoll = deferred<Response>()
+  it('keeps polling beside POST and refuses queued changes once stopping', async () => {
+    const nextPoll = deferred<Response>()
     const command = deferred<Response>()
     let pollCount = 0
     fetchMock.mockImplementation((input) => {
       if (input === COMMAND_ENDPOINT) return command.promise
-      pollCount += 1
-      return pollCount === 1 ? firstPoll.promise : pendingResponse()
+      return ++pollCount === 1 ? Promise.resolve(mockResponse(VALID_WIRE)) : nextPoll.promise
     })
     const adapter = new HttpAdapter()
-    const initial = adapter.getSnapshot()
-    const receiptPromise = adapter.dispatch({ type: 'run' })
+    await flushPoll()
+    const first = adapter.dispatch({ type: 'set-requested-tps', value: 25 })
+    const queued = adapter.dispatch({ type: 'set-sender-workers', value: 7 })
     await flushPoll()
 
     expect(snapshotFetchCalls()).toHaveLength(1)
     expect(commandFetchCalls()).toHaveLength(1)
     expect((commandFetchCalls()[0]![1] as RequestInit).signal).toBeUndefined()
 
-    command.resolve(mockCommandResponse(204))
-    const receipt = await receiptPromise
-    expect(receipt.snapshotRevision).toBe(0)
-    expect(adapter.getSnapshot()).toBe(initial)
-    expect(adapter.getSnapshot().runState).toBe('idle')
-
-    firstPoll.resolve(mockResponse(VALID_WIRE))
-    await flushPoll()
-    expect(adapter.getSnapshot()).not.toBe(initial)
-    expect(adapter.getSnapshot()).toMatchObject({
-      revision: 1,
-      runState: 'running',
-    })
-
     await vi.advanceTimersByTimeAsync(1_000)
     expect(snapshotFetchCalls()).toHaveLength(2)
+    nextPoll.resolve(mockResponse(withRunState('stopping')))
+    await flushPoll()
+    const stopping = adapter.getSnapshot()
+    expect(stopping).toMatchObject({ revision: 2, runState: 'stopping' })
+
+    command.resolve(mockCommandResponse(204))
+    await expect(first).resolves.toMatchObject({ accepted: true, snapshotRevision: 2 })
+    await expect(queued).resolves.toMatchObject({ accepted: false, snapshotRevision: 2 })
+    expect(adapter.getSnapshot()).toBe(stopping)
     expect(commandFetchCalls()).toHaveLength(1)
     adapter.dispose()
   })
 
-  it('uses monotonic invocation IDs and the current revision at receipt creation', async () => {
-    const poll = deferred<Response>()
-    const firstCommand = deferred<Response>()
-    let commandCount = 0
-    fetchMock.mockImplementation((input) => {
-      if (input === SNAPSHOT_ENDPOINT) return poll.promise
-      commandCount += 1
-      return commandCount === 1
-        ? firstCommand.promise
-        : Promise.resolve(mockCommandResponse(204))
-    })
+  it('assigns monotonic invocation IDs across local rejection and HTTP dispatch', async () => {
+    fetchMock.mockImplementation((input) => Promise.resolve(input === COMMAND_ENDPOINT
+      ? mockCommandResponse(204)
+      : mockResponse(VALID_WIRE)))
     const adapter = new HttpAdapter()
-    const unsupported = await adapter.dispatch({
-      type: 'set-requested-tps',
-      value: 10_000,
-    })
-    const run = adapter.dispatch({ type: 'run' })
-    const pause = adapter.dispatch({ type: 'pause' })
+    const unavailable = await adapter.dispatch({ type: 'set-requested-tps', value: 25 })
     await flushPoll()
-
-    poll.resolve(mockResponse(withRunState('paused')))
-    await flushPoll()
-    const authoritative = adapter.getSnapshot()
-    expect(authoritative.revision).toBe(1)
-
-    firstCommand.resolve(mockCommandResponse(204))
-    const [runReceipt, pauseReceipt] = await Promise.all([run, pause])
-
-    expect([unsupported, runReceipt, pauseReceipt].map(({ commandId }) => commandId))
+    const first = adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 2 })
+    const second = adapter.dispatch({ type: 'set-sender-workers', value: 7 })
+    const receipts = [unavailable, ...await Promise.all([first, second])]
+    expect(receipts.map(({ commandId }) => commandId))
       .toEqual(['http-local-1', 'http-local-2', 'http-local-3'])
-    expect(runReceipt.snapshotRevision).toBe(1)
-    expect(pauseReceipt.snapshotRevision).toBe(1)
-    expect(adapter.getSnapshot()).toBe(authoritative)
-    const allReceipts = [unsupported, runReceipt, pauseReceipt]
-    allReceipts.forEach((receipt) => expectDeepFrozen(receipt))
+    expect(receipts.map(({ accepted }) => accepted)).toEqual([false, true, true])
+    receipts.forEach((receipt) => expectDeepFrozen(receipt))
     adapter.dispose()
   })
+
 })

@@ -43,18 +43,16 @@ type senderPoolSnapshot struct {
 }
 
 type senderPool struct {
-	// mu guards worker state; intakeMu keeps admission before stop's boundary.
+	// mu guards worker state.
 	mu                                       sync.Mutex
-	intakeMu                                 sync.Mutex
 	available                                *sync.Cond
 	ctx                                      context.Context
 	cancel                                   context.CancelFunc
-	intakeDone                               chan struct{}
+	done                                     chan struct{}
 	wg                                       sync.WaitGroup
 	workers                                  []*senderWorker
 	desired                                  int
 	stopping                                 bool
-	resume                                   chan struct{}
 	retry                                    senderRetryConfig
 	batches                                  <-chan []Transaction
 	channelTelemetry                         *channelTelemetry
@@ -80,7 +78,7 @@ func startSenderPool(
 	pool := &senderPool{
 		ctx:                                      ctx,
 		cancel:                                   cancel,
-		intakeDone:                               make(chan struct{}),
+		done:                                     make(chan struct{}),
 		workers:                                  make([]*senderWorker, 0, workers),
 		retry:                                    retry,
 		batches:                                  batches,
@@ -151,7 +149,10 @@ func (p *senderPool) reconcile(desired int) {
 
 func (p *senderPool) stop() <-chan struct{} {
 	p.cancel()
-	p.intakeMu.Lock()
+	return p.done
+}
+
+func (p *senderPool) finishIntake() {
 	p.mu.Lock()
 	p.stopping = true
 	p.available.Broadcast()
@@ -162,58 +163,9 @@ func (p *senderPool) stop() <-chan struct{} {
 		}
 	}
 	p.mu.Unlock()
-	p.intakeMu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		<-p.intakeDone
-		p.wg.Wait()
-		close(done)
-	}()
-	return done
-}
-
-func (p *senderPool) pause() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.resume != nil || p.stopping {
-		return
-	}
-	p.resume = make(chan struct{})
-	for _, worker := range p.workers {
-		select {
-		case worker.wake <- struct{}{}:
-		default:
-		}
-	}
-}
-
-func (p *senderPool) resumeRun() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.resume != nil {
-		close(p.resume)
-		p.resume = nil
-	}
-}
-
-func (p *senderPool) waitUntilRunnable() bool {
-	for {
-		p.mu.Lock()
-		if p.ctx.Err() != nil {
-			p.mu.Unlock()
-			return false
-		}
-		resume := p.resume
-		p.mu.Unlock()
-		if resume == nil {
-			return true
-		}
-		select {
-		case <-p.ctx.Done():
-			return false
-		case <-resume:
-		}
-	}
+	p.wg.Wait()
+	p.cancel()
+	close(p.done)
 }
 
 func (p *senderPool) startWorkerLocked() {
@@ -228,7 +180,13 @@ func (p *senderPool) startWorkerLocked() {
 }
 
 func (p *senderPool) runIntake() {
-	defer close(p.intakeDone)
+	defer p.finishIntake()
+	stopWakeup := context.AfterFunc(p.ctx, func() {
+		p.mu.Lock()
+		p.available.Broadcast()
+		p.mu.Unlock()
+	})
+	defer stopWakeup()
 	for {
 		p.mu.Lock()
 		for p.availableWorkerLocked() == nil && p.ctx.Err() == nil {
@@ -239,31 +197,27 @@ func (p *senderPool) runIntake() {
 			return
 		}
 
-		p.intakeMu.Lock()
-		if p.ctx.Err() != nil {
-			p.intakeMu.Unlock()
-			return
-		}
 		select {
 		case <-p.ctx.Done():
-			p.intakeMu.Unlock()
 			return
 		case batch, ok := <-p.batches:
 			if !ok {
-				p.intakeMu.Unlock()
 				return
 			}
 			p.channelTelemetry.recordReceive(len(batch))
 			p.mu.Lock()
 			worker := p.availableWorkerLocked()
-			for worker == nil {
+			for worker == nil && p.ctx.Err() == nil {
 				p.available.Wait()
 				worker = p.availableWorkerLocked()
+			}
+			if p.ctx.Err() != nil {
+				p.mu.Unlock()
+				return
 			}
 			worker.busy = true
 			worker.work <- batch
 			p.mu.Unlock()
-			p.intakeMu.Unlock()
 		}
 	}
 }
@@ -357,7 +311,7 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		p.mu.Lock()
 		worker.backoff = false
 		p.mu.Unlock()
-		if !p.waitUntilRunnable() {
+		if p.ctx.Err() != nil {
 			return false
 		}
 		switch p.attempt(p.ctx, batch, attempt) {
@@ -408,7 +362,7 @@ func (p *senderPool) aggregateSnapshot() senderPoolSnapshot {
 func (p *senderPool) waitBackoff(worker *senderWorker, duration time.Duration) bool {
 	deadline := time.Now().Add(duration)
 	for {
-		if !p.waitUntilRunnable() {
+		if p.ctx.Err() != nil {
 			return false
 		}
 		remaining := time.Until(deadline)

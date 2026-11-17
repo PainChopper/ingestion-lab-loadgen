@@ -98,9 +98,9 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 	}
 }
 
-func TestFormatRuntimeStatusCardIdleSourceGolden(t *testing.T) {
+func TestFormatRuntimeStatusCardStartingSourceGolden(t *testing.T) {
 	card := formatRuntimeStatusCard(runtimeStatus{
-		Run: runtimeRunStatus{State: runStateIdle},
+		Run: runtimeRunStatus{State: runStateStarting},
 	})
 	if !strings.Contains(card, "Source:                   none\nSource error:             none\n\nReader channel\n") {
 		t.Fatalf("idle source fields are not adjacent golden values: %q", card)
@@ -200,25 +200,27 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 	state.logger = logger
 	requests := make(chan runtimeCommand)
 	metrics := make(chan time.Time)
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		state.runEventLoop(context.Background(), requests, metrics, NewPrometheusMetrics())
+		events := runtimeEvents{
+			requests: requests,
+			source:   prepareSourceAsync(state.config.Source.Path),
+			metrics:  serviceMetrics{ticks: metrics, prometheusMetrics: NewPrometheusMetrics()},
+		}
+		state.runEventLoop(ctx, events, gracefulShutdownTimeout)
 	}()
 	t.Cleanup(func() {
-		close(requests)
+		cancel()
 		select {
 		case <-done:
 		case <-time.After(time.Second):
 			t.Error("event loop did not stop")
 		}
 	})
-
-	reply := make(chan runtimeCommandReceipt, 1)
-	requests <- runtimeCommand{kind: cmdRun, receiptReply: reply}
-	if result := <-reply; result.rejected || result.err != nil {
-		t.Fatalf("run = %+v", result)
-	}
+	harness := testEventLoop{requests: runtimeRequests{commands: requests, done: done}}
+	harness.awaitSnapshot(t, func(s runtimeStatus) bool { return s.Run.State == runStateRunning })
 	output.Reset()
 	metrics <- time.Now()
 	awaitRuntimeSummaryMetric(t, requests)

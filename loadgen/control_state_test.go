@@ -3,6 +3,7 @@ package main
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestNewControlStateInitializesControls(t *testing.T) {
@@ -20,13 +21,14 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 				loaded.Throttler.RequestedTPS.Initial = 0
 			}
 			state := newControlState(loaded, nil)
-			if got := state.run.state; got != runStateIdle {
-				t.Fatalf("initial run state = %q, want %q", got, runStateIdle)
+			if got := state.run.state; got != runStateStarting {
+				t.Fatalf("initial run state = %q, want %q", got, runStateStarting)
 			}
+			snapshot := state.runtimeStatusAt(nil, time.Now())
 			got := []int{
-				state.controls.readBatchSize, state.controls.readerWorkers,
-				state.controls.readerChannelCapacity, state.controls.senderChannelCapacity,
-				state.controls.requestedTPS, state.controls.senderWorkers,
+				snapshot.Reader.ReadBatchSize, snapshot.Reader.Workers,
+				snapshot.ReaderChannel.Capacity, snapshot.SenderChannel.Capacity,
+				snapshot.Throttler.RequestedTps, snapshot.Sender.Workers,
 			}
 			want := []int{
 				loaded.Reader.ReadBatchSize.Initial, loaded.Reader.Workers.Initial,

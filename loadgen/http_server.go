@@ -18,13 +18,13 @@ const gracefulShutdownTimeout = 10 * time.Second
 const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
 
-func newServeMux(requests chan<- runtimeCommand, metrics *PrometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
+func newServeMux(requests runtimeRequests, metrics *PrometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	mux := http.NewServeMux()
 	mux.Handle(snapshotPath, snapshotHandler(requests, logger))
-	mux.Handle(commandsPath, commandsHandler(requests, config, logger))
+	mux.Handle(commandsPath, commandsHandler(requests, config))
 	registerDeveloperRoutes(mux)
 
 	if metrics != nil {
@@ -40,13 +40,17 @@ func newServeMux(requests chan<- runtimeCommand, metrics *PrometheusMetrics, con
 	return mux
 }
 
-func startHTTPServer(requests chan<- runtimeCommand, metrics *PrometheusMetrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
+func startHTTPServer(requests runtimeRequests, metrics *PrometheusMetrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	server := &http.Server{
-		Addr:    config.HTTP.Addr,
-		Handler: newServeMux(requests, metrics, config, logger),
+		Addr:              config.HTTP.Addr,
+		Handler:           newServeMux(requests, metrics, config, logger),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       time.Minute,
+		// A fixed write deadline could interrupt pprof requests.
 	}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
@@ -55,6 +59,7 @@ func startHTTPServer(requests chan<- runtimeCommand, metrics *PrometheusMetrics,
 
 	done := make(chan error, 1)
 	go func() {
+		defer close(done)
 		err := server.Serve(listener)
 		if errors.Is(err, http.ErrServerClosed) {
 			err = nil
@@ -65,17 +70,13 @@ func startHTTPServer(requests chan<- runtimeCommand, metrics *PrometheusMetrics,
 	return server, done, nil
 }
 
-func shutdownHTTPServer(ctx context.Context, server *http.Server, done <-chan error, logger *zap.Logger) {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
+func shutdownHTTPServer(ctx context.Context, server *http.Server) error {
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("graceful HTTP shutdown failed", zap.String("event", "run_failed"))
-		if closeErr := server.Close(); closeErr != nil {
-			logger.Error("forced HTTP close failed", zap.String("event", "run_failed"))
+		closeErr := server.Close()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return closeErr
 		}
+		return errors.Join(err, closeErr)
 	}
-	if err := <-done; err != nil {
-		logger.Error("HTTP server stopped unexpectedly", zap.String("event", "run_failed"))
-	}
+	return nil
 }

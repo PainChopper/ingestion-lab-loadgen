@@ -34,7 +34,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 
 	appCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-	if err := runServe(appCtx, command.configPath, command.runAfterStart); err != nil {
+	if err := runServe(appCtx, command.configPath); err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return cliExitLocal
 	}

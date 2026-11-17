@@ -1,6 +1,6 @@
 import type {
   LoadgenSnapshot,
-  NumericControlSnapshot,
+  ChannelCapacitySnapshot,
   ChannelSnapshot,
   SelectableId,
 } from '../model/loadgen'
@@ -9,7 +9,6 @@ import {
   formatMilliseconds,
   formatRate,
 } from './pipeline/formatters'
-import { getChannelCapacityPresentation } from './pipeline/channelCableGeometry'
 
 export interface InspectorRow {
   readonly label: string
@@ -41,7 +40,7 @@ export interface InspectorViewModel {
 }
 
 function formatControl(
-  control: NumericControlSnapshot,
+  control: ChannelCapacitySnapshot,
   unit = control.unit,
 ): string {
   const value = formatInteger(control.applied)
@@ -60,11 +59,7 @@ export function formatStateLabel(value: string): string {
 }
 
 function channelViewModel(channel: ChannelSnapshot): InspectorViewModel {
-  const capacity = getChannelCapacityPresentation(channel.capacity)
-  const appliedCapacity = formatControl({
-    ...channel.capacity,
-    applied: capacity.applied,
-  })
+  const appliedCapacity = formatControl(channel.capacity)
   const depth = formatInteger(channel.depthBatches)
   return {
     id: channel.id,
@@ -94,7 +89,6 @@ function channelViewModel(channel: ChannelSnapshot): InspectorViewModel {
 export function getInspectorViewModel(
   snapshot: LoadgenSnapshot,
   selectedId: SelectableId | null,
-  frozenObserved = false,
 ): InspectorViewModel | null {
   switch (selectedId) {
     case 'reader':
@@ -103,7 +97,7 @@ export function getInspectorViewModel(
         const sourceError = snapshot.reader.sourceError
         const rows: InspectorRow[] = [
 		  {
-			label: `Workers desired / ${frozenObserved ? 'frozen live' : 'live'} / draining`,
+			label: 'Workers desired / live / draining',
 			value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
 		  },
           {
@@ -148,6 +142,10 @@ export function getInspectorViewModel(
         title: 'THROTTLER',
         kind: 'Rate control',
         rows: [
+          ...(snapshot.adapterKind === 'simulation' ? [{
+            label: 'Requested TPS',
+            value: formatRate(snapshot.throttler.requestedTps.applied),
+          }] : []),
           { label: 'Admitted TPS', value: formatRate(snapshot.throttler.admittedTps) },
         ],
       }
@@ -157,7 +155,7 @@ export function getInspectorViewModel(
       const hasSenderTelemetry = snapshot.adapterKind !== 'http'
       const poolRows: ReadonlyArray<InspectorRow> = [
         {
-          label: `Workers desired / ${frozenObserved ? 'frozen live' : 'live'} / draining`,
+          label: 'Workers desired / live / draining',
           value: `${formatInteger(snapshot.sender.workers.applied)} / ` +
             `${formatInteger(snapshot.sender.liveWorkers)} / ` +
             `${formatInteger(snapshot.sender.drainingWorkers)}`,

@@ -39,7 +39,7 @@ interface ThrottlerActorProps {
   snapshot: ThrottlerSnapshot
   upstreamChannel: ChannelSnapshot
   requestedTpsControl: DesiredControl<number>
-  installedControl: DesiredControl<boolean>
+  installedControl?: DesiredControl<boolean>
   selected: boolean
   onSelect: (id: SelectableId) => void
   geometry: PipelineGeometry['actors']['throttler']
@@ -112,9 +112,9 @@ export function ThrottlerActor({
     startY: number
     moved: boolean
   } | null>(null)
-  const cancelInstalled = installedControl.cancel
-  const previewInstalled = installedControl.preview
-  const commitInstalled = installedControl.commit
+  const cancelInstalled = installedControl?.cancel
+  const previewInstalled = installedControl?.preview
+  const commitInstalled = installedControl?.commit
   const previewRequestedTps = requestedTpsControl.preview
 
   const derivedCandidatePhase = candidateIndex === null
@@ -150,15 +150,16 @@ export function ThrottlerActor({
   const cancelInstallationPreview = useCallback(() => {
     installationDrag.current = null
     installationDragProgressRef.current = 0
-    cancelInstalled()
+    cancelInstalled?.()
     setInstallationDragProgress(0)
   }, [cancelInstalled])
 
   useEffect(() => {
+    if (cancelInstalled === undefined) return
     const handleWindowBlur = () => cancelInstallationPreview()
     window.addEventListener('blur', handleWindowBlur)
     return () => window.removeEventListener('blur', handleWindowBlur)
-  }, [cancelInstallationPreview])
+  }, [cancelInstallationPreview, cancelInstalled])
 
   useEffect(() => {
     if (previousAppliedMode.current === snapshot.installed.applied) return
@@ -279,23 +280,24 @@ export function ThrottlerActor({
   const metricGeometry = appliedInstalled === false
     ? resolvedGeometry.metrics.bypass
     : resolvedGeometry.metrics.installed
-  const installationCandidate = installedControl.phase === 'idle'
+  const installationCandidate = installedControl === undefined || installedControl.phase === 'idle'
     ? null
     : installedControl.desired
-  const installationCandidateKind = installedControl.phase === 'idle'
+  const installationCandidateKind = installedControl === undefined || installedControl.phase === 'idle'
     ? null
     : installedControl.phase
   const targetInstalled = !appliedInstalled
   const installationControlAvailable =
     appliedInstalled !== null &&
+    installedControl !== undefined &&
     installedControl.available &&
     installedControl.phase !== 'pending'
 
   const requestInstalled = useCallback(() => {
     if (!installationControlAvailable) return
     installationFocusRequested.current = true
-    previewInstalled(targetInstalled)
-    void commitInstalled(targetInstalled).then((accepted) => {
+    previewInstalled?.(targetInstalled)
+    void commitInstalled?.(targetInstalled).then((accepted) => {
       if (accepted) return
       installationControlRef.current?.focus()
       installationFocusRequested.current = false
@@ -319,7 +321,7 @@ export function ThrottlerActor({
       startY: event.clientY,
       moved: false,
     }
-    previewInstalled(targetInstalled)
+    previewInstalled?.(targetInstalled)
     installationDragProgressRef.current = 0
     setInstallationDragProgress(0)
     event.currentTarget.setPointerCapture?.(event.pointerId)
@@ -797,79 +799,81 @@ export function ThrottlerActor({
           </>
         )}
 
-        <g
-          ref={installationControlRef}
-          className={`pipeline-valve-installation-control${installationControlAvailable ? '' : ' pipeline-valve-installation-control--disabled'}`}
-          role="button"
-          tabIndex={0}
-          aria-label={appliedInstalled === false
-            ? 'Reinsert throttler valve'
-            : 'Remove throttler valve'}
-          aria-pressed={appliedInstalled === false}
-          aria-valuetext={installationStatus}
-          aria-disabled={!installationControlAvailable}
-          data-applied-mode={appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'}
-          data-candidate-mode={installationCandidate ?? ''}
-          data-candidate-kind={installationCandidateKind ?? ''}
-          data-drag-progress={installationDragProgress.toFixed(2)}
-          onPointerDown={handleInstallationPointerDown}
-          onPointerMove={handleInstallationPointerMove}
-          onPointerUp={handleInstallationPointerUp}
-          onPointerCancel={cancelInstallationPreview}
-          onKeyDown={handleInstallationKeyDown}
-          onClick={(event) => {
-            event.stopPropagation()
-            handleInstallationClick()
-          }}
-          onBlur={cancelInstallationPreview}
-        >
-          {appliedInstalled === true && (
+        {installedControl !== undefined && (
+          <g
+            ref={installationControlRef}
+            className={`pipeline-valve-installation-control${installationControlAvailable ? '' : ' pipeline-valve-installation-control--disabled'}`}
+            role="button"
+            tabIndex={0}
+            aria-label={appliedInstalled === false
+              ? 'Reinsert throttler valve'
+              : 'Remove throttler valve'}
+            aria-pressed={appliedInstalled === false}
+            aria-valuetext={installationStatus}
+            aria-disabled={!installationControlAvailable}
+            data-applied-mode={appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'}
+            data-candidate-mode={installationCandidate ?? ''}
+            data-candidate-kind={installationCandidateKind ?? ''}
+            data-drag-progress={installationDragProgress.toFixed(2)}
+            onPointerDown={handleInstallationPointerDown}
+            onPointerMove={handleInstallationPointerMove}
+            onPointerUp={handleInstallationPointerUp}
+            onPointerCancel={cancelInstallationPreview}
+            onKeyDown={handleInstallationKeyDown}
+            onClick={(event) => {
+              event.stopPropagation()
+              handleInstallationClick()
+            }}
+            onBlur={cancelInstallationPreview}
+          >
+            {appliedInstalled === true && (
+              <rect
+                x={VALVE_INSTALLATION_CONTROL.installedTarget.x}
+                y={VALVE_INSTALLATION_CONTROL.installedTarget.y}
+                width={VALVE_INSTALLATION_CONTROL.installedTarget.width}
+                height={VALVE_INSTALLATION_CONTROL.installedTarget.height}
+                rx="8"
+                className="pipeline-valve-installation-hit-area pipeline-valve-installation-hit-area--wheel-grip"
+                data-installation-grip="wheel"
+              />
+            )}
+            {appliedInstalled === false ? (
+              <rect
+                x={VALVE_INSTALLATION_CONTROL.bypassTarget.x}
+                y={VALVE_INSTALLATION_CONTROL.bypassTarget.y}
+                width={VALVE_INSTALLATION_CONTROL.bypassTarget.width}
+                height={VALVE_INSTALLATION_CONTROL.bypassTarget.height}
+                rx="10"
+                className="pipeline-valve-installation-hit-area"
+              />
+            ) : (
+              <rect
+                x={VALVE_INSTALLATION_CONTROL.installedTarget.x}
+                y={VALVE_INSTALLATION_CONTROL.installedTarget.y}
+                width={VALVE_INSTALLATION_CONTROL.installedTarget.width}
+                height={VALVE_INSTALLATION_CONTROL.installedTarget.height}
+                rx="8"
+                className="pipeline-valve-installation-hit-area"
+              />
+            )}
             <rect
-              x={VALVE_INSTALLATION_CONTROL.installedTarget.x}
-              y={VALVE_INSTALLATION_CONTROL.installedTarget.y}
-              width={VALVE_INSTALLATION_CONTROL.installedTarget.width}
-              height={VALVE_INSTALLATION_CONTROL.installedTarget.height}
-              rx="8"
-              className="pipeline-valve-installation-hit-area pipeline-valve-installation-hit-area--wheel-grip"
-              data-installation-grip="wheel"
-            />
-          )}
-          {appliedInstalled === false ? (
-            <rect
-              x={VALVE_INSTALLATION_CONTROL.bypassTarget.x}
-              y={VALVE_INSTALLATION_CONTROL.bypassTarget.y}
-              width={VALVE_INSTALLATION_CONTROL.bypassTarget.width}
-              height={VALVE_INSTALLATION_CONTROL.bypassTarget.height}
+              x={appliedInstalled === false
+                ? VALVE_INSTALLATION_CONTROL.bypassTarget.x
+                : VALVE_INSTALLATION_CONTROL.installedTarget.x}
+              y={appliedInstalled === false
+                ? VALVE_INSTALLATION_CONTROL.bypassTarget.y
+                : VALVE_INSTALLATION_CONTROL.installedTarget.y}
+              width={appliedInstalled === false
+                ? VALVE_INSTALLATION_CONTROL.bypassTarget.width
+                : VALVE_INSTALLATION_CONTROL.installedTarget.width}
+              height={appliedInstalled === false
+                ? VALVE_INSTALLATION_CONTROL.bypassTarget.height
+                : VALVE_INSTALLATION_CONTROL.installedTarget.height}
               rx="10"
-              className="pipeline-valve-installation-hit-area"
+              className="pipeline-valve-installation-focus-ring"
             />
-          ) : (
-            <rect
-              x={VALVE_INSTALLATION_CONTROL.installedTarget.x}
-              y={VALVE_INSTALLATION_CONTROL.installedTarget.y}
-              width={VALVE_INSTALLATION_CONTROL.installedTarget.width}
-              height={VALVE_INSTALLATION_CONTROL.installedTarget.height}
-              rx="8"
-              className="pipeline-valve-installation-hit-area"
-            />
-          )}
-          <rect
-            x={appliedInstalled === false
-              ? VALVE_INSTALLATION_CONTROL.bypassTarget.x
-              : VALVE_INSTALLATION_CONTROL.installedTarget.x}
-            y={appliedInstalled === false
-              ? VALVE_INSTALLATION_CONTROL.bypassTarget.y
-              : VALVE_INSTALLATION_CONTROL.installedTarget.y}
-            width={appliedInstalled === false
-              ? VALVE_INSTALLATION_CONTROL.bypassTarget.width
-              : VALVE_INSTALLATION_CONTROL.installedTarget.width}
-            height={appliedInstalled === false
-              ? VALVE_INSTALLATION_CONTROL.bypassTarget.height
-              : VALVE_INSTALLATION_CONTROL.installedTarget.height}
-            rx="10"
-            className="pipeline-valve-installation-focus-ring"
-          />
-        </g>
+          </g>
+        )}
 
         <text x="430" y="454" textAnchor="middle" className="pipeline-valve-opening-label">
           {appliedInstalled === false
@@ -887,7 +891,7 @@ export function ThrottlerActor({
                 ? `${targetInstalled ? 'INSTALLED' : 'BYPASS'} PENDING`
                 : ''}
         </text>
-        {installedControl.error !== null && (
+        {installedControl?.error != null && (
           <text
             x="430"
             y="486"

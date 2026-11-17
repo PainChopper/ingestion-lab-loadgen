@@ -33,7 +33,6 @@ const (
 // Mutability values accepted by config fields.
 const (
 	startupOnly = "startup-only"
-	idleOnly    = "idle-only"
 	immediate   = "immediate"
 )
 
@@ -391,8 +390,8 @@ func (p installedConfig) contains(value bool) bool {
 }
 
 func (p rangeConfig) validate() error {
-	if p.Unit != batchSizeUnit || p.Mutability != idleOnly {
-		return fmt.Errorf("must use unit %q and mutability %q", batchSizeUnit, idleOnly)
+	if p.Unit != batchSizeUnit || p.Mutability != startupOnly {
+		return fmt.Errorf("must use unit %q and mutability %q", batchSizeUnit, startupOnly)
 	}
 	if p.Min <= 0 || p.Max < p.Min || p.Step <= 0 {
 		return fmt.Errorf("min, max, and step must form a positive range")
@@ -408,8 +407,8 @@ func (p rangeConfig) contains(value int) bool {
 }
 
 func (p allowedConfig) validate() error {
-	if p.Unit != unitBatches || p.Mutability != idleOnly {
-		return fmt.Errorf("must use unit %q and mutability %q", unitBatches, idleOnly)
+	if p.Unit != unitBatches || p.Mutability != startupOnly {
+		return fmt.Errorf("must use unit %q and mutability %q", unitBatches, startupOnly)
 	}
 	if len(p.Allowed) == 0 {
 		return fmt.Errorf("allowed must not be empty")

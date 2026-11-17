@@ -44,15 +44,9 @@ func TestCLIBinaryArgsAndHelp(t *testing.T) {
 			wantExit:   cliExitSuccess,
 		},
 		{
-			name:       "remote help",
-			args:       []string{"snapshot", "--help"},
-			wantStdout: "usage: ingestion-lab-loadgen snapshot [--url <url>]\n",
-			wantExit:   cliExitSuccess,
-		},
-		{
-			name:       "invalid remote arguments",
-			args:       []string{"snapshot", "extra"},
-			wantStderr: "invalid snapshot arguments\nusage: ingestion-lab-loadgen snapshot [--url <url>]\n",
+			name:       "unknown command",
+			args:       []string{"inspect"},
+			wantStderr: "unexpected command \"inspect\"\n" + cliUsage + "\n",
 			wantExit:   cliExitUsage,
 		},
 	} {
@@ -65,13 +59,9 @@ func TestCLIBinaryArgsAndHelp(t *testing.T) {
 	}
 }
 
-func TestCLIBinaryRemoteSnapshotAndErrors(t *testing.T) {
+func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 	binary := buildCLIBinary(t)
 	snapshot := testRemoteSnapshot(t)
-	expectedSnapshot, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatalf("encode expected snapshot: %v", err)
-	}
 
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet || request.URL.Path != snapshotPath {
@@ -84,29 +74,22 @@ func TestCLIBinaryRemoteSnapshotAndErrors(t *testing.T) {
 	}))
 	defer snapshotServer.Close()
 
-	result := runCLIBinary(t, binary, "snapshot", "--url", snapshotServer.URL)
-	if result.exitCode != cliExitSuccess || result.stdout != string(expectedSnapshot)+"\n" || result.stderr != "" {
+	result := runCLIBinary(t, binary, "status", "--url", snapshotServer.URL)
+	if result.exitCode != cliExitSuccess || !strings.Contains(result.stdout, "State:                    running") || result.stderr != "" {
 		t.Fatalf("success stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
-	}
-	var actual runtimeStatus
-	if err := json.Unmarshal([]byte(result.stdout), &actual); err != nil {
-		t.Fatalf("decode CLI stdout: %v", err)
-	}
-	if actual.Run.State != runStatePaused {
-		t.Fatalf("snapshot state = %q, want %q", actual.Run.State, runStatePaused)
 	}
 
 	httpFailure := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		http.Error(writer, "conflict", http.StatusConflict)
 	}))
 	defer httpFailure.Close()
-	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "snapshot", "--url", httpFailure.URL), cliExitHTTP, "HTTP 409", "")
+	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", httpFailure.URL), cliExitHTTP, "HTTP 409", "")
 
 	malformed := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(`{"unexpected":true}`))
 	}))
 	defer malformed.Close()
-	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "snapshot", "--url", malformed.URL), cliExitRemote, "decode snapshot", "")
+	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", malformed.URL), cliExitRemote, "decode snapshot", "")
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -116,10 +99,10 @@ func TestCLIBinaryRemoteSnapshotAndErrors(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatalf("release network failure address: %v", err)
 	}
-	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "snapshot", "--url", networkURL), cliExitRemote, "GET /api/loadgen/snapshot", "")
+	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", networkURL), cliExitRemote, "GET /api/loadgen/snapshot", "")
 }
 
-func TestCLIBinaryServeRunSmoke(t *testing.T) {
+func TestCLIBinaryServeStartsDeliveryAutomatically(t *testing.T) {
 	binary := buildCLIBinary(t)
 	ensureServePortAvailable(t)
 
@@ -139,12 +122,8 @@ func TestCLIBinaryServeRunSmoke(t *testing.T) {
 
 	configPath := writeBlackBoxConfig(t, receiver.URL+"/internal/ingest")
 	baseURL := startCLIServe(t, binary, configPath)
-	waitForCLISnapshotState(t, baseURL, runStateIdle)
+	waitForHTTPSnapshotState(t, baseURL, runStateRunning)
 
-	runResult := runCLIBinary(t, binary, "run", "--url", baseURL)
-	if runResult.exitCode != cliExitSuccess || runResult.stderr != "" || runResult.stdout != "action=run state=running\n" {
-		t.Fatalf("stdout/stderr/exit = %q / %q / %d", runResult.stdout, runResult.stderr, runResult.exitCode)
-	}
 	select {
 	case <-received:
 	case <-time.After(blackBoxTimeout):
@@ -243,7 +222,7 @@ func writeBlackBoxConfig(t *testing.T, senderURL string) string {
 	return configPath
 }
 
-func waitForCLISnapshotState(t *testing.T, baseURL string, want runState) {
+func waitForHTTPSnapshotState(t *testing.T, baseURL string, want runState) {
 	t.Helper()
 	deadline := time.Now().Add(blackBoxTimeout)
 	client := &http.Client{Timeout: time.Second}

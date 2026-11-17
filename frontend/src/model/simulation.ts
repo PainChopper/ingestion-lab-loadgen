@@ -27,21 +27,14 @@ export interface SimulationConfig {
   readerWorkers: number
   senderWorkers: number
   requestedTps: number
-  throttlerInstalled: boolean
   readBatchSize: number
   httpTimeoutMs: number
   targetDelayMs: number
   targetErrorRatePercent: number
 }
 
-export interface CapacityTelemetry {
-  readonly applied: number
-  readonly preview: number | null
-  readonly pending: number | null
-}
-
 export interface ChannelTelemetry {
-  readonly capacity: CapacityTelemetry
+  readonly capacity: number
   readonly sentBatchesTotal: number
   readonly sentTransactionsTotal: number
   readonly receivedBatchesTotal: number
@@ -82,7 +75,7 @@ export interface HttpTelemetry {
 }
 
 export interface SenderTelemetry {
-  readonly workers: CapacityTelemetry
+  readonly liveWorkers: number
   readonly workerStates: WorkerStateCounts
   readonly drainingWorkerStates: WorkerStateCounts
   readonly retryAttemptsStartedTotal: number
@@ -254,9 +247,7 @@ export function deterministicRetryDelayMs(
 class StatefulChannel<TItem> {
   private readonly items: TItem[] = []
   private readonly transactionsOf: (item: TItem) => number
-  private appliedCapacity: number
-  private previewCapacity: number | null = null
-  private pendingCapacity: number | null = null
+  readonly capacity: number
   private blockedForMs = 0
 
   sentBatchesTotal = 0
@@ -271,7 +262,7 @@ class StatefulChannel<TItem> {
     capacity: number,
     transactionsOf: (item: TItem) => number,
   ) {
-    this.appliedCapacity = capacity
+    this.capacity = capacity
     this.transactionsOf = transactionsOf
   }
 
@@ -286,37 +277,8 @@ class StatefulChannel<TItem> {
     )
   }
 
-  get capacity(): CapacityTelemetry {
-    return {
-      applied: this.appliedCapacity,
-      preview: this.previewCapacity,
-      pending: this.pendingCapacity,
-    }
-  }
-
   get oldestBlockedSenderMs(): number {
     return this.blockedForMs
-  }
-
-  requestCapacity(capacity: number): boolean {
-    if (
-      capacity === this.appliedCapacity &&
-      this.previewCapacity === null &&
-      this.pendingCapacity === null
-    ) {
-      return false
-    }
-
-    if (capacity >= this.depthBatches) {
-      this.appliedCapacity = capacity
-      this.previewCapacity = null
-      this.pendingCapacity = null
-      return true
-    }
-
-    this.previewCapacity = capacity
-    this.pendingCapacity = capacity
-    return true
   }
 
   peek(): TItem | null {
@@ -324,7 +286,7 @@ class StatefulChannel<TItem> {
   }
 
   send(item: TItem, activity: ChannelActivity): boolean {
-    if (this.appliedCapacity === 0 || this.depthBatches >= this.appliedCapacity) {
+    if (this.capacity === 0 || this.depthBatches >= this.capacity) {
       return false
     }
     this.items.push(item)
@@ -336,7 +298,6 @@ class StatefulChannel<TItem> {
     const item = this.items.shift()
     if (item === undefined) return null
     this.recordOutput(item, activity)
-    this.applyPendingCapacity()
     return item
   }
 
@@ -362,7 +323,6 @@ class StatefulChannel<TItem> {
   telemetry(
     activity: ChannelActivity,
     rateSeconds: number,
-    running: boolean,
   ): ChannelTelemetry {
     const inputBatchesPerSecond =
       rateSeconds === 0 ? 0 : activity.inputBatches / rateSeconds
@@ -372,13 +332,11 @@ class StatefulChannel<TItem> {
       rateSeconds === 0 ? 0 : activity.inputTransactions / rateSeconds
     const outputTransactionsPerSecond =
       rateSeconds === 0 ? 0 : activity.outputTransactions / rateSeconds
-    const trend: ChannelTrend = !running
-      ? 'steady'
-      : inputTransactionsPerSecond > outputTransactionsPerSecond
-        ? 'rising'
-        : inputTransactionsPerSecond < outputTransactionsPerSecond
-          ? 'falling'
-          : 'steady'
+    const trend: ChannelTrend = inputTransactionsPerSecond > outputTransactionsPerSecond
+      ? 'rising'
+      : inputTransactionsPerSecond < outputTransactionsPerSecond
+        ? 'falling'
+        : 'steady'
     return {
       capacity: this.capacity,
       sentBatchesTotal: this.sentBatchesTotal,
@@ -387,34 +345,17 @@ class StatefulChannel<TItem> {
       receivedTransactionsTotal: this.receivedTransactionsTotal,
       depthBatches: this.depthBatches,
       bufferedTransactions: this.bufferedTransactions,
-      handoffBatches: running ? activity.handoffBatches : 0,
+      handoffBatches: activity.handoffBatches,
       handoffBatchesTotal: this.handoffBatchesTotal,
-      blockedSenders: running ? this.blockedSenders : 0,
-      oldestBlockedSenderMs: running ? this.oldestBlockedSenderMs : 0,
+      blockedSenders: this.blockedSenders,
+      oldestBlockedSenderMs: this.oldestBlockedSenderMs,
       blockedMsTotal: this.blockedMsTotal,
-      inputBatchesPerSecond: running ? inputBatchesPerSecond : 0,
-      outputBatchesPerSecond: running ? outputBatchesPerSecond : 0,
-      inputTransactionsPerSecond: running ? inputTransactionsPerSecond : 0,
-      outputTransactionsPerSecond: running ? outputTransactionsPerSecond : 0,
+      inputBatchesPerSecond: inputBatchesPerSecond,
+      outputBatchesPerSecond: outputBatchesPerSecond,
+      inputTransactionsPerSecond: inputTransactionsPerSecond,
+      outputTransactionsPerSecond: outputTransactionsPerSecond,
       trend,
     }
-  }
-
-  resetRuntime(): void {
-    this.items.length = 0
-    if (this.pendingCapacity !== null) {
-      this.appliedCapacity = this.pendingCapacity
-    }
-    this.previewCapacity = null
-    this.pendingCapacity = null
-    this.blockedForMs = 0
-    this.sentBatchesTotal = 0
-    this.sentTransactionsTotal = 0
-    this.receivedBatchesTotal = 0
-    this.receivedTransactionsTotal = 0
-    this.handoffBatchesTotal = 0
-    this.blockedMsTotal = 0
-    this.blockedSenders = 0
   }
 
   private recordInput(item: TItem, activity: ChannelActivity): void {
@@ -433,16 +374,6 @@ class StatefulChannel<TItem> {
     activity.outputTransactions += transactions
   }
 
-  private applyPendingCapacity(): void {
-    if (
-      this.pendingCapacity !== null &&
-      this.depthBatches <= this.pendingCapacity
-    ) {
-      this.appliedCapacity = this.pendingCapacity
-      this.previewCapacity = null
-      this.pendingCapacity = null
-    }
-  }
 }
 
 export class FixedStepSimulation {
@@ -538,16 +469,13 @@ export class FixedStepSimulation {
     if (this.activities.length > RATE_WINDOW_STEPS) this.activities.shift()
   }
 
-  updateConfig(values: Partial<SimulationConfig>): void {
+  updateConfig(values: Partial<Pick<SimulationConfig, 'readerWorkers' | 'senderWorkers' | 'requestedTps'>>): void {
     const senderWorkers = values.senderWorkers
     Object.assign(this.config, values)
     if (senderWorkers !== undefined) {
       this.requestSenderWorkerCount(senderWorkers)
     }
-    if (
-      values.requestedTps === 0 ||
-      values.throttlerInstalled !== undefined
-    ) {
+    if (values.requestedTps === 0) {
       this.throttlerTokens = 0
     }
     this.readerTransactionCredit = Math.min(
@@ -556,57 +484,11 @@ export class FixedStepSimulation {
     )
   }
 
-  requestChannelCapacity(channel: 1 | 2, capacity: number): boolean {
-    return (channel === 1 ? this.readerChannel : this.senderChannel).requestCapacity(capacity)
-  }
-
-  clearInstantaneousTelemetry(): void {
-    this.activities.length = 0
-  }
-
-  reset(): void {
-    this.readerChannel.resetRuntime()
-    this.senderChannel.resetRuntime()
-    this.activities.length = 0
-    this.workers = Array.from(
-      { length: this.config.senderWorkers },
-      (_, ordinal) => createWorker(ordinal),
-    )
-    this.nextWorkerIndex = 0
-    this.readerTransactionCredit = 0
-    this.throttlerTokens = 0
-    this.pendingThrottledBatch = null
-    this.nextBatchSequence = 0
-    this.failureCredit = 0
-    this.latestStatusCode = null
-    this.lastOutcome = null
-    this.latestLatencyMs = null
-    this.latestResponseLatencyMs = null
-    this.requestStartedTotal = 0
-    this.retryAttemptStartedTotal = 0
-    this.requestCompletedTotal = 0
-    this.requestSucceededTotal = 0
-    this.requestFailedTotal = 0
-    this.responseRejectedTotal = 0
-    this.requestTimedOutTotal = 0
-    this.networkErrorTotal = 0
-    this.http503ResponseTotal = 0
-    this.successfulTransactionsTotal = 0
-    this.failedAttemptTransactionsTotal = 0
-    this.terminalFailedBatchesTotal = 0
-    this.terminalFailedTransactionsTotal = 0
-    this.ambiguousTimeoutTransactionsTotal = 0
-    this.duplicateRiskTransactionsTotal = 0
-    this.ambiguousTerminalTransactionsTotal = 0
-    this.elapsedMs = 0
-    this.limitedMs = 0
-  }
-
-  telemetry(running: boolean): SimulationTelemetry {
+  telemetry(): SimulationTelemetry {
     const aggregate = this.aggregateActivity()
     const rateSeconds = RATE_WINDOW_STEPS * FIXED_STEP_MS / 1_000
-    const readerChannel = this.readerChannel.telemetry(aggregate.readerChannel, rateSeconds, running)
-    const senderChannel = this.senderChannel.telemetry(aggregate.senderChannel, rateSeconds, running)
+    const readerChannel = this.readerChannel.telemetry(aggregate.readerChannel, rateSeconds)
+    const senderChannel = this.senderChannel.telemetry(aggregate.senderChannel, rateSeconds)
     const divisor = rateSeconds === 0 ? 1 : rateSeconds
     const { active: workerStates, draining: drainingWorkerStates } =
       this.workerStateCounts()
@@ -618,34 +500,18 @@ export class FixedStepSimulation {
       readerCapacityTps: this.readerCapacityTps,
       readerTransactionsPerSecond: readerChannel.inputTransactionsPerSecond,
       admittedTransactionsPerSecond: readerChannel.outputTransactionsPerSecond,
-      attemptedTransactionsPerSecond: running
-        ? aggregate.httpStartedTransactions / divisor
-        : 0,
-      acceptedTransactionsPerSecond: running
-        ? aggregate.httpSucceededTransactions / divisor
-        : 0,
-      rejectedTransactionsPerSecond: running
-        ? aggregate.httpRejectedTransactions / divisor
-        : 0,
+      attemptedTransactionsPerSecond: aggregate.httpStartedTransactions / divisor,
+      acceptedTransactionsPerSecond: aggregate.httpSucceededTransactions / divisor,
+      rejectedTransactionsPerSecond: aggregate.httpRejectedTransactions / divisor,
       readerChannel,
       senderChannel,
       sender: {
-        workers: {
-          applied: this.workers.length,
-          preview: null,
-          pending: this.workers.length === this.config.senderWorkers
-            ? null
-            : this.config.senderWorkers,
-        },
+        liveWorkers: this.workers.length,
         workerStates,
         drainingWorkerStates,
         retryAttemptsStartedTotal: this.retryAttemptStartedTotal,
-        retryAttemptedTransactionsPerSecond: running
-          ? aggregate.httpRetryStartedTransactions / divisor
-          : 0,
-        terminalFailedTransactionsPerSecond: running
-          ? aggregate.terminalFailedTransactions / divisor
-          : 0,
+        retryAttemptedTransactionsPerSecond: aggregate.httpRetryStartedTransactions / divisor,
+        terminalFailedTransactionsPerSecond: aggregate.terminalFailedTransactions / divisor,
         terminalFailedBatchesTotal: this.terminalFailedBatchesTotal,
         terminalFailedTransactionsTotal: this.terminalFailedTransactionsTotal,
         ambiguousTimeoutTransactionsTotal:
@@ -666,18 +532,10 @@ export class FixedStepSimulation {
         failedAttemptTransactionsTotal: this.failedAttemptTransactionsTotal,
         inFlightRequests:
           workerStates.inFlight + drainingWorkerStates.inFlight,
-        startedTransactionsPerSecond: running
-          ? aggregate.httpStartedTransactions / divisor
-          : 0,
-        completedTransactionsPerSecond: running
-          ? aggregate.httpCompletedTransactions / divisor
-          : 0,
-        succeededTransactionsPerSecond: running
-          ? aggregate.httpSucceededTransactions / divisor
-          : 0,
-        rejectedTransactionsPerSecond: running
-          ? aggregate.httpRejectedTransactions / divisor
-          : 0,
+        startedTransactionsPerSecond: aggregate.httpStartedTransactions / divisor,
+        completedTransactionsPerSecond: aggregate.httpCompletedTransactions / divisor,
+        succeededTransactionsPerSecond: aggregate.httpSucceededTransactions / divisor,
+        rejectedTransactionsPerSecond: aggregate.httpRejectedTransactions / divisor,
         latestStatusCode: this.latestStatusCode,
         lastOutcome: this.lastOutcome,
         latestLatencyMs: this.latestLatencyMs,
@@ -851,10 +709,6 @@ export class FixedStepSimulation {
   }
 
   private refillThrottlerTokens(): void {
-    if (this.config.throttlerInstalled === false) {
-      this.throttlerTokens = 0
-      return
-    }
     const refill = this.config.requestedTps * FIXED_STEP_MS / 1_000
     const headTransactions = this.readerChannel.peek()?.transactions ??
       this.config.readBatchSize
@@ -882,7 +736,7 @@ export class FixedStepSimulation {
     const batch = this.pendingThrottledBatch
     if (batch === null) return false
 
-    if (this.senderChannel.capacity.applied === 0) {
+    if (this.senderChannel.capacity === 0) {
       const worker = this.nextIdleWorker()
       if (worker === null) return true
       this.senderChannel.handoff(batch, activity.senderChannel)
@@ -909,7 +763,6 @@ export class FixedStepSimulation {
 
   private receiveReaderChannel(activity: StepActivity): AdmissionResult {
     const availableBatches = this.readerChannel.depthBatches
-    const installed = this.config.throttlerInstalled === true
     for (let batchIndex = 0; batchIndex < availableBatches; batchIndex += 1) {
       if (this.pendingThrottledBatch !== null) {
         const senderChannelBlocked = this.flushThrottledBatch(activity)
@@ -918,13 +771,13 @@ export class FixedStepSimulation {
 
       const batch = this.readerChannel.peek()
       if (batch === null) break
-      if (installed && this.throttlerTokens < batch.transactions) {
+      if (this.throttlerTokens < batch.transactions) {
         return { senderChannelBlocked: false, tokenLimited: true }
       }
 
       const received = this.readerChannel.receive(activity.readerChannel)
       if (received === null) break
-      if (installed) this.throttlerTokens -= received.transactions
+      this.throttlerTokens -= received.transactions
       this.pendingThrottledBatch = received
       const senderChannelBlocked = this.flushThrottledBatch(activity)
       if (senderChannelBlocked) return { senderChannelBlocked: true, tokenLimited: false }
@@ -948,7 +801,7 @@ export class FixedStepSimulation {
     }
 
     while (this.readerTransactionCredit >= transactions) {
-      if (this.readerChannel.capacity.applied === 0) {
+      if (this.readerChannel.capacity === 0) {
         if (this.pendingThrottledBatch !== null) {
           return {
             readerChannelBlocked: true,
@@ -956,10 +809,7 @@ export class FixedStepSimulation {
             tokenLimited: false,
           }
         }
-        if (
-          this.config.throttlerInstalled === true &&
-          this.throttlerTokens < transactions
-        ) {
+        if (this.throttlerTokens < transactions) {
           return {
             readerChannelBlocked: true,
             senderChannelBlocked: false,
@@ -968,9 +818,7 @@ export class FixedStepSimulation {
         }
         const batch = this.createPipelineBatch(transactions)
         this.readerChannel.handoff(batch, activity.readerChannel)
-        if (this.config.throttlerInstalled === true) {
-          this.throttlerTokens -= transactions
-        }
+        this.throttlerTokens -= transactions
         this.readerTransactionCredit -= transactions
         this.pendingThrottledBatch = batch
         const senderChannelBlocked = this.flushThrottledBatch(activity)
@@ -984,7 +832,7 @@ export class FixedStepSimulation {
       } else {
         if (
           this.readerChannel.depthBatches >=
-          this.readerChannel.capacity.applied
+          this.readerChannel.capacity
         ) {
           return {
             readerChannelBlocked: true,

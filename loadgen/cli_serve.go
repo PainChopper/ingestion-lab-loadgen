@@ -1,27 +1,24 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 const cliUsage = `usage:
-  ingestion-lab-loadgen serve [--config <path>] [--run]
-  ingestion-lab-loadgen snapshot [--url <url>]
+  ingestion-lab-loadgen serve [--config <path>]
   ingestion-lab-loadgen status [--url <url>]
-  ingestion-lab-loadgen run [--url <url>]
-  ingestion-lab-loadgen pause [--url <url>]
-  ingestion-lab-loadgen resume [--url <url>]
-  ingestion-lab-loadgen reset [--url <url>]
   ingestion-lab-loadgen set reader-workers <N> [--url <url>]
   ingestion-lab-loadgen set sender-workers <N> [--url <url>]
   ingestion-lab-loadgen set requested-tps <N> [--url <url>]
   ingestion-lab-loadgen set throttler-installed <true|false> [--url <url>]`
 
 type cliCommand struct {
-	configPath    string
-	showUsage     bool
-	runAfterStart bool
-	remoteAction  string
-	remoteURL     string
-	remoteSet     remoteSetCommand
+	configPath   string
+	showUsage    bool
+	remoteAction string
+	remoteURL    string
+	remoteSet    remoteSetCommand
 }
 
 func parseCLI(args []string) (cliCommand, error) {
@@ -32,16 +29,13 @@ func parseCLI(args []string) (cliCommand, error) {
 		return cliCommand{showUsage: true}, nil
 	}
 
-	if isRemoteCLIAction(args[0]) {
+	if args[0] == "status" {
 		return parseRemoteCLI(args)
 	}
 	if args[0] == "set" {
 		return parseSetCLI(args)
 	}
 	if args[0] != "serve" {
-		if len(args) == 1 {
-			return cliCommand{configPath: args[0]}, nil
-		}
 		return cliCommand{}, fmt.Errorf("unexpected command %q", args[0])
 	}
 
@@ -55,16 +49,11 @@ func parseCLI(args []string) (cliCommand, error) {
 			}
 			return cliCommand{}, fmt.Errorf("invalid serve arguments")
 		case "--config":
-			if command.configPath != "" || index+1 >= len(args) || args[index+1] == "" {
+			if command.configPath != "" || index+1 >= len(args) || args[index+1] == "" || strings.HasPrefix(args[index+1], "-") {
 				return cliCommand{}, fmt.Errorf("invalid serve arguments: --config requires one non-empty path")
 			}
 			index++
 			command.configPath = args[index]
-		case "--run":
-			if command.runAfterStart {
-				return cliCommand{}, fmt.Errorf("--run may be specified once")
-			}
-			command.runAfterStart = true
 		default:
 			return cliCommand{}, fmt.Errorf("unexpected argument %q", args[index])
 		}

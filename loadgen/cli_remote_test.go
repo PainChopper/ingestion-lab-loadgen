@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,14 +21,13 @@ func TestParseRemoteCLI(t *testing.T) {
 		wantHelp   bool
 		wantErr    bool
 	}{
-		{name: "default snapshot", args: []string{"snapshot"}, wantAction: "snapshot", wantURL: defaultCLIBaseURL},
-		{name: "run custom URL", args: []string{"run", "--url", "https://example.test/"}, wantAction: "run", wantURL: "https://example.test"},
-		{name: "remote help", args: []string{"pause", "--help"}, wantAction: "pause", wantURL: defaultCLIBaseURL, wantHelp: true},
-		{name: "unexpected operand", args: []string{"reset", "now"}, wantErr: true},
-		{name: "missing URL", args: []string{"run", "--url"}, wantErr: true},
-		{name: "path URL", args: []string{"run", "--url", "http://example.test/base"}, wantErr: true},
-		{name: "query URL", args: []string{"run", "--url", "http://example.test/?x=1"}, wantErr: true},
-		{name: "userinfo URL", args: []string{"run", "--url", "http://user@example.test"}, wantErr: true},
+		{name: "status custom URL", args: []string{"status", "--url", "https://example.test/"}, wantAction: "status", wantURL: "https://example.test"},
+		{name: "remote help", args: []string{"status", "--help"}, wantAction: "status", wantURL: defaultCLIBaseURL, wantHelp: true},
+		{name: "unexpected operand", args: []string{"status", "now"}, wantErr: true},
+		{name: "missing URL", args: []string{"status", "--url"}, wantErr: true},
+		{name: "path URL", args: []string{"status", "--url", "http://example.test/base"}, wantErr: true},
+		{name: "query URL", args: []string{"status", "--url", "http://example.test/?x=1"}, wantErr: true},
+		{name: "userinfo URL", args: []string{"status", "--url", "http://user@example.test"}, wantErr: true},
 	}
 
 	for _, test := range tests {
@@ -69,7 +67,6 @@ func TestParseSetCLI(t *testing.T) {
 		{name: "throttler true", args: []string{"set", "throttler-installed", "true"}, wantTarget: "throttler-installed", wantAction: "set-throttler-installed", wantValue: true, wantURL: defaultCLIBaseURL},
 		{name: "bool alias", args: []string{"set", "throttler-installed", "1"}, wantErr: true},
 		{name: "old value", args: []string{"set", "throttler-installed", "bypass"}, wantErr: true},
-		{name: "old target", args: []string{"set", "throttler-mode", "false"}, wantErr: true},
 		{name: "set help", args: []string{"set", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
 		{name: "target help", args: []string{"set", "reader-workers", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
 		{name: "unknown target", args: []string{"set", "other", "1"}, wantErr: true},
@@ -92,116 +89,6 @@ func TestParseSetCLI(t *testing.T) {
 			}
 			if command.remoteAction != "set" || command.remoteSet.target != test.wantTarget || command.remoteSet.requestAction != test.wantAction || command.remoteSet.value != test.wantValue || command.remoteURL != test.wantURL || command.showUsage != test.wantHelp {
 				t.Fatalf("command = %+v", command)
-			}
-		})
-	}
-}
-
-func TestParseServeRun(t *testing.T) {
-	command, err := parseCLI([]string{"serve", "--config", "custom.toml", "--run"})
-	if err != nil {
-		t.Fatalf("parseCLI: %v", err)
-	}
-	if command.configPath != "custom.toml" || !command.runAfterStart {
-		t.Fatalf("command = %+v", command)
-	}
-	if _, err := parseCLI([]string{"serve", "--run", "--run"}); err == nil {
-		t.Fatal("duplicate --run accepted")
-	}
-}
-
-func TestRunRemoteCLIMappingAndOutput(t *testing.T) {
-	snapshot := testRemoteSnapshot(t)
-	encodedSnapshot, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var requests []struct {
-		method string
-		path   string
-		action string
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		entry := struct {
-			method string
-			path   string
-			action string
-		}{method: request.Method, path: request.URL.Path}
-		if request.Method == http.MethodPost {
-			if got, want := request.Header.Get("Content-Type"), "application/json"; got != want {
-				t.Fatalf("Content-Type = %q, want %q", got, want)
-			}
-			data, err := io.ReadAll(request.Body)
-			if err != nil {
-				t.Fatalf("read command: %v", err)
-			}
-			if got, want := string(data), `{"action":"run"}`; got != want {
-				t.Fatalf("command body = %q, want %q", got, want)
-			}
-			var body commandRequest
-			if err := json.Unmarshal(data, &body); err != nil {
-				t.Fatalf("decode command: %v", err)
-			}
-			entry.action = body.Action
-		}
-		requests = append(requests, entry)
-		if request.URL.Path == snapshotPath {
-			writer.Header().Set("Content-Type", "application/json")
-			_, _ = writer.Write(encodedSnapshot)
-		}
-	}))
-	defer server.Close()
-
-	var output bytes.Buffer
-	if err := runRemoteCLI(context.Background(), cliCommand{remoteAction: "resume", remoteURL: server.URL}, &output); err != nil {
-		t.Fatalf("runRemoteCLI: %v", err)
-	}
-	if got, want := output.String(), "action=resume state=paused\n"; got != want {
-		t.Fatalf("stdout = %q, want %q", got, want)
-	}
-	if len(requests) != 2 || requests[0].method != http.MethodPost || requests[0].path != commandsPath || requests[0].action != "run" || requests[1].method != http.MethodGet || requests[1].path != snapshotPath {
-		t.Fatalf("requests = %+v", requests)
-	}
-}
-
-func TestRunRemoteCLIMapsLifecycleActions(t *testing.T) {
-	snapshot := testRemoteSnapshot(t)
-	encodedSnapshot, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, test := range []struct {
-		action     string
-		wantAction string
-	}{
-		{action: "run", wantAction: "run"},
-		{action: "pause", wantAction: "pause"},
-		{action: "resume", wantAction: "run"},
-		{action: "reset", wantAction: "reset"},
-	} {
-		t.Run(test.action, func(t *testing.T) {
-			var action string
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				if request.Method == http.MethodPost {
-					var body commandRequest
-					if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-						t.Fatalf("decode command: %v", err)
-					}
-					action = body.Action
-					return
-				}
-				_, _ = writer.Write(encodedSnapshot)
-			}))
-			defer server.Close()
-
-			var output bytes.Buffer
-			if err := runRemoteCLI(context.Background(), cliCommand{remoteAction: test.action, remoteURL: server.URL}, &output); err != nil {
-				t.Fatalf("runRemoteCLI: %v", err)
-			}
-			if action != test.wantAction {
-				t.Fatalf("request action = %q, want %q", action, test.wantAction)
 			}
 		})
 	}
@@ -251,7 +138,7 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 			if requestBody.Action != test.requestAction || string(requestBody.Value) != mustMarshalJSON(t, test.value) {
 				t.Fatalf("request = %+v", requestBody)
 			}
-			wantOutput := "action=set target=" + test.target + " value=" + mustFormatValue(test.value) + " state=paused\n"
+			wantOutput := "action=set target=" + test.target + " value=" + mustFormatValue(test.value) + " state=running\n"
 			if output.String() != wantOutput {
 				t.Fatalf("stdout = %q, want %q", output.String(), wantOutput)
 			}
@@ -278,7 +165,7 @@ func TestRunRemoteCLISetRejectsMismatchedVerificationSnapshot(t *testing.T) {
 	}
 }
 
-func TestRunRemoteCLISnapshotStrictlyValidatesSchema(t *testing.T) {
+func TestRunRemoteCLIStatusStrictlyValidatesSchema(t *testing.T) {
 	snapshot := testRemoteSnapshot(t)
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
@@ -299,7 +186,7 @@ func TestRunRemoteCLISnapshotStrictlyValidatesSchema(t *testing.T) {
 	defer server.Close()
 
 	var output bytes.Buffer
-	err = runRemoteCLI(context.Background(), cliCommand{remoteAction: "snapshot", remoteURL: server.URL}, &output)
+	err = runRemoteCLI(context.Background(), cliCommand{remoteAction: "status", remoteURL: server.URL}, &output)
 	if err == nil || !strings.Contains(err.Error(), "decode snapshot") {
 		t.Fatalf("runRemoteCLI error = %v", err)
 	}
@@ -461,7 +348,7 @@ func TestDecodeStrictSnapshotInitialContract(t *testing.T) {
 
 func TestRunCLIExitCodes(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if got := runCLI([]string{"run", "--url", "ftp://example.test"}, &stdout, &stderr); got != cliExitUsage {
+	if got := runCLI([]string{"status", "--url", "ftp://example.test"}, &stdout, &stderr); got != cliExitUsage {
 		t.Fatalf("invalid URL exit = %d, want %d", got, cliExitUsage)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -470,7 +357,7 @@ func TestRunCLIExitCodes(t *testing.T) {
 	defer server.Close()
 	stdout.Reset()
 	stderr.Reset()
-	if got := runCLI([]string{"run", "--url", server.URL}, &stdout, &stderr); got != cliExitHTTP {
+	if got := runCLI([]string{"set", "requested-tps", "0", "--url", server.URL}, &stdout, &stderr); got != cliExitHTTP {
 		t.Fatalf("HTTP exit = %d, want %d", got, cliExitHTTP)
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "HTTP 409") {
@@ -529,7 +416,7 @@ func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if got := runCLI([]string{"snapshot", "--url", test.url}, &stdout, &stderr); got != cliExitRemote {
+			if got := runCLI([]string{"status", "--url", test.url}, &stdout, &stderr); got != cliExitRemote {
 				t.Fatalf("exit = %d, want %d", got, cliExitRemote)
 			}
 			if stdout.Len() != 0 || !strings.Contains(stderr.String(), test.wantStderr) {
@@ -542,7 +429,7 @@ func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
 func testRemoteSnapshot(t *testing.T) runtimeStatus {
 	t.Helper()
 	return runtimeStatus{
-		Run:    runtimeRunStatus{State: runStatePaused},
+		Run:    runtimeRunStatus{State: runStateRunning},
 		Config: runtimeConfigStatusFromConfig(testConfig(t)),
 	}
 }

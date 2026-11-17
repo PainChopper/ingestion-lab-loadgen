@@ -163,11 +163,10 @@ export interface PipelineChannelGeometry extends ChannelCableEndpoints {
     readonly throughputY: number
     readonly depthY: number
     readonly waitingY: number
-    readonly requestY: number
   }
 }
 
-export interface PipelineBatchControlGeometry {
+export interface PipelineBatchLabelGeometry {
   readonly anchor: Point
   readonly guard: FixedActorBounds
 }
@@ -180,7 +179,7 @@ export const PIPELINE_BATCH_CONTROL = Object.freeze({
   guardHalfHeight: 28,
 })
 
-function batchControlGeometry(anchor: Point): PipelineBatchControlGeometry {
+function batchLabelGeometry(anchor: Point): PipelineBatchLabelGeometry {
   return {
     anchor,
     guard: {
@@ -345,7 +344,6 @@ function landscapeGeometry(contentWidth: number) {
         throughputY: 507,
         depthY: 528,
         waitingY: 548,
-        requestY: 566,
       },
     },
     'throttler-to-sender': {
@@ -356,7 +354,6 @@ function landscapeGeometry(contentWidth: number) {
         throughputY: 507,
         depthY: 528,
         waitingY: 548,
-        requestY: 566,
       },
     },
   }
@@ -369,7 +366,7 @@ function landscapeGeometry(contentWidth: number) {
       value: `0 0 ${width} ${PIPELINE_VIEW_BOX.height}`,
     },
     stationDelta: delta,
-    batchControl: batchControlGeometry({
+    batchLabel: batchLabelGeometry({
       x: throttler.title.x,
       y: PIPELINE_BATCH_CONTROL.landscapeY,
     }),
@@ -598,7 +595,6 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
         throughputY: throttlerTop - 178,
         depthY: throttlerTop - 156,
         waitingY: throttlerTop - 134,
-        requestY: throttlerTop - 96,
       },
     },
     'throttler-to-sender': {
@@ -609,7 +605,6 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
         throughputY: senderTop - 178,
         depthY: senderTop - 156,
         waitingY: senderTop - 134,
-        requestY: senderTop - 96,
       },
     },
   }
@@ -622,7 +617,7 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       value: `0 0 480 ${viewBoxHeight}`,
     },
     stationDelta: 0,
-    batchControl: batchControlGeometry({
+    batchLabel: batchLabelGeometry({
       x: 240,
       y: throttlerTop - 50,
     }),

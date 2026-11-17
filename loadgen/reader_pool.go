@@ -35,6 +35,30 @@ type readerPoolSnapshot struct {
 	drainingBlockedWorkers int
 }
 
+type readerSource struct {
+	directory string
+	files     []string
+	readFile  func(*readerPool, *readerWorker, string) *readerSourceError
+}
+
+func discoverReaderSource(dataPath string) (readerSource, error) {
+	directory := readerSourceDirectory(dataPath)
+	files, err := filepath.Glob(dataPath)
+	if err != nil {
+		return readerSource{}, readerSourceError{
+			Category: "source", Operation: "glob", RelativePath: relativeSourcePath(directory, dataPath), Message: err.Error(),
+		}
+	}
+	if len(files) == 0 {
+		return readerSource{}, readerSourceError{
+			Category: "source", Operation: "glob", RelativePath: relativeSourcePath(directory, dataPath),
+			Message: "no files found matching pattern",
+		}
+	}
+	sort.Strings(files)
+	return readerSource{directory: directory, files: files, readFile: (*readerPool).readFile}, nil
+}
+
 // readerPool owns file admission. A file is assigned once to exactly one worker;
 // workers emit their locally completed batches directly to the reader channel.
 type readerPool struct {
@@ -50,10 +74,8 @@ type readerPool struct {
 	wg sync.WaitGroup
 	// Closes after pool cancellation and all workers have exited.
 	done chan struct{}
-	// Contains the sorted, immutable set of source Parquet paths.
-	files []string
-	// Is the configured source root used for relative diagnostics.
-	sourceDirectory string
+	// Contains the sorted, immutable source paths and how to read them.
+	source readerSource
 	// Records source paths currently claimed by a worker.
 	active map[string]bool
 	// Is the round-robin cursor into the source paths.
@@ -72,6 +94,8 @@ type readerPool struct {
 	desired int
 	// Prevents new work while the pool is shutting down.
 	stopping bool
+	// Closes at the end of admission; in-progress sends still use ctx.
+	readingDone chan struct{}
 	// Delivers exactly the first fatal source error to the event loop.
 	sourceErrors    chan readerSourceError
 	sourceErrorOnce sync.Once
@@ -80,45 +104,37 @@ type readerPool struct {
 
 func startReaderPool(
 	ctx context.Context,
-	dataPath string,
+	source readerSource,
 	batchSize, workers int,
 	batches chan<- []Transaction,
 	telemetry *readerTelemetry,
 	channel *channelTelemetry,
 	logger *zap.Logger,
-) (*readerPool, error) {
+) *readerPool {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	sourceDirectory := readerSourceDirectory(dataPath)
-	files, err := filepath.Glob(dataPath)
-	if err != nil {
-		return nil, readerSourceError{Category: "source", Operation: "glob", RelativePath: relativeSourcePath(sourceDirectory, dataPath), Message: err.Error()}
-	}
-	if len(files) == 0 {
-		return nil, readerSourceError{Category: "source", Operation: "glob", RelativePath: relativeSourcePath(sourceDirectory, dataPath), Message: "no files found matching pattern"}
-	}
-	sort.Strings(files)
 	poolCtx, cancel := context.WithCancel(ctx)
 	pool := &readerPool{
-		ctx: poolCtx, cancel: cancel, files: files, sourceDirectory: sourceDirectory, active: make(map[string]bool),
+		ctx: poolCtx, cancel: cancel, source: source, active: make(map[string]bool),
 		batchSize: batchSize, batches: batches, telemetry: telemetry, channel: channel,
 		workers: make([]*readerWorker, 0, workers), done: make(chan struct{}),
+		readingDone:  make(chan struct{}),
 		sourceErrors: make(chan readerSourceError, 1),
 		logger:       logger,
 	}
 	pool.available = sync.NewCond(&pool.mu)
 	pool.reconcile(workers)
 	go func() {
-		<-poolCtx.Done()
-		pool.mu.Lock()
-		pool.stopping = true
-		pool.available.Broadcast()
-		pool.mu.Unlock()
+		select {
+		case <-poolCtx.Done():
+			pool.stopReading()
+		case <-pool.readingDone:
+		}
 		pool.wg.Wait()
 		close(pool.done)
 	}()
-	return pool, nil
+	return pool
 }
 
 func (p *readerPool) reconcile(desired int) {
@@ -147,11 +163,27 @@ func (p *readerPool) reconcile(desired int) {
 
 func (p *readerPool) stop() <-chan struct{} {
 	p.cancel()
-	p.mu.Lock()
-	p.stopping = true
-	p.available.Broadcast()
-	p.mu.Unlock()
+	p.stopReading()
 	return p.done
+}
+
+func (p *readerPool) stopReading() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.stopping {
+		p.stopping = true
+		close(p.readingDone)
+		p.available.Broadcast()
+	}
+}
+
+func (p *readerPool) canRead() bool {
+	select {
+	case <-p.readingDone:
+		return false
+	default:
+		return p.ctx.Err() == nil
+	}
 }
 
 func (p *readerPool) runWorker(worker *readerWorker) {
@@ -171,8 +203,10 @@ func (p *readerPool) runWorker(worker *readerWorker) {
 		if !ok {
 			return
 		}
-		if err := p.readFile(worker, filePath); err != nil {
-			p.reportSourceError(*err)
+		if p.canRead() {
+			if err := p.source.readFile(p, worker, filePath); err != nil {
+				p.reportSourceError(*err)
+			}
 		}
 		p.mu.Lock()
 		p.releaseFileLocked(worker, filePath)
@@ -186,11 +220,7 @@ func (p *readerPool) runWorker(worker *readerWorker) {
 func (p *readerPool) reportSourceError(sourceError readerSourceError) {
 	p.sourceErrorOnce.Do(func() {
 		p.sourceErrors <- sourceError
-		p.cancel()
-		p.mu.Lock()
-		p.stopping = true
-		p.available.Broadcast()
-		p.mu.Unlock()
+		p.stopReading()
 	})
 }
 
@@ -223,9 +253,9 @@ func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
 		if worker.draining {
 			return "", false
 		}
-		for offset := range p.files {
-			index := (p.nextFile + offset) % len(p.files)
-			filePath := p.files[index]
+		for offset := range p.source.files {
+			index := (p.nextFile + offset) % len(p.source.files)
+			filePath := p.source.files[index]
 			if !p.active[filePath] {
 				p.active[filePath] = true
 				p.nextFile = index + 1
@@ -243,6 +273,9 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 	if err != nil {
 		return p.newReaderSourceError("open", filePath, err)
 	}
+	if !p.canRead() {
+		return p.closeResources(filePath, nil, file, nil)
+	}
 	p.logger.Debug("reader source opened", zap.String("event", "reader_source_opened"))
 	reader, err := openParquetReader(file)
 	if err != nil {
@@ -251,41 +284,39 @@ func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSour
 		}
 		return p.newReaderSourceError("open", filePath, err)
 	}
+	var sourceError *readerSourceError
+	if err := p.readBatches(worker, reader.Read); err != nil {
+		sourceError = p.newReaderSourceError("read", filePath, err)
+	} else if p.canRead() {
+		p.logger.Debug("reader source exhausted", zap.String("event", "reader_source_exhausted"))
+	}
+	return p.closeResources(filePath, reader, file, sourceError)
+}
+
+func (p *readerPool) readBatches(worker *readerWorker, read func([]Transaction) (int, error)) error {
 	rows := make([]Transaction, p.batchSize)
 	batch := make([]Transaction, 0, p.batchSize)
-	var sourceError *readerSourceError
-	batchSendStopped := false
-	for {
-		if p.ctx.Err() != nil {
-			break
-		}
-		n, err := reader.Read(rows[:p.batchSize-len(batch)])
+	for p.canRead() {
+		n, err := read(rows[:p.batchSize-len(batch)])
 		if n > 0 {
 			p.telemetry.recordRead(n)
 			var sent bool
 			batch, sent = p.appendRows(worker, batch, rows[:n])
 			if !sent {
-				batchSendStopped = true
-				break
+				return nil
 			}
 		}
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
-			sourceError = p.newReaderSourceError("read", filePath, err)
-			break
+			return err
 		}
 	}
-	if sourceError == nil && !batchSendStopped && p.ctx.Err() == nil && len(batch) > 0 {
-		if !p.sendBatch(worker, batch) {
-			batchSendStopped = true
-		}
+	if len(batch) > 0 {
+		p.sendBatch(worker, batch)
 	}
-	if sourceError == nil && !batchSendStopped && p.ctx.Err() == nil {
-		p.logger.Debug("reader source exhausted", zap.String("event", "reader_source_exhausted"))
-	}
-	return p.closeResources(filePath, reader, file, sourceError)
+	return nil
 }
 
 func openParquetReader(file *os.File) (reader *parquet.GenericReader[Transaction], err error) {
@@ -304,8 +335,10 @@ func (p *readerPool) closeResources(
 	sourceError *readerSourceError,
 ) *readerSourceError {
 	cancelled := p.ctx.Err() != nil
-	if err := reader.Close(); sourceError == nil && !cancelled && err != nil {
-		sourceError = p.newReaderSourceError("reader-close", filePath, err)
+	if reader != nil {
+		if err := reader.Close(); sourceError == nil && !cancelled && err != nil {
+			sourceError = p.newReaderSourceError("reader-close", filePath, err)
+		}
 	}
 	if err := file.Close(); sourceError == nil && !cancelled && err != nil {
 		sourceError = p.newReaderSourceError("close", filePath, err)
@@ -317,7 +350,7 @@ func (p *readerPool) newReaderSourceError(operation, sourcePath string, err erro
 	return &readerSourceError{
 		Category:     "source",
 		Operation:    operation,
-		RelativePath: relativeSourcePath(p.sourceDirectory, sourcePath),
+		RelativePath: relativeSourcePath(p.source.directory, sourcePath),
 		Message:      err.Error(),
 	}
 }

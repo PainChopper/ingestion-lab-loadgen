@@ -15,7 +15,7 @@ import (
 
 func TestDeveloperRoutes(t *testing.T) {
 	requests := make(chan runtimeCommand, 1)
-	mux := newServeMux(requests, nil, testConfig(t), nil)
+	mux := newServeMux(runtimeRequests{commands: requests}, nil, testConfig(t), nil)
 	tests := []struct {
 		name        string
 		path        string
@@ -89,13 +89,14 @@ func TestOpenAPIContract(t *testing.T) {
 			}
 		}
 	}
-	checkLocalReferences(t, document, schemas)
+	responses := components["responses"].(map[string]any)
+	checkLocalReferences(t, document, schemas, responses)
 	checkCommandsSchema(t, paths[commandsPath].(map[string]any)["post"].(map[string]any), schemas)
 	checkSnapshotSchema(t, schemas)
-	checkResponseSemantics(t, paths, components["responses"].(map[string]any), schemas)
+	checkResponseSemantics(t, paths, responses, schemas)
 }
 
-func checkLocalReferences(t *testing.T, node any, schemas map[string]any) {
+func checkLocalReferences(t *testing.T, node any, schemas, responses map[string]any) {
 	t.Helper()
 	switch value := node.(type) {
 	case map[string]any:
@@ -103,21 +104,25 @@ func checkLocalReferences(t *testing.T, node any, schemas map[string]any) {
 			if len(value) != 1 {
 				t.Errorf("reference has ignored siblings: %v", value)
 			}
-			name := strings.TrimPrefix(reference, "#/components/schemas/")
-			if name == reference {
-				if reference != "#/components/responses/InvalidCommand" && reference != "#/components/responses/MethodNotAllowed" {
-					t.Errorf("unsupported reference %q", reference)
+			switch {
+			case strings.HasPrefix(reference, "#/components/schemas/"):
+				if _, ok := schemas[strings.TrimPrefix(reference, "#/components/schemas/")]; !ok {
+					t.Errorf("missing referenced schema %q", reference)
 				}
-			} else if _, ok := schemas[name]; !ok {
-				t.Errorf("missing schema %q", name)
+			case strings.HasPrefix(reference, "#/components/responses/"):
+				if _, ok := responses[strings.TrimPrefix(reference, "#/components/responses/")]; !ok {
+					t.Errorf("missing referenced response %q", reference)
+				}
+			default:
+				t.Errorf("unsupported reference %q", reference)
 			}
 		}
 		for _, child := range value {
-			checkLocalReferences(t, child, schemas)
+			checkLocalReferences(t, child, schemas, responses)
 		}
 	case []any:
 		for _, child := range value {
-			checkLocalReferences(t, child, schemas)
+			checkLocalReferences(t, child, schemas, responses)
 		}
 	}
 }
@@ -133,19 +138,15 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 		t.Errorf("discriminator propertyName = %v, want action", discriminator["propertyName"])
 	}
 	mapping := discriminator["mapping"].(map[string]any)
-	if len(branches) != 10 || len(examples) != 10 || len(mapping) != 10 {
-		t.Fatalf("branches/examples/mapping = %d/%d/%d, want 10", len(branches), len(examples), len(mapping))
+	if len(branches) != 4 || len(examples) != 4 || len(mapping) != 4 {
+		t.Fatalf("branches/examples/mapping = %d/%d/%d, want 4", len(branches), len(examples), len(mapping))
 	}
 	seen := map[string]bool{}
 	expected := map[string]runtimeCommand{
-		"run": {kind: cmdRun}, "pause": {kind: cmdPause}, "reset": {kind: cmdReset},
-		"set-read-batch-size":         {kind: cmdSetReadBatchSize, value: 1000},
-		"set-reader-workers":          {kind: cmdSetReaderWorkers, value: 2},
-		"set-reader-channel-capacity": {kind: cmdSetReaderChannelCapacity, value: 8192},
-		"set-sender-channel-capacity": {kind: cmdSetSenderChannelCapacity, value: 8192},
-		"set-requested-tps":           {kind: cmdSetRequestedTPS, value: 2000000},
-		"set-throttler-installed":     {kind: cmdSetThrottlerInstalled, installed: true},
-		"set-sender-workers":          {kind: cmdSetSenderWorkers, value: 32},
+		"set-reader-workers":      {kind: cmdSetReaderWorkers, value: 2},
+		"set-requested-tps":       {kind: cmdSetRequestedTPS, value: 2000000},
+		"set-throttler-installed": {kind: cmdSetThrottlerInstalled, installed: true},
+		"set-sender-workers":      {kind: cmdSetSenderWorkers, value: 32},
 	}
 	if got := stringSet(mapKeys(mapping)); !reflect.DeepEqual(got, stringSet(mapKeysFromRuntimeCommands(expected))) {
 		t.Errorf("discriminator actions = %v, want actions accepted by commandsHandler %v", mapKeys(mapping), mapKeysFromRuntimeCommands(expected))
@@ -194,10 +195,8 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 			if hasValue != requiresValue {
 				t.Errorf("%s example value presence = %t, required = %t", name, hasValue, requiresValue)
 			}
-			strict := action == "set-reader-workers" || action == "set-sender-channel-capacity" ||
-				action == "set-requested-tps" || action == "set-throttler-installed" || action == "set-sender-workers"
-			if (schema["additionalProperties"] == false) != strict {
-				t.Errorf("%s strict envelope = %v, want %t", name, schema["additionalProperties"], strict)
+			if schema["additionalProperties"] != false {
+				t.Errorf("%s does not reject unknown fields", name)
 			}
 			if requiresValue {
 				key, ok := schema["x-config-key"].(string)
@@ -253,7 +252,7 @@ func assertExampleDispatches(t *testing.T, body map[string]any, want runtimeComm
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		commandsHandler(requests, commandConfig, nil).ServeHTTP(recorder, request)
+		commandsHandler(runtimeRequests{commands: requests}, commandConfig).ServeHTTP(recorder, request)
 	}()
 	var got runtimeCommand
 	select {
@@ -514,8 +513,8 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 	t.Helper()
 	snapshot := paths[snapshotPath].(map[string]any)["get"].(map[string]any)["responses"].(map[string]any)
 	commands := paths[commandsPath].(map[string]any)["post"].(map[string]any)["responses"].(map[string]any)
-	if !reflect.DeepEqual(stringSet(mapKeys(snapshot)), stringSet([]string{"200", "405"})) ||
-		!reflect.DeepEqual(stringSet(mapKeys(commands)), stringSet([]string{"200", "400", "405", "409", "422"})) {
+	if !reflect.DeepEqual(stringSet(mapKeys(snapshot)), stringSet([]string{"200", "405", "503"})) ||
+		!reflect.DeepEqual(stringSet(mapKeys(commands)), stringSet([]string{"200", "400", "405", "409", "413", "503"})) {
 		t.Errorf("snapshot/commands response codes = %v / %v", mapKeys(snapshot), mapKeys(commands))
 	}
 	snapshotContent, ok := snapshot["200"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)
@@ -523,16 +522,16 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 		t.Error("snapshot 200 must reference the handler's Snapshot DTO")
 	} else {
 		fixtures := map[string]runtimeStatus{
-			"zero": {Run: runtimeRunStatus{State: runStateIdle}},
+			"zero": {Run: runtimeRunStatus{State: runStateStarting}},
 			"populated": {
-				Run:       runtimeRunStatus{State: runStatePaused, TotalTransactions: 46, ElapsedMs: 1234},
+				Run:       runtimeRunStatus{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
 				Reader:    runtimeReaderStatus{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
 				Throttler: runtimeThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, Installed: true},
 				Sender:    runtimeSenderStatus{Workers: 32},
 				Config:    runtimeConfigStatusFromConfig(testConfig(t)),
 			},
 			"source error": {
-				Run:    runtimeRunStatus{State: runStateIdle},
+				Run:    runtimeRunStatus{State: runStateFaulted},
 				Reader: runtimeReaderStatus{SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}
@@ -555,11 +554,15 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 			t.Errorf("commands %s promises a body", status)
 		}
 	}
-	runError, ok := commands["422"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)
-	if !ok || runError["schema"].(map[string]any)["$ref"] != "#/components/schemas/Error" {
-		t.Error("commands 422 must reference the run Error DTO")
-	} else if err := validateSchema(map[string]any{"error": "missing parquet"}, schemas["Error"].(map[string]any), schemas); err != nil {
-		t.Errorf("run error fixture does not satisfy Error: %v", err)
+	for _, operation := range []map[string]any{snapshot, commands} {
+		if operation["503"].(map[string]any)["$ref"] != "#/components/responses/RuntimeUnavailable" {
+			t.Errorf("503 does not document runtime unavailability: %v", operation["503"])
+		}
+	}
+	runSchema := schemas["RunStatus"].(map[string]any)["properties"].(map[string]any)["state"].(map[string]any)
+	wantStates := []string{string(runStateStarting), string(runStateRunning), string(runStateStopping), string(runStateFaulted)}
+	if got := anyStrings(runSchema["enum"].([]any)); !reflect.DeepEqual(stringSet(got), stringSet(wantStates)) {
+		t.Errorf("run state enum = %v, want %v", got, wantStates)
 	}
 	if _, ok := responses["InvalidCommand"].(map[string]any)["content"].(map[string]any)["text/plain"]; !ok {
 		t.Error("commands 400 has no plain-text error")
@@ -578,23 +581,23 @@ func TestSchemaExampleValidationRejectsContractDrift(t *testing.T) {
 		{
 			name: "action enum",
 			schema: map[string]any{"type": "object", "required": []any{"action"}, "properties": map[string]any{
-				"action": map[string]any{"type": "string", "enum": []any{"run"}},
+				"action": map[string]any{"type": "string", "enum": []any{"set-reader-workers"}},
 			}},
-			value: map[string]any{"action": "resume"},
+			value: map[string]any{"action": "unknown-action"},
 		},
 		{
 			name: "required property",
 			schema: map[string]any{"type": "object", "required": []any{"action", "value"}, "properties": map[string]any{
 				"action": map[string]any{"type": "string"}, "value": map[string]any{"type": "integer"},
 			}},
-			value: map[string]any{"action": "run"},
+			value: map[string]any{"action": "set-reader-workers"},
 		},
 		{
 			name: "unsupported keyword",
 			schema: map[string]any{"type": "object", "required": []any{"action"}, "properties": map[string]any{
 				"action": map[string]any{"type": "string"},
 			}, "patternProperties": map[string]any{}},
-			value: map[string]any{"action": "run"},
+			value: map[string]any{"action": "set-reader-workers"},
 		},
 	}
 	for _, test := range tests {

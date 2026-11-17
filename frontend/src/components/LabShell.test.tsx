@@ -1,4 +1,5 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { StrictMode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
@@ -13,34 +14,25 @@ afterEach(() => {
   adapter = null
   window.history.replaceState(null, '', '/')
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe('LabShell', () => {
-  it('dispatches the one on-canvas Batch command exactly once per click', async () => {
-    const user = userEvent.setup()
+  it('autostarts in StrictMode and advances the counters without input', () => {
+    vi.useFakeTimers()
     adapter = new SimulationAdapter()
-    const initial = adapter.getSnapshot()
-    const dispatch = vi.spyOn(adapter, 'dispatch')
-    const view = render(<LabShell adapter={adapter} />)
+    const view = render(<StrictMode><LabShell adapter={adapter} /></StrictMode>)
 
-    await user.click(screen.getByRole('button', { name: 'Increase Batch' }))
-    await waitFor(() => expect(dispatch.mock.calls.filter(
-      ([command]) => command.type === 'set-read-batch-size',
-    )).toHaveLength(1))
-    expect(dispatch.mock.calls.find(
-      ([command]) => command.type === 'set-read-batch-size',
-    )?.[0]).toEqual({
-      type: 'set-read-batch-size',
-      value: (initial.reader.readBatchSize.applied ??
-        initial.reader.readBatchSize.min) + initial.reader.readBatchSize.step,
-    })
-    expect(view.container.querySelectorAll('.pipeline-batch-stepper'))
-      .toHaveLength(1)
-    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('running')).not.toBeNull()
+    expect(screen.getByText('00:00:00')).not.toBeNull()
+    expect(vi.getTimerCount()).toBe(1)
 
-    await user.click(view.container.querySelector('#sender-actor')!)
-    expect(screen.getByLabelText('Sender configuration').children)
-      .toHaveLength(1)
+    act(() => vi.advanceTimersByTime(1_000))
+    expect(adapter.getSnapshot().elapsedMs).toBe(1_000)
+    expect(adapter.getSnapshot().totalTransactions).toBeGreaterThan(0)
+    expect(screen.getByText('00:00:01')).not.toBeNull()
+    view.unmount()
+    expect(vi.getTimerCount()).toBe(1)
   })
 
   it('renders a Reader source error overlay and clears it on the next snapshot', async () => {
@@ -84,84 +76,6 @@ describe('LabShell', () => {
     errorAdapter.dispose()
   })
 
-  it('keeps desired controls live while paused telemetry remains frozen', async () => {
-    const simulation = new SimulationAdapter()
-    const running: LoadgenTelemetrySnapshot = {
-      ...simulation.getSnapshot(),
-      revision: 1,
-      runState: 'running',
-      reader: { ...simulation.getSnapshot().reader, state: 'running' },
-      throttler: { ...simulation.getSnapshot().throttler, state: 'running' },
-      sender: {
-        ...simulation.getSnapshot().sender,
-        state: 'running',
-        liveWorkers: 2,
-        idleWorkers: 1,
-        inFlightWorkers: 1,
-        backoffWorkers: 0,
-        drainingIdleWorkers: 0,
-        drainingInFlightWorkers: 0,
-        drainingBackoffWorkers: 0,
-      },
-    }
-    let snapshot = running
-    const listeners = new Set<(next: LoadgenTelemetrySnapshot) => void>()
-    const controlledAdapter: LoadgenAdapter = {
-      kind: 'simulation',
-      getSnapshot: () => snapshot,
-      subscribe: (listener) => {
-        listeners.add(listener)
-        listener(snapshot)
-        return () => listeners.delete(listener)
-      },
-      dispatch: vi.fn(),
-      dispose: simulation.dispose,
-    }
-    render(<LabShell adapter={controlledAdapter} />)
-
-    act(() => {
-      snapshot = {
-        ...running,
-        revision: 2,
-        runState: 'paused',
-        reader: { ...running.reader, state: 'paused' },
-        throttler: { ...running.throttler, state: 'paused' },
-        sender: {
-          ...running.sender,
-          state: 'paused',
-          workers: { ...running.sender.workers, applied: 7 },
-          liveWorkers: 0,
-          idleWorkers: 0,
-          inFlightWorkers: 0,
-          backoffWorkers: 0,
-          drainingIdleWorkers: 0,
-          drainingInFlightWorkers: 0,
-          drainingBackoffWorkers: 0,
-        },
-      }
-      listeners.forEach((listener) => listener(snapshot))
-    })
-
-    expect(screen.getByText('Paused — last observed telemetry frozen; controls remain desired').textContent)
-      .toBe('Paused — last observed telemetry frozen; controls remain desired')
-    const qualifier = screen.getByText(
-      'Paused — last observed telemetry frozen; controls remain desired',
-    )
-    expect(document.querySelector('.topbar')).not.toBeNull()
-    expect(qualifier.getAttribute('role')).toBe('status')
-    await waitFor(() => expect(document.querySelector('#sender-count')?.textContent).toBe('7'))
-    expect(document.querySelector('#sender-actor')?.textContent)
-      .not.toContain('desired ·')
-    expect(document.querySelector('#sender-actor')?.textContent)
-      .toContain('1 idle · 1 in-flight · 0 backoff')
-    expect(screen.getByRole('button', { name: 'Resume run' })).not.toBeNull()
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect reader' }))
-    expect(screen.getByText('Workers desired / frozen live / draining')).not.toBeNull()
-    await userEvent.setup().click(screen.getByRole('button', { name: /Inspect sender/ }))
-    expect(screen.getByText('Workers desired / frozen live / draining')).not.toBeNull()
-    controlledAdapter.dispose()
-  })
-
   it('disables unavailable canvas worker controls without dispatching', async () => {
     const simulation = new SimulationAdapter()
     const initial = simulation.getSnapshot()
@@ -200,57 +114,70 @@ describe('LabShell', () => {
     unavailableAdapter.dispose()
   })
 
-  it('runs, pauses, and resets through the mounted toolbar', async () => {
-    const user = userEvent.setup()
+  it('shows backend batch sizes and queue depths without run or startup controls', async () => {
     adapter = new SimulationAdapter()
-    render(<LabShell adapter={adapter} />)
-
-    await user.click(screen.getByRole('button', { name: 'Start run' }))
-    await waitFor(() => {
-      expect(screen.getByText('running')).not.toBeNull()
-    })
-
-    await user.click(screen.getByRole('button', { name: 'Pause run' }))
-    await waitFor(() => {
-      expect(screen.getByText('paused')).not.toBeNull()
-    })
-    expect(screen.getByRole('button', { name: 'Resume run' })).not.toBeNull()
-    expect(screen.queryAllByRole('button', { name: /^(Pause|Resume) run$/ })).toHaveLength(1)
-
-    await user.click(screen.getByRole('button', { name: 'Reset run' }))
-    await waitFor(() => {
-      expect(screen.getByText('idle')).not.toBeNull()
-      expect(screen.getByText('00:00:00')).not.toBeNull()
-    })
-  })
-
-  it('disables Run when the HTTP config is unavailable and does not dispatch it', async () => {
-    const simulation = new SimulationAdapter()
-    const snapshot: LoadgenTelemetrySnapshot = {
-      ...simulation.getSnapshot(),
+    const initial = adapter.getSnapshot()
+    let snapshot: LoadgenTelemetrySnapshot = {
+      ...initial,
       adapterKind: 'http',
-      connectionState: 'error',
-      config: null,
+      runState: 'running',
+      throttler: {
+        ...initial.throttler,
+        installed: { ...initial.throttler.installed, applyMode: 'immediate', writable: true },
+      },
+      reader: { ...initial.reader, readBatchSize: { ...initial.reader.readBatchSize, applied: 1_000 } },
+      readerChannel: {
+        ...initial.readerChannel,
+        depthBatches: 1,
+        capacity: { ...initial.readerChannel.capacity, applied: 2 },
+      },
     }
     const dispatch = vi.fn()
-    const unavailableAdapter: LoadgenAdapter = {
+    const listeners = new Set<(value: LoadgenTelemetrySnapshot) => void>()
+    const backend: LoadgenAdapter = {
       kind: 'http',
       getSnapshot: () => snapshot,
       subscribe: (listener) => {
+        listeners.add(listener)
         listener(snapshot)
-        return () => undefined
+        return () => { listeners.delete(listener) }
       },
       dispatch,
-      dispose: simulation.dispose,
+      dispose: adapter.dispose,
     }
     const user = userEvent.setup()
-    render(<LabShell adapter={unavailableAdapter} />)
+    render(<LabShell adapter={backend} />)
 
-    const run = screen.getByRole('button', { name: 'Start run' })
-    expect((run as HTMLButtonElement).disabled).toBe(true)
-    await user.click(run)
+    expect(within(screen.getByRole('banner')).queryAllByRole('button')).toHaveLength(0)
+    expect(screen.getAllByRole('slider')).toEqual([screen.getByRole('slider', { name: 'Throttle opening' })])
+    expect(screen.getByText('Batch 1,000 tx')).not.toBeNull()
+    expect(screen.getByText('Depth 1 / 2 batches')).not.toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Inspect reader' }))
+    expect(screen.getByRole('spinbutton', { name: /^Workers/ })).not.toBeNull()
+    expect(screen.getAllByRole('spinbutton')).toHaveLength(1)
+    expect(screen.getByText('Read batch size: 1,000 tx')).not.toBeNull()
+
+    act(() => {
+      snapshot = {
+        ...snapshot,
+        revision: snapshot.revision + 1,
+        runState: 'stopping',
+        readerChannel: { ...snapshot.readerChannel, depthBatches: 0 },
+      }
+      for (const listener of listeners) listener(snapshot)
+    })
+    expect(screen.getByText('stopping')).not.toBeNull()
+    expect(screen.getByText('Depth 0 / 2 batches')).not.toBeNull()
     expect(dispatch).not.toHaveBeenCalled()
-    unavailableAdapter.dispose()
+
+    await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
+    expect(screen.getByRole('heading', { name: 'Controls' })).not.toBeNull()
+    expect(screen.getAllByRole('spinbutton')).toEqual([screen.getByRole('spinbutton', { name: /^Workers/ })])
+    await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
+    expect(screen.getAllByRole('spinbutton')).toEqual([screen.getByRole('spinbutton', { name: /^Requested TPS/ })])
+    expect(screen.getAllByRole('checkbox')).toEqual([screen.getByRole('checkbox', { name: 'Valve mode' })])
+    expect(screen.getByRole('button', { name: 'Remove throttler valve' })).not.toBeNull()
   })
 
   it('opens a real actor inspector and clears the selection', async () => {
@@ -272,40 +199,52 @@ describe('LabShell', () => {
       .getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('owns retained Sender controls and leaves ingestion service without controls', async () => {
+  it('offers exactly the three canvas settings and keeps the inspector read-only in simulation', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()
     const dispatch = vi.spyOn(adapter, 'dispatch')
     render(<LabShell adapter={adapter} />)
 
-    await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
-    expect(screen.getByLabelText('Sender configuration')).not.toBeNull()
-    expect(screen.getByRole('spinbutton', { name: /^Workers/ })).not.toBeNull()
-    expect(screen.queryByRole('spinbutton', { name: /^HTTP timeout/ })).toBeNull()
-    await user.click(screen.getByRole('button', { name: 'Add sender worker' }))
-    expect(dispatch).toHaveBeenCalledWith({ type: 'set-sender-workers', value: 4 })
+    expect(within(screen.getByRole('banner')).queryAllByRole('button')).toHaveLength(0)
+    const diagram = within(screen.getByRole('group', { name: /Reader to target/ }))
+    const settingsButtons = diagram.getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label'))
+      .filter((label) => !label?.startsWith('Inspect'))
+    expect(settingsButtons.sort()).toEqual([
+      'Add reader worker', 'Add sender worker', 'Decrease throttle opening',
+      'Increase throttle opening', 'Remove reader worker', 'Remove sender worker',
+    ])
+    expect(diagram.getAllByRole('slider')).toEqual([
+      diagram.getByRole('slider', { name: 'Throttle opening' }),
+    ])
+    expect(diagram.getByText('Batch 1,000 tx')).not.toBeNull()
+    expect(diagram.getByText(/^Depth \d+ \/ 4 batches$/)).not.toBeNull()
+    expect(diagram.getByText(/^Depth \d+ \/ 100 batches$/)).not.toBeNull()
 
-    await user.click(screen.getByRole('button', { name: 'Inspect ingestion service' }))
-    expect(screen.queryByLabelText('Sender configuration')).toBeNull()
-    expect(screen.queryByRole('spinbutton', { name: /^Workers/ })).toBeNull()
-    expect(screen.queryByRole('spinbutton', { name: /^HTTP timeout/ })).toBeNull()
-  })
+    const inspector = within(screen.getByRole('complementary'))
+    for (const name of [/Inspect reader$/, /Inspect throttler$/, /Inspect sender,/, /Inspect ingestion service/]) {
+      await user.click(diagram.getByRole('button', { name }))
+      expect(inspector.queryAllByRole('spinbutton')).toHaveLength(0)
+      expect(inspector.queryAllByRole('checkbox')).toHaveLength(0)
+      expect(inspector.queryAllByRole('slider')).toHaveLength(0)
+    }
+    await user.click(diagram.getByRole('button', { name: 'Inspect reader' }))
+    expect(inspector.getByText('Read batch size: 1,000 tx')).not.toBeNull()
+    await user.click(diagram.getByRole('button', { name: 'Inspect reader to throttler channel' }))
+    expect(inspector.getByText(/^\d+ \/ 4 batches$/)).not.toBeNull()
+    await user.click(diagram.getByRole('button', { name: 'Inspect throttler to sender channel' }))
+    expect(inspector.getByText(/^\d+ \/ 100 batches$/)).not.toBeNull()
 
-  it('changes Valve mode through the existing throttler command', async () => {
-    const user = userEvent.setup()
-    adapter = new SimulationAdapter()
-    const dispatch = vi.spyOn(adapter, 'dispatch')
-    render(<LabShell adapter={adapter} />)
-
-    await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
-    const valveMode = screen.getByRole('checkbox', { name: 'Valve mode' })
-    await user.click(valveMode)
-
+    await user.click(diagram.getByRole('button', { name: 'Add reader worker' }))
+    await user.click(diagram.getByRole('button', { name: 'Add sender worker' }))
+    diagram.getByRole('slider', { name: 'Throttle opening' }).focus()
+    await user.keyboard('{End}')
     await waitFor(() => {
-      expect(dispatch).toHaveBeenCalledWith({
-        type: 'set-throttler-installed', value: false,
-      })
-      expect((valveMode as HTMLInputElement).checked).toBe(false)
+      expect(dispatch.mock.calls.map(([command]) => command)).toEqual([
+        { type: 'set-worker-count', actor: 'reader', value: 6 },
+        { type: 'set-sender-workers', value: 4 },
+        { type: 'set-requested-tps', value: 250_000 },
+      ])
     })
   })
 
@@ -329,7 +268,6 @@ describe('LabShell', () => {
     const sectionTitles = screen.getAllByRole('heading', { level: 3 })
       .map((heading) => heading.textContent)
     expect(sectionTitles).toEqual([
-      'Управление',
       'Pool',
       'Delivery',
       'Diagnostics',
@@ -365,77 +303,7 @@ describe('LabShell', () => {
       .toHaveLength(3)
   })
 
-  it('shares numeric TPS preview and absolute command with the valve', async () => {
-    const user = userEvent.setup()
-    adapter = new SimulationAdapter()
-    const dispatch = vi.spyOn(adapter, 'dispatch')
-    render(<LabShell adapter={adapter} />)
-    await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
-    const input = screen.getByRole('spinbutton', { name: /^Requested TPS/ })
-    const valve = screen.getByRole('slider', { name: 'Throttle opening' })
-
-    expect(valve.getAttribute('aria-valuenow')).toBe('5')
-    await user.clear(input)
-    await user.type(input, '135000')
-    expect(valve.getAttribute('aria-valuenow')).toBe('6')
-    expect(dispatch).not.toHaveBeenCalled()
-
-    await user.keyboard('{Escape}')
-    expect(valve.getAttribute('aria-valuenow')).toBe('5')
-    await user.click(input)
-    await user.clear(input)
-    await user.type(input, '135000')
-    await user.keyboard('{Enter}')
-
-    await waitFor(() => {
-      expect(dispatch).toHaveBeenCalledWith({
-        type: 'set-requested-tps',
-        value: 135_000,
-      })
-      expect(valve.getAttribute('aria-valuenow')).toBe('6')
-      expect(screen.getByText('55% OPEN')).not.toBeNull()
-    })
-  })
-
-  it('removes and reinserts the valve without changing selection or saved TPS', async () => {
-    const user = userEvent.setup()
-    adapter = new SimulationAdapter()
-    const dispatch = vi.spyOn(adapter, 'dispatch')
-    render(<LabShell adapter={adapter} />)
-
-    await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
-    const remove = screen.getByRole('button', {
-      name: 'Remove throttler valve',
-    })
-    await user.click(remove)
-
-    const reinsert = await screen.findByRole('button', {
-      name: 'Reinsert throttler valve',
-    })
-    expect(dispatch).toHaveBeenCalledWith({
-      type: 'set-throttler-installed',
-      value: false,
-    })
-    expect(reinsert.getAttribute('aria-pressed')).toBe('true')
-    expect(document.activeElement).toBe(reinsert)
-    expect(screen.getAllByRole('spinbutton', { name: /^Requested TPS/ })
-      .every((input) => (input as HTMLInputElement).value === '120000'))
-      .toBe(true)
-    expect(screen.getByRole('heading', { name: 'THROTTLER' })).not.toBeNull()
-
-    await user.click(reinsert)
-    const restored = await screen.findByRole('button', {
-      name: 'Remove throttler valve',
-    })
-    expect(dispatch).toHaveBeenCalledWith({
-      type: 'set-throttler-installed',
-      value: true,
-    })
-    expect(restored.getAttribute('aria-pressed')).toBe('false')
-    expect(document.activeElement).toBe(restored)
-  })
-
-  it('preserves adapter state, selection, inspector, and preview on live resize', async () => {
+  it('preserves adapter state, selection, and valve focus on live resize', async () => {
     const user = userEvent.setup()
     const resizeCallbacks: ResizeObserverCallback[] = []
     class MockResizeObserver implements ResizeObserver {
@@ -478,10 +346,9 @@ describe('LabShell', () => {
     render(<LabShell adapter={adapter} />)
 
     await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
-    await user.click(screen.getByRole('button', { name: 'Start run' }))
-    const requested = screen.getByRole('spinbutton', { name: /^Requested TPS/ })
-    await user.clear(requested)
-    await user.type(requested, '135000')
+    const valve = screen.getByRole('slider', { name: 'Throttle opening' })
+    valve.focus()
+    await user.keyboard('{End}')
     expect(screen.getByTestId('pipeline-viewport').dataset.layout)
       .toBe('landscape')
     const callback = resizeCallbacks[0]
@@ -493,7 +360,7 @@ describe('LabShell', () => {
       .toBe('1440')
     expect(document.querySelector('.pipeline-svg')?.getAttribute('viewBox'))
       .toBe('0 0 1440 650')
-    expect(document.activeElement).toBe(requested)
+    expect(document.activeElement).toBe(valve)
 
     portrait = true
     Object.defineProperties(window, {
@@ -510,8 +377,8 @@ describe('LabShell', () => {
     expect(screen.getByRole('button', { name: 'Inspect throttler' })
       .getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByText('running')).not.toBeNull()
-    expect((requested as HTMLInputElement).value).toBe('135000')
-    expect(document.activeElement).toBe(requested)
+    expect(adapter.getSnapshot().throttler.requestedTps.applied).toBe(250_000)
+    expect(document.activeElement).toBe(valve)
     expect(document.querySelector('.pipeline-svg')?.getAttribute('viewBox'))
       .toMatch(/^0 0 480 \d+$/)
     expect(Number(document.querySelector('.pipeline-svg')?.getAttribute('viewBox')?.split(' ')[3]))

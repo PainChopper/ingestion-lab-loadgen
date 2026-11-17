@@ -1,94 +1,73 @@
-# Rich CLI и удалённое управление сервисом
+# CLI LoadGen
 
 ## Контекст
 
-`serve` запускает локальный load-generator service, но отдельный CLI-процесс не
-может напрямую вызвать private control plane уже работающего процесса. Для
-оператора нужны те же lifecycle-команды и наблюдение без обязательного открытия
-web-интерфейса.
+LoadGen запускает один прогон на процесс и обслуживает HTTP API для наблюдения
+и изменения поддерживаемых настроек. CLI позволяет запустить сервис и работать
+с уже запущенным экземпляром.
 
 ## Цель
 
-Добавить полноценный CLI, который:
+Поддерживаемые команды:
 
-- умеет запускать локальный service;
-- умеет сразу запускать нагрузку;
-- умеет управлять и наблюдать уже запущенный service;
-- не создаёт вторую реализацию lifecycle или pipeline.
+```text
+loadgen serve [--config FILE]
+loadgen status [--url URL]
+loadgen set reader-workers N [--url URL]
+loadgen set sender-workers N [--url URL]
+loadgen set requested-tps N [--url URL]
+loadgen set throttler-installed <true|false> [--url URL]
+```
 
 ## Решение
 
-Есть два режима одного бинарника.
+Это два способа запуска одного бинарника.
 
 ### Локальный service
 
 ```text
-loadgen serve [--config FILE] [--run]
+loadgen serve [--config FILE]
 ```
 
-- `serve` запускает обычный HTTP service в `idle`;
-- `serve --run` после успешного старта переводит тот же local control plane в
-  `running` и продолжает обслуживать HTTP/UI;
-- `--config` выбирает существующий TOML-файл; новый формат конфигурации не
-  вводится.
+- без аргументов бинарник запускает сервис с `config.toml` из текущего
+  каталога;
+- `serve` делает то же самое явно;
+- `--config FILE` выбирает другой TOML-файл;
+- прогон начинается автоматически после успешной загрузки конфигурации.
 
 ### Remote-admin client
 
 ```text
-loadgen snapshot [--url URL]
-loadgen run      [--url URL]
-loadgen pause    [--url URL]
-loadgen resume   [--url URL]
-loadgen reset    [--url URL]
+loadgen status   [--url URL]
 loadgen set reader-workers N [--url URL]
 loadgen set sender-workers N [--url URL]
 loadgen set requested-tps N [--url URL]
-loadgen set valve-mode installed|bypassed [--url URL]
+loadgen set throttler-installed <true|false> [--url URL]
 ```
 
-- remote-admin использует существующие `/api/loadgen/snapshot` и
-  `/api/loadgen/commands` как HTTP client adapter;
-- он не подключается к private control plane другого процесса и не создаёт
-  собственный pipeline;
-- `resume` отправляет ту же lifecycle-команду, что `run` из `paused`;
-- `--url` имеет единый documented default (определяется при реализации) и
-  валидируется до сетевого запроса.
+- `status` читает `/api/loadgen/snapshot`; JSON также доступен напрямую через
+  этот endpoint;
+- `set` отправляет одну из четырёх поддерживаемых настроек через
+  `/api/loadgen/commands` и проверяет результат следующим снапшотом;
+- `--url` по умолчанию равен `http://127.0.0.1:8080` и валидируется до
+  сетевого запроса.
 
 ## Формат вывода
 
-- успешный mutating command печатает краткий итог: действие и итоговый state;
-- `snapshot` печатает стабильный машиночитаемый JSON по wire schema сервиса;
+- успешный `set` печатает краткий итог: настройку, значение и состояние;
+- `status` печатает читаемое состояние; JSON доступен через HTTP endpoint
+  `/api/loadgen/snapshot`;
 - ошибки сети, HTTP error response и malformed snapshot печатаются в stderr с
   ненулевым exit code;
 - CLI не печатает retry policy, секреты, request body или скрытые config values.
 
-## Не менять
+## Поведение
 
-- private control plane, pipeline runtime и ownership очередей;
-- HTTP URL, методы, JSON schema, status-коды и текущую UI-семантику;
-- retry policy, lossless retry, graceful Reader downscale и Sender context;
-- frontend и Storybook;
-- не вводить shell/REPL, daemon protocol, authentication или новый RPC.
-
-## Этапы
-
-1. [ ] Проанализировать текущий CLI/startup path и точный HTTP command/snapshot
-   contract; принять default URL и exit-code matrix.
-2. [ ] Реализовать `serve [--config] [--run]` через существующий composition
-   root и local control plane без дублирования server lifecycle.
-3. [ ] Реализовать remote-admin HTTP client adapter и subcommands `snapshot`,
-   `run`, `pause`, `resume`, `reset`.
-4. [ ] Добавить `set` subcommands для уже существующих controls с той же
-   validation/error semantics, что у HTTP adapter.
-5. [ ] Добавить unit/HTTP contract tests, независимый review и CLI smoke against
-   a real local service; отдельно UI/browser smoke `serve --run`.
-
-## Критерии приёмки
-
-- `serve` стартует service в `idle`, а `serve --run` — в `running`.
-- Remote commands изменяют тот же lifecycle, который виден в UI и snapshot.
-- `snapshot` CLI и HTTP snapshot совпадают по JSON contract.
-- Remote `run → pause → resume → reset` сохраняет текущие state/status semantics.
-- `set` commands не обходят HTTP validation и не создают второй control path.
+- Обычный запуск и `serve` используют `config.toml` текущего каталога;
+  `serve --config FILE` использует указанный файл.
+- Неизвестная CLI-команда получает общий отказ с кодом usage; неизвестное
+  HTTP-действие получает `400 Bad Request`.
+- `status` показывает читаемое состояние; JSON snapshot доступен по HTTP.
+- `set` принимает только `reader-workers`, `sender-workers`, `requested-tps` и
+  `throttler-installed`; команды используют HTTP validation.
 - Сетевые/HTTP/validation ошибки имеют понятный stderr и ненулевой exit code.
-- CLI smoke и UI/browser smoke проходят без control-plane ошибок.

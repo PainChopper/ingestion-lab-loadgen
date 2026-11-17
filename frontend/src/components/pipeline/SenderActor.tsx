@@ -10,7 +10,6 @@ interface SenderActorProps {
   selected: boolean
   onSelect: (id: SelectableId) => void
   desiredControl: DesiredControl<number>
-  frozenObserved: boolean
   geometry: PipelineGeometry['actors']['sender']
   orientation: PipelineOrientation
 }
@@ -20,7 +19,6 @@ export function SenderActor({
   selected,
   onSelect,
   desiredControl,
-  frozenObserved: _frozenObserved,
   geometry,
   orientation,
 }: SenderActorProps) {

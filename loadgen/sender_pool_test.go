@@ -3,9 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -400,138 +397,7 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	}
 }
 
-func TestSenderPoolStopLeavesReadyBatchForResume(t *testing.T) {
-	batches := make(chan []Transaction, 1)
-	var channel channelTelemetry
-	var consumed atomic.Int64
-	config := testConfig(t).Sender
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer server.Close()
-	config.API.URL = server.URL
-	pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	pool.attempt = func(_ context.Context, _ []Transaction, _ int) senderAttemptOutcome {
-		close(entered)
-		<-release
-		return senderAttemptSuccess
-	}
-
-	batches <- []Transaction{{ClientID: "accepted"}}
-	<-entered
-	pool.intakeMu.Lock()
-	// Leave one worker idle with a ready batch while intake is held.
-	pool.reconcile(2)
-	batches <- []Transaction{{ClientID: "ready"}}
-	stopped := make(chan (<-chan struct{}), 1)
-	go func() { stopped <- pool.stop() }()
-	<-pool.ctx.Done()
-	select {
-	case <-stopped:
-		t.Fatal("stop crossed the intake boundary while intake was held")
-	default:
-	}
-	pool.intakeMu.Unlock()
-	done := <-stopped
-	received := channel.snapshot(time.Now()).receivedBatchesTotal
-	if len(batches) != 1 || received != 1 {
-		t.Fatalf("after stop boundary: queued=%d received=%d, want one of each", len(batches), received)
-	}
-	select {
-	case <-done:
-		t.Fatal("stop completed before the accepted batch")
-	default:
-	}
-	close(release)
-	<-done
-	if consumed.Load() != 1 || len(batches) != 1 {
-		t.Fatalf("after stop: completed=%d queued=%d, want one of each", consumed.Load(), len(batches))
-	}
-
-	resumed := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
-	waitForSenderCondition(t, func() bool { return consumed.Load() == 2 })
-	<-resumed.stop()
-	if got := channel.snapshot(time.Now()).receivedBatchesTotal; got != 2 {
-		t.Fatalf("received batches after resume = %d, want 2", got)
-	}
-}
-
-func TestSenderPoolPauseRetainsLateHTTPOutcomeAndBatch(t *testing.T) {
-	for _, status := range []int{http.StatusNoContent, http.StatusServiceUnavailable} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				batches := make(chan []Transaction, 1)
-				var telemetry channelTelemetry
-				var completed atomic.Int64
-				config := testConfig(t).Sender
-				config.Retry.DelaysMS = []int{1_000}
-				config.Retry.JitterPercent = 0
-				pool := startSenderPool(
-					context.Background(), batches, &telemetry, &completed,
-					1, config.API, config.Retry, nil,
-				)
-				defer func() { <-pool.stop() }()
-				entered := make(chan string, 3)
-				release := make(chan struct{})
-				requests := 0
-				client := &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
-					body, err := io.ReadAll(r.Body)
-					if err != nil {
-						return nil, err
-					}
-					entered <- string(body)
-					requests++
-					responseStatus := http.StatusNoContent
-					if requests == 1 {
-						select {
-						case <-release:
-						case <-r.Context().Done():
-							return nil, r.Context().Err()
-						}
-						responseStatus = status
-					}
-					return &http.Response{
-						StatusCode: responseStatus,
-						Body:       io.NopCloser(strings.NewReader("")),
-						Header:     make(http.Header),
-					}, nil
-				})}
-				pool.attempt = newSenderHTTPAttempt("http://example.test/ingest", client).deliver
-				batches <- []Transaction{{ClientID: "retained"}}
-				first := <-entered
-				pool.pause()
-				batches <- []Transaction{{ClientID: "next"}}
-				close(release)
-				synctest.Wait()
-				time.Sleep(2 * time.Second)
-				synctest.Wait()
-				if requests != 1 {
-					t.Fatalf("HTTP requests during Pause = %d, want 1", requests)
-				}
-				wantCompleted := int64(0)
-				if status == http.StatusNoContent {
-					wantCompleted = 1
-				}
-				if completed.Load() != wantCompleted || pool.aggregateSnapshot().inFlightWorkers+
-					pool.aggregateSnapshot().backoffWorkers != 1 {
-					t.Fatalf("paused completion=%d workers=%+v", completed.Load(), pool.aggregateSnapshot())
-				}
-				pool.resumeRun()
-				synctest.Wait()
-				if status != http.StatusNoContent && <-entered != first {
-					t.Fatal("retry changed the retained JSON batch/ClientID")
-				}
-				if next := <-entered; !strings.Contains(next, "next") || completed.Load() != 2 {
-					t.Fatalf("after Resume next=%s completed=%d", next, completed.Load())
-				}
-			})
-		})
-	}
-}
-
-func TestSenderPoolPauseRetryDeadlineAndReconcileWake(t *testing.T) {
+func TestSenderPoolRetryDeadlineAndReconcileWake(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		batches := make(chan []Transaction)
 		var telemetry channelTelemetry
@@ -558,19 +424,12 @@ func TestSenderPoolPauseRetryDeadlineAndReconcileWake(t *testing.T) {
 		batches <- []Transaction{{ClientID: "held"}}
 		synctest.Wait()
 		time.Sleep(10 * time.Minute)
-		pool.pause()
-		synctest.Wait()
-		if len(pool.workers[0].wake) != 0 {
-			t.Fatal("long backoff did not consume the Pause wake before its deadline")
-		}
-		time.Sleep(10 * time.Minute)
-		pool.resumeRun()
 		pool.reconcile(1)
 		synctest.Wait()
 		if attempts.Load() != 1 {
-			t.Fatal("Resume/reconcile shortened retry delay")
+			t.Fatal("reconcile shortened retry delay")
 		}
-		time.Sleep(40*time.Minute - time.Nanosecond)
+		time.Sleep(50*time.Minute - time.Nanosecond)
 		synctest.Wait()
 		if attempts.Load() != 1 {
 			t.Fatal("retry started before its original deadline")
@@ -579,57 +438,6 @@ func TestSenderPoolPauseRetryDeadlineAndReconcileWake(t *testing.T) {
 		synctest.Wait()
 		if attempts.Load() != 2 || completed.Load() != 1 {
 			t.Fatalf("at deadline attempts=%d completed=%d", attempts.Load(), completed.Load())
-		}
-	})
-}
-
-func TestSenderPoolPauseWaitersRecheckGateAndKeepBusySlots(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		batches := make(chan []Transaction, 3)
-		var telemetry channelTelemetry
-		var completed atomic.Int64
-		config := testConfig(t).Sender
-		pool := startSenderPool(
-			context.Background(), batches, &telemetry, &completed,
-			2, config.API, config.Retry, nil,
-		)
-		pool.pause()
-		ids := make(chan string, 3)
-		pool.attempt = func(_ context.Context, batch []Transaction, _ int) senderAttemptOutcome {
-			ids <- batch[0].ClientID
-			return senderAttemptSuccess
-		}
-		batches <- []Transaction{{ClientID: "A"}}
-		batches <- []Transaction{{ClientID: "B"}}
-		batches <- []Transaction{{ClientID: "C"}}
-		synctest.Wait()
-		pool.reconcile(1)
-		if got := pool.aggregateSnapshot(); got.inFlightWorkers != 2 || got.drainingWorkers != 1 || len(batches) != 1 {
-			t.Fatalf("busy downscale = %+v queued=%d", got, len(batches))
-		}
-		pool.reconcile(2)
-		// Close the old gate and install a new Pause before any waiter can recheck it.
-		pool.mu.Lock()
-		close(pool.resume)
-		pool.resume = make(chan struct{})
-		pool.mu.Unlock()
-		synctest.Wait()
-		if len(ids) != 0 || completed.Load() != 0 {
-			t.Fatal("an old Resume wake bypassed the new gate")
-		}
-		pool.resumeRun()
-		synctest.Wait()
-		got := []string{<-ids, <-ids, <-ids}
-		slices.Sort(got)
-		if !slices.Equal(got, []string{"A", "B", "C"}) || completed.Load() != 3 {
-			t.Fatalf("resumed batches=%v completed=%d", got, completed.Load())
-		}
-		pool.pause()
-		batches <- []Transaction{{ClientID: "canceled"}}
-		synctest.Wait()
-		<-pool.stop()
-		if completed.Load() != 3 || pool.aggregateSnapshot().liveWorkers != 0 {
-			t.Fatal("cancel did not join gate waiters without delivery")
 		}
 	})
 }

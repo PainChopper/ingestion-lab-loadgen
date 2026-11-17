@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"sync/atomic"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -17,23 +17,19 @@ type controlState struct {
 	telemetry     controlTelemetry
 	logger        *zap.Logger
 }
+
 type controlRunState struct {
 	totalTransactions int64
-	elapsedBeforeRun  time.Duration
 	runStartedAt      time.Time
 	sourceError       *readerSourceError
-	pausedStatus      runtimeStatus
 	state             runState
 }
 
 type configuredControls struct {
-	readBatchSize         int
-	readerWorkers         int
-	readerChannelCapacity int
-	senderChannelCapacity int
-	requestedTPS          int
-	installed             bool
-	senderWorkers         int
+	readerWorkers int
+	requestedTPS  int
+	installed     bool
+	senderWorkers int
 }
 
 type controlTelemetry struct {
@@ -42,248 +38,241 @@ type controlTelemetry struct {
 	senderChannel channelTelemetry
 }
 
+type runtimeEvents struct {
+	requests   <-chan runtimeCommand
+	source     <-chan sourceDiscovery
+	serverDone <-chan error
+	metrics    serviceMetrics
+}
+
 func newControlState(cfg config, logger *zap.Logger) controlState {
-	metricsWindow := time.Duration(cfg.Metrics.WindowMS.Initial) * time.Millisecond
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return controlState{
-		metricsWindow: metricsWindow,
-		run:           controlRunState{state: runStateIdle},
+		metricsWindow: time.Duration(cfg.Metrics.WindowMS.Initial) * time.Millisecond,
+		run:           controlRunState{state: runStateStarting},
 		config:        cfg,
 		controls: configuredControls{
-			readBatchSize:         cfg.Reader.ReadBatchSize.Initial,
-			readerWorkers:         cfg.Reader.Workers.Initial,
-			readerChannelCapacity: cfg.ReaderChannel.Capacity.Initial,
-			senderChannelCapacity: cfg.SenderChannel.Capacity.Initial,
-			requestedTPS:          cfg.Throttler.RequestedTPS.Initial,
-			installed:             cfg.Throttler.Installed.Initial,
-			senderWorkers:         cfg.Sender.Workers.Initial,
+			readerWorkers: cfg.Reader.Workers.Initial,
+			requestedTPS:  cfg.Throttler.RequestedTPS.Initial,
+			installed:     cfg.Throttler.Installed.Initial,
+			senderWorkers: cfg.Sender.Workers.Initial,
 		},
 		logger: logger,
 	}
 }
 
 func (state *controlState) runEventLoop(
-	ctx context.Context,
-	requests <-chan runtimeCommand,
-	metrics <-chan time.Time,
-	promMetrics *PrometheusMetrics,
-) {
-	logger := state.logger
-	if logger == nil {
-		logger = zap.NewNop()
+	appCtx context.Context,
+	events runtimeEvents,
+	grace time.Duration,
+) (shutdownDeadline time.Time, runErr error) {
+	metrics := events.metrics
+	if metrics.prometheusMetrics == nil {
+		return time.Time{}, errors.New("run event loop: Prometheus metrics are required")
 	}
-	runtime := newPipelineRuntime(state)
-	nextRuntimeSummaryAt := time.Now().Add(runtimeSummaryInterval)
+
+	// App cancellation stops admission first; the deadline cancels the pipeline.
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	appDone := appCtx.Done()
+	var pipeline *pipelineRuntime
+	var pipelineDone <-chan struct{}
+	var sourceErrors <-chan readerSourceError
+	var deadline <-chan time.Time
+	var timer *time.Timer
+	var partial bool
+	beginDrain := func() {
+		appDone = nil
+		if timer == nil {
+			shutdownDeadline = time.Now().Add(grace)
+			timer = time.NewTimer(time.Until(shutdownDeadline))
+			deadline = timer.C
+		}
+		if pipeline != nil {
+			pipeline.readerPool.stopReading()
+		}
+	}
+	stopOnSignal := func() {
+		state.run.state = runStateStopping
+		beginDrain()
+		state.logger.Info("service stopping", zap.String("event", "service_stopping"))
+	}
 	defer func() {
-		runtime.stop()
-		state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
+		if timer != nil {
+			timer.Stop()
+		}
+		// A Reader can report a fault just before the pipeline closes or the deadline fires.
+		select {
+		case sourceError := <-sourceErrors:
+			state.recordSourceFault(sourceError)
+			runErr = errors.Join(runErr, sourceError)
+		default:
+		}
+		state.finishRun(pipeline, metrics.prometheusMetrics, partial)
 	}()
 
+	nextSummary := time.Now().Add(runtimeSummaryInterval)
 	for {
 		select {
-		case <-ctx.Done():
-			return
-		case command, ok := <-requests:
+		case <-appDone:
+			stopOnSignal()
+		case err := <-events.serverDone:
+			events.serverDone = nil
+			if err == nil {
+				err = errors.New("http server stopped unexpectedly")
+			}
+			runErr = errors.Join(runErr, err)
+			state.run.state = runStateFaulted
+			state.logger.Error("HTTP server failed", zap.String("event", "run_failed"), zap.Error(err))
+			beginDrain()
+		case found := <-events.source:
+			events.source = nil
+			if found.err != nil {
+				var sourceError readerSourceError
+				if errors.As(found.err, &sourceError) {
+					state.recordSourceFault(sourceError)
+				}
+				return shutdownDeadline, errors.Join(runErr, fmt.Errorf("start run: %w", found.err))
+			}
+			if state.run.state != runStateStarting {
+				return shutdownDeadline, runErr
+			}
+			if appCtx.Err() != nil {
+				stopOnSignal()
+				return shutdownDeadline, runErr
+			}
+			pipeline = startPipeline(runCtx, state, found.source)
+			pipelineDone = pipeline.done
+			sourceErrors = pipeline.readerPool.sourceErrors
+			state.run.runStartedAt = time.Now()
+			state.run.state = runStateRunning
+			state.logger.Info("run started", zap.String("event", "run_started"))
+		case sourceError := <-sourceErrors:
+			sourceErrors = nil
+			state.recordSourceFault(sourceError)
+			runErr = errors.Join(runErr, sourceError)
+			beginDrain()
+		case <-deadline:
+			cancelRun()
+			// Source filesystem calls can outlive cancellation. Leave stage channels to their owners.
+			select {
+			case <-pipelineDone:
+			default:
+				partial = true
+				state.logger.Warn("pipeline drain timed out", zap.String("event", "service_stopping"))
+			}
+			return shutdownDeadline, runErr
+		case <-pipelineDone:
+			return shutdownDeadline, runErr
+		case command, ok := <-events.requests:
 			if !ok {
-				return
-			}
-			switch command.kind {
-			case getRuntimeStatus:
-				command.respondStatus(state.runtimeStatusAt(runtime, time.Now()))
-			case cmdRun:
-				resuming := state.run.state == runStatePaused
-				if state.run.state == runStateIdle {
-					err := runtime.start(ctx)
-					if err != nil {
-						sourceError := sourceErrorFromStartup(err, state.config.Source.Path)
-						logger.Error("run failed to start", zap.String("event", "run_failed"), zap.String("operation", sourceError.Operation))
-						state.run.sourceError = &sourceError
-						state.run.state.faultStart()
-						command.respond(runtimeCommandReceipt{err: err})
-						continue
-					}
-				}
-				if state.run.state == runStateFaulted {
-					command.respond(runtimeCommandReceipt{rejected: true})
-					continue
-				}
-				if state.run.state.run() {
-					state.run.runStartedAt = time.Now()
-					if resuming {
-						state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
-						state.run.pausedStatus = runtimeStatus{}
-						state.telemetry.reader.startInterval(state.run.runStartedAt)
-						state.telemetry.readerChannel.startInterval()
-						state.telemetry.senderChannel.startInterval()
-						promMetrics.actualTPS.Set(0)
-						runtime.senderPool.resumeRun()
-					} else {
-						runtime.startSender()
-					}
-					if resuming {
-						logger.Info("run resumed", zap.String("event", "run_resumed"))
-					} else {
-						logger.Info("run started", zap.String("event", "run_started"))
-					}
-				}
-				command.respond(runtimeCommandReceipt{})
-			case cmdPause:
-				if state.run.state != runStateRunning {
-					continue
-				}
-				runtime.senderPool.pause()
-				now := time.Now()
-				state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
-				state.run.pausedStatus = state.runtimeStatusAt(runtime, now)
-				state.pauseElapsed(now)
-				state.run.state.pause()
-				logger.Info("run paused", zap.String("event", "run_paused"))
-			case cmdReset:
-				result := runtimeCommandReceipt{}
-				switch state.run.state {
-				case runStatePaused, runStateFaulted:
-					state.run.state.reset()
-					runtime.stop()
-					state.resetProgress(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
-					state.run.state.completeReset()
-				case runStateIdle:
-					state.resetProgress(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
-				default:
-					result.rejected = true
-				}
-				if !result.rejected {
-					logger.Info("run stopped", zap.String("event", "run_stopped"))
-				}
-				command.respond(result)
-			case cmdSetReadBatchSize:
-				result := runtimeCommandReceipt{}
-				if state.run.state != runStateIdle {
-					result.rejected = true
-				} else if !state.config.Reader.ReadBatchSize.contains(command.value) {
-					result.rejected = true
-				} else {
-					state.controls.readBatchSize = command.value
-				}
-				command.respond(result)
-			case cmdSetReaderWorkers:
-				result := runtimeCommandReceipt{}
-				if !state.config.Reader.Workers.contains(command.value) {
-					result.rejected = true
-				} else {
-					state.controls.readerWorkers = command.value
-					runtime.reconcileReader(command.value)
-				}
-				command.respond(result)
-			case cmdSetReaderChannelCapacity:
-				result := runtimeCommandReceipt{}
-				if state.run.state != runStateIdle ||
-					!state.config.ReaderChannel.Capacity.contains(command.value) {
-					result.rejected = true
-				} else {
-					state.controls.readerChannelCapacity = command.value
-				}
-				command.respond(result)
-			case cmdSetSenderChannelCapacity:
-				result := runtimeCommandReceipt{}
-				if state.run.state != runStateIdle ||
-					!state.config.SenderChannel.Capacity.contains(command.value) {
-					result.rejected = true
-				} else {
-					state.controls.senderChannelCapacity = command.value
-				}
-				command.respond(result)
-			case cmdSetRequestedTPS:
-				result := runtimeCommandReceipt{}
-				if !state.config.Throttler.RequestedTPS.contains(command.value) {
-					result.rejected = true
-				} else if state.controls.requestedTPS != command.value {
-					state.controls.requestedTPS = command.value
-					promMetrics.targetTPS.Set(float64(state.controls.requestedTPS))
-					runtime.throttler.update(state.throttlerSettings())
-					logger.Info(
-						"throttler rate changed",
-						zap.String("event", "throttler_rate_changed"),
-						zap.Int("requested_tps", command.value),
-					)
-				}
-				command.respond(result)
-			case cmdSetThrottlerInstalled:
-				result := runtimeCommandReceipt{}
-				if !state.config.Throttler.Installed.contains(command.installed) {
-					result.rejected = true
-				} else if state.controls.installed != command.installed {
-					state.controls.installed = command.installed
-					runtime.throttler.update(state.throttlerSettings())
-					logger.Info(
-						"throttler mode changed",
-						zap.String("event", "throttler_mode_changed"),
-						zap.Bool("installed", command.installed),
-					)
-				}
-				command.respond(result)
-			case cmdSetSenderWorkers:
-				if !state.config.Sender.Workers.contains(command.value) {
-					command.respond(runtimeCommandReceipt{rejected: true})
-					continue
-				}
-				state.controls.senderWorkers = command.value
-				runtime.reconcileSender(command.value)
-				command.respond(runtimeCommandReceipt{})
-			}
-
-		case sourceError := <-runtime.sourceErrors():
-			if !state.run.state.fault() {
+				events.requests = nil
 				continue
 			}
-			state.pauseElapsed(time.Now())
-			state.run.sourceError = &sourceError
-			logger.Error("reader source failed", zap.String("event", "reader_source_failed"), zap.String("operation", sourceError.Operation), zap.String("relative_path", sourceError.RelativePath))
-			runtime.stop()
-			state.resetFaultedMeasurements(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
-
-		case now := <-metrics:
-			delta := state.collectCompleted(&runtime.terminallyCompletedTransactionsSinceTick, promMetrics)
-			if state.run.state != runStatePaused {
-				state.telemetry.reader.sample(now)
-				state.telemetry.readerChannel.sample(state.metricsWindow)
-				state.telemetry.senderChannel.sample(state.metricsWindow)
-				promMetrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
+			if command.kind == getRuntimeStatus {
+				command.respondStatus(state.runtimeStatusAt(pipeline, time.Now()))
+				continue
 			}
-			if !now.Before(nextRuntimeSummaryAt) {
-				nextRuntimeSummaryAt = now.Add(runtimeSummaryInterval)
-				logger.Info(
-					"runtime summary",
-					runtimeSummaryFields(state.runtimeStatusAt(runtime, now))...,
-				)
+			applied := state.run.state == runStateRunning &&
+				state.applyCommand(pipeline, command, metrics.prometheusMetrics)
+			command.respond(runtimeCommandReceipt{rejected: !applied})
+		case now := <-metrics.ticks:
+			if pipeline != nil {
+				state.sample(pipeline, metrics.prometheusMetrics, now)
+			}
+			if !now.Before(nextSummary) {
+				nextSummary = now.Add(runtimeSummaryInterval)
+				state.logger.Info("runtime summary", runtimeSummaryFields(state.runtimeStatusAt(pipeline, now))...)
 			}
 		}
 	}
 }
 
-func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Time) runtimeStatus {
-	runState := state.run.state
-	if runState == runStatePaused {
-		status := state.run.pausedStatus
-		status.Run.State = runState
-		status.Reader.SourceError = state.run.sourceError
-		status.Reader.Workers = state.controls.readerWorkers
-		status.Reader.ReadBatchSize = state.controls.readBatchSize
-		status.Sender.Workers = state.controls.senderWorkers
-		status.Throttler.RequestedTps = state.controls.requestedTPS
-		status.Throttler.Installed = state.controls.installed
-		return status
+func (state *controlState) applyCommand(pipeline *pipelineRuntime, command runtimeCommand, metrics *PrometheusMetrics) bool {
+	switch command.kind {
+	case cmdSetReaderWorkers:
+		if !state.config.Reader.Workers.contains(command.value) {
+			return false
+		}
+		state.controls.readerWorkers = command.value
+		pipeline.readerPool.reconcile(command.value)
+	case cmdSetSenderWorkers:
+		if !state.config.Sender.Workers.contains(command.value) {
+			return false
+		}
+		state.controls.senderWorkers = command.value
+		pipeline.senderPool.reconcile(command.value)
+	case cmdSetRequestedTPS:
+		if !state.config.Throttler.RequestedTPS.contains(command.value) {
+			return false
+		}
+		if state.controls.requestedTPS != command.value {
+			state.controls.requestedTPS = command.value
+			metrics.targetTPS.Set(float64(command.value))
+			pipeline.throttler.update(state.throttlerSettings())
+			state.logger.Info("throttler rate changed",
+				zap.String("event", "throttler_rate_changed"), zap.Int("requested_tps", command.value))
+		}
+	case cmdSetThrottlerInstalled:
+		if !state.config.Throttler.Installed.contains(command.installed) {
+			return false
+		}
+		if state.controls.installed != command.installed {
+			state.controls.installed = command.installed
+			pipeline.throttler.update(state.throttlerSettings())
+			state.logger.Info("throttler mode changed",
+				zap.String("event", "throttler_mode_changed"), zap.Bool("installed", command.installed))
+		}
+	default:
+		return false
 	}
+	return true
+}
+
+func (state *controlState) recordSourceFault(sourceError readerSourceError) {
+	state.run.state = runStateFaulted
+	state.run.sourceError = &sourceError
+	state.logger.Error("reader source failed", zap.String("event", "reader_source_failed"),
+		zap.String("operation", sourceError.Operation), zap.String("relative_path", sourceError.RelativePath), zap.Error(sourceError))
+}
+
+func (state *controlState) sample(pipeline *pipelineRuntime, metrics *PrometheusMetrics, now time.Time) {
+	delta := state.collectCompleted(pipeline, metrics)
+	state.telemetry.reader.sample(now)
+	state.telemetry.readerChannel.sample(state.metricsWindow)
+	state.telemetry.senderChannel.sample(state.metricsWindow)
+	metrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
+}
+
+func (state *controlState) finishRun(pipeline *pipelineRuntime, metrics *PrometheusMetrics, partial bool) {
+	if pipeline != nil {
+		state.collectCompleted(pipeline, metrics)
+	}
+	metrics.actualTPS.Set(0)
+	// Sample confirmations first: all confirmed rows were already counted at the Reader.
+	rowsRead := state.telemetry.reader.snapshot().rowsRead
+	state.logger.Info("run stopped", zap.String("event", "run_stopped"),
+		zap.String("state", string(state.run.state)),
+		zap.Bool("partial", partial),
+		zap.Int64("confirmed_transactions", state.run.totalTransactions),
+		zap.Int64("unconfirmed_transactions", rowsRead-state.run.totalTransactions),
+	)
+	if pipeline != nil && !partial {
+		pipeline.detachChannels(state)
+	}
+}
+
+func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Time) runtimeStatus {
 	reader := state.telemetry.reader.snapshot()
 	readerPool, senderPool := runtime.snapshots()
 	readerChannel := state.telemetry.readerChannel.snapshot(now)
 	senderChannel := state.telemetry.senderChannel.snapshot(now)
-	if runState == runStateIdle || runState == runStateFaulted {
-		readerChannel.capacity = state.controls.readerChannelCapacity
-		senderChannel.capacity = state.controls.senderChannelCapacity
-	}
 
 	return runtimeStatus{
 		Run: runtimeRunStatus{
-			State:             runState,
+			State:             state.run.state,
 			TotalTransactions: state.run.totalTransactions,
 			ElapsedMs:         state.elapsedMs(now),
 		},
@@ -294,7 +283,7 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 			DrainingIdleWorkers:    readerPool.drainingIdleWorkers,
 			DrainingReadingWorkers: readerPool.drainingReadingWorkers,
 			DrainingBlockedWorkers: readerPool.drainingBlockedWorkers,
-			ReadBatchSize:          state.controls.readBatchSize, ReadTps: reader.readTPS,
+			ReadBatchSize:          state.config.Reader.ReadBatchSize.Initial, ReadTps: reader.readTPS,
 			RowsRead:        reader.rowsRead,
 			SourceDirectory: readerSourceDirectory(state.config.Source.Path),
 			SourceError:     state.run.sourceError,
@@ -313,7 +302,7 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 			DrainingBackoffWorkers:  senderPool.drainingBackoffWorkers,
 		},
 		ReaderChannel: runtimeChannelStatus{
-			Capacity:                      readerChannel.capacity,
+			Capacity:                      state.config.ReaderChannel.Capacity.Initial,
 			DepthBatches:                  readerChannel.depthBatches,
 			BufferedTransactions:          readerChannel.bufferedTransactions,
 			BlockedSenders:                readerChannel.blockedSenders,
@@ -329,7 +318,7 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 			ReceivedTransactionsPerSecond: readerChannel.receivedTransactionsPerSecond,
 		},
 		SenderChannel: runtimeChannelStatus{
-			Capacity:                      senderChannel.capacity,
+			Capacity:                      state.config.SenderChannel.Capacity.Initial,
 			DepthBatches:                  senderChannel.depthBatches,
 			BufferedTransactions:          senderChannel.bufferedTransactions,
 			BlockedSenders:                senderChannel.blockedSenders,
@@ -355,71 +344,19 @@ func (state *controlState) throttlerSettings() throttlerSettings {
 	}
 }
 
-func (state *controlState) resetProgress(terminallyCompletedTransactionsSinceTick *atomic.Int64, promMetrics *PrometheusMetrics) {
-	state.collectCompleted(terminallyCompletedTransactionsSinceTick, promMetrics)
-	state.telemetry.reader.reset()
-	state.telemetry.readerChannel.clearMeasurements()
-	state.telemetry.senderChannel.clearMeasurements()
-	terminallyCompletedTransactionsSinceTick.Store(0)
-	state.run.totalTransactions = 0
-	state.run.elapsedBeforeRun = 0
-	state.run.runStartedAt = time.Time{}
-	state.run.sourceError = nil
-	state.run.pausedStatus = runtimeStatus{}
-	promMetrics.actualTPS.Set(0)
-}
-
-func (state *controlState) resetFaultedMeasurements(
-	terminallyCompletedTransactionsSinceTick *atomic.Int64,
-	promMetrics *PrometheusMetrics,
-) {
-	state.collectCompleted(terminallyCompletedTransactionsSinceTick, promMetrics)
-	state.run.pausedStatus = runtimeStatus{}
-	state.telemetry.reader.reset()
-	state.telemetry.readerChannel.clearMeasurements()
-	state.telemetry.senderChannel.clearMeasurements()
-	terminallyCompletedTransactionsSinceTick.Store(0)
-	promMetrics.actualTPS.Set(0)
-}
-
 func (state *controlState) collectCompleted(
-	completed *atomic.Int64,
+	pipeline *pipelineRuntime,
 	promMetrics *PrometheusMetrics,
 ) int64 {
-	delta := completed.Swap(0)
+	delta := pipeline.terminallyCompletedTransactionsSinceTick.Swap(0)
 	state.run.totalTransactions += delta
 	promMetrics.transactionsTotal.Add(float64(delta))
 	return delta
 }
 
-func sourceErrorFromStartup(err error, sourcePath string) readerSourceError {
-	var sourceError readerSourceError
-	if errors.As(err, &sourceError) {
-		return sourceError
-	}
-	return readerSourceError{
-		Category:     "source",
-		Operation:    "glob",
-		RelativePath: relativeSourcePath(readerSourceDirectory(sourcePath), sourcePath),
-		Message:      err.Error(),
-	}
-}
-
 func (state *controlState) elapsedMs(now time.Time) int64 {
-	elapsed := state.run.elapsedBeforeRun
-	if state.run.state == runStateRunning {
-		elapsed += now.Sub(state.run.runStartedAt)
-	}
-	if elapsed < 0 {
+	if state.run.runStartedAt.IsZero() {
 		return 0
 	}
-	return elapsed.Milliseconds()
-}
-
-func (state *controlState) pauseElapsed(now time.Time) {
-	if state.run.runStartedAt.IsZero() {
-		return
-	}
-	state.run.elapsedBeforeRun += now.Sub(state.run.runStartedAt)
-	state.run.runStartedAt = time.Time{}
+	return max(0, now.Sub(state.run.runStartedAt).Milliseconds())
 }

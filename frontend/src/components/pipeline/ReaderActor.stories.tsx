@@ -39,11 +39,9 @@ function desiredControl<T>(applied: T) {
 function liveControls(snapshot: LoadgenSnapshot): LiveControls {
   return {
     readerWorkers: desiredControl(snapshot.reader.workers.applied ?? 0),
-    readBatchSize: desiredControl(snapshot.reader.readBatchSize.applied ?? 0),
     requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? 0),
     installed: desiredControl(snapshot.throttler.installed.applied ?? true),
     senderWorkers: desiredControl(snapshot.sender.workers.applied ?? 0),
-    timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? 0),
   }
 }
 
@@ -53,7 +51,7 @@ function snapshotFor(state: ReaderState): LoadgenSnapshot {
   const active = state === 'reading' || state === 'backpressured'
   const draining = state === 'draining'
   const connectionError = state === 'error'
-  const runState = active ? 'running' : draining ? 'paused' : 'idle'
+  const runState = active ? 'running' : draining ? 'stopping' : 'idle'
   const readerWorkers = active ? 3 : 2
   const readerChannel = {
     id: 'reader-to-throttler' as const,
@@ -162,7 +160,6 @@ function ReaderStory({ state }: { state: ReaderState }) {
       snapshot={snapshot}
       selectedId="reader"
       onSelect={noop}
-      onChannelCapacityChange={noop}
       liveControls={liveControls(snapshot)}
     />
   )

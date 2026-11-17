@@ -14,8 +14,8 @@ describe('SimulationAdapter', () => {
     expect(Object.isFrozen(snapshot.sender)).toBe(true)
     expect(snapshot.sender.workers.applied).not.toBeNull()
     expect(snapshot.sender).toMatchObject({
-      liveWorkers: 0,
-      idleWorkers: 0,
+      liveWorkers: 3,
+      idleWorkers: 3,
       inFlightWorkers: 0,
       backoffWorkers: 0,
       drainingWorkers: 0,
@@ -32,12 +32,64 @@ describe('SimulationAdapter', () => {
     adapter.dispose()
   })
 
-  it('continues to dispatch the retained Sender workers control', async () => {
+  it('starts immediately and ticks once per interval across subscriptions', async () => {
+    vi.useFakeTimers()
+    const adapter = new SimulationAdapter()
+    expect(adapter.getSnapshot()).toMatchObject({ revision: 0, runState: 'running' })
+
+    const listener = vi.fn()
+    adapter.subscribe(listener)()
+    const unsubscribe = adapter.subscribe(listener)
+    expect(listener).toHaveBeenCalledTimes(2)
+    expect(vi.getTimerCount()).toBe(1)
+
+    await vi.advanceTimersByTimeAsync(200)
+    const snapshot = adapter.getSnapshot()
+    expect(snapshot).toMatchObject({ revision: 2, elapsedMs: 200 })
+    expect(snapshot.totalTransactions).toBeGreaterThan(0)
+    expect(snapshot.http.requestsCompletedTotal).toBeGreaterThan(0)
+    expect(listener).toHaveBeenCalledTimes(4)
+
+    unsubscribe()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(listener).toHaveBeenCalledTimes(4)
+
+    adapter.dispose()
+    adapter.dispose()
+    const disposedSnapshot = adapter.getSnapshot()
+    const afterDispose = vi.fn()
+    adapter.subscribe(afterDispose)()
+    await vi.advanceTimersByTimeAsync(300)
+    expect(adapter.getSnapshot()).toBe(disposedSnapshot)
+    expect(afterDispose).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    await expect(adapter.dispatch({ type: 'set-sender-workers', value: 4 }))
+      .resolves.toMatchObject({ accepted: false, error: { code: 'disposed' } })
+  })
+
+  it('applies Reader, Sender, and TPS changes while running', async () => {
+    vi.useFakeTimers()
     const adapter = new SimulationAdapter()
 
-    await expect(adapter.dispatch({ type: 'set-sender-workers', value: 3 }))
+    await vi.advanceTimersByTimeAsync(200)
+    const initial = adapter.getSnapshot()
+    await expect(adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 }))
       .resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })
-    expect(adapter.getSnapshot().sender.workers.applied).toBe(3)
+    await expect(adapter.dispatch({ type: 'set-sender-workers', value: 4 }))
+      .resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })
+    await expect(adapter.dispatch({ type: 'set-requested-tps', value: 75_000 }))
+      .resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })
+
+    const updated = adapter.getSnapshot()
+    expect(updated).toMatchObject({
+      runState: 'running',
+      elapsedMs: initial.elapsedMs,
+      reader: { workers: { applied: 7 }, liveWorkers: 7 },
+      sender: { workers: { applied: 4 }, liveWorkers: 4 },
+      throttler: { requestedTps: { applied: 75_000 } },
+    })
+    await vi.advanceTimersByTimeAsync(200)
+    expect(adapter.getSnapshot().totalTransactions).toBeGreaterThan(initial.totalTransactions)
     adapter.dispose()
   })
 
@@ -53,7 +105,6 @@ describe('SimulationAdapter', () => {
       expect(initial.throttler.requestedTps.max).toBe(250_000)
       expect(initial.sender.workers.max).toBe(32)
       await adapter.dispatch({ type: 'set-requested-tps', value: 250_000 })
-      await adapter.dispatch({ type: 'run' })
 
       for (const workers of [3, 24, 32]) {
         await adapter.dispatch({ type: 'set-sender-workers', value: workers })
@@ -94,10 +145,6 @@ describe('SimulationAdapter', () => {
     const adapter = new SimulationAdapter()
 
     await adapter.dispatch({ type: 'set-sender-workers', value: 2 })
-    await adapter.dispatch({ type: 'set-throttler-installed', value: false })
-    expect(adapter.getSnapshot().throttler.installed.applied).toBe(false)
-    await adapter.dispatch({ type: 'set-read-batch-size', value: 1_000 })
-    await adapter.dispatch({ type: 'run' })
     await vi.advanceTimersByTimeAsync(50)
     await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
 
@@ -109,16 +156,6 @@ describe('SimulationAdapter', () => {
       inFlightRequests: 2,
     })
     expect(adapter.getSnapshot().http.inFlightRequests).toBe(2)
-    const requestedTps = adapter.getSnapshot().throttler.requestedTps.applied
-    await adapter.dispatch({ type: 'pause' })
-    await adapter.dispatch({ type: 'reset' })
-    expect(adapter.getSnapshot().throttler).toMatchObject({
-      installed: { applied: false }, requestedTps: { applied: requestedTps },
-    })
-    await adapter.dispatch({ type: 'set-throttler-installed', value: true })
-    expect(adapter.getSnapshot().throttler).toMatchObject({
-      installed: { applied: true }, requestedTps: { applied: requestedTps },
-    })
     adapter.dispose()
   })
 })

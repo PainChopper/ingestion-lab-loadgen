@@ -9,7 +9,6 @@ const CONFIG: SimulationConfig = {
   readerWorkers: 1,
   senderWorkers: 1,
   requestedTps: 50_000,
-  throttlerInstalled: true,
   readBatchSize: 5_000,
   httpTimeoutMs: 500,
   targetDelayMs: 0,
@@ -30,7 +29,7 @@ describe('FixedStepSimulation pipeline batch', () => {
     )
 
     for (let step = 0; step < 200; step += 1) simulation.advanceStep()
-    const telemetry = simulation.telemetry(true)
+    const telemetry = simulation.telemetry()
 
     expect(attempts.length).toBeGreaterThan(0)
     expect(attempts.every(({ batch }) =>
@@ -50,7 +49,6 @@ describe('FixedStepSimulation pipeline batch', () => {
       {
         ...CONFIG,
         senderWorkers: 2,
-        throttlerInstalled: false,
         readBatchSize: 1_000,
         targetDelayMs: 100,
       },
@@ -60,22 +58,21 @@ describe('FixedStepSimulation pipeline batch', () => {
 
     for (let step = 0; step < 50; step += 1) {
       simulation.advanceStep()
-      if (simulation.telemetry(true).sender.workerStates.inFlight === 2) break
+      if (simulation.telemetry().sender.workerStates.inFlight === 2) break
     }
 
-    expect(simulation.telemetry(true).sender.workerStates.inFlight).toBe(2)
+    expect(simulation.telemetry().sender.workerStates.inFlight).toBe(2)
 
     simulation.updateConfig({ senderWorkers: 1 })
 
-    const telemetry = simulation.telemetry(true).sender
-    expect(telemetry.workers.applied).toBe(2)
-    expect(telemetry.workers.pending).toBe(1)
+    const telemetry = simulation.telemetry().sender
+    expect(telemetry.liveWorkers).toBe(2)
     expect(telemetry.workerStates.inFlight).toBe(1)
     expect(telemetry.drainingWorkerStates).toEqual({
       idle: 0,
       inFlight: 1,
       backoff: 0,
     })
-    expect(simulation.telemetry(true).http.inFlightRequests).toBe(2)
+    expect(simulation.telemetry().http.inFlightRequests).toBe(2)
   })
 })

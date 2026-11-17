@@ -1,9 +1,6 @@
 import {
   FlaskConical,
   MousePointer2,
-  Pause,
-  Play,
-  RotateCcw,
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -11,7 +8,6 @@ import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import type {
   LoadgenSnapshot,
   ChannelFlowState,
-  ChannelId,
   SelectableId,
 } from '../model/loadgen'
 import { useLoadgenSnapshot } from '../hooks/useLoadgenSnapshot'
@@ -24,6 +20,7 @@ import {
   type InspectorRow,
 } from './inspectorViewModel'
 import { NumericControl } from './NumericControl'
+import { formatInteger } from './pipeline/formatters'
 import { PipelineSvg } from './pipeline/PipelineSvg'
 import { createPipelineGeometry } from './pipeline/geometry'
 import {
@@ -33,10 +30,6 @@ import {
 
 interface AdapterProps {
   adapter: LoadgenAdapter
-}
-
-interface SnapshotProps extends AdapterProps {
-  snapshot: LoadgenSnapshot
 }
 
 const CHANNEL_STATES: ReadonlyArray<{
@@ -63,17 +56,7 @@ function formatCount(value: number): string {
   return new Intl.NumberFormat('en-US').format(value)
 }
 
-function TopBar({
-  adapter,
-  snapshot,
-  frozenObserved,
-}: SnapshotProps & { frozenObserved: boolean }) {
-  const running = snapshot.runState === 'running'
-  const paused = snapshot.runState === 'paused'
-  const faulted = snapshot.runState === 'faulted'
-  const runUnavailable = snapshot.adapterKind === 'http' &&
-    (snapshot.connectionState !== 'connected' || snapshot.config === null)
-
+function TopBar({ snapshot }: { snapshot: LoadgenSnapshot }) {
   return (
     <header className="topbar">
       <div className="brand">
@@ -89,39 +72,6 @@ function TopBar({
         <span className="state-dot" aria-hidden="true" />
         <span>{snapshot.runState}</span>
       </div>
-
-      <div className="run-actions">
-        <button
-          id="run-toggle"
-          className="button button--primary"
-          type="button"
-          onClick={() =>
-            void adapter.dispatch({ type: running ? 'pause' : 'run' })
-          }
-          disabled={runUnavailable || faulted}
-          title={running ? 'Pause run' : paused ? 'Resume run' : 'Start run'}
-          aria-label={running ? 'Pause run' : paused ? 'Resume run' : 'Start run'}
-        >
-          {running ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
-          <span>{running ? 'Pause' : paused ? 'Resume' : 'Run'}</span>
-        </button>
-        <button
-          id="reset-run"
-          className="button button--icon"
-          type="button"
-          onClick={() => void adapter.dispatch({ type: 'reset' })}
-          title="Reset run"
-          aria-label="Reset run"
-        >
-          <RotateCcw aria-hidden="true" />
-        </button>
-      </div>
-
-      {frozenObserved && (
-        <p className="run-state-qualifier" role="status">
-          Paused — last observed telemetry frozen; controls remain desired
-        </p>
-      )}
 
       <dl className="run-counters">
         <div>
@@ -142,9 +92,7 @@ interface PipelineViewportProps {
   snapshot: LoadgenSnapshot
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
-  onChannelCapacityChange: (channel: ChannelId, value: number) => void
   liveControls: LiveControls
-  frozenObserved: boolean
   orientation: PipelineOrientation
 }
 
@@ -152,9 +100,7 @@ function PipelineViewport({
   snapshot,
   selectedId,
   onSelect,
-  onChannelCapacityChange,
   liveControls,
-  frozenObserved,
   orientation,
 }: PipelineViewportProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -211,9 +157,7 @@ function PipelineViewport({
           snapshot={snapshot}
           selectedId={selectedId}
           onSelect={onSelect}
-          onChannelCapacityChange={onChannelCapacityChange}
           liveControls={liveControls}
-          frozenObserved={frozenObserved}
           orientation={orientation}
           geometry={geometry}
         />
@@ -227,31 +171,29 @@ interface InspectorDockProps {
   selectedId: SelectableId | null
   onClearSelection: () => void
   liveControls: LiveControls
-  frozenObserved: boolean
 }
 
 function InspectorControls({
   snapshot,
   selectedId,
   liveControls,
-}: Omit<InspectorDockProps, 'onClearSelection' | 'frozenObserved'>) {
+}: Omit<InspectorDockProps, 'onClearSelection'>) {
   switch (selectedId) {
     case 'reader':
       return (
         <div className="inspector-controls" aria-label="Reader configuration">
-          <NumericControl
-            label="Workers"
-            control={snapshot.reader.workers}
-            desiredControl={liveControls.readerWorkers}
-          />
-          <NumericControl
-            label="Read batch size"
-            control={snapshot.reader.readBatchSize}
-            desiredControl={liveControls.readBatchSize}
-          />
+          {snapshot.adapterKind === 'http' && (
+            <NumericControl
+              label="Workers"
+              control={snapshot.reader.workers}
+              desiredControl={liveControls.readerWorkers}
+            />
+          )}
+          <p>Read batch size: {formatInteger(snapshot.reader.readBatchSize.applied)} tx</p>
         </div>
       )
     case 'throttler': {
+      if (snapshot.adapterKind !== 'http') return null
       return (
         <div className="inspector-controls" aria-label="Throttler configuration">
           <NumericControl
@@ -275,6 +217,7 @@ function InspectorControls({
       )
     }
     case 'sender':
+      if (snapshot.adapterKind !== 'http') return null
       return (
         <div className="inspector-controls" aria-label="Sender configuration">
           <NumericControl
@@ -296,13 +239,12 @@ function InspectorDock({
   selectedId,
   onClearSelection,
   liveControls,
-  frozenObserved,
 }: InspectorDockProps) {
-  const model = getInspectorViewModel(snapshot, selectedId, frozenObserved)
-  const controls = model?.id === 'sender'
+  const model = getInspectorViewModel(snapshot, selectedId)
+  const controls = model?.id === 'sender' && snapshot.adapterKind === 'http'
     ? (
       <section className="inspector-section" aria-labelledby="sender-controls-title">
-        <h3 id="sender-controls-title" className="inspector-section__title">Управление</h3>
+        <h3 id="sender-controls-title" className="inspector-section__title">Controls</h3>
         <InspectorControls
           snapshot={snapshot}
           selectedId={selectedId}
@@ -404,9 +346,7 @@ interface WorkspaceProps {
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
   onClearSelection: () => void
-  onChannelCapacityChange: (channel: ChannelId, value: number) => void
   liveControls: LiveControls
-  frozenObserved: boolean
   orientation: PipelineOrientation
 }
 
@@ -415,9 +355,7 @@ function Workspace({
   selectedId,
   onSelect,
   onClearSelection,
-  onChannelCapacityChange,
   liveControls,
-  frozenObserved,
   orientation,
 }: WorkspaceProps) {
   return (
@@ -426,9 +364,7 @@ function Workspace({
         snapshot={snapshot}
         selectedId={selectedId}
         onSelect={onSelect}
-        onChannelCapacityChange={onChannelCapacityChange}
         liveControls={liveControls}
-        frozenObserved={frozenObserved}
         orientation={orientation}
       />
       <InspectorDock
@@ -436,7 +372,6 @@ function Workspace({
         selectedId={selectedId}
         onClearSelection={onClearSelection}
         liveControls={liveControls}
-        frozenObserved={frozenObserved}
       />
     </div>
   )
@@ -459,7 +394,7 @@ function ChannelStateLegend() {
 }
 
 export function LabShell({ adapter }: AdapterProps) {
-  const { snapshot, liveSnapshot, frozenObserved } = useLoadgenSnapshot(adapter)
+  const { snapshot, liveSnapshot } = useLoadgenSnapshot(adapter)
   const orientation = usePipelineOrientation()
   const [selectedId, setSelectedId] = useState<SelectableId | null>(null)
   const immediate = (control: { applied: number | null; applyMode: string }) =>
@@ -471,12 +406,6 @@ export function LabShell({ adapter }: AdapterProps) {
     dispatch: (value) => adapter.dispatch({
       type: 'set-worker-count', actor: 'reader', value,
     }),
-  })
-  const readBatchSize = useDesiredControl({
-    applied: liveSnapshot.reader.readBatchSize.applied ?? liveSnapshot.reader.readBatchSize.min,
-    revision: liveSnapshot.revision,
-    available: immediate(liveSnapshot.reader.readBatchSize),
-    dispatch: (value) => adapter.dispatch({ type: 'set-read-batch-size', value }),
   })
   const requestedTps = useDesiredControl({
     applied: liveSnapshot.throttler.requestedTps.applied ?? liveSnapshot.throttler.requestedTps.min,
@@ -502,26 +431,11 @@ export function LabShell({ adapter }: AdapterProps) {
     available: immediate(liveSnapshot.sender.workers),
     dispatch: (value) => adapter.dispatch({ type: 'set-sender-workers', value }),
   })
-  const timeoutMs = useDesiredControl({
-    applied: liveSnapshot.sender.timeoutMs.applied ?? liveSnapshot.sender.timeoutMs.min,
-    revision: liveSnapshot.revision,
-    available: immediate(liveSnapshot.sender.timeoutMs),
-    dispatch: (valueMs) => adapter.dispatch({ type: 'set-http-timeout', valueMs }),
-  })
   const liveControls: LiveControls = {
     readerWorkers,
-    readBatchSize,
     requestedTps,
     installed,
     senderWorkers,
-    timeoutMs,
-  }
-  const handleChannelCapacityChange = (channel: ChannelId, value: number) => {
-    void adapter.dispatch(
-      channel === 'reader-to-throttler'
-        ? { type: 'set-reader-channel-capacity', value }
-        : { type: 'set-sender-channel-capacity', value },
-    )
   }
 
   return (
@@ -530,19 +444,13 @@ export function LabShell({ adapter }: AdapterProps) {
       aria-label="Load generator laboratory"
       data-layout={orientation}
     >
-      <TopBar
-        adapter={adapter}
-        snapshot={snapshot}
-        frozenObserved={frozenObserved}
-      />
+      <TopBar snapshot={snapshot} />
       <Workspace
         snapshot={snapshot}
         selectedId={selectedId}
         onSelect={setSelectedId}
         onClearSelection={() => setSelectedId(null)}
-        onChannelCapacityChange={handleChannelCapacityChange}
         liveControls={liveControls}
-        frozenObserved={frozenObserved}
         orientation={orientation}
       />
       <ChannelStateLegend />

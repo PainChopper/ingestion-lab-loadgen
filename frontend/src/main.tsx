@@ -11,11 +11,17 @@ const adapter = import.meta.env.MODE === 'backend'
 
 window.addEventListener('beforeunload', adapter.dispose, { once: true })
 
+const root = createRoot(document.getElementById('root')!)
+
 if (import.meta.hot) {
-  import.meta.hot.dispose(adapter.dispose)
+  import.meta.hot.dispose(() => {
+    root.unmount()
+    window.removeEventListener('beforeunload', adapter.dispose)
+    adapter.dispose()
+  })
 }
 
-createRoot(document.getElementById('root')!).render(
+root.render(
   <StrictMode>
     <App adapter={adapter} />
   </StrictMode>,

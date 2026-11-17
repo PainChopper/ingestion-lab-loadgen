@@ -2,12 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"go.uber.org/zap"
 )
 
-func snapshotHandler(requests chan<- runtimeCommand, logger *zap.Logger) http.Handler {
+func snapshotHandler(requests runtimeRequests, logger *zap.Logger) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -17,10 +18,15 @@ func snapshotHandler(requests chan<- runtimeCommand, logger *zap.Logger) http.Ha
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		status := requestRuntimeStatus(requests)
-		w.Header().Set("Content-Type", "application/json")
-		err := json.NewEncoder(w).Encode(status)
+		status, err := requestRuntimeStatus(r.Context(), requests)
 		if err != nil {
+			if errors.Is(err, errRuntimeUnavailable) {
+				http.Error(w, "Runtime unavailable", http.StatusServiceUnavailable)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(status); err != nil {
 			logger.Error("snapshot response encoding failed", zap.String("event", "run_failed"))
 			return
 		}

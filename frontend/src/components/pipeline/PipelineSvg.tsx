@@ -1,6 +1,6 @@
+import { formatInteger } from './formatters'
 import type {
   LoadgenSnapshot,
-  ChannelId,
   SelectableId,
 } from '../../model/loadgen'
 import type { LiveControls } from '../../hooks/useDesiredControl'
@@ -11,7 +11,6 @@ import {
   type PipelineGeometry,
 } from './geometry'
 import { ChannelCable } from './ChannelCable'
-import { PipelineBatchControl } from './PipelineBatchControl'
 import { ReaderActor } from './ReaderActor'
 import { SenderActor } from './SenderActor'
 import { TargetActor } from './TargetActor'
@@ -24,9 +23,7 @@ interface PipelineSvgProps {
   snapshot: LoadgenSnapshot
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
-  onChannelCapacityChange: (channel: ChannelId, value: number) => void
   liveControls: LiveControls
-  frozenObserved?: boolean
   orientation?: PipelineOrientation
   geometry?: PipelineGeometry
 }
@@ -35,9 +32,7 @@ export function PipelineSvg({
   snapshot,
   selectedId,
   onSelect,
-  onChannelCapacityChange,
   liveControls,
-  frozenObserved = false,
   orientation = 'landscape',
   geometry,
 }: PipelineSvgProps) {
@@ -75,7 +70,6 @@ export function PipelineSvg({
         geometry={readerChannelGeometry}
         selected={selectedId === snapshot.readerChannel.id}
         onSelect={onSelect}
-        onCapacityChange={onChannelCapacityChange}
         orientation={orientation}
         capacityValues={snapshot.adapterKind === 'http'
           ? snapshot.config?.readerChannelCapacity.allowed
@@ -83,7 +77,7 @@ export function PipelineSvg({
         hoseForbiddenBoxes={orientation === 'portrait'
           ? [
               { x: 70, y: readerChannelGeometry.end.y - 196, width: 340, height: 188 },
-              resolvedGeometry.batchControl.guard,
+              resolvedGeometry.batchLabel.guard,
             ]
           : undefined}
       />
@@ -93,7 +87,6 @@ export function PipelineSvg({
         geometry={senderChannelGeometry}
         selected={selectedId === snapshot.senderChannel.id}
         onSelect={onSelect}
-        onCapacityChange={onChannelCapacityChange}
         orientation={orientation}
         capacityValues={snapshot.adapterKind === 'http'
           ? snapshot.config?.senderChannelCapacity.allowed
@@ -120,7 +113,6 @@ export function PipelineSvg({
         selected={selectedId === snapshot.reader.id}
         onSelect={onSelect}
         desiredControl={liveControls.readerWorkers}
-        frozenObserved={frozenObserved}
         geometry={resolvedGeometry.actors.reader}
         orientation={resolvedGeometry.orientation}
       />
@@ -128,23 +120,25 @@ export function PipelineSvg({
         snapshot={snapshot.throttler}
         upstreamChannel={snapshot.readerChannel}
         requestedTpsControl={liveControls.requestedTps}
-        installedControl={liveControls.installed}
+        installedControl={snapshot.adapterKind === 'http' ? liveControls.installed : undefined}
         selected={selectedId === snapshot.throttler.id}
         onSelect={onSelect}
         geometry={resolvedGeometry.actors.throttler}
         orientation={resolvedGeometry.orientation}
       />
-      <PipelineBatchControl
-        control={snapshot.reader.readBatchSize}
-        desiredControl={liveControls.readBatchSize}
-        anchor={resolvedGeometry.batchControl.anchor}
-      />
+      <text
+        className="pipeline-batch-size"
+        x={resolvedGeometry.batchLabel.anchor.x}
+        y={resolvedGeometry.batchLabel.anchor.y + 5}
+        textAnchor="middle"
+      >
+        Batch {formatInteger(snapshot.reader.readBatchSize.applied)} tx
+      </text>
       <SenderActor
         snapshot={snapshot.sender}
         selected={selectedId === snapshot.sender.id}
         onSelect={onSelect}
         desiredControl={liveControls.senderWorkers}
-        frozenObserved={frozenObserved}
         geometry={resolvedGeometry.actors.sender}
         orientation={resolvedGeometry.orientation}
       />

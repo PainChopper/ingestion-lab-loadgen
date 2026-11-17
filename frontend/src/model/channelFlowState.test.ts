@@ -35,8 +35,6 @@ function channelInput(
   values: {
     depth?: number | null
     applied?: number | null
-    preview?: number | null
-    pending?: number | null
     blockedSenders?: number
     oldestBlockedSenderMs?: number
     runState?: RunState
@@ -65,14 +63,6 @@ function channelInput(
           values.applied === undefined
             ? snapshot.readerChannel.capacity.applied
             : values.applied,
-        preview:
-          values.preview === undefined
-            ? snapshot.readerChannel.capacity.preview
-            : values.preview,
-        pending:
-          values.pending === undefined
-            ? snapshot.readerChannel.capacity.pending
-            : values.pending,
       },
     },
   }
@@ -115,8 +105,6 @@ describe('channel flow state derivation', () => {
       capacity: {
         ...telemetry.capacity,
         applied: 20,
-        preview: 0,
-        pending: 0,
       },
     })).toBe(0.5)
     expect(effectiveChannelPressure({
@@ -127,8 +115,6 @@ describe('channel flow state derivation', () => {
       capacity: {
         ...telemetry.capacity,
         applied: 10,
-        preview: 0,
-        pending: 0,
       },
     })).toBe(1)
     expect([
@@ -148,8 +134,6 @@ describe('channel flow state derivation', () => {
     const idle = deriver.derive(channelInput(base, {
       depth: 0,
       applied: 0,
-      preview: 12,
-      pending: 12,
       blockedSenders: 0,
       oldestBlockedSenderMs: 0,
     }), 0).readerChannel
@@ -165,8 +149,6 @@ describe('channel flow state derivation', () => {
       values: {
         depth: 0,
         applied: 0,
-        preview: 12,
-        pending: 12,
         blockedSenders: 1,
         oldestBlockedSenderMs: age,
       },
@@ -237,8 +219,6 @@ describe('channel flow state derivation', () => {
         values: {
           depth: 160,
           applied: 160,
-          preview: 0,
-          pending: 0,
         },
       })),
     )
@@ -299,7 +279,7 @@ describe('channel flow state derivation', () => {
           applied: 0,
           blockedSenders: 0,
           oldestBlockedSenderMs: 0,
-          runState: 'paused',
+          runState: 'idle',
         },
       },
       {

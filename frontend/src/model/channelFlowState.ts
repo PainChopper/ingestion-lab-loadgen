@@ -100,7 +100,7 @@ function channelMode(
   if (connectionState !== 'connected' || missingTelemetry) {
     return 'connection-error'
   }
-  if (runState !== 'running') return 'stopped'
+  if (runState !== 'running' && runState !== 'stopping') return 'stopped'
   return null
 }
 

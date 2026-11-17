@@ -48,7 +48,7 @@ function installedControl(
   applied: boolean,
   desired: boolean,
   phase: 'idle' | 'pending',
-): ThrottlerActorProps['installedControl'] {
+): NonNullable<ThrottlerActorProps['installedControl']> {
   return {
     applied,
     available: true,
@@ -58,7 +58,7 @@ function installedControl(
     preview: noop,
     commit: accept,
     cancel: noop,
-  } as ThrottlerActorProps['installedControl']
+  }
 }
 
 function createArgs({
@@ -77,7 +77,7 @@ function createArgs({
   admittedTps?: number
   flowState?: 'normal' | 'stopped' | 'connection-error'
   displayedPressure?: number
-}): ThrottlerActorProps {
+}): ThrottlerActorProps & { installedControl: ReturnType<typeof installedControl> } {
   const snapshot = {
     id: 'throttler',
     requestedTps: numericControl(appliedTps, 'tx/s', 5_000),
