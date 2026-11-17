@@ -7,8 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -20,18 +18,7 @@ const gracefulShutdownTimeout = 10 * time.Second
 const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
 
-func newServeMux(requests chan<- runtimeCommand, metrics *PrometheusMetrics, config config, logger *zap.Logger) (*http.ServeMux, error) {
-	parsed, err := url.Parse(config.Sender.API.URL)
-	if err != nil {
-		return nil, fmt.Errorf("sender.api.url: %w", err)
-	}
-	ingestPath := parsed.Path
-	if ingestPath == "" {
-		ingestPath = "/"
-	}
-	if !strings.HasPrefix(ingestPath, "/") || strings.ContainsAny(ingestPath, "{} \t\r\n") {
-		return nil, fmt.Errorf("sender.api.url: path %q is not a literal HTTP route", ingestPath)
-	}
+func newServeMux(requests chan<- runtimeCommand, metrics *PrometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -50,26 +37,16 @@ func newServeMux(requests chan<- runtimeCommand, metrics *PrometheusMetrics, con
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	request := &http.Request{Method: http.MethodPost, URL: &url.URL{Path: ingestPath}}
-	if _, pattern := mux.Handler(request); pattern != "" || ingestPath == "/metrics" {
-		return nil, fmt.Errorf("sender.api.url: path %q conflicts with a service route", ingestPath)
-	}
-	mux.Handle(ingestPath, internalTestIngestHandler())
-	return mux, nil
+	return mux
 }
 
 func startHTTPServer(requests chan<- runtimeCommand, metrics *PrometheusMetrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	mux, err := newServeMux(requests, metrics, config, logger)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	server := &http.Server{
 		Addr:    config.HTTP.Addr,
-		Handler: mux,
+		Handler: newServeMux(requests, metrics, config, logger),
 	}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {

@@ -75,9 +75,12 @@ func TestDefaultServeUsesCurrentDefaultConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse default CLI: %v", err)
 	}
-	_, err = loadConfig(command.configPath)
+	loaded, err := loadConfig(command.configPath)
 	if err != nil {
 		t.Fatalf("load default serve config: %v", err)
+	}
+	if loaded.Sender.API.URL != testSenderURL {
+		t.Fatalf("default Sender URL = %q, want %q", loaded.Sender.API.URL, testSenderURL)
 	}
 }
 
