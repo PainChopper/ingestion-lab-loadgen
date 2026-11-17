@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,108 +8,12 @@ import (
 	"time"
 )
 
-func TestCommandsHandlerDispatches(t *testing.T) {
-	tests := []struct {
-		action       string
-		expectedKind runtimeCommandKind
-	}{
-		{"run", cmdRun},
-		{"pause", cmdPause},
-		{"reset", cmdReset},
-	}
-
-	for _, test := range tests {
-		t.Run(test.action, func(t *testing.T) {
-			commands := make(chan runtimeCommand, 1)
-			body := strings.NewReader(`{"action":"` + test.action + `"}`)
-			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
-			rec := httptest.NewRecorder()
-
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				commandsHandler(commands, testConfig(t), nil).ServeHTTP(rec, req)
-			}()
-
-			var cmd runtimeCommand
-			select {
-			case cmd = <-commands:
-			case <-time.After(time.Second):
-				t.Fatal("command was not dispatched")
-			}
-			if test.expectedKind == cmdRun || test.expectedKind == cmdReset {
-				cmd.receiptReply <- runtimeCommandReceipt{}
-			}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("command handler did not return")
-			}
-			response := rec.Result()
-			if response.StatusCode != http.StatusOK {
-				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusOK)
-			}
-
-			if cmd.kind != test.expectedKind {
-				t.Errorf("command kind = %v, want %v", cmd.kind, test.expectedKind)
-			}
-		})
-	}
-}
-
-func TestCommandsHandlerReportsRunStartError(t *testing.T) {
-	commands := make(chan runtimeCommand, 1)
-	request := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"run"}`))
-	recorder := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		commandsHandler(commands, testConfig(t), nil).ServeHTTP(recorder, request)
-	}()
-
-	command := <-commands
-	command.receiptReply <- runtimeCommandReceipt{err: errors.New("missing parquet")}
-	<-done
-
-	if recorder.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("reply code = %d, want %d", recorder.Code, http.StatusUnprocessableEntity)
-	}
-	if contentType := recorder.Header().Get("Content-Type"); contentType != "application/json" {
-		t.Errorf("content type = %q, want application/json", contentType)
-	}
-	if body := recorder.Body.String(); body != "{\"error\":\"missing parquet\"}\n" {
-		t.Errorf("reply body = %q", body)
-	}
-}
-
-func TestCommandsHandlerNilLoggerHandlesResponseWriteError(t *testing.T) {
-	commands := make(chan runtimeCommand, 1)
-	request := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"run"}`))
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		commandsHandler(commands, testConfig(t), nil).ServeHTTP(&errorResponseWriter{}, request)
-	}()
-
-	command := <-commands
-	command.receiptReply <- runtimeCommandReceipt{err: errors.New("missing parquet")}
-	<-done
-}
-
-type errorResponseWriter struct{}
-
-func (errorResponseWriter) Header() http.Header { return make(http.Header) }
-
-func (errorResponseWriter) WriteHeader(int) {}
-
-func (errorResponseWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
-
 func TestCommandsHandlerRejectsGet(t *testing.T) {
 	commands := make(chan runtimeCommand, 1)
 	req := httptest.NewRequest(http.MethodGet, commandsPath, nil)
 	rec := httptest.NewRecorder()
 
-	commandsHandler(commands, testConfig(t), nil).ServeHTTP(rec, req)
+	commandsHandler(runtimeRequests{commands: commands}, testConfig(t)).ServeHTTP(rec, req)
 	response := rec.Result()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %v, want %v", rec.Code, http.StatusMethodNotAllowed)
@@ -127,7 +30,7 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 		body string
 	}{
 		{"malformed-json", "malformed-json"},
-		{"unknown-action", `{"action":"unknown-action"}`},
+		{"unknown-action", `{"action":"unknown-action","value":2}`},
 	}
 
 	for _, test := range tests {
@@ -136,10 +39,36 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 			body := strings.NewReader(test.body)
 			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
 			rec := httptest.NewRecorder()
-			commandsHandler(commands, testConfig(t), nil).ServeHTTP(rec, req)
+			commandsHandler(runtimeRequests{commands: commands}, testConfig(t)).ServeHTTP(rec, req)
 			response := rec.Result()
 			if response.StatusCode != http.StatusBadRequest {
 				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestCommandsHandlerRejectsOversizedBody(t *testing.T) {
+	const command = `{"action":"set-reader-workers","value":2}`
+	const limit = 4096
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"JSON exceeds limit", `{"action":"` + strings.Repeat("x", limit) + `","value":2}`},
+		{"trailing whitespace exceeds limit", command + strings.Repeat(" ", limit+1-len(command))},
+	}
+	done := make(chan struct{})
+	close(done)
+	handler := commandsHandler(runtimeRequests{done: done}, testConfig(t))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
+			req.ContentLength = -1
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusRequestEntityTooLarge {
+				t.Errorf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
 			}
 		})
 	}
@@ -169,7 +98,6 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "old installed string", body: `{"action":"set-throttler-installed","value":"installed"}`, want: http.StatusBadRequest},
 		{name: "old bypass string", body: `{"action":"set-throttler-installed","value":"bypass"}`, want: http.StatusBadRequest},
 		{name: "quoted bool", body: `{"action":"set-throttler-installed","value":"false"}`, want: http.StatusBadRequest},
-		{name: "legacy action", body: `{"action":"set-throttler-installation-mode","value":false}`, want: http.StatusBadRequest},
 		{name: "installed trailing JSON", body: `{"action":"set-throttler-installed","value":false}{}`, want: http.StatusBadRequest},
 		{name: "mode extra field", body: `{"action":"set-throttler-installed","value":"bypass","other":1}`, want: http.StatusBadRequest},
 		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
@@ -187,7 +115,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 			config := testConfig(t)
 			go func() {
 				defer close(done)
-				commandsHandler(commands, config, nil).ServeHTTP(recorder, req)
+				commandsHandler(runtimeRequests{commands: commands}, config).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -244,7 +172,7 @@ func TestSenderCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(commands, testConfig(t), nil).ServeHTTP(recorder, req)
+				commandsHandler(runtimeRequests{commands: commands}, testConfig(t)).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -270,12 +198,14 @@ func TestSenderCommandValidation(t *testing.T) {
 }
 
 func TestReaderWorkersCommandValidation(t *testing.T) {
+	const command = `{"action":"set-reader-workers","value":1}`
 	tests := []struct {
 		name, body string
 		want       int
 		value      int
 	}{
-		{"minimum", `{"action":"set-reader-workers","value":1}`, http.StatusOK, 1},
+		{"minimum", command, http.StatusOK, 1},
+		{"body at the limit", command + strings.Repeat(" ", 4096-len(command)), http.StatusOK, 1},
 		{"maximum", `{"action":"set-reader-workers","value":7}`, http.StatusOK, 7},
 		{"zero", `{"action":"set-reader-workers","value":0}`, http.StatusBadRequest, 0},
 		{"eight", `{"action":"set-reader-workers","value":8}`, http.StatusBadRequest, 0},
@@ -294,7 +224,7 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(commands, testConfig(t), nil).ServeHTTP(recorder, req)
+				commandsHandler(runtimeRequests{commands: commands}, testConfig(t)).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {

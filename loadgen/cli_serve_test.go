@@ -25,7 +25,7 @@ func TestParseCLI(t *testing.T) {
 		{name: "top level help", args: []string{"--help"}, wantHelp: true},
 		{name: "serve help", args: []string{"serve", "--help"}, wantHelp: true},
 		{name: "serve with config", args: []string{"serve", "--config", "custom.toml"}, wantConfig: "custom.toml"},
-		{name: "legacy config", args: []string{"custom.toml"}, wantConfig: "custom.toml"},
+		{name: "positional config", args: []string{"./custom.toml"}, wantErr: "unexpected command \"./custom.toml\""},
 		{name: "missing config value", args: []string{"serve", "--config"}, wantErr: "invalid serve arguments"},
 		{name: "unknown serve argument", args: []string{"serve", "--other", "value"}, wantErr: "unexpected argument \"--other\""},
 		{name: "invalid status arguments", args: []string{"status", "extra"}, wantErr: "invalid status arguments"},
@@ -53,13 +53,13 @@ func TestParseCLI(t *testing.T) {
 	}
 }
 
-func TestNewControlStateStartsIdleWithLoadedConfig(t *testing.T) {
+func TestNewControlStateStartsStartingWithLoadedConfig(t *testing.T) {
 	loadedConfig := testConfig(t)
 	loadedConfig.Metrics.WindowMS.Initial = 300
 	state := newControlState(loadedConfig, zap.NewNop())
 
-	if got := state.run.state; got != runStateIdle {
-		t.Fatalf("initial lifecycle state = %q, want %q", got, runStateIdle)
+	if got := state.run.state; got != runStateStarting {
+		t.Fatalf("initial lifecycle state = %q, want %q", got, runStateStarting)
 	}
 	if state.config.Source.Path != loadedConfig.Source.Path {
 		t.Fatal("serve state did not retain loaded config")
@@ -84,7 +84,7 @@ func TestDefaultServeUsesCurrentDefaultConfig(t *testing.T) {
 	}
 }
 
-func TestRunServeRunFailsBeforePipelineWhenListenerOccupied(t *testing.T) {
+func TestRunServeFailsBeforePipelineWhenListenerOccupied(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:8080")
 	if err != nil {
 		t.Skipf("cannot reserve default HTTP listener: %v", err)
@@ -95,7 +95,7 @@ func TestRunServeRunFailsBeforePipelineWhenListenerOccupied(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte(testConfigContents()), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	if err := runServe(context.Background(), configPath, true); err == nil || !strings.Contains(err.Error(), "listen HTTP server") {
+	if err := runServe(context.Background(), configPath); err == nil || !strings.Contains(err.Error(), "listen HTTP server") {
 		t.Fatalf("runServe error = %v, want listener startup failure", err)
 	}
 }

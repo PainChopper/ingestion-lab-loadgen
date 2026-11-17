@@ -15,11 +15,9 @@ export interface DesiredControl<T> {
 
 export interface LiveControls {
   readerWorkers: DesiredControl<number>
-  readBatchSize: DesiredControl<number>
   requestedTps: DesiredControl<number>
   installed: DesiredControl<boolean>
   senderWorkers: DesiredControl<number>
-  timeoutMs: DesiredControl<number>
 }
 
 interface DesiredControlOptions<T> {

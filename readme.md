@@ -14,7 +14,7 @@ The public demo uses simulation so you can explore the interface without running
 Parquet → Reader workers → Reader queue → Throttler → Sender queue → Sender workers → HTTP target
 ```
 
-- Start, pause, and reset runs through the UI, HTTP API, or CLI.
+- One run per LoadGen process, started automatically and stopped with Ctrl+C or SIGTERM.
 - Read Parquet files with configurable batch sizes and Reader/Sender worker counts.
 - Two configurable queues and optional batch-level transaction rate limiting (TPS).
 - HTTP POST delivery of JSON batches, retries with delays and jitter, and cancellation handling.
@@ -99,11 +99,11 @@ npm run dev
 From the `loadgen/` directory, with the backend already running:
 
 ```bash
-go run . snapshot --url http://127.0.0.1:8080
-go run . run --url http://127.0.0.1:8080
-go run . pause --url http://127.0.0.1:8080
-go run . reset --url http://127.0.0.1:8080
+go run . status --url http://127.0.0.1:8080
+go run . set reader-workers 2 --url http://127.0.0.1:8080
+go run . set sender-workers 4 --url http://127.0.0.1:8080
 go run . set requested-tps 200000 --url http://127.0.0.1:8080
+go run . set throttler-installed true --url http://127.0.0.1:8080
 ```
 
 ## Configuration and delivery
@@ -114,22 +114,24 @@ See [loadgen/config.toml](loadgen/config.toml) for the current configuration exa
 | --- | --- | --- |
 | `http.addr` | HTTP server address | At startup |
 | `source.path` | Absolute glob pattern for Parquet files | At startup |
-| `reader.read_batch_size` | Transactions per Reader batch | While idle |
+| `reader.read_batch_size` | Transactions per Reader batch | At startup |
 | `reader.workers`, `sender.workers` | Worker counts | At runtime |
-| `readerChannel.capacity`, `senderChannel.capacity` | Queue capacity in batches | While idle |
+| `readerChannel.capacity`, `senderChannel.capacity` | Queue capacity in batches | At startup |
 | `throttler.requested_tps` | Requested transaction rate | At runtime |
 | `throttler.installed` | Enable or disable rate limiting | At runtime |
 | `sender.api.url` | HTTP delivery endpoint | At startup |
 | `sender.retry` | Configurable retry delays; jitter is fixed at 20% | At startup |
 
-A capacity of `0` means an unbuffered Go channel. With the Throttler enabled, `0 TPS` holds batches; disabling the Throttler removes the rate limit. Rate limiting operates on whole batches: the delay is calculated from the batch size and requested TPS. Queue capacity cannot be changed during an active run.
+A capacity of `0` means an unbuffered Go channel. With the Throttler enabled, `0 TPS` holds batches; disabling the Throttler removes the rate limit. Rate limiting operates on whole batches: the delay is calculated from the batch size and requested TPS.
+
+On Ctrl+C or SIGTERM, LoadGen stops reading new rows and gives the remaining batches up to 10 seconds to reach the Receiver. The rate limit stays in effect, including at zero TPS. At the deadline, LoadGen cancels pending work and logs the confirmed and unconfirmed transaction totals.
 
 The HTTP Sender posts a JSON array with `Content-Type: application/json` and treats `204 No Content` as success. Failed attempts are retried according to the configured delay schedule. Once the final interval is reached, retries continue at that delay until delivery succeeds or is cancelled. This is a controllable ingestion pipeline lab, not a general-purpose browser simulator or a load-testing tool for arbitrary protocols.
 
 ## HTTP API and observability
 
 - `GET /api/loadgen/snapshot`: run status, stage and queue telemetry, and configuration.
-- `POST /api/loadgen/commands`: run controls and settings.
+- `POST /api/loadgen/commands`: change live settings while the pipeline is running.
 - `GET /metrics`: Prometheus metrics.
 - `/debug/pprof/`: Go profiling.
 
@@ -139,9 +141,9 @@ Example command body:
 {"action":"set-requested-tps","value":200000}
 ```
 
-Supported actions: `run`, `pause`, `reset`, `set-read-batch-size`, `set-reader-workers`, `set-sender-workers`, `set-reader-channel-capacity`, `set-sender-channel-capacity`, `set-requested-tps`, and `set-throttler-installed`.
+Supported actions: `set-reader-workers`, `set-sender-workers`, `set-requested-tps`, and `set-throttler-installed`.
 
-Changes to idle-only settings are rejected during an active run. Invalid values receive `400 Bad Request`; state conflicts receive `409 Conflict`. In backend mode, the UI displays actual backend snapshots rather than simulated telemetry.
+Invalid actions or values receive `400 Bad Request`. During shutdown, snapshots remain available while batches drain and commands receive `409 Conflict`. The backend UI shows batch size and queue capacity as read-only values.
 
 ## Tests and component development
 

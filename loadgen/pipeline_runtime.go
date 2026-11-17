@@ -6,172 +6,73 @@ import (
 	"time"
 )
 
-// pipelineRuntime owns resources created for one pipeline run. controlState
-// retains lifecycle, controls, telemetry sampling, and public snapshots.
+// pipelineRuntime owns the pipeline resources for the process's single run.
 type pipelineRuntime struct {
-	state *controlState
-
 	terminallyCompletedTransactionsSinceTick atomic.Int64
-	readerBatches                            chan []Transaction
-	senderBatches                            chan []Transaction
-	senderPool                               *senderPool
-	runContext                               context.Context
-	cancelRun                                context.CancelFunc
-	throttler                                *throttler
 	readerPool                               *readerPool
+	throttler                                *throttler
+	senderPool                               *senderPool
+	done                                     chan struct{}
 }
 
-func newPipelineRuntime(state *controlState) *pipelineRuntime {
-	return &pipelineRuntime{state: state}
-}
+func startPipeline(ctx context.Context, state *controlState, source readerSource) *pipelineRuntime {
+	p := &pipelineRuntime{done: make(chan struct{})}
+	cfg := state.config
+	batchSize := cfg.Reader.ReadBatchSize.Initial
+	readerBatches := make(chan []Transaction, cfg.ReaderChannel.Capacity.Initial)
+	senderBatches := make(chan []Transaction, cfg.SenderChannel.Capacity.Initial)
+	state.telemetry.reader.startInterval(time.Now())
+	state.telemetry.readerChannel.start(readerBatches, batchSize)
+	state.telemetry.senderChannel.start(senderBatches, batchSize)
 
-func (runtime *pipelineRuntime) start(ctx context.Context) error {
-	runtime.state.telemetry.reader.startInterval(time.Now())
-	runtime.runContext, runtime.cancelRun = context.WithCancel(ctx)
-	runtime.readerBatches = make(chan []Transaction, runtime.state.controls.readerChannelCapacity)
-	runtime.state.telemetry.readerChannel.start(runtime.readerBatches, runtime.state.controls.readBatchSize)
-	runtime.state.telemetry.readerChannel.clearMeasurements()
-	runtime.senderBatches = make(chan []Transaction, runtime.state.controls.senderChannelCapacity)
-	runtime.state.telemetry.senderChannel.start(runtime.senderBatches, runtime.state.controls.readBatchSize)
-	runtime.state.telemetry.senderChannel.clearMeasurements()
-
-	started, err := startReaderPool(
-		runtime.runContext,
-		runtime.state.config.Source.Path,
-		runtime.state.controls.readBatchSize,
-		runtime.state.controls.readerWorkers,
-		runtime.readerBatches,
-		&runtime.state.telemetry.reader,
-		&runtime.state.telemetry.readerChannel,
-		runtime.state.logger,
+	reader := startReaderPool(
+		ctx,
+		source,
+		batchSize,
+		state.controls.readerWorkers,
+		readerBatches,
+		&state.telemetry.reader,
+		&state.telemetry.readerChannel,
+		state.logger,
 	)
-	if err != nil {
-		runtime.cancelRun()
-		runtime.runContext = nil
-		runtime.cancelRun = nil
-		closeAndDrain(runtime.readerBatches)
-		runtime.readerBatches = nil
-		runtime.state.telemetry.readerChannel.detach()
-		closeAndDrain(runtime.senderBatches)
-		runtime.senderBatches = nil
-		runtime.state.telemetry.senderChannel.detach()
-		runtime.state.telemetry.reader.reset()
-		return err
+	p.readerPool = reader
+	p.throttler = &throttler{
+		readerBatches: readerBatches,
+		senderBatches: senderBatches,
+		readerChannel: &state.telemetry.readerChannel,
+		senderChannel: &state.telemetry.senderChannel,
 	}
-
-	runtime.readerPool = started
-	runtime.throttler = &throttler{
-		readerBatches: runtime.readerBatches,
-		senderBatches: runtime.senderBatches,
-		readerChannel: &runtime.state.telemetry.readerChannel,
-		senderChannel: &runtime.state.telemetry.senderChannel,
-	}
-	runtime.throttler.start(
-		runtime.runContext,
-		runtime.state.throttlerSettings(),
+	p.throttler.start(ctx, state.throttlerSettings())
+	p.senderPool = startSenderPool(
+		ctx,
+		senderBatches,
+		&state.telemetry.senderChannel,
+		&p.terminallyCompletedTransactionsSinceTick,
+		state.controls.senderWorkers,
+		cfg.Sender.API,
+		cfg.Sender.Retry,
+		state.logger,
 	)
-	return nil
+	go func() {
+		// Only the pipeline closes stage outputs, after their last producer exits.
+		<-reader.done
+		close(readerBatches)
+		<-p.throttler.done
+		close(senderBatches)
+		<-p.senderPool.done
+		close(p.done)
+	}()
+	return p
 }
 
-func (runtime *pipelineRuntime) startSender() {
-	runtime.senderPool = startSenderPool(
-		runtime.runContext,
-		runtime.senderBatches,
-		&runtime.state.telemetry.senderChannel,
-		&runtime.terminallyCompletedTransactionsSinceTick,
-		runtime.state.controls.senderWorkers,
-		runtime.state.config.Sender.API,
-		runtime.state.config.Sender.Retry,
-		runtime.state.logger,
-	)
+func (p *pipelineRuntime) detachChannels(state *controlState) {
+	state.telemetry.readerChannel.detach()
+	state.telemetry.senderChannel.detach()
 }
 
-func (runtime *pipelineRuntime) stopSender() {
-	if runtime.senderPool == nil {
-		return
+func (p *pipelineRuntime) snapshots() (readerPoolSnapshot, senderPoolSnapshot) {
+	if p == nil {
+		return readerPoolSnapshot{}, senderPoolSnapshot{}
 	}
-	<-runtime.senderPool.stop()
-	runtime.senderPool = nil
-}
-
-func (runtime *pipelineRuntime) stop() {
-	runtime.stopSender()
-	if runtime.cancelRun != nil {
-		runtime.cancelRun()
-	}
-	if runtime.readerPool != nil {
-		<-runtime.readerPool.done
-	}
-	if runtime.throttler != nil {
-		<-runtime.throttler.done
-	}
-	closeAndDrain(runtime.readerBatches)
-	closeAndDrain(runtime.senderBatches)
-	runtime.readerBatches = nil
-	runtime.senderBatches = nil
-	runtime.state.telemetry.readerChannel.detach()
-	runtime.state.telemetry.senderChannel.detach()
-	runtime.clearActive()
-}
-
-func (runtime *pipelineRuntime) clearActive() {
-	runtime.runContext = nil
-	runtime.cancelRun = nil
-	runtime.readerPool = nil
-	runtime.throttler = nil
-}
-
-func (runtime *pipelineRuntime) reconcileReader(workers int) {
-	if runtime.readerPool != nil {
-		runtime.readerPool.reconcile(workers)
-	}
-}
-
-func (runtime *pipelineRuntime) reconcileSender(workers int) {
-	if runtime.senderPool != nil {
-		runtime.senderPool.reconcile(workers)
-	}
-}
-
-func (runtime *pipelineRuntime) snapshots() (readerPoolSnapshot, senderPoolSnapshot) {
-	reader := readerPoolSnapshot{}
-	if runtime.readerPool != nil {
-		reader = runtime.readerPool.aggregateSnapshot()
-	}
-	sender := senderPoolSnapshot{}
-	if runtime.senderPool != nil {
-		sender = runtime.senderPool.aggregateSnapshot()
-	}
-	return reader, sender
-}
-
-func (runtime *pipelineRuntime) sourceErrors() <-chan readerSourceError {
-	if runtime.readerPool == nil {
-		return nil
-	}
-	return runtime.readerPool.sourceErrors
-}
-
-func closeAndDrain(batches chan []Transaction) {
-	if batches == nil {
-		return
-	}
-	close(batches)
-	drain(batches)
-}
-
-func drain(batches chan []Transaction) {
-	if batches == nil {
-		return
-	}
-	for {
-		select {
-		case _, ok := <-batches:
-			if !ok {
-				return
-			}
-		default:
-			return
-		}
-	}
+	return p.readerPool.aggregateSnapshot(), p.senderPool.aggregateSnapshot()
 }

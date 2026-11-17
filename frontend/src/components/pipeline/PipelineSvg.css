@@ -39,8 +39,7 @@
   font-weight: 600;
 }
 
-.pipeline-svg--portrait .pipeline-channel-wait-status,
-.pipeline-svg--portrait .pipeline-channel-capacity-status {
+.pipeline-svg--portrait .pipeline-channel-wait-status {
   font-size: 12px;
   font-weight: 700;
 }
@@ -80,11 +79,6 @@
   font-size: 10px;
   font-weight: 700;
   text-transform: none;
-}
-
-.pipeline-svg--portrait .pipeline-channel-handle__value {
-  font-size: 11px;
-  font-weight: 750;
 }
 
 .pipeline-selectable {
@@ -709,115 +703,6 @@
   stroke-dasharray: 15 10;
 }
 
-.pipeline-channel-requested-cable {
-  fill: none;
-  opacity: 0.84;
-  pointer-events: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: var(--pipeline-channel-requested-capacity-width, 2px);
-  stroke-dasharray: none;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-channel-requested-cable--preview {
-  opacity: 0.92;
-  stroke: var(--cyan);
-}
-
-.pipeline-channel-requested-cable--pending {
-  stroke: var(--yellow);
-}
-
-.pipeline-channel-scale {
-  color: #66899f;
-}
-
-.pipeline-channel-scale__line,
-.pipeline-channel-scale__tick {
-  stroke: currentColor;
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-channel-scale__label {
-  fill: currentColor;
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-}
-
-.pipeline-channel-handle {
-  cursor: ns-resize;
-  outline: none;
-  touch-action: none;
-}
-
-.pipeline-svg--portrait
-  .pipeline-channel-handle:not(.pipeline-channel-handle--disabled) {
-  cursor: ew-resize;
-}
-
-.pipeline-channel-handle {
-  --pipeline-channel-handle-state-color: currentColor;
-}
-
-.pipeline-channel-handle--pending {
-  --pipeline-channel-handle-state-color: var(--yellow);
-}
-
-.pipeline-channel-handle--preview {
-  --pipeline-channel-handle-state-color: var(--cyan);
-}
-
-.pipeline-channel-handle__body {
-  fill: color-mix(
-    in srgb,
-    var(--pipeline-channel-handle-state-color) 14%,
-    var(--navy-850)
-  );
-  fill-opacity: 1;
-  stroke: var(--pipeline-channel-handle-state-color);
-  stroke-width: 1.4;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-channel-handle--connection-error .pipeline-channel-handle__body {
-  stroke-dasharray: 6 3;
-}
-
-.pipeline-channel-handle__request-ring,
-.pipeline-channel-handle__focus-ring {
-  fill: none;
-  opacity: 0;
-  pointer-events: none;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-channel-handle__focus-ring {
-  stroke: var(--cyan);
-  stroke-width: 2;
-}
-
-.pipeline-channel-handle__value {
-  fill: var(--pipeline-channel-handle-state-color);
-  font-size: 10px;
-  font-weight: 750;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-  user-select: none;
-}
-
-.pipeline-channel-handle:focus-visible .pipeline-channel-handle__focus-ring {
-  opacity: 1;
-}
-
-.pipeline-channel-handle--disabled {
-  --pipeline-channel-handle-state-color: var(--muted);
-  color: var(--muted);
-  cursor: default;
-  opacity: 1;
-}
-
 .pipeline-service-stage {
   fill: rgba(12, 52, 78, 0.72);
   stroke: var(--line-strong);
@@ -829,66 +714,12 @@
   stroke-width: 2;
 }
 
-.pipeline-batch-stepper {
-  color: var(--cyan);
-  cursor: default;
-}
-
-.pipeline-batch-stepper__body {
-  fill: rgba(6, 21, 34, 0.94);
-  stroke: var(--line-strong);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-batch-stepper__button {
-  cursor: pointer;
-  outline: none;
-}
-
-.pipeline-batch-stepper__button rect {
-  fill: transparent;
-  stroke: transparent;
-}
-
-.pipeline-batch-stepper__button text {
-  fill: currentColor;
-  font-size: 17px;
-  font-weight: 750;
-  pointer-events: none;
-}
-
-.pipeline-batch-stepper__button:hover:not([aria-disabled='true']) rect {
-  fill: rgba(39, 199, 234, 0.1);
-}
-
-.pipeline-batch-stepper__button:focus-visible rect {
-  stroke: var(--cyan);
-  stroke-width: 2;
-}
-
-.pipeline-batch-stepper__button[aria-disabled='true'] {
-  cursor: default;
-  opacity: 0.3;
-}
-
-.pipeline-batch-stepper__value {
+.pipeline-batch-size {
   fill: var(--text);
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
-.pipeline-batch-stepper__value {
   font-size: 10px;
   font-weight: 750;
-}
-
-.pipeline-batch-stepper--busy {
-  color: var(--yellow);
-}
-
-.pipeline-batch-stepper--unavailable {
-  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 .pipeline-channel--markers-visible .pipeline-channel-cable {
@@ -907,47 +738,8 @@
   }
 }
 
-.pipeline-channel-handle--preview .pipeline-channel-handle__request-ring {
-  stroke: var(--cyan);
-  stroke-dasharray: 2 2;
-  stroke-width: 1.5;
-  opacity: 1;
-}
-
-.pipeline-channel-capacity-applied {
-  pointer-events: none;
-}
-
-.pipeline-channel-capacity-applied line {
-  stroke: currentColor;
-  stroke-dasharray: 3 2;
-  stroke-width: 1.2;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-channel-capacity-applied rect {
-  fill: var(--navy-950);
-  stroke: currentColor;
-  stroke-dasharray: 3 2;
-  stroke-width: 1.2;
-  vector-effect: non-scaling-stroke;
-}
-
-.pipeline-channel-capacity-applied text {
-  fill: currentColor;
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 750;
-}
-
 .pipeline-channel-metric {
   fill: currentColor;
-}
-
-.pipeline-channel-capacity-status {
-  font-size: 10px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
 }
 
 .pipeline-channel-wait-status {
@@ -955,14 +747,6 @@
   font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-}
-
-.pipeline-channel-capacity-status--preview {
-  fill: var(--cyan);
-}
-
-.pipeline-channel-capacity-status--pending {
-  fill: var(--yellow);
 }
 
 @media (prefers-reduced-motion: reduce) {

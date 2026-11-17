@@ -13,7 +13,7 @@ import (
 func TestServeMuxRoutes(t *testing.T) {
 	loaded := testConfig(t)
 	loaded.Sender.API.URL = "https://example.test" + snapshotPath
-	mux := newServeMux(make(chan runtimeCommand, 1), nil, loaded, nil)
+	mux := newServeMux(runtimeRequests{commands: make(chan runtimeCommand, 1)}, nil, loaded, nil)
 
 	for _, route := range []string{snapshotPath, commandsPath} {
 		req := httptest.NewRequest(http.MethodGet, route, nil)
@@ -25,7 +25,7 @@ func TestServeMuxRoutes(t *testing.T) {
 }
 
 func TestServeMuxHasNoLocalIngest(t *testing.T) {
-	mux := newServeMux(make(chan runtimeCommand), nil, testConfig(t), nil)
+	mux := newServeMux(runtimeRequests{commands: make(chan runtimeCommand)}, nil, testConfig(t), nil)
 	for _, path := range []string{"/internal/test/ingest", "/internal/ingest"} {
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
@@ -46,14 +46,24 @@ func TestStartHTTPServerUsesConfiguredAddressAndShutsDown(t *testing.T) {
 	}
 	loaded := testConfig(t)
 	loaded.HTTP.Addr = addr
-	server, done, err := startHTTPServer(make(chan runtimeCommand), nil, loaded, nil)
+	server, done, err := startHTTPServer(runtimeRequests{commands: make(chan runtimeCommand)}, nil, loaded, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		shutdownHTTPServer(ctx, server, done, nil)
+		if err := shutdownHTTPServer(ctx, server); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("HTTP server did not exit")
+		}
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {
 			t.Fatalf("configured address not released after shutdown: %v", err)
@@ -83,7 +93,7 @@ func TestStartHTTPServerReturnsOccupiedAddressError(t *testing.T) {
 	defer listener.Close()
 	loaded := testConfig(t)
 	loaded.HTTP.Addr = listener.Addr().String()
-	server, done, err := startHTTPServer(make(chan runtimeCommand), nil, loaded, nil)
+	server, done, err := startHTTPServer(runtimeRequests{commands: make(chan runtimeCommand)}, nil, loaded, nil)
 	if server != nil || done != nil {
 		t.Fatal("failed startup returned server or done channel")
 	}
@@ -92,4 +102,48 @@ func TestStartHTTPServerReturnsOccupiedAddressError(t *testing.T) {
 		t.Fatalf("startup error = %v, want wrapped listen error", err)
 	}
 	t.Logf("occupied address %s returned %v", loaded.HTTP.Addr, err)
+}
+
+func TestShutdownHTTPServerClosesAnActiveRequestAtDeadline(t *testing.T) {
+	entered := make(chan struct{})
+	left := make(chan struct{})
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-r.Context().Done()
+		close(left)
+	}))
+	server.Start()
+	t.Cleanup(server.Close)
+	requestCtx, cancelRequest := context.WithTimeout(t.Context(), time.Second)
+	defer cancelRequest()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		response, err := server.Client().Do(request)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		result <- err
+	}()
+	select {
+	case <-entered:
+	case <-requestCtx.Done():
+		t.Fatal("HTTP request did not enter handler")
+	}
+	shutdownCtx, cancelShutdown := context.WithDeadline(t.Context(), time.Now())
+	defer cancelShutdown()
+	if err := shutdownHTTPServer(shutdownCtx, server.Config); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-left:
+	case <-requestCtx.Done():
+		t.Fatal("HTTP handler remained active past force-close")
+	}
+	if err := <-result; err == nil || requestCtx.Err() != nil {
+		t.Fatalf("request error = %v, client context = %v, want server-side close", err, requestCtx.Err())
+	}
 }

@@ -62,22 +62,22 @@ describe('responsive pipeline geometry', () => {
       value: `0 0 ${width} 650`,
     })
     expect(geometry.stationDelta).toBe(delta)
-    expect(geometry.batchControl.anchor.x).toBeCloseTo(430 + delta, 10)
-    expect(geometry.batchControl.anchor.y).toBe(112)
-    expect(geometry.batchControl.guard.x).toBeCloseTo(334 + delta, 10)
-    expect(geometry.batchControl.guard).toMatchObject({
+    expect(geometry.batchLabel.anchor.x).toBeCloseTo(430 + delta, 10)
+    expect(geometry.batchLabel.anchor.y).toBe(112)
+    expect(geometry.batchLabel.guard.x).toBeCloseTo(334 + delta, 10)
+    expect(geometry.batchLabel.guard).toMatchObject({
       y: 84,
       width: 192,
       height: 56,
     })
-    const guardRight = geometry.batchControl.guard.x +
-      geometry.batchControl.guard.width
+    const guardRight = geometry.batchLabel.guard.x +
+      geometry.batchLabel.guard.width
     const scaleCenters = Object.values(geometry.channels).map((channel) =>
       (channel.start.x + channel.end.x) / 2)
     expect(scaleCenters.every((x) =>
-      x < geometry.batchControl.guard.x || x > guardRight,
+      x < geometry.batchLabel.guard.x || x > guardRight,
     )).toBe(true)
-    expect(geometry.batchControl.guard.y + geometry.batchControl.guard.height)
+    expect(geometry.batchLabel.guard.y + geometry.batchLabel.guard.height)
       .toBeLessThan(FLOW_BASELINE - CHANNEL_CAPACITY_SCALE_OFFSET -
         CHANNEL_CABLE_MAX_LIFT)
     expect(geometry.actors.reader.bounds.width).toBe(120)
@@ -148,13 +148,13 @@ describe('responsive pipeline geometry', () => {
       expect(target.bounds.y + target.bounds.height).toBeLessThan(geometry.viewBox.height)
       for (const channel of Object.values(geometry.channels)) {
         expect(channel.metrics.throughputY).toBeGreaterThan(channel.start.y + 50)
-        expect(channel.metrics.requestY).toBeLessThan(channel.end.y - 80)
+        expect(channel.metrics.waitingY).toBeLessThan(channel.end.y - 80)
         expect(channel.end.y - channel.start.y).toBeGreaterThan(300)
       }
-      expect(geometry.batchControl.guard.y).toBeGreaterThan(
-        geometry.channels['reader-to-throttler'].metrics.requestY + 12,
+      expect(geometry.batchLabel.guard.y).toBeGreaterThan(
+        geometry.channels['reader-to-throttler'].metrics.waitingY + 12,
       )
-      expect(geometry.batchControl.guard.y + geometry.batchControl.guard.height)
+      expect(geometry.batchLabel.guard.y + geometry.batchLabel.guard.height)
         .toBeLessThan(throttler.title.y)
     },
   )
@@ -362,7 +362,6 @@ afterAll(() => {
 function activeChannel<TChannel extends ChannelTelemetrySnapshot>(
   channel: TChannel,
   applied: number,
-  candidate: number | null,
 ): TChannel {
   return {
     ...channel,
@@ -379,8 +378,6 @@ function activeChannel<TChannel extends ChannelTelemetrySnapshot>(
     capacity: {
       ...channel.capacity,
       applied,
-      preview: candidate,
-      pending: candidate,
     },
   }
 }
@@ -395,8 +392,8 @@ function activeSnapshot(): LoadgenSnapshot {
     reader: { ...base.reader, state: 'running' },
     throttler: { ...base.throttler, state: 'running' },
     sender: { ...base.sender, state: 'running' },
-    readerChannel: activeChannel(base.readerChannel, 10, 0),
-    senderChannel: activeChannel(base.senderChannel, 160, 50),
+    readerChannel: activeChannel(base.readerChannel, 10),
+    senderChannel: activeChannel(base.senderChannel, 160),
   }
   return new ChannelFlowStateDeriver().derive(telemetry, 0)
 }
@@ -427,11 +424,9 @@ function liveControls(
 ): LiveControls {
   return {
     readerWorkers: desiredControl(snapshot.reader.workers.applied ?? snapshot.reader.workers.min),
-    readBatchSize: desiredControl(snapshot.reader.readBatchSize.applied ?? snapshot.reader.readBatchSize.min),
     requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? snapshot.throttler.requestedTps.min),
     installed: desiredControl(snapshot.throttler.installed.applied ?? true),
     senderWorkers: desiredControl(snapshot.sender.workers.applied ?? snapshot.sender.workers.min),
-    timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? snapshot.sender.timeoutMs.min),
     ...overrides,
   }
 }
@@ -452,7 +447,6 @@ function renderPipeline(
       snapshot={snapshot}
       selectedId={null}
       onSelect={vi.fn()}
-      onChannelCapacityChange={vi.fn()}
       liveControls={liveControls(snapshot)}
       orientation={orientation}
       geometry={geometry}
@@ -494,10 +488,12 @@ function withWorkerCount(
     reader: {
       ...snapshot.reader,
       workers: control(snapshot.reader.workers),
+      liveWorkers: count,
     },
     sender: {
       ...snapshot.sender,
       workers: control(snapshot.sender.workers),
+      liveWorkers: count,
     },
   }
 }
@@ -508,7 +504,6 @@ function pipelineElement(snapshot: LoadgenSnapshot) {
       snapshot={snapshot}
       selectedId={null}
       onSelect={vi.fn()}
-      onChannelCapacityChange={vi.fn()}
       liveControls={liveControls(snapshot)}
     />
   )
@@ -526,26 +521,25 @@ describe('PipelineSvg rendering', () => {
         senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
       })
       const controls = view.container.querySelectorAll(
-        '.pipeline-batch-stepper',
+        '.pipeline-batch-size',
       )
       const cables = view.container.querySelectorAll<SVGPathElement>(
         '.pipeline-channel-cable',
       )
 
       expect(controls).toHaveLength(1)
-      expect(controls[0]?.getAttribute('transform')).toBe(
-        `translate(${geometry.batchControl.anchor.x} ${geometry.batchControl.anchor.y})`,
-      )
-      expect(geometry.batchControl.anchor.y)
+      expect(controls[0]?.getAttribute('x')).toBe(String(geometry.batchLabel.anchor.x))
+      expect(controls[0]?.getAttribute('y')).toBe(String(geometry.batchLabel.anchor.y + 5))
+      expect(geometry.batchLabel.anchor.y)
         .toBeLessThan(geometry.actors.throttler.ports.input.y)
       expect(controls[0]?.textContent).toBe(
-        `−Batch ${snapshot.reader.readBatchSize.applied?.toLocaleString('en-US')} tx+`,
+        `Batch ${snapshot.reader.readBatchSize.applied?.toLocaleString('en-US')} tx`,
       )
       expect(view.container.querySelector(
-        '#channel-reader-to-throttler .pipeline-batch-stepper',
+        '#channel-reader-to-throttler .pipeline-batch-size',
       )).toBeNull()
       expect(view.container.querySelector(
-        '#channel-throttler-to-sender .pipeline-batch-stepper',
+        '#channel-throttler-to-sender .pipeline-batch-size',
       )).toBeNull()
       expect(cables).toHaveLength(2)
       expect(cables[0]?.style.strokeWidth).toBe(cables[1]?.style.strokeWidth)
@@ -558,7 +552,7 @@ describe('PipelineSvg rendering', () => {
     adapter.dispose()
     const withReadRate = (
       adapterKind: 'simulation' | 'http',
-      runState: 'idle' | 'running' | 'paused',
+      runState: 'idle' | 'running' | 'stopping',
       readTps: number,
     ) =>
       new ChannelFlowStateDeriver().derive({
@@ -585,10 +579,10 @@ describe('PipelineSvg rendering', () => {
       .toHaveLength(0)
     running.unmount()
 
-    const paused = renderPipeline(withReadRate('http', 'paused', 1))
-    expect(paused.container.querySelectorAll('#reader-actor .pipeline-worker--reading'))
+    const stopping = renderPipeline(withReadRate('http', 'stopping', 1))
+    expect(stopping.container.querySelectorAll('#reader-actor .pipeline-worker--reading'))
       .toHaveLength(0)
-    paused.unmount()
+    stopping.unmount()
   })
 
   it('keeps landscape actor bottoms, ports, and link endpoints stable across worker boundaries', () => {
@@ -1056,50 +1050,40 @@ describe('PipelineSvg rendering', () => {
     }
   })
 
-  it('keeps channel ownership and removes request UI after apply', () => {
-    const pending = activeSnapshot()
-    const view = renderPipeline(pending)
-
-    for (const channel of [pending.readerChannel, pending.senderChannel]) {
-      const channelGroup = view.container.querySelector(`#channel-${channel.id}`)!
-      const cable = channelGroup.querySelector('.pipeline-channel-cable')!
-      const appliedLabel = channelGroup.querySelector('.pipeline-channel-capacity-applied')!
-      const metrics = [...channelGroup.querySelectorAll('.pipeline-channel-metric')]
-      const slider = channelGroup.querySelector('.pipeline-channel-handle')!
-      const children = [...channelGroup.children]
-
-      expect(channelGroup.querySelector('.pipeline-channel-requested-cable')).toBeNull()
-      expect(children.indexOf(cable)).toBeLessThan(children.indexOf(appliedLabel))
-      expect(children.indexOf(appliedLabel)).toBeLessThan(
-        children.indexOf(metrics[0]),
-      )
-      expect(children.indexOf(metrics.at(-1)!)).toBeLessThan(
-        children.indexOf(slider),
-      )
+  it('uses configured uneven capacity steps without showing backend channel controls', () => {
+    const base = activeSnapshot()
+    const capacity = { initial: 1_024, allowed: [0, 1_024, 8_192], unit: 'batches', mutability: 'startup-only' }
+    const range = { initial: 1, min: 1, max: 1, step: 1, unit: 'workers', mutability: 'immediate' }
+    const readerChannel = activeChannel(base.readerChannel, capacity.initial)
+    const senderChannel = activeChannel(base.senderChannel, capacity.initial)
+    const snapshot: LoadgenSnapshot = {
+      ...base,
+      adapterKind: 'http',
+      config: {
+        readerReadBatchSize: range,
+        readerChannelCapacity: capacity,
+        senderChannelCapacity: capacity,
+        metricsWindowMs: range,
+        throttlerRequestedTps: range,
+        throttlerInstalled: { initial: true, allowed: [true, false], mutability: 'immediate' },
+        senderWorkers: range,
+      },
+      readerChannel: {
+        ...readerChannel,
+        capacity: { ...readerChannel.capacity, min: 0, max: 8_192, step: 1 },
+      },
+      senderChannel: {
+        ...senderChannel,
+        capacity: { ...senderChannel.capacity, min: 0, max: 8_192, step: 1 },
+      },
     }
-
-    const applied = {
-      ...pending,
-      readerChannel: activeChannel(pending.readerChannel, 0, null),
-      senderChannel: activeChannel(pending.senderChannel, 50, null),
+    const view = renderPipeline(snapshot)
+    for (const channel of [snapshot.readerChannel, snapshot.senderChannel]) {
+      const group = view.container.querySelector(`#channel-${channel.id}`)!
+      expect(group.getAttribute('data-leg-count')).toBe('2')
+      expect(group.querySelector('[role="slider"]')).toBeNull()
+      expect(group.textContent).toContain('Depth 4 / 1,024 batches')
     }
-    view.rerender(
-      <PipelineSvg
-        snapshot={applied}
-        selectedId={null}
-        onSelect={vi.fn()}
-        onChannelCapacityChange={vi.fn()}
-        liveControls={liveControls(applied)}
-      />,
-    )
-
-    for (const channel of [applied.readerChannel, applied.senderChannel]) {
-      const channelGroup = view.container.querySelector(`#channel-${channel.id}`)!
-      expect(channelGroup.querySelector('.pipeline-channel-requested-cable')).toBeNull()
-      expect(channelGroup.querySelector('.pipeline-channel-capacity-applied')).toBeNull()
-      expect(channelGroup.querySelector('.pipeline-channel-capacity-status')).toBeNull()
-    }
-    expect(view.container.querySelectorAll('[data-family-id]')).toHaveLength(0)
   })
 
   it('keeps one uniform vacuum and an empty green senderChannel projection at drain end', () => {
@@ -1158,8 +1142,6 @@ describe('PipelineSvg rendering', () => {
         capacity: {
           ...base.readerChannel.capacity,
           applied: 0,
-          preview: 12,
-          pending: 12,
         },
       },
       senderChannel: {
@@ -1210,6 +1192,7 @@ describe('PipelineSvg rendering', () => {
     const base = activeSnapshot()
     const snapshot: LoadgenSnapshot = {
       ...base,
+      adapterKind: 'http',
       throttler: {
         ...base.throttler,
         requestedTps: {
@@ -1232,7 +1215,6 @@ describe('PipelineSvg rendering', () => {
         snapshot={snapshot}
         selectedId={null}
         onSelect={vi.fn()}
-        onChannelCapacityChange={vi.fn()}
         liveControls={liveControls(snapshot, {
           requestedTps: desiredControl<number>(120_000, onRequestedTpsChange),
           installed: desiredControl(
@@ -1289,14 +1271,21 @@ describe('PipelineSvg rendering', () => {
     expect(onInstalledChange).not.toHaveBeenCalled()
   })
 
-  it('reserves portrait card height for frozen live workers after downscale', () => {
+  it('reserves portrait card height for live workers after downscale', () => {
     const base = activeSnapshot()
     const snapshot = {
       ...base,
       sender: { ...base.sender, workers: { ...base.sender.workers, applied: 1 }, liveWorkers: 32 },
     }
-    const view = render(<PipelineSvg snapshot={snapshot} selectedId={null} onSelect={vi.fn()}
-      onChannelCapacityChange={vi.fn()} liveControls={liveControls(snapshot)} orientation="portrait" />)
+    const view = render(
+      <PipelineSvg
+        snapshot={snapshot}
+        selectedId={null}
+        onSelect={vi.fn()}
+        liveControls={liveControls(snapshot)}
+        orientation="portrait"
+      />,
+    )
     const card = view.container.querySelector('#sender-actor .pipeline-actor-box')!
     const title = view.container.querySelector('.pipeline-title--sender')!
     const port = view.container.querySelector('#sender-actor .pipeline-port')!
@@ -1363,6 +1352,7 @@ describe('PipelineSvg rendering', () => {
     const base = activeSnapshot()
     const snapshot: LoadgenSnapshot = {
       ...base,
+      adapterKind: 'http',
       throttler: {
         ...base.throttler,
         installed: {
@@ -1390,57 +1380,6 @@ describe('PipelineSvg rendering', () => {
     expect(view.container.querySelector(
       '.pipeline-valve-detached-assembly--applied',
     )?.getAttribute('data-detached-anchor')).toBe('550 342')
-  })
-
-  it('follows the resolved layout class for channel handle cursors', () => {
-    const snapshot = activeSnapshot()
-    const cases = [
-      {
-        orientation: 'landscape',
-        expectedCursor: 'ns-resize',
-        expectedAriaOrientation: 'vertical',
-      },
-      {
-        orientation: 'portrait',
-        expectedCursor: 'ew-resize',
-        expectedAriaOrientation: 'horizontal',
-      },
-    ] as const
-
-    for (const testCase of cases) {
-      const view = renderPipeline(snapshot, testCase.orientation)
-      const svg = view.container.querySelector('svg')!
-      const slider = view.container.querySelector<SVGGElement>(
-        '.pipeline-channel-handle',
-      )!
-
-      expect(svg.classList).toContain(
-        `pipeline-svg--${testCase.orientation}`,
-      )
-      expect(getComputedStyle(slider).cursor).toBe(testCase.expectedCursor)
-      expect(slider.getAttribute('aria-orientation'))
-        .toBe(testCase.expectedAriaOrientation)
-      view.unmount()
-    }
-
-    const unavailableSnapshot: LoadgenSnapshot = {
-      ...snapshot,
-      readerChannel: {
-        ...snapshot.readerChannel,
-        capacity: {
-          ...snapshot.readerChannel.capacity,
-          applyMode: 'unavailable',
-        },
-      },
-    }
-    const unavailableView = renderPipeline(unavailableSnapshot, 'portrait')
-    const disabledSlider = unavailableView.container.querySelector<SVGGElement>(
-      '#channel-reader-to-throttler .pipeline-channel-handle',
-    )!
-
-    expect(disabledSlider.classList)
-      .toContain('pipeline-channel-handle--disabled')
-    expect(getComputedStyle(disabledSlider).cursor).toBe('default')
   })
 
   it('applies the portrait operational typography matrix', () => {
@@ -1472,13 +1411,11 @@ describe('PipelineSvg rendering', () => {
     assertTypography('.pipeline-channel-metric.pipeline-small-strong', '15px', '700')
     assertTypography('.pipeline-channel-metric.pipeline-small', '13px', '600')
     assertTypography('.pipeline-channel-wait-status', '12px', '700')
-    assertTypography('.pipeline-channel-capacity-status', '12px', '700')
     assertTypography('.pipeline-http-status', '14px', '700')
     assertTypography('.pipeline-http-throughput', '13px', '650')
     assertTypography('.pipeline-http-detail', '12px', '600')
     assertTypography('#requested-display', '14px', '650')
     assertTypography('.pipeline-valve-opening-label', '13px', '800')
-    assertTypography('.pipeline-channel-handle__value', '11px', '750')
   })
 
   it.each(['landscape', 'portrait'] as const)(
@@ -1547,7 +1484,7 @@ describe('PipelineSvg rendering', () => {
     expect(sender.querySelectorAll('.pipeline-worker--backoff')).toHaveLength(0)
   })
 
-  it.each(['idle', 'paused'] as const)(
+  it.each(['idle', 'stopping'] as const)(
     'keeps known empty pools and zero-batch channel state visible in %s',
     (state) => {
       const base = activeSnapshot()
@@ -1610,11 +1547,7 @@ describe('PipelineSvg rendering', () => {
       expect(view.container.querySelectorAll(
         '#sender-actor .pipeline-worker--inactive',
       )).toHaveLength(0)
-      const batchControls = view.getAllByRole('group', {
-        name: 'Batch: Applied 0 tx',
-      })
-      expect(batchControls).toHaveLength(1)
-      expect(batchControls[0]?.textContent).toBe('−Batch 0 tx+')
+      expect(view.getAllByText('Batch 0 tx')).toHaveLength(1)
     },
   )
 

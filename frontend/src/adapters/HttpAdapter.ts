@@ -7,13 +7,12 @@ import type {
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
   ChannelTelemetrySnapshot,
-  RunState,
   ReaderSourceErrorSnapshot,
 } from '../model/loadgen'
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
 const COMMAND_ENDPOINT = '/api/loadgen/commands'
 const POLL_INTERVAL_MS = 1_000
-const UNAVAILABLE_REASON = 'Недоступно в HTTP snapshot mode'
+const UNAVAILABLE_REASON = 'Unavailable in HTTP mode'
 const UNAVAILABLE_COMMAND_MESSAGE = 'command is not available in the HTTP adapter'
 const DISPOSED_COMMAND_MESSAGE = 'http adapter is disposed'
 const NETWORK_COMMAND_MESSAGE = 'command request failed due to a network error'
@@ -32,7 +31,8 @@ const CHANNEL_KEYS = Object.freeze([
   'receivedTransactionsTotal', 'sentBatchesTotal', 'sentTransactionsTotal',
 ])
 
-interface WireRun { readonly state: RunState; readonly totalTransactions: number; readonly elapsedMs: number }
+type WireRunState = 'starting' | 'running' | 'stopping' | 'faulted'
+interface WireRun { readonly state: WireRunState; readonly totalTransactions: number; readonly elapsedMs: number }
 interface WireReader { readonly workers: number; readonly liveWorkers: number; readonly idleWorkers: number; readonly readingWorkers: number; readonly blockedWorkers: number; readonly drainingWorkers: number; readonly drainingIdleWorkers: number; readonly drainingReadingWorkers: number; readonly drainingBlockedWorkers: number; readonly readBatchSize: number; readonly readTps: number; readonly rowsRead: number; readonly sourceDirectory: string; readonly sourceError: ReaderSourceErrorSnapshot | null }
 interface WireThrottler { readonly requestedTps: number; readonly admittedTps: number; readonly installed: boolean }
 interface WireSender { readonly workers: number; readonly liveWorkers: number; readonly idleWorkers: number; readonly inFlightWorkers: number; readonly backoffWorkers: number; readonly drainingWorkers: number; readonly drainingIdleWorkers: number; readonly drainingInFlightWorkers: number; readonly drainingBackoffWorkers: number }
@@ -43,12 +43,6 @@ type SupportedCommand = Extract<
   LoadgenCommand,
   {
     type:
-      | 'run'
-      | 'pause'
-      | 'reset'
-      | 'set-reader-channel-capacity'
-      | 'set-sender-channel-capacity'
-      | 'set-read-batch-size'
       | 'set-requested-tps'
       | 'set-throttler-installed'
       | 'set-worker-count'
@@ -70,13 +64,7 @@ function deepFreeze<T>(value: T): T {
 function isSupportedCommand(
   command: LoadgenCommand,
 ): command is SupportedCommand {
-  return command.type === 'run' ||
-    command.type === 'pause' ||
-    command.type === 'reset' ||
-    command.type === 'set-reader-channel-capacity' ||
-    command.type === 'set-sender-channel-capacity' ||
-    command.type === 'set-read-batch-size' ||
-    command.type === 'set-requested-tps' ||
+  return command.type === 'set-requested-tps' ||
     command.type === 'set-throttler-installed' ||
     command.type === 'set-worker-count' ||
     command.type === 'set-sender-workers'
@@ -98,7 +86,7 @@ function unavailableControl(unit: string): NumericControlSnapshot {
 function senderControl(
   value: number | null,
   config: LoadgenConfigSnapshot['senderWorkers'] | null,
-  connectionState: ConnectionState,
+  writable: boolean,
   unavailableUnit = 'workers',
 ): NumericControlSnapshot {
   if (config === null) return unavailableControl(unavailableUnit)
@@ -110,7 +98,7 @@ function senderControl(
     max: config.max,
     step: config.step,
     unit: config.unit,
-    applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
+    applyMode: writable ? 'immediate' : 'unavailable',
   }
 }
 
@@ -123,7 +111,7 @@ function neutralChannel(
     id,
     from,
     to,
-    capacity: unavailableControl('batches'),
+    capacity: { applied: null, min: 0, max: 0, step: 1, unit: 'batches' },
     sentBatchesTotal: 0,
     sentTransactionsTotal: 0,
     receivedBatchesTotal: 0,
@@ -146,30 +134,21 @@ function neutralChannel(
   }
 }
 
-function readerChannelCapacityControl(
+function channelCapacity(
   value: number,
   config: LoadgenConfigSnapshot['readerChannelCapacity'],
-  connectionState: ConnectionState,
-  runState: RunState,
-): NumericControlSnapshot {
+): ChannelTelemetrySnapshot['capacity'] {
   return {
     applied: value,
-    preview: null,
-    pending: null,
     min: config.allowed[0]!,
     max: config.allowed.at(-1)!,
     step: 1,
     unit: config.unit,
-    applyMode: connectionState === 'connected' && runState === 'idle'
-      ? 'immediate'
-      : 'unavailable',
   }
 }
 
 function readerChannel(
   wire: WireSnapshot | null,
-  connectionState: ConnectionState,
-  runState: RunState,
 ): ChannelTelemetrySnapshot {
   const channel = neutralChannel(
     'reader-to-throttler',
@@ -180,11 +159,9 @@ function readerChannel(
 
   return {
     ...channel,
-    capacity: readerChannelCapacityControl(
+    capacity: channelCapacity(
       wire.readerChannel.capacity,
       wire.config.readerChannelCapacity,
-      connectionState,
-      runState,
     ),
     depthBatches: wire.readerChannel.depthBatches,
     bufferedTransactions: wire.readerChannel.bufferedTransactions,
@@ -207,8 +184,6 @@ function readerChannel(
 
 function senderChannel(
   wire: WireSnapshot | null,
-  connectionState: ConnectionState,
-  runState: RunState,
 ): ChannelTelemetrySnapshot {
   const channel = neutralChannel(
     'throttler-to-sender',
@@ -219,11 +194,9 @@ function senderChannel(
 
   return {
     ...channel,
-    capacity: readerChannelCapacityControl(
+    capacity: channelCapacity(
       wire.senderChannel.capacity,
       wire.config.senderChannelCapacity,
-      connectionState,
-      runState,
     ),
     depthBatches: wire.senderChannel.depthBatches,
     bufferedTransactions: wire.senderChannel.bufferedTransactions,
@@ -250,6 +223,7 @@ function createSnapshot(
   wire: WireSnapshot | null,
 ): LoadgenTelemetrySnapshot {
   const runState = wire?.run.state ?? 'idle'
+  const writable = connectionState === 'connected' && runState === 'running'
 
   return deepFreeze({
     revision,
@@ -261,7 +235,7 @@ function createSnapshot(
     config: wire?.config ?? null,
     reader: {
       id: 'reader',
-      workers: senderControl(wire?.reader.workers ?? null, wire?.config.readerWorkers ?? null, connectionState),
+      workers: senderControl(wire?.reader.workers ?? null, wire?.config.readerWorkers ?? null, writable),
       liveWorkers: wire?.reader.liveWorkers ?? 0,
       drainingWorkers: wire?.reader.drainingWorkers ?? 0,
       idleWorkers: wire?.reader.idleWorkers ?? 0,
@@ -273,8 +247,6 @@ function createSnapshot(
       readBatchSize: readBatchSizeControl(
         wire?.reader.readBatchSize ?? null,
         wire?.config.readerReadBatchSize ?? null,
-        connectionState,
-        runState,
       ),
       readTps: wire?.reader.readTps ?? null,
       configuredCapacityTps: null,
@@ -289,28 +261,24 @@ function createSnapshot(
       requestedTps: throttlerRequestedTpsControl(
         wire?.throttler.requestedTps ?? null,
         wire?.config.throttlerRequestedTps ?? null,
-        connectionState,
+        writable,
       ),
       installed: {
         applied: wire?.throttler.installed ?? null,
         pending: null,
-        applyMode: connectionState === 'connected' && wire !== null
-          ? 'immediate'
-          : 'unavailable',
-        writable: connectionState === 'connected' && wire !== null,
-        unavailableReason: connectionState === 'connected' && wire !== null
-          ? null
-          : UNAVAILABLE_REASON,
+        applyMode: writable ? 'immediate' : 'unavailable',
+        writable,
+        unavailableReason: writable ? null : UNAVAILABLE_REASON,
       },
       admittedTps: wire?.throttler.admittedTps ?? null,
       limitedMs: null,
       state: runState,
     },
-    readerChannel: readerChannel(wire, connectionState, runState),
-    senderChannel: senderChannel(wire, connectionState, runState),
+    readerChannel: readerChannel(wire),
+    senderChannel: senderChannel(wire),
     sender: {
       id: 'sender',
-      workers: senderControl(wire?.sender.workers ?? null, wire?.config.senderWorkers ?? null, connectionState),
+      workers: senderControl(wire?.sender.workers ?? null, wire?.config.senderWorkers ?? null, writable),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
       timeoutMs: unavailableControl('ms'),
@@ -390,7 +358,7 @@ function isRangeValue(
 function throttlerRequestedTpsControl(
   value: number | null,
   config: LoadgenConfigSnapshot['throttlerRequestedTps'] | null,
-  connectionState: ConnectionState,
+  writable: boolean,
 ): NumericControlSnapshot {
   if (config === null) return unavailableControl('transactions/s')
 
@@ -402,7 +370,7 @@ function throttlerRequestedTpsControl(
     max: config.max,
     step: config.step,
     unit: config.unit,
-    applyMode: connectionState === 'connected' ? 'immediate' : 'unavailable',
+    applyMode: writable ? 'immediate' : 'unavailable',
   }
 }
 
@@ -438,7 +406,7 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
     !isWireInteger(reader.initial) || !isWireInteger(reader.min) ||
     !isWireInteger(reader.max) || !isWireInteger(reader.step) ||
     reader.min <= 0 || reader.max < reader.min || reader.step <= 0 ||
-    reader.unit !== 'transactions' || reader.mutability !== 'idle-only'
+    reader.unit !== 'transactions' || reader.mutability !== 'startup-only'
   ) {
     throw new Error('snapshot reader config is invalid')
   }
@@ -491,7 +459,7 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
   if (
     !Array.isArray(readerChannel.allowed) || readerChannel.allowed.length === 0 ||
     !readerChannel.allowed.every(isWireInteger) || readerChannel.unit !== 'batches' ||
-    readerChannel.mutability !== 'idle-only'
+    readerChannel.mutability !== 'startup-only'
   ) {
     throw new Error('snapshot readerChannel config is invalid')
   }
@@ -509,7 +477,7 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
   if (
     !Array.isArray(senderChannel.allowed) || senderChannel.allowed.length === 0 ||
     !senderChannel.allowed.every(isWireInteger) || senderChannel.unit !== 'batches' ||
-    senderChannel.mutability !== 'idle-only'
+    senderChannel.mutability !== 'startup-only'
   ) {
     throw new Error('snapshot senderChannel config is invalid')
   }
@@ -634,16 +602,16 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   const reader = value.reader
   const throttler = value.throttler
   const sender = value.sender
-  if (run.state !== 'idle' && run.state !== 'running' && run.state !== 'paused' && run.state !== 'faulted') throw new Error('snapshot run state is invalid')
+  if (run.state !== 'starting' && run.state !== 'running' && run.state !== 'stopping' && run.state !== 'faulted') throw new Error('snapshot run state is invalid')
   if (!isWireInteger(run.elapsedMs) || !isWireInteger(run.totalTransactions)) throw new Error('snapshot run values are invalid')
-  if (!isRangeValue(reader.workers, config.readerWorkers!) || !isRangeValue(reader.readBatchSize, config.readerReadBatchSize) || !isWireNumber(reader.readTps) || !isWireInteger(reader.rowsRead) || !isWireInteger(reader.liveWorkers) || !isWireInteger(reader.idleWorkers) || !isWireInteger(reader.readingWorkers) || !isWireInteger(reader.blockedWorkers) || !isWireInteger(reader.drainingWorkers) || !isWireInteger(reader.drainingIdleWorkers) || !isWireInteger(reader.drainingReadingWorkers) || !isWireInteger(reader.drainingBlockedWorkers) || reader.liveWorkers !== reader.idleWorkers + reader.readingWorkers + reader.blockedWorkers || reader.drainingWorkers !== reader.drainingIdleWorkers + reader.drainingReadingWorkers + reader.drainingBlockedWorkers || reader.drainingIdleWorkers > reader.idleWorkers || reader.drainingReadingWorkers > reader.readingWorkers || reader.drainingBlockedWorkers > reader.blockedWorkers || ((run.state === 'idle' || run.state === 'faulted') && (reader.liveWorkers !== 0 || reader.drainingWorkers !== 0))) throw new Error('snapshot reader values are invalid')
+  if (!isRangeValue(reader.workers, config.readerWorkers!) || !isRangeValue(reader.readBatchSize, config.readerReadBatchSize) || !isWireNumber(reader.readTps) || !isWireInteger(reader.rowsRead) || !isWireInteger(reader.liveWorkers) || !isWireInteger(reader.idleWorkers) || !isWireInteger(reader.readingWorkers) || !isWireInteger(reader.blockedWorkers) || !isWireInteger(reader.drainingWorkers) || !isWireInteger(reader.drainingIdleWorkers) || !isWireInteger(reader.drainingReadingWorkers) || !isWireInteger(reader.drainingBlockedWorkers) || reader.liveWorkers !== reader.idleWorkers + reader.readingWorkers + reader.blockedWorkers || reader.drainingWorkers !== reader.drainingIdleWorkers + reader.drainingReadingWorkers + reader.drainingBlockedWorkers || reader.drainingIdleWorkers > reader.idleWorkers || reader.drainingReadingWorkers > reader.readingWorkers || reader.drainingBlockedWorkers > reader.blockedWorkers || (run.state === 'starting' && (reader.liveWorkers !== 0 || reader.drainingWorkers !== 0))) throw new Error('snapshot reader values are invalid')
   if (typeof reader.sourceDirectory !== 'string' || reader.sourceDirectory.length === 0) throw new Error('snapshot reader sourceDirectory is invalid')
   if (reader.sourceError !== null && (!isExactObject(reader.sourceError, SOURCE_ERROR_KEYS) || reader.sourceError.category !== 'source' || (reader.sourceError.operation !== 'glob' && reader.sourceError.operation !== 'open' && reader.sourceError.operation !== 'read' && reader.sourceError.operation !== 'close' && reader.sourceError.operation !== 'reader-close') || typeof reader.sourceError.relativePath !== 'string' || reader.sourceError.relativePath.length === 0 || reader.sourceError.relativePath.startsWith('/') || reader.sourceError.relativePath.startsWith('../') || typeof reader.sourceError.message !== 'string' || reader.sourceError.message.length === 0)) throw new Error('snapshot reader sourceError is invalid')
   if (!isRangeValue(throttler.requestedTps, config.throttlerRequestedTps) || !isWireNumber(throttler.admittedTps) || typeof throttler.installed !== 'boolean' || !config.throttlerInstalled.allowed.includes(throttler.installed)) throw new Error('snapshot throttler values are invalid')
   if (!isRangeValue(sender.workers, config.senderWorkers) ||
     !isWireInteger(sender.liveWorkers) || !isWireInteger(sender.idleWorkers) || !isWireInteger(sender.inFlightWorkers) || !isWireInteger(sender.backoffWorkers) || !isWireInteger(sender.drainingWorkers) || !isWireInteger(sender.drainingIdleWorkers) || !isWireInteger(sender.drainingInFlightWorkers) || !isWireInteger(sender.drainingBackoffWorkers) ||
     sender.liveWorkers !== sender.idleWorkers + sender.inFlightWorkers + sender.backoffWorkers || sender.drainingWorkers !== sender.drainingIdleWorkers + sender.drainingInFlightWorkers + sender.drainingBackoffWorkers || sender.drainingIdleWorkers > sender.idleWorkers || sender.drainingInFlightWorkers > sender.inFlightWorkers || sender.drainingBackoffWorkers > sender.backoffWorkers ||
-    ((run.state === 'idle' || run.state === 'faulted') &&
+    (run.state === 'starting' &&
       (sender.liveWorkers !== 0 || sender.drainingWorkers !== 0))) {
     throw new Error('snapshot sender values are invalid')
   }
@@ -661,8 +629,6 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
 function readBatchSizeControl(
   value: number | null,
   config: LoadgenConfigSnapshot['readerReadBatchSize'] | null,
-  connectionState: ConnectionState,
-  runState: RunState,
 ): NumericControlSnapshot {
   if (config === null) return unavailableControl('transactions')
 
@@ -674,9 +640,7 @@ function readBatchSizeControl(
     max: config.max,
     step: config.step,
     unit: config.unit,
-    applyMode: connectionState === 'connected' && runState === 'idle'
-      ? 'immediate'
-      : 'unavailable',
+    applyMode: 'unavailable',
   }
 }
 
@@ -685,37 +649,18 @@ function canDispatchConfigCommand(
   snapshot: LoadgenTelemetrySnapshot,
 ): boolean {
   const config = snapshot.config
-  if (command.type === 'reset') return true
-  if (snapshot.connectionState === 'error') return false
-  if (command.type === 'run' || command.type === 'pause') {
-    return snapshot.connectionState === 'connecting' || config !== null
+  if (snapshot.connectionState !== 'connected' || snapshot.runState !== 'running' || config === null) return false
+  switch (command.type) {
+    case 'set-requested-tps':
+      return isRangeValue(command.value, config.throttlerRequestedTps)
+    case 'set-throttler-installed':
+      return config.throttlerInstalled.allowed.includes(command.value)
+    case 'set-sender-workers':
+      return isRangeValue(command.value, config.senderWorkers)
+    case 'set-worker-count':
+      return command.actor === 'reader' && config.readerWorkers !== undefined &&
+        isRangeValue(command.value, config.readerWorkers)
   }
-  if (command.type === 'set-requested-tps') {
-    return snapshot.connectionState === 'connected' && config !== null &&
-      isRangeValue(command.value, config.throttlerRequestedTps)
-  }
-  if (command.type === 'set-throttler-installed') {
-    return snapshot.connectionState === 'connected' && config !== null &&
-      config.throttlerInstalled.allowed.includes(command.value)
-  }
-  if (command.type === 'set-sender-workers') {
-    return snapshot.connectionState === 'connected' && config !== null &&
-      isRangeValue(command.value, config.senderWorkers)
-  }
-  if (command.type === 'set-worker-count' && command.actor === 'reader') {
-    return snapshot.connectionState === 'connected' && config?.readerWorkers !== undefined && isRangeValue(command.value, config.readerWorkers)
-  }
-  if (
-    snapshot.connectionState !== 'connected' ||
-    config === null ||
-    snapshot.runState !== 'idle'
-  ) return false
-  if (command.type === 'set-read-batch-size') {
-    return isRangeValue(command.value, config.readerReadBatchSize)
-  }
-  return command.type === 'set-reader-channel-capacity'
-    ? config.readerChannelCapacity.allowed.includes(command.value)
-    : config.senderChannelCapacity.allowed.includes(command.value)
 }
 
 async function decodeResponse(response: Response): Promise<WireSnapshot> {
@@ -733,19 +678,6 @@ async function decodeResponse(response: Response): Promise<WireSnapshot> {
   }
 
   return decodeWireSnapshot(await response.json())
-}
-
-async function decodeCommandError(response: Response): Promise<string | null> {
-  try {
-    const body: unknown = await response.json()
-    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-      return null
-    }
-    const error = (body as Record<string, unknown>).error
-    return typeof error === 'string' && error.length > 0 ? error : null
-  } catch {
-    return null
-  }
 }
 
 export class HttpAdapter implements LoadgenAdapter {
@@ -908,18 +840,10 @@ export class HttpAdapter implements LoadgenAdapter {
       const response = await fetch(COMMAND_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          command.type === 'set-read-batch-size' ||
-          command.type === 'set-reader-channel-capacity' ||
-          command.type === 'set-sender-channel-capacity' ||
-          command.type === 'set-requested-tps' ||
-          command.type === 'set-throttler-installed' ||
-          command.type === 'set-sender-workers'
-            ? { action: command.type, value: command.value }
-            : command.type === 'set-worker-count' && command.actor === 'reader'
-              ? { action: 'set-reader-workers', value: command.value }
-            : { action: command.type },
-        ),
+        body: JSON.stringify({
+          action: command.type === 'set-worker-count' ? 'set-reader-workers' : command.type,
+          value: command.value,
+        }),
       })
 
       if (response.status >= 200 && response.status <= 299) {
@@ -932,19 +856,6 @@ export class HttpAdapter implements LoadgenAdapter {
           snapshotRevision: this.snapshot.revision,
           error: null,
         })
-      }
-
-      if (response.status === 422) {
-        const message = await decodeCommandError(response)
-        if (message !== null) {
-          return this.rejectCommand(
-            commandId,
-            command,
-            'unavailable',
-            message,
-            false,
-          )
-        }
       }
 
       return this.rejectCommand(

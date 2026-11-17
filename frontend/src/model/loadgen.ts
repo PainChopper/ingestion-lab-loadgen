@@ -12,9 +12,9 @@ export type ConnectionState =
   | 'disconnected'
   | 'error'
 
-export type RunState = 'idle' | 'running' | 'paused' | 'faulted'
+export type RunState = 'idle' | 'starting' | 'running' | 'stopping' | 'faulted'
 
-export type ApplyMode = 'immediate' | 'next-run' | 'unavailable'
+export type ApplyMode = 'immediate' | 'unavailable'
 
 export type ReaderLimitationReason = 'downstream-backpressure'
 
@@ -130,11 +130,13 @@ export interface ThrottlerSnapshot {
   readonly state: RunState
 }
 
+export type ChannelCapacitySnapshot = Pick<NumericControlSnapshot, 'applied' | 'min' | 'max' | 'step' | 'unit'>
+
 export interface ChannelTelemetrySnapshot {
   readonly id: ChannelId
   readonly from: ActorId
   readonly to: ActorId
-  readonly capacity: NumericControlSnapshot
+  readonly capacity: ChannelCapacitySnapshot
   readonly sentBatchesTotal: number
   readonly sentTransactionsTotal: number
   readonly receivedBatchesTotal: number
@@ -252,9 +254,6 @@ export interface LoadgenSnapshot extends Omit<
 }
 
 export type LoadgenCommand =
-  | { type: 'run' }
-  | { type: 'pause' }
-  | { type: 'reset' }
   | { type: 'set-requested-tps'; value: number }
   | {
       type: 'set-throttler-installed'
@@ -262,15 +261,10 @@ export type LoadgenCommand =
     }
   | { type: 'set-worker-count'; actor: 'reader'; value: number }
   | { type: 'set-sender-workers'; value: number }
-  | { type: 'set-reader-channel-capacity'; value: number }
-  | { type: 'set-sender-channel-capacity'; value: number }
-  | { type: 'set-read-batch-size'; value: number }
-  | { type: 'set-http-timeout'; valueMs: number }
 
 export interface AdapterError {
   readonly code:
     | 'invalid-command'
-    | 'invalid-state'
     | 'disposed'
     | 'unavailable'
     | 'internal'

@@ -78,15 +78,6 @@ type remoteSetCommand struct {
 	value         any
 }
 
-func isRemoteCLIAction(action string) bool {
-	switch action {
-	case "snapshot", "status", "run", "pause", "resume", "reset":
-		return true
-	default:
-		return false
-	}
-}
-
 func parseRemoteCLI(args []string) (cliCommand, error) {
 	command := cliCommand{remoteAction: args[0], remoteURL: defaultCLIBaseURL}
 	if len(args) == 2 && args[1] == "--help" {
@@ -198,18 +189,6 @@ func validateCLIBaseURL(rawURL string) (string, error) {
 
 func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) error {
 	client := remoteCLIClient{baseURL: command.remoteURL, httpClient: &http.Client{Timeout: remoteClientTimeout}}
-	if command.remoteAction == "snapshot" {
-		snapshot, err := client.snapshot(ctx)
-		if err != nil {
-			return err
-		}
-		encoded, err := json.Marshal(snapshot)
-		if err != nil {
-			return fmt.Errorf("encode snapshot: %w", err)
-		}
-		_, err = fmt.Fprintln(stdout, string(encoded))
-		return err
-	}
 	if command.remoteAction == "status" {
 		snapshot, err := client.snapshot(ctx)
 		if err != nil {
@@ -233,20 +212,7 @@ func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) err
 		return err
 	}
 
-	action := command.remoteAction
-	requestAction := action
-	if action == "resume" {
-		requestAction = "run"
-	}
-	if err := client.command(ctx, requestAction); err != nil {
-		return err
-	}
-	snapshot, err := client.snapshot(ctx)
-	if err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(stdout, "action=%s state=%s\n", action, snapshot.Run.State)
-	return err
+	return cliUsageError{err: fmt.Errorf("unknown remote action %q", command.remoteAction)}
 }
 
 type remoteCLIClient struct {
@@ -264,10 +230,6 @@ func (client remoteCLIClient) snapshot(ctx context.Context) (runtimeStatus, erro
 		return runtimeStatus{}, newRemoteHTTPError(response, http.MethodGet, snapshotPath)
 	}
 	return decodeStrictSnapshot(response.Body)
-}
-
-func (client remoteCLIClient) command(ctx context.Context, action string) error {
-	return client.commandWithValue(ctx, action, nil)
 }
 
 func (client remoteCLIClient) commandWithValue(ctx context.Context, action string, value any) error {
@@ -378,6 +340,11 @@ func decodeStrictSnapshot(body io.Reader) (runtimeStatus, error) {
 	}
 	if err := validateSnapshotKeys(root); err != nil {
 		return runtimeStatus{}, err
+	}
+	switch snapshot.Run.State {
+	case runStateStarting, runStateRunning, runStateStopping, runStateFaulted:
+	default:
+		return runtimeStatus{}, fmt.Errorf("decode snapshot: invalid run state %q", snapshot.Run.State)
 	}
 	return snapshot, nil
 }

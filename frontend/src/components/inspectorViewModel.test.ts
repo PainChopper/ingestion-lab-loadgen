@@ -15,7 +15,6 @@ function withChannelCapacity(
   snapshot: LoadgenSnapshot,
   applied: number,
   depthBatches: number,
-  pending: number | null = null,
 ): LoadgenSnapshot {
   return {
     ...snapshot,
@@ -25,8 +24,6 @@ function withChannelCapacity(
       capacity: {
         ...snapshot.readerChannel.capacity,
         applied,
-        preview: pending,
-        pending,
       },
     },
   }
@@ -70,7 +67,7 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
-  it('shows complete zeroed simulation metrics before the first run', () => {
+  it('shows zero simulation counters and the live idle pool before the first tick', () => {
     const adapter = new SimulationAdapter()
     const model = getInspectorViewModel(derivedSnapshot(adapter), 'sender')
 
@@ -78,9 +75,9 @@ describe('inspector view model', () => {
     expect(model?.rows.find((row) => row.label === 'Retry attempts')?.value)
       .toBe('0')
     expect(model?.rows.find((row) => row.label === 'Worker states')?.value)
-      .toBe('0 idle · 0 in-flight · 0 backoff')
+      .toBe('3 idle · 0 in-flight · 0 backoff')
     expect(model?.rows.find((row) => row.label === 'Workers desired / live / draining')?.value)
-      .toBe('3 / 0 / 0')
+      .toBe('3 / 3 / 0')
     expect(model?.rows.some((row) => row.label === 'Retry policy')).toBe(false)
     adapter.dispose()
   })
@@ -229,9 +226,9 @@ describe('inspector view model', () => {
       { label: 'Rows read', value: '14,000' },
       expect.objectContaining({
         label: 'Worker states',
-        value: '0 idle · 0 reading · 0 blocked · — errors',
+        value: '5 idle · 0 reading · 0 blocked · — errors',
         segments: [
-          { value: '0 idle', tone: 'idle' },
+          { value: '5 idle', tone: 'idle' },
           { value: '0 reading', tone: 'in-flight' },
           { value: '0 blocked', tone: 'backoff' },
           { value: '— errors', tone: 'error' },
@@ -351,8 +348,6 @@ describe('inspector view model', () => {
         capacity: {
           ...base.readerChannel.capacity,
           applied: 0,
-          preview: 12,
-          pending: 12,
         },
       },
     }, 0)
@@ -369,31 +364,27 @@ describe('inspector view model', () => {
   it('keeps channel depth and capacity truthful without capacity-change rows', () => {
     const cases = [
     {
-      name: 'applied 4, depth 4, pending 0',
+      name: 'full queue at capacity 4',
       applied: 4,
       depth: 4,
-      pending: 0,
       expectedDepth: '4 / 4 batches',
     },
     {
-      name: 'applied 12, depth 12, pending 4',
+      name: 'full queue at capacity 12',
       applied: 12,
       depth: 12,
-      pending: 4,
       expectedDepth: '12 / 12 batches',
     },
     {
-      name: 'increase from 4 to 12 applied immediately',
+      name: 'partially filled queue',
       applied: 12,
       depth: 4,
-      pending: null,
       expectedDepth: '4 / 12 batches',
     },
     {
       name: 'zero capacity applied',
       applied: 0,
       depth: 0,
-      pending: null,
       expectedDepth: '0 / 0 batches',
     },
     ]
@@ -404,7 +395,6 @@ describe('inspector view model', () => {
         derivedSnapshot(adapter),
         testCase.applied,
         testCase.depth,
-        testCase.pending,
       )
       const model = getInspectorViewModel(snapshot, 'reader-to-throttler')
       const depthRow = model?.rows.find(

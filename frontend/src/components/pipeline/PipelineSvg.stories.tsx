@@ -36,11 +36,9 @@ function desiredControl<T>(applied: T) {
 function liveControls(snapshot: LoadgenSnapshot): LiveControls {
   return {
     readerWorkers: desiredControl(snapshot.reader.workers.applied ?? 0),
-    readBatchSize: desiredControl(snapshot.reader.readBatchSize.applied ?? 0),
     requestedTps: desiredControl(snapshot.throttler.requestedTps.applied ?? 0),
     installed: desiredControl(snapshot.throttler.installed.applied ?? true),
     senderWorkers: desiredControl(snapshot.sender.workers.applied ?? 0),
-    timeoutMs: desiredControl(snapshot.sender.timeoutMs.applied ?? 0),
   }
 }
 
@@ -148,7 +146,6 @@ function PipelineStory({ snapshot }: { snapshot: LoadgenSnapshot }) {
       snapshot={snapshot}
       selectedId={null}
       onSelect={noop}
-      onChannelCapacityChange={noop}
       liveControls={liveControls(snapshot)}
     />
   )
@@ -162,7 +159,5 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Idle: Story = { args: { snapshot: snapshotFor('idle', 'stopped', 0) } }
 export const Running: Story = { args: { snapshot: snapshotFor('running', 'normal', 0.2) } }
-export const Paused: Story = { args: { snapshot: snapshotFor('paused', 'stopped', 0.35) } }
 export const Backpressure: Story = { args: { snapshot: snapshotFor('running', 'backpressure', 1) } }

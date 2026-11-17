@@ -11,7 +11,6 @@ interface ReaderActorProps {
   selected: boolean
   onSelect: (id: SelectableId) => void
   desiredControl: DesiredControl<number>
-  frozenObserved: boolean
   geometry: PipelineGeometry['actors']['reader']
   orientation: PipelineOrientation
 }
@@ -22,7 +21,6 @@ export function ReaderActor({
   selected,
   onSelect,
   desiredControl,
-  frozenObserved: _frozenObserved,
   geometry,
   orientation,
 }: ReaderActorProps) {

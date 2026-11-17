@@ -26,7 +26,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	}
 	rec := httptest.NewRecorder()
 	go func() { (<-requests).statusReply <- expected }()
-	snapshotHandler(requests, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	snapshotHandler(runtimeRequests{commands: requests}, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reply code = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -117,7 +117,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 
 func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 	want := runtimeStatus{
-		Run: runtimeRunStatus{State: runStatePaused, TotalTransactions: 101, ElapsedMs: 102},
+		Run: runtimeRunStatus{State: runStateStopping, TotalTransactions: 101, ElapsedMs: 102},
 		Reader: runtimeReaderStatus{
 			Workers: 11, LiveWorkers: 12, IdleWorkers: 13, ReadingWorkers: 14, BlockedWorkers: 15,
 			DrainingWorkers: 16, DrainingIdleWorkers: 17, DrainingReadingWorkers: 18, DrainingBlockedWorkers: 19,
@@ -153,7 +153,7 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	const expectedJSON = `{
-		"run":{"state":"paused","totalTransactions":101,"elapsedMs":102},
+		"run":{"state":"stopping","totalTransactions":101,"elapsedMs":102},
 		"reader":{"workers":11,"liveWorkers":12,"idleWorkers":13,"readingWorkers":14,"blockedWorkers":15,
 		"drainingWorkers":16,"drainingIdleWorkers":17,"drainingReadingWorkers":18,"drainingBlockedWorkers":19,
 		"readBatchSize":20,"readTps":21.5,"rowsRead":22,"sourceDirectory":"reader-source",
@@ -203,10 +203,10 @@ func stringSet(values []string) map[string]struct{} {
 func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	requests := make(chan runtimeCommand, 1)
 	go func() {
-		(<-requests).statusReply <- runtimeStatus{Run: runtimeRunStatus{State: runStateIdle}}
+		(<-requests).statusReply <- runtimeStatus{Run: runtimeRunStatus{State: runStateStarting}}
 	}()
 	recorder := httptest.NewRecorder()
-	snapshotHandler(requests, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	snapshotHandler(runtimeRequests{commands: requests}, nil).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
@@ -215,7 +215,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}
-	if want := (runtimeStatus{Run: runtimeRunStatus{State: runStateIdle}}); !reflect.DeepEqual(actual, want) {
+	if want := (runtimeStatus{Run: runtimeRunStatus{State: runStateStarting}}); !reflect.DeepEqual(actual, want) {
 		t.Errorf("zero snapshot = %+v, want %+v", actual, want)
 	}
 	var run, reader map[string]json.RawMessage
@@ -226,7 +226,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(run["elapsedMs"]) != "0" || string(reader["readTps"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["sourceDirectory"]) != "\"\"" || string(reader["sourceError"]) != "null" {
-		t.Errorf("idle snapshot body = %v", root)
+		t.Errorf("starting snapshot body = %v", root)
 	}
 	var throttler map[string]json.RawMessage
 	if err := json.Unmarshal(root["throttler"], &throttler); err != nil {
@@ -240,7 +240,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 func TestSnapshotHandlerRejectsPost(t *testing.T) {
 	requests := make(chan runtimeCommand, 1)
 	rec := httptest.NewRecorder()
-	snapshotHandler(requests, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
+	snapshotHandler(runtimeRequests{commands: requests}, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

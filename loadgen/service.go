@@ -2,16 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"go.uber.org/zap"
 )
 
-func runServe(appCtx context.Context, configPath string, runAfterStart bool) error {
-	serviceCtx, stopService := context.WithCancel(appCtx)
-	defer stopService()
-
+func runServe(appCtx context.Context, configPath string) error {
 	cfg, err := loadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -23,7 +22,9 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 	defer func() { _ = logger.Sync() }()
 
 	state := newControlState(cfg, logger)
-	requests := make(chan runtimeCommand, 10)
+	commands := make(chan runtimeCommand, 10)
+	loopDone := make(chan struct{})
+	requests := runtimeRequests{commands: commands, done: loopDone}
 	metrics := newServiceMetrics(cfg)
 	defer metrics.stop()
 
@@ -32,47 +33,42 @@ func runServe(appCtx context.Context, configPath string, runAfterStart bool) err
 		return err
 	}
 	logger.Info("service started", zap.String("event", "service_started"))
-	eventLoopDone := make(chan struct{})
-	go func() {
-		defer close(eventLoopDone)
-		state.runEventLoop(
-			serviceCtx,
-			requests,
-			metrics.ticks,
-			metrics.prometheusMetrics,
-		)
-	}()
-	if runAfterStart {
-		if result := executeRuntimeCommand(requests, runtimeCommand{kind: cmdRun}); result.err != nil {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
-			defer cancel()
-			stopService()
-			shutdownHTTPServer(shutdownCtx, server, serverDone, logger)
-			<-eventLoopDone
-			return fmt.Errorf("start run: %w", result.err)
-		} else if result.rejected {
-			stopService()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
-			defer cancel()
-			shutdownHTTPServer(shutdownCtx, server, serverDone, logger)
-			<-eventLoopDone
-			return fmt.Errorf("start run: lifecycle conflict")
-		}
+	events := runtimeEvents{
+		requests:   commands,
+		source:     prepareSourceAsync(cfg.Source.Path),
+		serverDone: serverDone,
+		metrics:    metrics,
 	}
-
+	deadline, runErr := state.runEventLoop(appCtx, events, gracefulShutdownTimeout)
+	close(loopDone)
+	if deadline.IsZero() {
+		deadline = time.Now().Add(gracefulShutdownTimeout)
+	}
+	shutdownCtx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	if err := shutdownHTTPServer(shutdownCtx, server); err != nil {
+		logger.Error("graceful HTTP shutdown failed", zap.String("event", "run_failed"), zap.Error(err))
+		runErr = errors.Join(runErr, fmt.Errorf("shutdown http server: %w", err))
+	}
 	select {
-	case <-appCtx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
-		defer cancel()
-		logger.Info("service stopping", zap.String("event", "service_stopping"))
-		shutdownHTTPServer(shutdownCtx, server, serverDone, logger)
-		select {
-		case <-eventLoopDone:
-		case <-shutdownCtx.Done():
-			logger.Warn("service shutdown timed out", zap.String("event", "run_stopped"))
-		}
-	case <-eventLoopDone:
+	case err := <-serverDone:
+		runErr = errors.Join(runErr, err)
+	case <-shutdownCtx.Done():
 	}
 	logger.Info("service stopped", zap.String("event", "service_stopped"))
-	return nil
+	return runErr
+}
+
+type sourceDiscovery struct {
+	source readerSource
+	err    error
+}
+
+func prepareSourceAsync(path string) <-chan sourceDiscovery {
+	ready := make(chan sourceDiscovery, 1)
+	go func() {
+		source, err := discoverReaderSource(path)
+		ready <- sourceDiscovery{source: source, err: err}
+	}()
+	return ready
 }

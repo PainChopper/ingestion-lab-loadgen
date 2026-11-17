@@ -20,28 +20,23 @@
               }
             }
           },
-          "405": { "$ref": "#/components/responses/MethodNotAllowed" }
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "503": { "$ref": "#/components/responses/RuntimeUnavailable" }
         }
       }
     },
     "/api/loadgen/commands": {
       "post": {
         "operationId": "executeCommand",
-        "summary": "Execute a lifecycle or configuration command",
-        "description": "Choose one action in the request body. Allowed setting values come from GET /api/loadgen/snapshot under config. The server does not check Content-Type or Accept request headers. Run starts from idle, resumes from paused and is a no-op while running. Pause is asynchronous and may be a no-op outside running. Reset conflicts while running or resetting. Strict setting actions reject unknown fields and trailing JSON; other actions ignore unknown fields and trailing JSON after the first object.",
+        "summary": "Change a live setting",
+        "description": "Choose one action in the request body. Allowed setting values come from GET /api/loadgen/snapshot under config. Commands are only accepted while the pipeline is running. Unknown fields and trailing JSON are rejected. The server does not check Content-Type or Accept request headers.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": { "$ref": "#/components/schemas/Command" },
               "examples": {
-                "run": { "value": { "action": "run" } },
-                "pause": { "value": { "action": "pause" } },
-                "reset": { "value": { "action": "reset" } },
-                "readBatchSize": { "value": { "action": "set-read-batch-size", "value": 1000 } },
                 "readerWorkers": { "value": { "action": "set-reader-workers", "value": 2 } },
-                "readerChannelCapacity": { "value": { "action": "set-reader-channel-capacity", "value": 8192 } },
-                "senderChannelCapacity": { "value": { "action": "set-sender-channel-capacity", "value": 8192 } },
                 "requestedTPS": { "value": { "action": "set-requested-tps", "value": 2000000 } },
                 "installed": { "value": { "action": "set-throttler-installed", "value": true } },
                 "senderWorkers": { "value": { "action": "set-sender-workers", "value": 32 } }
@@ -50,18 +45,15 @@
           }
         },
         "responses": {
-          "200": { "description": "Empty body. The command was handled or queued; pause may not yet have changed the snapshot." },
+          "200": { "description": "Empty body. The setting was applied." },
           "400": { "$ref": "#/components/responses/InvalidCommand" },
-          "409": { "description": "Empty body. A synchronous command conflicts with the current runtime state; pause does not return this status." },
-          "422": {
-            "description": "Run could not start",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Error" }
-              }
-            }
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "409": { "description": "Empty body. The pipeline is not running; no setting was changed." },
+          "413": {
+            "description": "The command request body exceeds 4096 bytes; no setting was changed.",
+            "content": { "text/plain": { "schema": { "type": "string" } } }
           },
-          "405": { "$ref": "#/components/responses/MethodNotAllowed" }
+          "503": { "$ref": "#/components/responses/RuntimeUnavailable" }
         }
       }
     }
@@ -72,6 +64,10 @@
         "description": "Malformed command, unknown action or invalid configured value. Plain text with UTF-8 charset and a trailing line feed; X-Content-Type-Options is nosniff.",
         "content": { "text/plain": { "schema": { "type": "string" } } }
       },
+      "RuntimeUnavailable": {
+        "description": "The event loop has exited; the HTTP server is shutting down.",
+        "content": { "text/plain": { "schema": { "type": "string" } } }
+      },
       "MethodNotAllowed": {
         "description": "Method is not supported for this path",
         "headers": { "Allow": { "schema": { "type": "string" } } }
@@ -80,13 +76,7 @@
     "schemas": {
       "Command": {
         "oneOf": [
-          { "$ref": "#/components/schemas/RunCommand" },
-          { "$ref": "#/components/schemas/PauseCommand" },
-          { "$ref": "#/components/schemas/ResetCommand" },
-          { "$ref": "#/components/schemas/ReadBatchSizeCommand" },
           { "$ref": "#/components/schemas/ReaderWorkersCommand" },
-          { "$ref": "#/components/schemas/ReaderChannelCapacityCommand" },
-          { "$ref": "#/components/schemas/SenderChannelCapacityCommand" },
           { "$ref": "#/components/schemas/RequestedTPSCommand" },
           { "$ref": "#/components/schemas/InstalledCommand" },
           { "$ref": "#/components/schemas/SenderWorkersCommand" }
@@ -94,41 +84,11 @@
         "discriminator": {
           "propertyName": "action",
           "mapping": {
-            "run": "#/components/schemas/RunCommand",
-            "pause": "#/components/schemas/PauseCommand",
-            "reset": "#/components/schemas/ResetCommand",
-            "set-read-batch-size": "#/components/schemas/ReadBatchSizeCommand",
             "set-reader-workers": "#/components/schemas/ReaderWorkersCommand",
-            "set-reader-channel-capacity": "#/components/schemas/ReaderChannelCapacityCommand",
-            "set-sender-channel-capacity": "#/components/schemas/SenderChannelCapacityCommand",
             "set-requested-tps": "#/components/schemas/RequestedTPSCommand",
             "set-throttler-installed": "#/components/schemas/InstalledCommand",
             "set-sender-workers": "#/components/schemas/SenderWorkersCommand"
           }
-        }
-      },
-      "RunCommand": {
-        "type": "object",
-        "required": ["action"],
-        "properties": { "action": { "type": "string", "enum": ["run"] }, "value": { "description": "Optional and ignored by the server." } }
-      },
-      "PauseCommand": {
-        "type": "object",
-        "required": ["action"],
-        "properties": { "action": { "type": "string", "enum": ["pause"] }, "value": { "description": "Optional and ignored by the server." } }
-      },
-      "ResetCommand": {
-        "type": "object",
-        "required": ["action"],
-        "properties": { "action": { "type": "string", "enum": ["reset"] }, "value": { "description": "Optional and ignored by the server." } }
-      },
-      "ReadBatchSizeCommand": {
-        "type": "object",
-        "x-config-key": "readerReadBatchSize",
-        "required": ["action", "value"],
-        "properties": {
-          "action": { "type": "string", "enum": ["set-read-batch-size"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.readerReadBatchSize." }
         }
       },
       "ReaderWorkersCommand": {
@@ -138,24 +98,6 @@
         "properties": {
           "action": { "type": "string", "enum": ["set-reader-workers"] },
           "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.readerWorkers." }
-        }
-      },
-      "ReaderChannelCapacityCommand": {
-        "type": "object",
-        "x-config-key": "readerChannelCapacity",
-        "required": ["action", "value"],
-        "properties": {
-          "action": { "type": "string", "enum": ["set-reader-channel-capacity"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.readerChannelCapacity.allowed." }
-        }
-      },
-      "SenderChannelCapacityCommand": {
-        "type": "object", "additionalProperties": false,
-        "x-config-key": "senderChannelCapacity",
-        "required": ["action", "value"],
-        "properties": {
-          "action": { "type": "string", "enum": ["set-sender-channel-capacity"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.senderChannelCapacity.allowed." }
         }
       },
       "RequestedTPSCommand": {
@@ -185,11 +127,6 @@
           "value": { "type": "boolean" }
         }
       },
-      "Error": {
-        "type": "object", "additionalProperties": false,
-        "required": ["error"],
-        "properties": { "error": { "type": "string" } }
-      },
       "Snapshot": {
         "type": "object", "additionalProperties": false,
         "required": ["run", "reader", "throttler", "sender", "readerChannel", "senderChannel", "config"],
@@ -207,7 +144,7 @@
         "type": "object", "additionalProperties": false,
         "required": ["state", "totalTransactions", "elapsedMs"],
         "properties": {
-          "state": { "type": "string", "enum": ["idle", "running", "paused", "faulted", "resetting"] },
+          "state": { "type": "string", "enum": ["starting", "running", "stopping", "faulted"] },
           "totalTransactions": { "type": "integer", "format": "int64" },
           "elapsedMs": { "type": "integer", "format": "int64" }
         }
