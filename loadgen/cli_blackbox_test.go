@@ -123,23 +123,42 @@ func TestCLIBinaryServeRunSmoke(t *testing.T) {
 	binary := buildCLIBinary(t)
 	ensureServePortAvailable(t)
 
-	baseURL := startCLIServe(t, binary)
+	received := make(chan struct{}, 1)
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/internal/ingest" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		select {
+		case received <- struct{}{}:
+		default:
+		}
+	}))
+	defer receiver.Close()
+
+	configPath := writeBlackBoxConfig(t, receiver.URL+"/internal/ingest")
+	baseURL := startCLIServe(t, binary, configPath)
 	waitForCLISnapshotState(t, baseURL, runStateIdle)
 
 	runResult := runCLIBinary(t, binary, "run", "--url", baseURL)
 	if runResult.exitCode != cliExitSuccess || runResult.stderr != "" || runResult.stdout != "action=run state=running\n" {
 		t.Fatalf("stdout/stderr/exit = %q / %q / %d", runResult.stdout, runResult.stderr, runResult.exitCode)
 	}
+	select {
+	case <-received:
+	case <-time.After(blackBoxTimeout):
+		t.Fatal("Sender did not POST to the separate receiver")
+	}
 }
 
 func buildCLIBinary(t *testing.T) string {
 	t.Helper()
-	buildDirectory := blackBoxRuntimeDirectory(t)
+	buildDirectory := t.TempDir()
 	binary := filepath.Join(buildDirectory, "ingestion-lab-loadgen.exe")
 	ctx, cancel := context.WithTimeout(context.Background(), blackBoxTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, "go", "build", "-o", binary, ".")
-	command.Dir = repositoryRoot(t)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build CLI binary: %v\n%s", err, output)
@@ -175,11 +194,11 @@ func assertCLIBinaryFailure(t *testing.T, result blackBoxResult, wantExit int, w
 	}
 }
 
-func startCLIServe(t *testing.T, binary string) string {
+func startCLIServe(t *testing.T, binary, configPath string) string {
 	t.Helper()
-	configPath := writeBlackBoxConfig(t)
 	args := []string{"serve", "--config", configPath}
 	command := exec.Command(binary, args...)
+	command.Dir = filepath.Dir(configPath)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
@@ -203,9 +222,9 @@ func startCLIServe(t *testing.T, binary string) string {
 	return defaultCLIBaseURL
 }
 
-func writeBlackBoxConfig(t *testing.T) string {
+func writeBlackBoxConfig(t *testing.T, senderURL string) string {
 	t.Helper()
-	directory := blackBoxRuntimeDirectory(t)
+	directory := t.TempDir()
 	parquetPath := filepath.Join(directory, "input.parquet")
 	if err := parquet.WriteFile(parquetPath, []Transaction{{ClientID: "black-box"}}); err != nil {
 		t.Fatalf("write parquet fixture: %v", err)
@@ -216,6 +235,7 @@ func writeBlackBoxConfig(t *testing.T) string {
 		filepath.ToSlash(filepath.Join(directory, "*.parquet")),
 		1,
 	)
+	config = strings.Replace(config, testSenderURL, senderURL, 1)
 	configPath := filepath.Join(directory, "config.toml")
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatalf("write serve config: %v", err)
@@ -255,28 +275,4 @@ func ensureServePortAvailable(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatalf("release serve port: %v", err)
 	}
-}
-
-func blackBoxRuntimeDirectory(t *testing.T) string {
-	t.Helper()
-	moduleRoot := repositoryRoot(t)
-	gitRoot := filepath.Dir(moduleRoot)
-	runtimeRoot := filepath.Join(filepath.Dir(gitRoot), "ingestion-lab-agents-runtime")
-	if info, err := os.Stat(runtimeRoot); err != nil || !info.IsDir() {
-		t.Fatalf("runtime root %q is unavailable: %v", runtimeRoot, err)
-	}
-	directory, err := os.MkdirTemp(filepath.Join(runtimeRoot, "BUILD"), "T0447-cli-blackbox-")
-	if err != nil {
-		t.Fatalf("create runtime build directory: %v", err)
-	}
-	return directory
-}
-
-func repositoryRoot(t *testing.T) string {
-	t.Helper()
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("resolve repository root: %v", err)
-	}
-	return root
 }

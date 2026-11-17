@@ -16,7 +16,7 @@ func TestSenderHTTPAttemptPostsJSONBatch(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
 		}
-		if r.URL.Path != "/internal/test/ingest" {
+		if r.URL.Path != "/internal/ingest" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
@@ -33,34 +33,32 @@ func TestSenderHTTPAttemptPostsJSONBatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	attempt := newSenderHTTPAttempt(server.URL+"/internal/test/ingest", server.Client())
+	attempt := newSenderHTTPAttempt(server.URL+"/internal/ingest", server.Client())
 	if got := attempt.deliver(context.Background(), batch, 1); got != senderAttemptSuccess {
 		t.Fatalf("deliver outcome = %d, want success", got)
 	}
 }
 
-func TestSenderHTTPAttemptReachesConfiguredMuxWithQuery(t *testing.T) {
-	loaded := testConfig(t)
-	loaded.Sender.API.URL = "http://example.test/test/receive?source=loadgen&batch=1"
-	mux, err := newServeMux(make(chan runtimeCommand), nil, loaded, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestSenderHTTPAttemptPreservesTargetQuery(t *testing.T) {
+	const target = "/test/receive?source=loadgen&batch=1"
 	observed := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		observed <- r.URL.RequestURI()
-		mux.ServeHTTP(w, r)
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	loaded.Sender.API.URL = server.URL + "/test/receive?source=loadgen&batch=1"
-	attempt := newSenderHTTPAttempt(loaded.Sender.API.URL, server.Client())
+	attempt := newSenderHTTPAttempt(server.URL+target, server.Client())
 	if got := attempt.deliver(t.Context(), []Transaction{{ClientID: "client-1"}}, 1); got != senderAttemptSuccess {
-		t.Fatalf("real Sender→mux attempt outcome = %d, want success", got)
+		t.Fatalf("deliver outcome = %d, want success", got)
 	}
-	if got := <-observed; got != "/test/receive?source=loadgen&batch=1" {
-		t.Fatalf("Sender request URI = %q, want configured path and query", got)
+	select {
+	case got := <-observed:
+		if got != target {
+			t.Fatalf("Sender request URI = %q, want %q", got, target)
+		}
+	default:
+		t.Fatal("target received no HTTP request")
 	}
-	t.Log("real Sender→configured ingest handler returned success; query source=loadgen&batch=1 preserved")
 }
 
 func TestSenderHTTPAttemptClassifiesResponseStatuses(t *testing.T) {

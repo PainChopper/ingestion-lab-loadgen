@@ -15,10 +15,7 @@ import (
 
 func TestDeveloperRoutes(t *testing.T) {
 	requests := make(chan runtimeCommand, 1)
-	mux, err := newServeMux(requests, nil, testConfig(t), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mux := newServeMux(requests, nil, testConfig(t), nil)
 	tests := []struct {
 		name        string
 		path        string

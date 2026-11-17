@@ -15,6 +15,8 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
+const testSenderURL = "http://127.0.0.1:8081/internal/ingest"
+
 func testConfig(t *testing.T) config {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -54,7 +56,7 @@ func testConfigContents() string {
 		"", "[throttler.requested_tps]", "initial = 2000000", "min = 0", "max = 4000000", "step = 200000", "unit = \"transactions/s\"", "mutability = \"immediate\"",
 		"", "[throttler.installed]", "initial = true", "allowed = [true, false]", "mutability = \"immediate\"",
 		"", "[sender.workers]", "initial = 32", "min = 1", "max = 32", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"",
-		"", "[sender.api]", "url = \"http://127.0.0.1:8080/internal/test/ingest\"", "mutability = \"startup-only\"",
+		"", "[sender.api]", "url = \"" + testSenderURL + "\"", "mutability = \"startup-only\"",
 		"", "[sender.retry]", "delays_ms = [250, 500, 1000, 2000, 5000]", "jitter_percent = 20", "mutability = \"startup-only\"",
 		"", "[metrics.window_ms]", "initial = 1000", "min = 100", "max = 10000", "step = 100", "unit = \"milliseconds\"", "mutability = \"startup-only\"",
 		"", "[logging]", "level = \"info\"", "mutability = \"startup-only\"",
@@ -108,19 +110,31 @@ func TestLoadConfigInitialContract(t *testing.T) {
 }
 
 func TestLoadConfigValidatesSenderAPI(t *testing.T) {
+	contents := testConfigContents()
+	urlLine := "url = \"" + testSenderURL + "\"\n"
 	tests := []struct {
 		name     string
 		contents string
 		wantErr  bool
 	}{
-		{name: "default", contents: testConfigContents()},
-		{name: "external HTTPS", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "https://ingest.example.test/v1/batches")},
-		{name: "missing URL", contents: strings.ReplaceAll(testConfigContents(), "url = \"http://127.0.0.1:8080/internal/test/ingest\"\n", ""), wantErr: true},
-		{name: "relative URL", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "/internal/test/ingest"), wantErr: true},
-		{name: "unsupported scheme", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "ftp://ingest.example.test/batches"), wantErr: true},
-		{name: "missing host", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "http:/internal/test/ingest"), wantErr: true},
-		{name: "fragment", contents: strings.ReplaceAll(testConfigContents(), "http://127.0.0.1:8080/internal/test/ingest", "https://ingest.example.test/batches#fragment"), wantErr: true},
-		{name: "runtime mutability", contents: strings.ReplaceAll(testConfigContents(), "[sender.api]\nurl = \"http://127.0.0.1:8080/internal/test/ingest\"\nmutability = \"startup-only\"", "[sender.api]\nurl = \"http://127.0.0.1:8080/internal/test/ingest\"\nmutability = \"immediate\""), wantErr: true},
+		{name: "default", contents: contents},
+		{name: "external HTTPS", contents: strings.Replace(contents, testSenderURL, "https://ingest.example.test/v1/batches", 1)},
+		{name: "missing URL", contents: strings.Replace(contents, urlLine, "", 1), wantErr: true},
+		{name: "malformed URL", contents: strings.Replace(contents, testSenderURL, "http://example.test/%invalid", 1), wantErr: true},
+		{name: "relative URL", contents: strings.Replace(contents, testSenderURL, "/internal/ingest", 1), wantErr: true},
+		{name: "unsupported scheme", contents: strings.Replace(contents, testSenderURL, "ftp://ingest.example.test/batches", 1), wantErr: true},
+		{name: "missing host", contents: strings.Replace(contents, testSenderURL, "http:/internal/ingest", 1), wantErr: true},
+		{name: "fragment", contents: strings.Replace(contents, testSenderURL, "https://ingest.example.test/batches#fragment", 1), wantErr: true},
+		{
+			name: "runtime mutability",
+			contents: strings.Replace(
+				contents,
+				urlLine+"mutability = \"startup-only\"",
+				urlLine+"mutability = \"immediate\"",
+				1,
+			),
+			wantErr: true,
+		},
 	}
 
 	for _, test := range tests {

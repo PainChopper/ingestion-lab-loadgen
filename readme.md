@@ -18,7 +18,7 @@ Parquet → Reader workers → Reader queue → Throttler → Sender queue → S
 - Read Parquet files with configurable batch sizes and Reader/Sender worker counts.
 - Two configurable queues and optional batch-level transaction rate limiting (TPS).
 - HTTP POST delivery of JSON batches, retries with delays and jitter, and cancellation handling.
-- A built-in HTTP receiver for local experiments.
+- A standalone HTTP receiver for local experiments.
 - Backend snapshots with rates, counters, queue occupancy, and applied settings.
 - Prometheus metrics and standard Go `pprof` endpoints.
 - A React/TypeScript frontend built with Vite, plus Storybook for UI component development.
@@ -31,6 +31,17 @@ The project is developed with AI assistance. The author remains responsible for 
 Requires Go 1.27 and Node.js 24 with npm. Backend mode requires compatible transaction data in Parquet format; the dataset is not included in the repository.
 
 ### Backend
+
+Start Receiver in its own terminal, from the repository root:
+
+```bash
+cd receiver
+go run ./cmd/receiver --config config.example.toml
+```
+
+The example Receiver listens on `127.0.0.1:8081`, accepts batches at `POST /internal/ingest`, and reports acceptance counters at `GET /status`.
+
+Start LoadGen in another terminal.
 
 From the repository root:
 
@@ -59,7 +70,7 @@ By default, the server reads `config.toml` from the current directory. To use a 
 go run . serve --config /home/user/config/loadgen.toml
 ```
 
-With the configuration included in the repository, the server listens on `127.0.0.1:8080` and the Sender targets the built-in receiver at `http://127.0.0.1:8080/internal/test/ingest`. The receiver path is derived from `sender.api.url`; if no path is specified, it defaults to `/`. Reserved API, metrics, and diagnostics routes cannot be used as receiver paths.
+With the included configuration, LoadGen listens on `127.0.0.1:8080` and its Sender posts to `http://127.0.0.1:8081/internal/ingest`. Set `sender.api.url` to use a different target.
 
 ### Backend-connected UI
 
