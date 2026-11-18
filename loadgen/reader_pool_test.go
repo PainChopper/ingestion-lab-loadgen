@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/parquet-go/parquet-go"
@@ -248,49 +249,56 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 }
 
 func TestReaderPoolCanceledBlockedSendDoesNotRestoreReading(t *testing.T) {
-	batches := make(chan []Transaction, 1)
-	batches <- []Transaction{{ClientID: "preexisting"}}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var telemetry readerTelemetry
-	var channel channelTelemetry
-	channel.start(batches, 1)
-	worker := &readerWorker{busy: true}
-	pool := &readerPool{
-		ctx:       ctx,
-		batches:   batches,
-		telemetry: &telemetry,
-		channel:   &channel,
-		workers:   []*readerWorker{worker},
-	}
-	sent := make(chan bool, 1)
-	go func() {
-		sent <- pool.sendBatch(worker, []Transaction{{ClientID: "a"}})
-	}()
-
-	waitForBlockedSender(t, &channel)
-	cancel()
-	select {
-	case ok := <-sent:
-		if ok {
-			t.Fatal("cancelled blocked send succeeded")
+	synctest.Test(t, func(t *testing.T) {
+		batches := make(chan []Transaction, 1)
+		batches <- []Transaction{{ClientID: "preexisting"}}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		var telemetry readerTelemetry
+		var channel channelTelemetry
+		channel.start(batches, 1)
+		worker := &readerWorker{busy: true}
+		pool := &readerPool{
+			ctx:       ctx,
+			batches:   batches,
+			telemetry: &telemetry,
+			channel:   &channel,
+			workers:   []*readerWorker{worker},
 		}
-	case <-time.After(time.Second):
-		t.Fatal("cancelled blocked send did not complete")
-	}
-	pool.mu.Lock()
-	blocked := worker.blocked
-	pool.mu.Unlock()
-	if blocked {
-		t.Fatal("cancelled send left worker blocked")
-	}
-	if snapshot := pool.aggregateSnapshot(); snapshot.readingWorkers != 1 || snapshot.blockedWorkers != 0 {
-		t.Fatalf("cancelled send snapshot = %+v", snapshot)
-	}
-	if measurements := channel.snapshot(time.Now()); measurements.blockedSenders != 0 ||
-		measurements.sentBatchesTotal != 0 || measurements.sentTransactionsTotal != 0 {
-		t.Fatalf("cancelled send channel measurements = %+v", measurements)
-	}
+		sent := make(chan bool, 1)
+		go func() {
+			sent <- pool.sendBatch(worker, []Transaction{{ClientID: "a"}})
+		}()
+
+		synctest.Wait()
+		if measurements := channel.snapshot(time.Now()); measurements.blockedSenders != 1 {
+			t.Fatalf("send did not block: %+v", measurements)
+		}
+		const blockedFor = 25 * time.Millisecond
+		time.Sleep(blockedFor)
+		cancel()
+		select {
+		case ok := <-sent:
+			if ok {
+				t.Fatal("cancelled blocked send succeeded")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("cancelled blocked send did not complete")
+		}
+		pool.mu.Lock()
+		blocked := worker.blocked
+		pool.mu.Unlock()
+		if blocked {
+			t.Fatal("cancelled send left worker blocked")
+		}
+		if snapshot := pool.aggregateSnapshot(); snapshot.readingWorkers != 1 || snapshot.blockedWorkers != 0 {
+			t.Fatalf("cancelled send snapshot = %+v", snapshot)
+		}
+		if measurements := channel.snapshot(time.Now()); measurements.blockedSenders != 0 || measurements.blockedMs != blockedFor.Milliseconds() ||
+			measurements.sentBatchesTotal != 0 || measurements.sentTransactionsTotal != 0 {
+			t.Fatalf("cancelled send channel measurements = %+v", measurements)
+		}
+	})
 }
 
 func TestReaderPoolConcurrentSendsUseLastFreeSlotOnce(t *testing.T) {
