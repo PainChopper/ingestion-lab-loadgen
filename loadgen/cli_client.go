@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,30 +30,32 @@ func (err remoteHTTPError) Error() string {
 
 func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) error {
 	client := remoteCLIClient{baseURL: command.remoteURL, httpClient: &http.Client{Timeout: remoteClientTimeout}}
-	if command.remoteAction == "status" {
-		snapshot, err := client.snapshot(ctx)
-		if err != nil {
-			return err
-		}
-		_, err = io.WriteString(stdout, formatSnapshot(snapshot))
-		return err
-	}
-	if command.remoteAction == "set" {
+	switch command.remoteAction {
+	case "status":
+	case "set":
 		if err := client.commandWithValue(ctx, command.remoteSet.requestAction, command.remoteSet.value); err != nil {
 			return err
 		}
-		snapshot, err := client.snapshot(ctx)
-		if err != nil {
-			return err
-		}
-		if err := command.remoteSet.confirm(snapshot); err != nil {
+	default:
+		return fmt.Errorf("unknown remote action %q", command.remoteAction)
+	}
+	data, err := client.snapshotData(ctx)
+	if err != nil {
+		return err
+	}
+	snapshot, err := decodeStrictSnapshot(bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	if command.remoteAction == "set" {
+		if err := command.remoteSet.confirm(data); err != nil {
 			return err
 		}
 		_, err = fmt.Fprintf(stdout, "action=set target=%s value=%v state=%s\n", command.remoteSet.target, command.remoteSet.value, snapshot.Run.State)
 		return err
 	}
-
-	return fmt.Errorf("unknown remote action %q", command.remoteAction)
+	_, err = io.WriteString(stdout, formatSnapshot(snapshot))
+	return err
 }
 
 type remoteCLIClient struct {
@@ -60,16 +63,20 @@ type remoteCLIClient struct {
 	httpClient *http.Client
 }
 
-func (c remoteCLIClient) snapshot(ctx context.Context) (runtimeSnapshot, error) {
+func (c remoteCLIClient) snapshotData(ctx context.Context) ([]byte, error) {
 	response, err := c.do(ctx, http.MethodGet, snapshotPath, nil)
 	if err != nil {
-		return runtimeSnapshot{}, err
+		return nil, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return runtimeSnapshot{}, newRemoteHTTPError(response, http.MethodGet, snapshotPath)
+		return nil, newRemoteHTTPError(response, http.MethodGet, snapshotPath)
 	}
-	return decodeStrictSnapshot(response.Body)
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read snapshot: %w", err)
+	}
+	return data, nil
 }
 
 func (c remoteCLIClient) commandWithValue(ctx context.Context, action string, value any) error {
@@ -91,39 +98,68 @@ func (c remoteCLIClient) commandWithValue(ctx context.Context, action string, va
 	return nil
 }
 
-func (c remoteSetCommand) confirm(snapshot runtimeSnapshot) error {
+func (c remoteSetCommand) confirm(data []byte) error {
+	// The shared DTO has validated the response; pointers distinguish an explicit zero from absence/null.
+	var snapshot struct {
+		Reader struct {
+			Workers *int `json:"workers"`
+		} `json:"reader"`
+		Sender struct {
+			Workers *int `json:"workers"`
+		} `json:"sender"`
+		Throttler struct {
+			RequestedTps *int  `json:"requestedTps"`
+			Installed    *bool `json:"installed"`
+		} `json:"throttler"`
+	}
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return fmt.Errorf("decode verification snapshot: %w", err)
+	}
+
 	switch c.target {
 	case "readers":
 		expected, err := c.numericValue()
 		if err != nil {
 			return err
 		}
-		if snapshot.Reader.Workers != expected {
-			return fmt.Errorf("verification snapshot reader.workers = %v, want %v", snapshot.Reader.Workers, expected)
+		if snapshot.Reader.Workers == nil {
+			return errors.New("verification snapshot reader.workers is missing or null")
+		}
+		if *snapshot.Reader.Workers != expected {
+			return fmt.Errorf("verification snapshot reader.workers = %v, want %v", *snapshot.Reader.Workers, expected)
 		}
 	case "senders":
 		expected, err := c.numericValue()
 		if err != nil {
 			return err
 		}
-		if snapshot.Sender.Workers != expected {
-			return fmt.Errorf("verification snapshot sender.workers = %v, want %v", snapshot.Sender.Workers, expected)
+		if snapshot.Sender.Workers == nil {
+			return errors.New("verification snapshot sender.workers is missing or null")
+		}
+		if *snapshot.Sender.Workers != expected {
+			return fmt.Errorf("verification snapshot sender.workers = %v, want %v", *snapshot.Sender.Workers, expected)
 		}
 	case "tps":
 		expected, err := c.numericValue()
 		if err != nil {
 			return err
 		}
-		if snapshot.Throttler.RequestedTps != expected {
-			return fmt.Errorf("verification snapshot throttler.requestedTps = %v, want %v", snapshot.Throttler.RequestedTps, expected)
+		if snapshot.Throttler.RequestedTps == nil {
+			return errors.New("verification snapshot throttler.requestedTps is missing or null")
+		}
+		if *snapshot.Throttler.RequestedTps != expected {
+			return fmt.Errorf("verification snapshot throttler.requestedTps = %v, want %v", *snapshot.Throttler.RequestedTps, expected)
 		}
 	case "throttle":
 		expected, ok := c.value.(bool)
 		if !ok {
 			return fmt.Errorf("verification snapshot throttle value has invalid type")
 		}
-		if snapshot.Throttler.Installed != expected {
-			return fmt.Errorf("verification snapshot throttler.installed = %v, want %v", snapshot.Throttler.Installed, expected)
+		if snapshot.Throttler.Installed == nil {
+			return errors.New("verification snapshot throttler.installed is missing or null")
+		}
+		if *snapshot.Throttler.Installed != expected {
+			return fmt.Errorf("verification snapshot throttler.installed = %v, want %v", *snapshot.Throttler.Installed, expected)
 		}
 	default:
 		return fmt.Errorf("verification snapshot unknown set target %q", c.target)
@@ -161,11 +197,7 @@ func newRemoteHTTPError(response *http.Response, method, endpoint string) remote
 }
 
 func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return runtimeSnapshot{}, fmt.Errorf("read snapshot: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder := json.NewDecoder(body)
 	decoder.DisallowUnknownFields()
 	var snapshot runtimeSnapshot
 	if err := decoder.Decode(&snapshot); err != nil {
@@ -174,125 +206,12 @@ func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: trailing JSON")
 	}
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(data, &root); err != nil {
-		return runtimeSnapshot{}, fmt.Errorf("decode snapshot shape: %w", err)
-	}
-	if err := validateSnapshotKeys(root); err != nil {
-		return runtimeSnapshot{}, err
-	}
 	switch snapshot.Run.State {
 	case runStateStarting, runStateRunning, runStateStopping, runStateFaulted:
 	default:
 		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: invalid run state %q", snapshot.Run.State)
 	}
 	return snapshot, nil
-}
-
-func validateSnapshotKeys(root map[string]json.RawMessage) error {
-	sections := map[string][]string{
-		"":              {"config", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"},
-		"run":           {"elapsedMs", "state", "totalTransactions"},
-		"reader":        {"blockedWorkers", "drainingBlockedWorkers", "drainingIdleWorkers", "drainingReadingWorkers", "drainingWorkers", "idleWorkers", "liveWorkers", "readBatchSize", "readTps", "readingWorkers", "rowsRead", "sourceDirectory", "sourceError", "workers"},
-		"throttler":     {"admittedTps", "installed", "requestedTps"},
-		"sender":        {"backoffWorkers", "drainingBackoffWorkers", "drainingIdleWorkers", "drainingInFlightWorkers", "drainingWorkers", "idleWorkers", "inFlightWorkers", "liveWorkers", "workers"},
-		"readerChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
-		"senderChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
-		"config":        {"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstalled", "throttlerRequestedTps"},
-	}
-	if err := validateExactKeys("snapshot", root, sections[""]); err != nil {
-		return err
-	}
-	for section, expected := range sections {
-		if section == "" {
-			continue
-		}
-		var value map[string]json.RawMessage
-		if err := json.Unmarshal(root[section], &value); err != nil {
-			return fmt.Errorf("decode snapshot %s: %w", section, err)
-		}
-		if err := validateExactKeys("snapshot "+section, value, expected); err != nil {
-			return err
-		}
-	}
-	var config map[string]json.RawMessage
-	if err := json.Unmarshal(root["config"], &config); err != nil {
-		return fmt.Errorf("decode snapshot config: %w", err)
-	}
-	for _, name := range []string{"readerReadBatchSize", "readerWorkers", "metricsWindowMs", "senderWorkers", "throttlerRequestedTps"} {
-		if err := validateSnapshotObjectKeys(config, name, []string{"initial", "max", "min", "mutability", "step", "unit"}); err != nil {
-			return err
-		}
-	}
-	for _, name := range []string{"readerChannelCapacity", "senderChannelCapacity"} {
-		if err := validateSnapshotObjectKeys(config, name, []string{"allowed", "initial", "mutability", "unit"}); err != nil {
-			return err
-		}
-	}
-	if err := validateSnapshotObjectKeys(config, "throttlerInstalled", []string{"allowed", "initial", "mutability"}); err != nil {
-		return err
-	}
-	var throttler map[string]json.RawMessage
-	if err := json.Unmarshal(root["throttler"], &throttler); err != nil {
-		return fmt.Errorf("decode snapshot throttler: %w", err)
-	}
-	var installedConfig map[string]json.RawMessage
-	if err := json.Unmarshal(config["throttlerInstalled"], &installedConfig); err != nil {
-		return fmt.Errorf("decode snapshot throttlerInstalled: %w", err)
-	}
-	for _, raw := range []json.RawMessage{throttler["installed"], installedConfig["initial"]} {
-		value := string(bytes.TrimSpace(raw))
-		if value != "true" && value != "false" {
-			return fmt.Errorf("decode snapshot installed value must be boolean")
-		}
-	}
-	var allowed []json.RawMessage
-	if err := json.Unmarshal(installedConfig["allowed"], &allowed); err != nil || allowed == nil {
-		return fmt.Errorf("decode snapshot throttlerInstalled.allowed must be boolean array")
-	}
-	for _, raw := range allowed {
-		value := string(bytes.TrimSpace(raw))
-		if value != "true" && value != "false" {
-			return fmt.Errorf("decode snapshot throttlerInstalled.allowed must contain only booleans")
-		}
-	}
-	if err := validateSnapshotObjectKeys(config, "logging", []string{"level", "mutability"}); err != nil {
-		return err
-	}
-	var reader map[string]json.RawMessage
-	if err := json.Unmarshal(root["reader"], &reader); err != nil {
-		return fmt.Errorf("decode snapshot reader: %w", err)
-	}
-	if string(reader["sourceError"]) != "null" {
-		var sourceError map[string]json.RawMessage
-		if err := json.Unmarshal(reader["sourceError"], &sourceError); err != nil {
-			return fmt.Errorf("decode snapshot sourceError: %w", err)
-		}
-		if err := validateExactKeys("snapshot sourceError", sourceError, []string{"category", "message", "operation", "relativePath"}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateSnapshotObjectKeys(parent map[string]json.RawMessage, name string, expected []string) error {
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(parent[name], &object); err != nil {
-		return fmt.Errorf("decode snapshot %s: %w", name, err)
-	}
-	return validateExactKeys("snapshot "+name, object, expected)
-}
-
-func validateExactKeys(name string, object map[string]json.RawMessage, expected []string) error {
-	if len(object) != len(expected) {
-		return fmt.Errorf("invalid %s schema", name)
-	}
-	for _, key := range expected {
-		if _, ok := object[key]; !ok {
-			return fmt.Errorf("invalid %s schema", name)
-		}
-	}
-	return nil
 }
 
 func formatSnapshot(snapshot runtimeSnapshot) string {

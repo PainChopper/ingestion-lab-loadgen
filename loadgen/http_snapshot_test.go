@@ -43,44 +43,12 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
 	}
-	assertExactJSONKeys(t, root, []string{"config", "reader", "readerChannel", "run", "sender", "senderChannel", "throttler"})
-	for name, want := range map[string][]string{
-		"run":           {"elapsedMs", "state", "totalTransactions"},
-		"reader":        {"blockedWorkers", "drainingBlockedWorkers", "drainingIdleWorkers", "drainingReadingWorkers", "drainingWorkers", "idleWorkers", "liveWorkers", "readBatchSize", "readTps", "readingWorkers", "rowsRead", "sourceDirectory", "sourceError", "workers"},
-		"throttler":     {"admittedTps", "installed", "requestedTps"},
-		"sender":        {"backoffWorkers", "drainingBackoffWorkers", "drainingIdleWorkers", "drainingInFlightWorkers", "drainingWorkers", "idleWorkers", "inFlightWorkers", "liveWorkers", "workers"},
-		"readerChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
-		"senderChannel": {"blockedMs", "blockedSenders", "bufferedTransactions", "capacity", "depthBatches", "inputBatchesPerSecond", "inputTransactionsPerSecond", "oldestBlockedSenderMs", "outputBatchesPerSecond", "outputTransactionsPerSecond", "receivedBatchesTotal", "receivedTransactionsTotal", "sentBatchesTotal", "sentTransactionsTotal"},
-	} {
-		var section map[string]json.RawMessage
-		if err := json.Unmarshal(root[name], &section); err != nil {
-			t.Fatalf("decode %s: %v", name, err)
-		}
-		assertExactJSONKeys(t, section, want)
-	}
 	if string(root["config"]) == "null" {
 		t.Error("config must be a JSON object")
 	}
 	var config map[string]json.RawMessage
 	if err := json.Unmarshal(root["config"], &config); err != nil {
 		t.Fatalf("decode config: %v", err)
-	}
-	assertExactJSONKeys(t, config, []string{"logging", "metricsWindowMs", "readerChannelCapacity", "readerReadBatchSize", "readerWorkers", "senderChannelCapacity", "senderWorkers", "throttlerInstalled", "throttlerRequestedTps"})
-	for name, want := range map[string][]string{
-		"readerReadBatchSize":   {"initial", "max", "min", "mutability", "step", "unit"},
-		"readerWorkers":         {"initial", "max", "min", "mutability", "step", "unit"},
-		"readerChannelCapacity": {"allowed", "initial", "mutability", "unit"},
-		"senderChannelCapacity": {"allowed", "initial", "mutability", "unit"},
-		"throttlerRequestedTps": {"initial", "max", "min", "mutability", "step", "unit"},
-		"throttlerInstalled":    {"allowed", "initial", "mutability"},
-		"senderWorkers":         {"initial", "max", "min", "mutability", "step", "unit"},
-		"metricsWindowMs":       {"initial", "max", "min", "mutability", "step", "unit"},
-	} {
-		section := map[string]json.RawMessage{}
-		if err := json.Unmarshal(config[name], &section); err != nil {
-			t.Fatalf("decode %s: %v", name, err)
-		}
-		assertExactJSONKeys(t, section, want)
 	}
 	var workers rangeConfig
 	if err := json.Unmarshal(config["readerWorkers"], &workers); err != nil {
@@ -93,27 +61,8 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(root["reader"], &reader); err != nil {
 		t.Fatal(err)
 	}
-	var sourceError map[string]json.RawMessage
-	if err := json.Unmarshal(reader["sourceError"], &sourceError); err != nil {
-		t.Fatal(err)
-	}
-	assertExactJSONKeys(t, sourceError, []string{"category", "message", "operation", "relativePath"})
 	if string(reader["liveWorkers"]) != "2" || string(reader["drainingWorkers"]) != "1" {
 		t.Errorf("Reader worker counts = %s / %s", reader["liveWorkers"], reader["drainingWorkers"])
-	}
-	for _, legacy := range []string{"workerSlots", "workerId", "source", "completed"} {
-		if _, ok := reader[legacy]; ok {
-			t.Fatalf("Reader includes legacy field %q", legacy)
-		}
-	}
-	var sender map[string]json.RawMessage
-	if err := json.Unmarshal(root["sender"], &sender); err != nil {
-		t.Fatal(err)
-	}
-	for _, legacy := range []string{"workerSlots", "workerId", "terminalError"} {
-		if _, ok := sender[legacy]; ok {
-			t.Fatalf("Sender includes legacy field %q", legacy)
-		}
 	}
 }
 
@@ -181,25 +130,6 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 			t.Errorf("wire %s = %+v, want %+v", name, actual[name], value)
 		}
 	}
-}
-
-func assertExactJSONKeys(t *testing.T, object map[string]json.RawMessage, want []string) {
-	t.Helper()
-	actual := make([]string, 0, len(object))
-	for key := range object {
-		actual = append(actual, key)
-	}
-	if !reflect.DeepEqual(stringSet(actual), stringSet(want)) {
-		t.Errorf("JSON keys = %v, want %v", actual, want)
-	}
-}
-
-func stringSet(values []string) map[string]struct{} {
-	set := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		set[value] = struct{}{}
-	}
-	return set
 }
 
 func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {

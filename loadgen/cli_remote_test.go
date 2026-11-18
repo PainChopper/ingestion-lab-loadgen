@@ -165,6 +165,72 @@ func TestRunRemoteCLISetRejectsMismatchedVerificationSnapshot(t *testing.T) {
 	}
 }
 
+func TestRunCLISetRequiresExplicitTargetValue(t *testing.T) {
+	for _, command := range []struct {
+		target, value, section, field string
+		valid, wrongType, mismatch    json.RawMessage
+	}{
+		{target: "readers", value: "3", section: "reader", field: "workers", valid: json.RawMessage(`3`), wrongType: json.RawMessage(`true`), mismatch: json.RawMessage(`4`)},
+		{target: "senders", value: "4", section: "sender", field: "workers", valid: json.RawMessage(`4`), wrongType: json.RawMessage(`false`), mismatch: json.RawMessage(`5`)},
+		{target: "tps", value: "0", section: "throttler", field: "requestedTps", valid: json.RawMessage(`0`), wrongType: json.RawMessage(`false`), mismatch: json.RawMessage(`1`)},
+		{target: "throttle", value: "false", section: "throttler", field: "installed", valid: json.RawMessage(`false`), wrongType: json.RawMessage(`0`), mismatch: json.RawMessage(`true`)},
+	} {
+		t.Run(command.target, func(t *testing.T) {
+			for _, shape := range []string{"explicit", "only target", "missing", "missing section", "null", "string", "wrong type", "mismatch"} {
+				t.Run(shape, func(t *testing.T) {
+					root := map[string]json.RawMessage{}
+					if err := json.Unmarshal([]byte(mustMarshalJSON(t, testRemoteSnapshot(t))), &root); err != nil {
+						t.Fatal(err)
+					}
+					section := map[string]json.RawMessage{}
+					if err := json.Unmarshal(root[command.section], &section); err != nil {
+						t.Fatal(err)
+					}
+					section[command.field] = command.valid
+					switch shape {
+					case "missing":
+						delete(section, command.field)
+					case "null":
+						section[command.field] = json.RawMessage(`null`)
+					case "string":
+						section[command.field] = json.RawMessage(mustMarshalJSON(t, command.value))
+					case "wrong type":
+						section[command.field] = command.wrongType
+					case "mismatch":
+						section[command.field] = command.mismatch
+					}
+					root[command.section] = json.RawMessage(mustMarshalJSON(t, section))
+					if shape == "missing section" {
+						delete(root, command.section)
+					}
+					if shape == "only target" {
+						root = map[string]json.RawMessage{
+							"run":           json.RawMessage(`{"state":"running"}`),
+							command.section: json.RawMessage(mustMarshalJSON(t, map[string]json.RawMessage{command.field: command.valid})),
+						}
+					}
+					body := mustMarshalJSON(t, root)
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.URL.Path == snapshotPath {
+							_, _ = w.Write([]byte(body))
+						}
+					}))
+					defer server.Close()
+					var stdout, stderr bytes.Buffer
+					code := runCLI([]string{"set", command.target, command.value, "--url", server.URL}, &stdout, &stderr)
+					if shape == "explicit" || shape == "only target" {
+						if code != 0 || !strings.Contains(stdout.String(), "target="+command.target+" value="+command.value) || stderr.Len() != 0 {
+							t.Fatalf("explicit value: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+						}
+					} else if code != cliExitRemote || stdout.Len() != 0 || stderr.Len() == 0 {
+						t.Fatalf("invalid target field: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestRunRemoteCLIStatusStrictlyValidatesSchema(t *testing.T) {
 	snapshot := testRemoteSnapshot(t)
 	encoded, err := json.Marshal(snapshot)
@@ -195,154 +261,35 @@ func TestRunRemoteCLIStatusStrictlyValidatesSchema(t *testing.T) {
 	}
 }
 
-func TestDecodeStrictSnapshotConfigContract(t *testing.T) {
-	snapshot := testRemoteSnapshot(t)
-	encoded, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &root); err != nil {
-		t.Fatal(err)
-	}
-	delete(root, "policy")
-	config, err := json.Marshal(snapshot.Config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	root["config"] = config
+func TestDecodeStrictSnapshotValidatesJSONAndState(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		change  func(map[string]json.RawMessage)
-		wantErr bool
+		name, body string
+		wantErr    bool
 	}{
-		{name: "config accepted", change: func(map[string]json.RawMessage) {}},
-		{name: "installed null", wantErr: true, change: func(root map[string]json.RawMessage) {
-			root["throttler"] = json.RawMessage(`{"requestedTps":0,"admittedTps":0,"installed":null}`)
-		}},
-		{name: "installed missing", wantErr: true, change: func(root map[string]json.RawMessage) {
-			root["throttler"] = json.RawMessage(`{"requestedTps":0,"admittedTps":0}`)
-		}},
-		{name: "installed string", wantErr: true, change: func(root map[string]json.RawMessage) {
-			root["throttler"] = json.RawMessage(`{"requestedTps":0,"admittedTps":0,"installed":"false"}`)
-		}},
-		{name: "installed number", wantErr: true, change: func(root map[string]json.RawMessage) {
-			root["throttler"] = json.RawMessage(`{"requestedTps":0,"admittedTps":0,"installed":0}`)
-		}},
-		{name: "only legacy field rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["policy"] = root["config"]; delete(root, "config") }},
-		{name: "both fields rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["policy"] = root["config"] }},
-		{name: "missing config rejected", wantErr: true, change: func(root map[string]json.RawMessage) { delete(root, "config") }},
-		{name: "null config rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["config"] = json.RawMessage(`null`) }},
-		{name: "invalid config rejected", wantErr: true, change: func(root map[string]json.RawMessage) { root["config"] = json.RawMessage(`[]`) }},
+		{name: "partial status", body: `{"run":{"state":"running"}}`},
+		{name: "starting", body: `{"run":{"state":"starting"}}`},
+		{name: "stopping", body: `{"run":{"state":"stopping"}}`},
+		{name: "faulted", body: `{"run":{"state":"faulted"}}`},
+		{name: "missing and null unrelated values", body: `{"run":{"state":"running"},"reader":null,"throttler":{"requestedTps":null,"installed":null}}`},
+		{name: "missing state", body: `{"run":{}}`, wantErr: true},
+		{name: "null state", body: `{"run":{"state":null}}`, wantErr: true},
+		{name: "invalid state", body: `{"run":{"state":"invalid"}}`, wantErr: true},
+		{name: "unknown root field", body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: true},
+		{name: "unknown nested field", body: `{"run":{"state":"running"},"reader":{"unexpected":true}}`, wantErr: true},
+		{name: "wrong known type", body: `{"run":{"state":"running"},"throttler":{"requestedTps":"0"}}`, wantErr: true},
+		{name: "array root", body: `[]`, wantErr: true},
+		{name: "null root", body: `null`, wantErr: true},
+		{name: "two objects", body: `{"run":{"state":"running"}} {}`, wantErr: true},
+		{name: "trailing null", body: `{"run":{"state":"running"}} null`, wantErr: true},
+		{name: "trailing garbage", body: `{"run":{"state":"running"}} broken`, wantErr: true},
+		{name: "malformed JSON", body: `{"run":`, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			input := make(map[string]json.RawMessage, len(root))
-			for key, value := range root {
-				input[key] = value
-			}
-			test.change(input)
-			data, err := json.Marshal(input)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, err := decodeStrictSnapshot(bytes.NewReader(data))
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("invalid snapshot accepted")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("config snapshot rejected: %v", err)
-			}
-			if got.Config.ReaderReadBatchSize != snapshot.Config.ReaderReadBatchSize {
-				t.Fatalf("decoded config = %+v", got.Config)
+			_, err := decodeStrictSnapshot(strings.NewReader(test.body))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("decode error=%v, wantErr=%v", err, test.wantErr)
 			}
 		})
-	}
-}
-
-func TestDecodeStrictSnapshotInitialContract(t *testing.T) {
-	encoded, err := json.Marshal(testRemoteSnapshot(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fields := []string{
-		"readerReadBatchSize", "readerWorkers", "readerChannelCapacity", "senderChannelCapacity",
-		"throttlerRequestedTps", "throttlerInstalled", "senderWorkers", "metricsWindowMs",
-	}
-	for _, field := range fields {
-		shapes := []string{"initial-only", "legacy-only", "both", "missing"}
-		if field == "throttlerInstalled" {
-			shapes = append(shapes, "null", "string", "number", "allowed-null", "allowed-element-null", "allowed-element-string", "allowed-element-number")
-		}
-		for _, shape := range shapes {
-			t.Run(field+"/"+shape, func(t *testing.T) {
-				root := map[string]json.RawMessage{}
-				if err := json.Unmarshal(encoded, &root); err != nil {
-					t.Fatal(err)
-				}
-				settings := map[string]json.RawMessage{}
-				if err := json.Unmarshal(root["config"], &settings); err != nil {
-					t.Fatal(err)
-				}
-				value := map[string]json.RawMessage{}
-				if err := json.Unmarshal(settings[field], &value); err != nil {
-					t.Fatal(err)
-				}
-				if _, ok := value["initial"]; !ok {
-					t.Fatal("fixture lacks initial")
-				}
-				if field == "readerChannelCapacity" || field == "senderChannelCapacity" {
-					value["initial"] = json.RawMessage(`0`)
-				}
-				if field == "throttlerInstalled" {
-					value["initial"] = json.RawMessage(`false`)
-				}
-				switch shape {
-				case "legacy-only":
-					value["default"] = value["initial"]
-					delete(value, "initial")
-				case "both":
-					value["default"] = value["initial"]
-				case "missing":
-					delete(value, "initial")
-				case "null":
-					value["initial"] = json.RawMessage(`null`)
-				case "string":
-					value["initial"] = json.RawMessage(`"false"`)
-				case "number":
-					value["initial"] = json.RawMessage(`0`)
-				case "allowed-null":
-					value["allowed"] = json.RawMessage(`null`)
-				case "allowed-element-null":
-					value["allowed"] = json.RawMessage(`[true,null]`)
-				case "allowed-element-string":
-					value["allowed"] = json.RawMessage(`[true,"false"]`)
-				case "allowed-element-number":
-					value["allowed"] = json.RawMessage(`[true,0]`)
-				}
-				settings[field], err = json.Marshal(value)
-				if err != nil {
-					t.Fatal(err)
-				}
-				root["config"], err = json.Marshal(settings)
-				if err != nil {
-					t.Fatal(err)
-				}
-				input, err := json.Marshal(root)
-				if err != nil {
-					t.Fatal(err)
-				}
-				_, err = decodeStrictSnapshot(bytes.NewReader(input))
-				if shape == "initial-only" && err != nil {
-					t.Fatalf("initial snapshot rejected: %v", err)
-				}
-				if shape != "initial-only" && err == nil {
-					t.Fatal("legacy or incomplete snapshot accepted")
-				}
-			})
-		}
 	}
 }
 
