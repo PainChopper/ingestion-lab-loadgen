@@ -320,15 +320,12 @@ export function WorkerActor({
               width={bounds.width}
               height={layout.height}
               rx="5"
-              fill="#5f1018"
-              fillOpacity="0.84"
+              className="pipeline-reader-source-error__background"
             />
             <text
               x={bounds.x + bounds.width / 2}
               y={layout.top + layout.height / 2}
-              fill="#ffd9dc"
-              fontSize="13"
-              fontWeight="700"
+              className="pipeline-reader-source-error__label"
               textAnchor="middle"
             >
               SOURCE ERROR

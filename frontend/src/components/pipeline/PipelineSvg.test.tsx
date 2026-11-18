@@ -10,7 +10,12 @@ import type {
   LoadgenTelemetrySnapshot,
   ChannelTelemetrySnapshot,
 } from '../../model/loadgen'
-import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
+import {
+  CHANNEL_PRESSURE_GREEN,
+  CHANNEL_PRESSURE_RED,
+  CHANNEL_PRESSURE_YELLOW,
+  ChannelFlowStateDeriver,
+} from '../../model/channelFlowState'
 import { createPipelineGeometry, FLOW_BASELINE, type TextPlacement } from './geometry'
 import { CHANNEL_CAPACITY_SCALE_OFFSET, CHANNEL_CABLE_MAX_LIFT } from './channelCableGeometry'
 import type { PipelineOrientation } from './pipelineLayout'
@@ -28,6 +33,20 @@ const pipelineStyles = readFileSync(
 beforeAll(() => {
   styleElement.textContent = pipelineStyles
   document.head.append(styleElement)
+})
+
+it('keeps channel pressure colors aligned with the stylesheet palette', () => {
+  const stylesheet = document.createElement('style')
+  stylesheet.textContent = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8')
+  document.head.append(stylesheet)
+  try {
+    const palette = getComputedStyle(document.documentElement)
+    expect(palette.getPropertyValue('--green').trim()).toBe(CHANNEL_PRESSURE_GREEN)
+    expect(palette.getPropertyValue('--yellow').trim()).toBe(CHANNEL_PRESSURE_YELLOW)
+    expect(palette.getPropertyValue('--red').trim()).toBe(CHANNEL_PRESSURE_RED)
+  } finally {
+    stylesheet.remove()
+  }
 })
 
 describe('responsive pipeline geometry', () => {
@@ -879,6 +898,11 @@ describe('PipelineSvg rendering', () => {
       const overlayText = overlay.querySelector<SVGTextElement>('text')!
 
       expect(overlay.getAttribute('role')).toBe('alert')
+      expect(getComputedStyle(overlayRect).fill).toBe('var(--reader-source-error-background)')
+      expect(getComputedStyle(overlayRect).fillOpacity).toBe('0.84')
+      expect(getComputedStyle(overlayText).fill).toBe('var(--reader-source-error-text)')
+      expect(getComputedStyle(overlayText).fontSize).toBe('13px')
+      expect(getComputedStyle(overlayText).fontWeight).toBe('700')
       expect({
         x: Number(overlayRect.getAttribute('x')),
         y: Number(overlayRect.getAttribute('y')),
@@ -1122,7 +1146,7 @@ describe('PipelineSvg rendering', () => {
     const view = renderPipeline(drained)
     const vacuum = view.container.querySelector<SVGEllipseElement>('.pipeline-valve-vacuum')!
     expect(vacuum.dataset.vacuumFill).toBe('uniform')
-    expect(vacuum.getAttribute('fill')).toBe('#03111f')
+    expect(getComputedStyle(vacuum).fill).toBe('var(--valve-vacuum-fill)')
     const senderChannel = view.container.querySelector<SVGGElement>('#channel-throttler-to-sender')!
     expect(senderChannel.style.getPropertyValue('--pipeline-channel-pressure-color')).toBe(
       '#79d957',

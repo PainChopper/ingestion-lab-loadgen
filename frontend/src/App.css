@@ -165,12 +165,6 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-.lab-shell--portrait {
-  width: 100vw;
-  max-width: 100vw;
-  min-width: 0;
-}
-
 .lab-shell--portrait .pipeline-scroll {
   width: 100%;
   max-width: 100%;

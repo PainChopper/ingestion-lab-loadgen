@@ -13,11 +13,13 @@
   --yellow: #ffd31f;
   --red: #ff6748;
   --purple: #c49cf5;
+  --reader-source-error-background: #5f1018;
+  --reader-source-error-text: #ffd9dc;
+  --valve-vacuum-fill: #03111f;
   color: var(--text);
   background: var(--navy-950);
   font:
-    14px/1.35 Inter,
-    ui-sans-serif,
+    14px/1.35 ui-sans-serif,
     system-ui,
     -apple-system,
     BlinkMacSystemFont,
@@ -35,21 +37,13 @@
 }
 
 html {
-  min-width: 0;
-  width: 100%;
-  max-width: 100%;
   min-height: 100%;
   background: var(--navy-950);
-  overflow-x: hidden;
 }
 
 body {
-  min-width: 0;
-  width: 100%;
-  max-width: 100%;
   min-height: 100vh;
   margin: 0;
-  overflow-x: hidden;
 }
 
 button,
