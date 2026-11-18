@@ -29,21 +29,20 @@ describe('pipeline layout selection', () => {
   })
 
   it('gives explicit query mode precedence and uses portrait at narrow widths', () => {
-    expect(resolvePipelineOrientation('portrait', false, 1200, 600))
-      .toBe('portrait')
-    expect(resolvePipelineOrientation('landscape', true, 600, 1200))
-      .toBe('landscape')
+    expect(resolvePipelineOrientation('portrait', false, 1200, 600)).toBe('portrait')
+    expect(resolvePipelineOrientation('landscape', true, 600, 1200)).toBe('landscape')
     expect(resolvePipelineOrientation('auto', false, 615, 400)).toBe('portrait')
     expect(resolvePipelineOrientation('auto', false, 1440, 900)).toBe('landscape')
-    expect(resolvePipelineOrientation('auto', true, 800, 800))
-      .toBe('portrait')
+    expect(resolvePipelineOrientation('auto', true, 800, 800)).toBe('portrait')
   })
 
   it('follows live orientation media changes in auto mode', () => {
     let portrait = false
     const listeners = new Set<() => void>()
     const media = {
-      get matches() { return portrait },
+      get matches() {
+        return portrait
+      },
       media: '(orientation: portrait)',
       onchange: null,
       addEventListener: vi.fn((_name: string, listener: () => void) => {

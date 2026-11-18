@@ -9,7 +9,13 @@ import { WorkerActor } from './WorkerActor'
 const sender = ACTOR_GEOMETRY.sender
 const activityCounts = { idle: 0, reading: 0, blocked: 0, 'in-flight': 0, backoff: 0 }
 
-function SenderWorkers({ onCommand, max = 10 }: { onCommand: (value: number) => void; max?: number }) {
+function SenderWorkers({
+  onCommand,
+  max = 10,
+}: {
+  onCommand: (value: number) => void
+  max?: number
+}) {
   const [applied, setApplied] = useState(5)
   const [revision, setRevision] = useState(0)
   const desiredControl = useDesiredControl({
@@ -130,7 +136,9 @@ describe('WorkerActor controls', () => {
     expect(screen.getByRole('status').textContent).toBe('11')
     expect(currentCommand).not.toHaveBeenCalled()
 
-    await act(async () => { fireEvent.pointerUp(window, { pointerId: 1 }) })
+    await act(async () => {
+      fireEvent.pointerUp(window, { pointerId: 1 })
+    })
     expect(originalCommand).not.toHaveBeenCalled()
     expect(currentCommand.mock.calls).toEqual([[11]])
   })

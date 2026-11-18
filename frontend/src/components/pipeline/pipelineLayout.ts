@@ -20,16 +20,8 @@ export function resolvePipelineOrientation(
   return portraitMediaMatches ? 'portrait' : 'landscape'
 }
 
-function currentOrientation(
-  mode: PipelineLayoutMode,
-  media: MediaQueryList,
-): PipelineOrientation {
-  return resolvePipelineOrientation(
-    mode,
-    media.matches,
-    window.innerWidth,
-    window.innerHeight,
-  )
+function currentOrientation(mode: PipelineLayoutMode, media: MediaQueryList): PipelineOrientation {
+  return resolvePipelineOrientation(mode, media.matches, window.innerWidth, window.innerHeight)
 }
 
 export function usePipelineOrientation(): PipelineOrientation {

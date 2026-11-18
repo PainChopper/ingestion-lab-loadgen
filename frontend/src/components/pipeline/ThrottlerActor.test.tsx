@@ -6,11 +6,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
-import type {
-  NumericControlSnapshot,
-  ChannelSnapshot,
-  SelectableId,
-} from '../../model/loadgen'
+import type { NumericControlSnapshot, ChannelSnapshot, SelectableId } from '../../model/loadgen'
 import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import { createPipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
@@ -29,9 +25,7 @@ beforeAll(() => {
   document.head.append(styleElement)
 })
 
-function requestedControl(
-  overrides: Partial<NumericControlSnapshot> = {},
-): NumericControlSnapshot {
+function requestedControl(overrides: Partial<NumericControlSnapshot> = {}): NumericControlSnapshot {
   return {
     applied: 120_000,
     preview: null,
@@ -110,14 +104,16 @@ function Harness({
     rejectionMessage: 'Valve mode change rejected',
     unavailableMessage: 'Valve mode change unavailable',
   })
-  const requestedTpsControl = control.preview !== null
-    ? { ...requestedController, desired: control.preview, phase: 'preview' as const }
-    : control.pending === null
-      ? requestedController
-      : { ...requestedController, desired: control.pending, phase: 'pending' as const }
-  const installedControl = pendingInstalled === null
-    ? modeController
-    : { ...modeController, desired: pendingInstalled, phase: 'pending' as const }
+  const requestedTpsControl =
+    control.preview !== null
+      ? { ...requestedController, desired: control.preview, phase: 'preview' as const }
+      : control.pending === null
+        ? requestedController
+        : { ...requestedController, desired: control.pending, phase: 'pending' as const }
+  const installedControl =
+    pendingInstalled === null
+      ? modeController
+      : { ...modeController, desired: pendingInstalled, phase: 'pending' as const }
   const geometry = createPipelineGeometry({
     orientation,
     readerWorkers: 7,
@@ -203,17 +199,17 @@ describe('ThrottlerActor valve control', () => {
     expect(slider.getAttribute('aria-valuenow')).toBe('5')
     expect(slider.getAttribute('aria-valuetext')).toContain('45% open')
     expect(view.container.querySelector('.pipeline-valve-body')).not.toBeNull()
-    expect(view.container.querySelectorAll('.pipeline-valve-wheel-knob'))
-      .toHaveLength(6)
-    expect(view.container.querySelectorAll('.pipeline-valve-wheel-spoke'))
-      .toHaveLength(5)
-    expect(view.container.querySelector('[data-direction="decrease"]')
-      ?.getAttribute('x')).toBe(String(VALVE_OPENING_CONTROLS.decrease.x))
-    expect(view.container.querySelector('[data-direction="increase"]')
-      ?.getAttribute('x')).toBe(String(VALVE_OPENING_CONTROLS.increase.x))
-    expect(view.container.querySelector('[data-installation-grip="wheel"]')
-      ?.getAttribute('height'))
-      .toBe(String(VALVE_INSTALLATION_CONTROL.installedTarget.height))
+    expect(view.container.querySelectorAll('.pipeline-valve-wheel-knob')).toHaveLength(6)
+    expect(view.container.querySelectorAll('.pipeline-valve-wheel-spoke')).toHaveLength(5)
+    expect(view.container.querySelector('[data-direction="decrease"]')?.getAttribute('x')).toBe(
+      String(VALVE_OPENING_CONTROLS.decrease.x),
+    )
+    expect(view.container.querySelector('[data-direction="increase"]')?.getAttribute('x')).toBe(
+      String(VALVE_OPENING_CONTROLS.increase.x),
+    )
+    expect(
+      view.container.querySelector('[data-installation-grip="wheel"]')?.getAttribute('height'),
+    ).toBe(String(VALVE_INSTALLATION_CONTROL.installedTarget.height))
     fireEvent.pointerDown(view.container.querySelector('[data-direction="increase"]')!)
     fireEvent.pointerUp(window)
 
@@ -244,17 +240,23 @@ describe('ThrottlerActor valve control', () => {
     const decrease = view.container.querySelector('[data-direction="decrease"]')!
     const increase = view.container.querySelector('[data-direction="increase"]')!
 
-    expect([decrease, increase].map((element) => [
-      element.getAttribute('x'), element.getAttribute('y'),
-      element.getAttribute('width'), element.getAttribute('height'),
-    ])).toEqual([
+    expect(
+      [decrease, increase].map((element) => [
+        element.getAttribute('x'),
+        element.getAttribute('y'),
+        element.getAttribute('width'),
+        element.getAttribute('height'),
+      ]),
+    ).toEqual([
       ['394', '398', '26', '34'],
       ['440', '398', '26', '34'],
     ])
-    expect(view.container.querySelector('[data-installation-grip="wheel"]')
-      ?.getAttribute('y')).toBe('368')
-    expect(view.container.querySelector('[data-installation-grip="wheel"]')
-      ?.getAttribute('height')).toBe('29')
+    expect(
+      view.container.querySelector('[data-installation-grip="wheel"]')?.getAttribute('y'),
+    ).toBe('368')
+    expect(
+      view.container.querySelector('[data-installation-grip="wheel"]')?.getAttribute('height'),
+    ).toBe('29')
 
     fireEvent.pointerDown(decrease)
     fireEvent.pointerUp(window)
@@ -262,9 +264,7 @@ describe('ThrottlerActor valve control', () => {
     fireEvent.pointerDown(increase)
     fireEvent.pointerUp(window)
 
-    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([
-      1_400_000, 1_800_000,
-    ])
+    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([1_400_000, 1_800_000])
     expect(onModeCommand).not.toHaveBeenCalled()
   })
 
@@ -272,12 +272,8 @@ describe('ThrottlerActor valve control', () => {
     const onCommand = vi.fn()
     const onModeCommand = vi.fn()
     const view = renderHarness({ onCommand, onModeCommand })
-    const decrease = view.container.querySelector(
-      '[data-wheel-direction="decrease"]',
-    )!
-    const increase = view.container.querySelector(
-      '[data-wheel-direction="increase"]',
-    )!
+    const decrease = view.container.querySelector('[data-wheel-direction="decrease"]')!
+    const increase = view.container.querySelector('[data-wheel-direction="increase"]')!
 
     expect(decrease.getAttribute('aria-label')).toBe('Decrease throttle opening')
     expect(increase.getAttribute('aria-label')).toBe('Increase throttle opening')
@@ -290,9 +286,7 @@ describe('ThrottlerActor valve control', () => {
     fireEvent.pointerUp(window)
     fireEvent.keyDown(increase, { key: 'Enter' })
 
-    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([
-      90_000, 115_000, 135_000,
-    ])
+    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([90_000, 115_000, 135_000])
     expect(onModeCommand).not.toHaveBeenCalled()
   })
 
@@ -387,20 +381,16 @@ describe('ThrottlerActor valve control', () => {
     const control = screen.getByRole('button', {
       name: 'Remove throttler valve',
     })
-    const grip = view.container.querySelector(
-      '[data-installation-grip="wheel"]',
-    )!
+    const grip = view.container.querySelector('[data-installation-grip="wheel"]')!
 
     fireEvent.pointerDown(grip, { clientX: 100, clientY: 100, pointerId: 1 })
     fireEvent.pointerMove(control, { clientX: 100, clientY: 75, pointerId: 1 })
-    expect(view.container.querySelector(
-      '.pipeline-valve-installation-ghost--preview',
-    )).not.toBeNull()
+    expect(
+      view.container.querySelector('.pipeline-valve-installation-ghost--preview'),
+    ).not.toBeNull()
     fireEvent.pointerUp(control, { clientX: 100, clientY: 75, pointerId: 1 })
     expect(onModeCommand).not.toHaveBeenCalled()
-    expect(view.container.querySelector(
-      '.pipeline-valve-installation-ghost',
-    )).toBeNull()
+    expect(view.container.querySelector('.pipeline-valve-installation-ghost')).toBeNull()
 
     fireEvent.pointerDown(grip, { clientX: 100, clientY: 100, pointerId: 2 })
     fireEvent.pointerMove(control, { clientX: 100, clientY: 45, pointerId: 2 })
@@ -457,35 +447,27 @@ describe('ThrottlerActor valve control', () => {
     const control = screen.getByRole('button', {
       name: 'Remove throttler valve',
     })
-    const grip = view.container.querySelector(
-      '[data-installation-grip="wheel"]',
-    )!
+    const grip = view.container.querySelector('[data-installation-grip="wheel"]')!
     const begin = (pointerId: number) => {
       fireEvent.pointerDown(grip, {
         clientX: 100,
         clientY: 100,
         pointerId,
       })
-      expect(view.container.querySelector(
-        '.pipeline-valve-installation-ghost--preview',
-      )).not.toBeNull()
+      expect(
+        view.container.querySelector('.pipeline-valve-installation-ghost--preview'),
+      ).not.toBeNull()
     }
 
     begin(4)
     fireEvent.keyDown(control, { key: 'Escape' })
-    expect(view.container.querySelector(
-      '.pipeline-valve-installation-ghost',
-    )).toBeNull()
+    expect(view.container.querySelector('.pipeline-valve-installation-ghost')).toBeNull()
     begin(5)
     fireEvent.pointerCancel(control, { pointerId: 5 })
-    expect(view.container.querySelector(
-      '.pipeline-valve-installation-ghost',
-    )).toBeNull()
+    expect(view.container.querySelector('.pipeline-valve-installation-ghost')).toBeNull()
     begin(6)
     fireEvent.blur(window)
-    expect(view.container.querySelector(
-      '.pipeline-valve-installation-ghost',
-    )).toBeNull()
+    expect(view.container.querySelector('.pipeline-valve-installation-ghost')).toBeNull()
     expect(onModeCommand).not.toHaveBeenCalled()
   })
 
@@ -522,12 +504,10 @@ describe('ThrottlerActor valve control', () => {
 
     expect(control.getAttribute('aria-pressed')).toBe('false')
     expect(control.getAttribute('aria-valuetext')).toContain('bypass pending')
-    expect(view.container.querySelector(
-      '.pipeline-valve-installation-ghost--pending',
-    )).not.toBeNull()
-    expect(view.container.querySelector(
-      '.pipeline-valve-detached-assembly--applied',
-    )).toBeNull()
+    expect(
+      view.container.querySelector('.pipeline-valve-installation-ghost--pending'),
+    ).not.toBeNull()
+    expect(view.container.querySelector('.pipeline-valve-detached-assembly--applied')).toBeNull()
   })
 
   it('keeps applied opening solid while preview takes precedence over pending', () => {
@@ -536,16 +516,14 @@ describe('ThrottlerActor valve control', () => {
 
     expect(slider.getAttribute('aria-valuenow')).toBe('6')
     expect(screen.getByText('45% OPEN')).not.toBeNull()
-    expect(view.container.querySelector('.pipeline-valve-ghost--pending'))
-      .not.toBeNull()
+    expect(view.container.querySelector('.pipeline-valve-ghost--pending')).not.toBeNull()
 
     view.rerender({
       control: requestedControl({ preview: 160_000, pending: 135_000 }),
     })
     expect(slider.getAttribute('aria-valuenow')).toBe('7')
     expect(screen.getByText('45% OPEN')).not.toBeNull()
-    expect(view.container.querySelector('.pipeline-valve-ghost--preview'))
-      .not.toBeNull()
+    expect(view.container.querySelector('.pipeline-valve-ghost--preview')).not.toBeNull()
   })
 
   it('clears a rejected ghost and keeps invalid capabilities readonly', async () => {
@@ -648,29 +626,37 @@ describe('ThrottlerActor valve control', () => {
       const rim = view.container.querySelector('.pipeline-valve-wheel-rim')!
       const body = view.container.querySelector('.pipeline-valve-body')!
       const inner = view.container.querySelector('.pipeline-valve-wheel-inner-motion')!
-      rimGeometry.push([
-        rim.getAttribute('cx'), rim.getAttribute('cy'),
-        rim.getAttribute('rx'), rim.getAttribute('ry'),
-      ].join(':'))
+      rimGeometry.push(
+        [
+          rim.getAttribute('cx'),
+          rim.getAttribute('cy'),
+          rim.getAttribute('rx'),
+          rim.getAttribute('ry'),
+        ].join(':'),
+      )
       visibleBounds.push(body.getAttribute('data-visible-bounds')!)
       internalPhases.push(inner.getAttribute('data-internal-phase')!)
-      orbitLayouts.push([...view.container.querySelectorAll(
-        '.pipeline-valve-wheel-knob',
-      )].map((knob) => Number(knob.getAttribute('data-orbit-angle')))
-        .sort((left, right) => left - right))
-      expect([...view.container.querySelectorAll(
-        '.pipeline-valve-wheel-knob',
-      )].every((knob) => {
-        const x = Number(knob.getAttribute('cx'))
-        const y = Number(knob.getAttribute('cy'))
-        const radius = Number(knob.getAttribute('r'))
-        return x - radius >= 400.25 && x + radius <= 459.75 &&
-          y - radius >= 336.75 && y + radius <= 363.25
-      })).toBe(true)
+      orbitLayouts.push(
+        [...view.container.querySelectorAll('.pipeline-valve-wheel-knob')]
+          .map((knob) => Number(knob.getAttribute('data-orbit-angle')))
+          .sort((left, right) => left - right),
+      )
+      expect(
+        [...view.container.querySelectorAll('.pipeline-valve-wheel-knob')].every((knob) => {
+          const x = Number(knob.getAttribute('cx'))
+          const y = Number(knob.getAttribute('cy'))
+          const radius = Number(knob.getAttribute('r'))
+          return (
+            x - radius >= 400.25 &&
+            x + radius <= 459.75 &&
+            y - radius >= 336.75 &&
+            y + radius <= 363.25
+          )
+        }),
+      ).toBe(true)
       await user.keyboard('{ArrowRight}')
       if (phase < 5) {
-        await waitFor(() => expect(slider.getAttribute('aria-valuenow'))
-          .toBe(String(phase + 1)))
+        await waitFor(() => expect(slider.getAttribute('aria-valuenow')).toBe(String(phase + 1)))
       }
     }
 
@@ -685,22 +671,25 @@ describe('ThrottlerActor valve control', () => {
       [0, 60, 120, 180, 240, 300],
       [30, 90, 150, 210, 270, 330],
     ])
-    const orderedDepths = [...view.container.querySelectorAll(
-      '.pipeline-valve-wheel-knob',
-    )].map((knob) => Number(knob.getAttribute('data-orbit-depth')))
+    const orderedDepths = [...view.container.querySelectorAll('.pipeline-valve-wheel-knob')].map(
+      (knob) => Number(knob.getAttribute('data-orbit-depth')),
+    )
     expect(orderedDepths).toEqual([...orderedDepths].sort((a, b) => a - b))
-    expect([...view.container.querySelectorAll(
-      '.pipeline-valve-wheel-knob',
-    )].every((knob) => knob.getAttribute('data-orbit-layer') === (
-      Number(knob.getAttribute('data-orbit-depth')) < 0 ? 'back' : 'front'
-    ))).toBe(true)
+    expect(
+      [...view.container.querySelectorAll('.pipeline-valve-wheel-knob')].every(
+        (knob) =>
+          knob.getAttribute('data-orbit-layer') ===
+          (Number(knob.getAttribute('data-orbit-depth')) < 0 ? 'back' : 'front'),
+      ),
+    ).toBe(true)
   })
 
   it('shares perspective and clips closed partial open and ghost pistons', () => {
     const view = renderHarness({ control: requestedControl({ applied: 0 }) })
-    const readPose = () => Number(view.container.querySelector(
-      '[data-gate-kind="applied"]',
-    )!.getAttribute('data-gate-y'))
+    const readPose = () =>
+      Number(
+        view.container.querySelector('[data-gate-kind="applied"]')!.getAttribute('data-gate-y'),
+      )
     const aperture = view.container.querySelector('.pipeline-valve-aperture')!
     const body = view.container.querySelector('.pipeline-valve-body')!
     const gate = view.container.querySelector('[data-gate-kind="applied"]')!
@@ -708,20 +697,22 @@ describe('ThrottlerActor valve control', () => {
     const hits = [...view.container.querySelectorAll('.pipeline-valve-hit-area')]
 
     expect(aperture.getAttribute('data-axis-ratio')).toBe('0.82')
-    expect(Number(gateEllipse.getAttribute('ry')) /
-      Number(gateEllipse.getAttribute('rx'))).toBeCloseTo(0.82, 8)
+    expect(
+      Number(gateEllipse.getAttribute('ry')) / Number(gateEllipse.getAttribute('rx')),
+    ).toBeCloseTo(0.82, 8)
     expect(gate.getAttribute('data-piston-axis-ratio')).toBe('0.82')
-    expect(gate.getAttribute('clip-path'))
-      .toBe('url(#throttler-valve-aperture-clip)')
-    expect(gate.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING)
-      .not.toBe(0)
+    expect(gate.getAttribute('clip-path')).toBe('url(#throttler-valve-aperture-clip)')
+    expect(gate.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(readPose()).toBe(415)
-    expect(body.getAttribute('data-visible-bounds'))
-      .toBe('400.25 336.75 59.5 95.25')
-    expect(hits.map((hit) => [
-      hit.getAttribute('x'), hit.getAttribute('y'),
-      hit.getAttribute('width'), hit.getAttribute('height'),
-    ])).toEqual([
+    expect(body.getAttribute('data-visible-bounds')).toBe('400.25 336.75 59.5 95.25')
+    expect(
+      hits.map((hit) => [
+        hit.getAttribute('x'),
+        hit.getAttribute('y'),
+        hit.getAttribute('width'),
+        hit.getAttribute('height'),
+      ]),
+    ).toEqual([
       ['394', '398', '26', '34'],
       ['440', '398', '26', '34'],
     ])
@@ -730,26 +721,26 @@ describe('ThrottlerActor valve control', () => {
     const partialY = readPose()
     expect(partialY).toBeGreaterThan(393)
     expect(partialY).toBeLessThan(415)
-    expect(partialY + Number(gateEllipse.getAttribute('ry')))
-      .toBeLessThan(415 + 12.3)
+    expect(partialY + Number(gateEllipse.getAttribute('ry'))).toBeLessThan(415 + 12.3)
 
     view.rerender({ control: requestedControl({ applied: 250_000 }) })
     expect(readPose()).toBe(393)
-    const openEdge = readPose() + Number(gateEllipse.getAttribute('ry')) -
-      (415 - 12.3)
+    const openEdge = readPose() + Number(gateEllipse.getAttribute('ry')) - (415 - 12.3)
     expect(openEdge).toBeGreaterThan(0)
     expect(openEdge).toBeLessThan(1)
-    expect([...view.container.querySelectorAll('[data-gate-kind]')].every(
-      (item) => item.getAttribute('clip-path') ===
-        'url(#throttler-valve-aperture-clip)',
-    )).toBe(true)
+    expect(
+      [...view.container.querySelectorAll('[data-gate-kind]')].every(
+        (item) => item.getAttribute('clip-path') === 'url(#throttler-valve-aperture-clip)',
+      ),
+    ).toBe(true)
 
     view.rerender({ control: requestedControl({ pending: 135_000 }) })
     const ghost = view.container.querySelector('[data-gate-kind="pending"]')!
     expect(ghost.getAttribute('data-piston-axis-ratio')).toBe('0.82')
-    expect(Number(ghost.querySelector('ellipse')!.getAttribute('ry')) /
-      Number(ghost.querySelector('ellipse')!.getAttribute('rx')))
-      .toBeCloseTo(0.82, 8)
+    expect(
+      Number(ghost.querySelector('ellipse')!.getAttribute('ry')) /
+        Number(ghost.querySelector('ellipse')!.getAttribute('rx')),
+    ).toBeCloseTo(0.82, 8)
   })
 
   it('leaves an exact flange connector gap and colors it from applied flow only', () => {
@@ -758,30 +749,29 @@ describe('ThrottlerActor valve control', () => {
       control,
       channelOverrides: { flowState: 'normal', displayedPressure: 0 },
     })
-    const connectors = [...view.container.querySelectorAll(
-      '.pipeline-valve-flow-line',
-    )]
-    expect(connectors.map((line) => [
-      line.getAttribute('data-connector-side'),
-      Number(line.getAttribute('x1')),
-      Number(line.getAttribute('x2')),
-    ])).toEqual([
+    const connectors = [...view.container.querySelectorAll('.pipeline-valve-flow-line')]
+    expect(
+      connectors.map((line) => [
+        line.getAttribute('data-connector-side'),
+        Number(line.getAttribute('x1')),
+        Number(line.getAttribute('x2')),
+      ]),
+    ).toEqual([
       ['left', 355, 401],
       ['right', 459, 505],
     ])
-    expect(connectors.every((line) =>
-      Number(line.getAttribute('x2')) <= 401 ||
-      Number(line.getAttribute('x1')) >= 459
-    )).toBe(true)
+    expect(
+      connectors.every(
+        (line) => Number(line.getAttribute('x2')) <= 401 || Number(line.getAttribute('x1')) >= 459,
+      ),
+    ).toBe(true)
     const actor = view.container.querySelector<SVGGElement>('#throttler-actor')!
-    expect(actor.style.getPropertyValue('--pipeline-valve-flow-color'))
-      .toBe('#79d957')
+    expect(actor.style.getPropertyValue('--pipeline-valve-flow-color')).toBe('#79d957')
 
     view.rerender({
       control,
       channelOverrides: { flowState: 'backpressure', displayedPressure: 1 },
     })
-    expect(actor.style.getPropertyValue('--pipeline-valve-flow-color'))
-      .toBe('#ff6748')
+    expect(actor.style.getPropertyValue('--pipeline-valve-flow-color')).toBe('#ff6748')
   })
 })

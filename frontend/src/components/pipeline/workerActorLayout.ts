@@ -93,8 +93,7 @@ export function getWorkerActorLayout(
   const compact = workerCount > DETAILED_WORKER_LIMIT
   if (orientation === 'portrait') {
     const metrics = getPortraitWorkerGridMetrics(actor, workerCount)
-    const gridWidth =
-      (metrics.columns - 1) * metrics.columnPitch + metrics.chipWidth
+    const gridWidth = (metrics.columns - 1) * metrics.columnPitch + metrics.chipWidth
     const top = bounds.bottom - metrics.height
     const gridX = bounds.x + (bounds.width - gridWidth) / 2
     const gridY = top + bounds.padding

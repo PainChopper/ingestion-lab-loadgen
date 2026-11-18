@@ -83,18 +83,65 @@ interface MockResponseOptions {
 
 const VALID_WIRE: TestWireSnapshot = {
   run: { state: 'running', elapsedMs: 12_345, totalTransactions: 42_000 },
-  reader: { workers: 1, liveWorkers: 1, idleWorkers: 0, readingWorkers: 1, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0, readTps: 3_500.5, readBatchSize: 50_000, rowsRead: 14_000, sourceDirectory: 'C:/dataset', sourceError: null },
+  reader: {
+    workers: 1,
+    liveWorkers: 1,
+    idleWorkers: 0,
+    readingWorkers: 1,
+    blockedWorkers: 0,
+    drainingWorkers: 0,
+    drainingIdleWorkers: 0,
+    drainingReadingWorkers: 0,
+    drainingBlockedWorkers: 0,
+    readTps: 3_500.5,
+    readBatchSize: 50_000,
+    rowsRead: 14_000,
+    sourceDirectory: 'C:/dataset',
+    sourceError: null,
+  },
   throttler: { requestedTps: 200, admittedTps: 125_000.5, installed: true },
-  sender: { workers: 32, liveWorkers: 0, idleWorkers: 0, inFlightWorkers: 0, backoffWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingInFlightWorkers: 0, drainingBackoffWorkers: 0 },
+  sender: {
+    workers: 32,
+    liveWorkers: 0,
+    idleWorkers: 0,
+    inFlightWorkers: 0,
+    backoffWorkers: 0,
+    drainingWorkers: 0,
+    drainingIdleWorkers: 0,
+    drainingInFlightWorkers: 0,
+    drainingBackoffWorkers: 0,
+  },
   readerChannel: {
-    capacity: 8, sentBatchesTotal: 11, sentTransactionsTotal: 550_000, receivedBatchesTotal: 5, receivedTransactionsTotal: 250_000,
-    depthBatches: 6, bufferedTransactions: 300_000, blockedSenders: 1, oldestBlockedSenderMs: 450, blockedMs: 1_600,
-    inputBatchesPerSecond: 2.5, inputTransactionsPerSecond: 125_000.5, outputBatchesPerSecond: 1.25, outputTransactionsPerSecond: 62_500.25,
+    capacity: 8,
+    sentBatchesTotal: 11,
+    sentTransactionsTotal: 550_000,
+    receivedBatchesTotal: 5,
+    receivedTransactionsTotal: 250_000,
+    depthBatches: 6,
+    bufferedTransactions: 300_000,
+    blockedSenders: 1,
+    oldestBlockedSenderMs: 450,
+    blockedMs: 1_600,
+    inputBatchesPerSecond: 2.5,
+    inputTransactionsPerSecond: 125_000.5,
+    outputBatchesPerSecond: 1.25,
+    outputTransactionsPerSecond: 62_500.25,
   },
   senderChannel: {
-    capacity: 0, sentBatchesTotal: 7, sentTransactionsTotal: 350_000, receivedBatchesTotal: 7, receivedTransactionsTotal: 350_000,
-    depthBatches: 0, bufferedTransactions: 0, blockedSenders: 1, oldestBlockedSenderMs: 450, blockedMs: 1_600,
-    inputBatchesPerSecond: 1.5, inputTransactionsPerSecond: 75_000.5, outputBatchesPerSecond: 1.25, outputTransactionsPerSecond: 62_500.25,
+    capacity: 0,
+    sentBatchesTotal: 7,
+    sentTransactionsTotal: 350_000,
+    receivedBatchesTotal: 7,
+    receivedTransactionsTotal: 350_000,
+    depthBatches: 0,
+    bufferedTransactions: 0,
+    blockedSenders: 1,
+    oldestBlockedSenderMs: 450,
+    blockedMs: 1_600,
+    inputBatchesPerSecond: 1.5,
+    inputTransactionsPerSecond: 75_000.5,
+    outputBatchesPerSecond: 1.25,
+    outputTransactionsPerSecond: 62_500.25,
   },
   config: {
     readerReadBatchSize: {
@@ -146,7 +193,14 @@ const VALID_WIRE: TestWireSnapshot = {
       allowed: [true, false],
       mutability: 'immediate',
     },
-    senderWorkers: { initial: 32, min: 1, max: 32, step: 1, unit: 'workers', mutability: 'immediate' },
+    senderWorkers: {
+      initial: 32,
+      min: 1,
+      max: 32,
+      step: 1,
+      unit: 'workers',
+      mutability: 'immediate',
+    },
     logging: { level: 'info', mutability: 'startup-only' },
   },
 }
@@ -155,12 +209,34 @@ function withRunState(state: RunState): TestWireSnapshot {
   return {
     ...VALID_WIRE,
     run: { ...VALID_WIRE.run, state },
-    reader: state === 'starting'
-      ? { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0 }
-      : VALID_WIRE.reader,
-    sender: state === 'stopping'
-      ? { ...VALID_WIRE.sender, liveWorkers: 32, idleWorkers: 28, inFlightWorkers: 3, backoffWorkers: 1, drainingWorkers: 3, drainingIdleWorkers: 1, drainingInFlightWorkers: 1, drainingBackoffWorkers: 1 }
-      : VALID_WIRE.sender,
+    reader:
+      state === 'starting'
+        ? {
+            ...VALID_WIRE.reader,
+            liveWorkers: 0,
+            idleWorkers: 0,
+            readingWorkers: 0,
+            blockedWorkers: 0,
+            drainingWorkers: 0,
+            drainingIdleWorkers: 0,
+            drainingReadingWorkers: 0,
+            drainingBlockedWorkers: 0,
+          }
+        : VALID_WIRE.reader,
+    sender:
+      state === 'stopping'
+        ? {
+            ...VALID_WIRE.sender,
+            liveWorkers: 32,
+            idleWorkers: 28,
+            inFlightWorkers: 3,
+            backoffWorkers: 1,
+            drainingWorkers: 3,
+            drainingIdleWorkers: 1,
+            drainingInFlightWorkers: 1,
+            drainingBackoffWorkers: 1,
+          }
+        : VALID_WIRE.sender,
   }
 }
 
@@ -184,19 +260,15 @@ function pendingResponse(): Promise<Response> {
   return new Promise(() => undefined)
 }
 
-function mockResponse(
-  body: unknown,
-  options: MockResponseOptions = {},
-): Response {
+function mockResponse(body: unknown, options: MockResponseOptions = {}): Response {
   const headers = new Headers()
-  const contentType = options.contentType === undefined
-    ? 'application/json'
-    : options.contentType
+  const contentType = options.contentType === undefined ? 'application/json' : options.contentType
   if (contentType !== null) headers.set('Content-Type', contentType)
 
-  const json = options.jsonError === undefined
-    ? vi.fn().mockResolvedValue(body)
-    : vi.fn().mockRejectedValue(options.jsonError)
+  const json =
+    options.jsonError === undefined
+      ? vi.fn().mockResolvedValue(body)
+      : vi.fn().mockRejectedValue(options.jsonError)
 
   return {
     status: options.status ?? 200,
@@ -210,10 +282,18 @@ function mockCommandResponse(status = 204): Response {
 }
 
 function responseWithThrowingRepresentation(status: number) {
-  const headers = vi.fn(() => { throw new Error('headers must be ignored') })
-  const body = vi.fn(() => { throw new Error('body must be ignored') })
-  const json = vi.fn(() => { throw new Error('json must be ignored') })
-  const text = vi.fn(() => { throw new Error('text must be ignored') })
+  const headers = vi.fn(() => {
+    throw new Error('headers must be ignored')
+  })
+  const body = vi.fn(() => {
+    throw new Error('body must be ignored')
+  })
+  const json = vi.fn(() => {
+    throw new Error('json must be ignored')
+  })
+  const text = vi.fn(() => {
+    throw new Error('text must be ignored')
+  })
   const response = { status }
 
   Object.defineProperties(response, {
@@ -243,10 +323,7 @@ async function flushPoll(): Promise<void> {
   }
 }
 
-function control(
-  unit: string,
-  applied: number | null = null,
-): NumericControlSnapshot {
+function control(unit: string, applied: number | null = null): NumericControlSnapshot {
   return {
     applied,
     preview: null,
@@ -336,14 +413,8 @@ function neutralChannel(
   }
 }
 
-function readerChannel(
-  wire: TestWireSnapshot | null,
-): ChannelTelemetrySnapshot {
-  const channel = neutralChannel(
-    'reader-to-throttler',
-    'reader',
-    'throttler',
-  )
+function readerChannel(wire: TestWireSnapshot | null): ChannelTelemetrySnapshot {
+  const channel = neutralChannel('reader-to-throttler', 'reader', 'throttler')
   if (wire === null) return channel
 
   return {
@@ -353,25 +424,27 @@ function readerChannel(
       wire.config.readerChannelCapacity.allowed[0]!,
       wire.config.readerChannelCapacity.allowed.at(-1)!,
     ),
-    depthBatches: wire.readerChannel.depthBatches, bufferedTransactions: wire.readerChannel.bufferedTransactions,
-    sentBatchesTotal: wire.readerChannel.sentBatchesTotal, sentTransactionsTotal: wire.readerChannel.sentTransactionsTotal,
-    receivedBatchesTotal: wire.readerChannel.receivedBatchesTotal, receivedTransactionsTotal: wire.readerChannel.receivedTransactionsTotal,
-    inputBatchesPerSecond: wire.readerChannel.inputBatchesPerSecond, inputTransactionsPerSecond: wire.readerChannel.inputTransactionsPerSecond,
-    outputBatchesPerSecond: wire.readerChannel.outputBatchesPerSecond, outputTransactionsPerSecond: wire.readerChannel.outputTransactionsPerSecond,
-    inputTps: wire.readerChannel.inputTransactionsPerSecond, outputTps: wire.readerChannel.outputTransactionsPerSecond,
-    throughputTps: wire.readerChannel.outputTransactionsPerSecond, blockedSenders: wire.readerChannel.blockedSenders,
-    oldestBlockedSenderMs: wire.readerChannel.oldestBlockedSenderMs, blockedMs: wire.readerChannel.blockedMs,
+    depthBatches: wire.readerChannel.depthBatches,
+    bufferedTransactions: wire.readerChannel.bufferedTransactions,
+    sentBatchesTotal: wire.readerChannel.sentBatchesTotal,
+    sentTransactionsTotal: wire.readerChannel.sentTransactionsTotal,
+    receivedBatchesTotal: wire.readerChannel.receivedBatchesTotal,
+    receivedTransactionsTotal: wire.readerChannel.receivedTransactionsTotal,
+    inputBatchesPerSecond: wire.readerChannel.inputBatchesPerSecond,
+    inputTransactionsPerSecond: wire.readerChannel.inputTransactionsPerSecond,
+    outputBatchesPerSecond: wire.readerChannel.outputBatchesPerSecond,
+    outputTransactionsPerSecond: wire.readerChannel.outputTransactionsPerSecond,
+    inputTps: wire.readerChannel.inputTransactionsPerSecond,
+    outputTps: wire.readerChannel.outputTransactionsPerSecond,
+    throughputTps: wire.readerChannel.outputTransactionsPerSecond,
+    blockedSenders: wire.readerChannel.blockedSenders,
+    oldestBlockedSenderMs: wire.readerChannel.oldestBlockedSenderMs,
+    blockedMs: wire.readerChannel.blockedMs,
   }
 }
 
-function senderChannel(
-  wire: TestWireSnapshot | null,
-): ChannelTelemetrySnapshot {
-  const channel = neutralChannel(
-    'throttler-to-sender',
-    'throttler',
-    'sender',
-  )
+function senderChannel(wire: TestWireSnapshot | null): ChannelTelemetrySnapshot {
+  const channel = neutralChannel('throttler-to-sender', 'throttler', 'sender')
   if (wire === null) return channel
 
   return {
@@ -381,14 +454,22 @@ function senderChannel(
       wire.config.senderChannelCapacity.allowed[0]!,
       wire.config.senderChannelCapacity.allowed.at(-1)!,
     ),
-    depthBatches: wire.senderChannel.depthBatches, bufferedTransactions: wire.senderChannel.bufferedTransactions,
-    sentBatchesTotal: wire.senderChannel.sentBatchesTotal, sentTransactionsTotal: wire.senderChannel.sentTransactionsTotal,
-    receivedBatchesTotal: wire.senderChannel.receivedBatchesTotal, receivedTransactionsTotal: wire.senderChannel.receivedTransactionsTotal,
-    inputBatchesPerSecond: wire.senderChannel.inputBatchesPerSecond, inputTransactionsPerSecond: wire.senderChannel.inputTransactionsPerSecond,
-    outputBatchesPerSecond: wire.senderChannel.outputBatchesPerSecond, outputTransactionsPerSecond: wire.senderChannel.outputTransactionsPerSecond,
-    inputTps: wire.senderChannel.inputTransactionsPerSecond, outputTps: wire.senderChannel.outputTransactionsPerSecond,
-    throughputTps: wire.senderChannel.outputTransactionsPerSecond, blockedSenders: wire.senderChannel.blockedSenders,
-    oldestBlockedSenderMs: wire.senderChannel.oldestBlockedSenderMs, blockedMs: wire.senderChannel.blockedMs,
+    depthBatches: wire.senderChannel.depthBatches,
+    bufferedTransactions: wire.senderChannel.bufferedTransactions,
+    sentBatchesTotal: wire.senderChannel.sentBatchesTotal,
+    sentTransactionsTotal: wire.senderChannel.sentTransactionsTotal,
+    receivedBatchesTotal: wire.senderChannel.receivedBatchesTotal,
+    receivedTransactionsTotal: wire.senderChannel.receivedTransactionsTotal,
+    inputBatchesPerSecond: wire.senderChannel.inputBatchesPerSecond,
+    inputTransactionsPerSecond: wire.senderChannel.inputTransactionsPerSecond,
+    outputBatchesPerSecond: wire.senderChannel.outputBatchesPerSecond,
+    outputTransactionsPerSecond: wire.senderChannel.outputTransactionsPerSecond,
+    inputTps: wire.senderChannel.inputTransactionsPerSecond,
+    outputTps: wire.senderChannel.outputTransactionsPerSecond,
+    throughputTps: wire.senderChannel.outputTransactionsPerSecond,
+    blockedSenders: wire.senderChannel.blockedSenders,
+    oldestBlockedSenderMs: wire.senderChannel.oldestBlockedSenderMs,
+    blockedMs: wire.senderChannel.blockedMs,
   }
 }
 
@@ -410,18 +491,19 @@ function expectedSnapshot(
     config: wire?.config ?? null,
     reader: {
       id: 'reader',
-      workers: wire === null
-        ? control('workers', null)
-        : {
-            applied: wire.reader.workers,
-            preview: null,
-            pending: null,
-            min: wire.config.readerWorkers!.min,
-            max: wire.config.readerWorkers!.max,
-            step: wire.config.readerWorkers!.step,
-            unit: wire.config.readerWorkers!.unit,
-            applyMode: writable ? 'immediate' : 'unavailable',
-          },
+      workers:
+        wire === null
+          ? control('workers', null)
+          : {
+              applied: wire.reader.workers,
+              preview: null,
+              pending: null,
+              min: wire.config.readerWorkers!.min,
+              max: wire.config.readerWorkers!.max,
+              step: wire.config.readerWorkers!.step,
+              unit: wire.config.readerWorkers!.unit,
+              applyMode: writable ? 'immediate' : 'unavailable',
+            },
       liveWorkers: wire?.reader.liveWorkers ?? 0,
       drainingWorkers: wire?.reader.drainingWorkers ?? 0,
       idleWorkers: wire?.reader.idleWorkers ?? 0,
@@ -464,7 +546,15 @@ function expectedSnapshot(
     senderChannel: senderChannel(wire),
     sender: {
       id: 'sender',
-      workers: wire ? { ...control('workers', wire.sender.workers), min: 1, max: 32, step: 1, applyMode: writable ? 'immediate' : 'unavailable' } : control('workers'),
+      workers: wire
+        ? {
+            ...control('workers', wire.sender.workers),
+            min: 1,
+            max: 32,
+            step: 1,
+            applyMode: writable ? 'immediate' : 'unavailable',
+          }
+        : control('workers'),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
       idleWorkers: wire?.sender.idleWorkers ?? 0,
@@ -533,38 +623,43 @@ const malformedCases: ReadonlyArray<{
 }> = [
   {
     name: 'negative Reader aggregate count',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      reader: { ...VALID_WIRE.reader, readingWorkers: -1 },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        reader: { ...VALID_WIRE.reader, readingWorkers: -1 },
+      }),
   },
   {
     name: 'missing key',
-    result: async () => mockResponse({
-      run: { state: 'running', totalTransactions: 1 },
-      reader: { workers: 1 },
-    }),
+    result: async () =>
+      mockResponse({
+        run: { state: 'running', totalTransactions: 1 },
+        reader: { workers: 1 },
+      }),
   },
   {
     name: 'extra key',
     result: async () => mockResponse({ ...VALID_WIRE, extra: true }),
   },
-  ...(['run', 'reader', 'throttler', 'sender', 'readerChannel', 'senderChannel'] as const).flatMap((section) => [
-    {
-      name: `missing ${section} section key`,
-      result: async () => {
-        const { [section]: _removed, ...withoutSection } = VALID_WIRE
-        return mockResponse(withoutSection)
+  ...(['run', 'reader', 'throttler', 'sender', 'readerChannel', 'senderChannel'] as const).flatMap(
+    (section) => [
+      {
+        name: `missing ${section} section key`,
+        result: async () => {
+          const { [section]: _removed, ...withoutSection } = VALID_WIRE
+          return mockResponse(withoutSection)
+        },
       },
-    },
-    {
-      name: `extra ${section} section key`,
-      result: async () => mockResponse({
-        ...VALID_WIRE,
-        [section]: { ...VALID_WIRE[section], extra: true },
-      }),
-    },
-  ]),
+      {
+        name: `extra ${section} section key`,
+        result: async () =>
+          mockResponse({
+            ...VALID_WIRE,
+            [section]: { ...VALID_WIRE[section], extra: true },
+          }),
+      },
+    ],
+  ),
   {
     name: 'missing config',
     result: async () => {
@@ -574,56 +669,61 @@ const malformedCases: ReadonlyArray<{
   },
   {
     name: 'malformed readerChannel config',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: {
-        ...VALID_WIRE.config,
-        readerChannelCapacity: {
-          ...VALID_WIRE.config.readerChannelCapacity,
-          allowed: [0, 2, 2],
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          readerChannelCapacity: {
+            ...VALID_WIRE.config.readerChannelCapacity,
+            allowed: [0, 2, 2],
+          },
         },
-      },
-    }),
+      }),
   },
   {
     name: 'missing senderChannel config',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: (() => {
-        const { senderChannelCapacity: _senderChannel, ...config } = VALID_WIRE.config
-        return config
-      })(),
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: (() => {
+          const { senderChannelCapacity: _senderChannel, ...config } = VALID_WIRE.config
+          return config
+        })(),
+      }),
   },
   {
     name: 'malformed senderChannel config',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: {
-        ...VALID_WIRE.config,
-        senderChannelCapacity: {
-          ...VALID_WIRE.config.senderChannelCapacity,
-          allowed: [0, 2, 2],
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          senderChannelCapacity: {
+            ...VALID_WIRE.config.senderChannelCapacity,
+            allowed: [0, 2, 2],
+          },
         },
-      },
-    }),
+      }),
   },
   {
     name: 'missing throttler requested TPS config',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: (() => {
-        const { throttlerRequestedTps: _requestedTps, ...config } = VALID_WIRE.config
-        return config
-      })(),
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: (() => {
+          const { throttlerRequestedTps: _requestedTps, ...config } = VALID_WIRE.config
+          return config
+        })(),
+      }),
   },
   {
     name: 'extra sender field',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      sender: { ...VALID_WIRE.sender, extra: true },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        sender: { ...VALID_WIRE.sender, extra: true },
+      }),
   },
   ...(['senderWorkers'] as const).flatMap((field) => [
     {
@@ -636,38 +736,48 @@ const malformedCases: ReadonlyArray<{
     },
     {
       name: `extra config ${field}`,
-      result: async () => mockResponse({
-        ...VALID_WIRE,
-        config: { ...VALID_WIRE.config, [field]: { ...VALID_WIRE.config[field], extra: true } },
-      }),
+      result: async () =>
+        mockResponse({
+          ...VALID_WIRE,
+          config: { ...VALID_WIRE.config, [field]: { ...VALID_WIRE.config[field], extra: true } },
+        }),
     },
     {
       name: `wrong-type config ${field}`,
-      result: async () => mockResponse({
-        ...VALID_WIRE,
-        config: { ...VALID_WIRE.config, [field]: null },
-      }),
+      result: async () =>
+        mockResponse({
+          ...VALID_WIRE,
+          config: { ...VALID_WIRE.config, [field]: null },
+        }),
     },
   ]),
   {
     name: 'Sender config with an initial value outside the step grid',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: {
-        ...VALID_WIRE.config,
-        senderWorkers: { ...VALID_WIRE.config.senderWorkers, initial: 6, min: 2, step: 3 },
-      },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          senderWorkers: { ...VALID_WIRE.config.senderWorkers, initial: 6, min: 2, step: 3 },
+        },
+      }),
   },
   {
     name: 'unexpected sender retry policy',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: {
-        ...VALID_WIRE.config,
-        senderRetry: { maxAttempts: 3, backoffBaseMs: 250, backoffMultiplier: 2, jitterPercent: 20, mutability: 'startup-only' },
-      },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          senderRetry: {
+            maxAttempts: 3,
+            backoffBaseMs: 250,
+            backoffMultiplier: 2,
+            jitterPercent: 20,
+            mutability: 'startup-only',
+          },
+        },
+      }),
   },
   {
     name: 'extra obsolete Sender simulation config fields',
@@ -678,37 +788,61 @@ const malformedCases: ReadonlyArray<{
         ...VALID_WIRE,
         config: {
           ...VALID_WIRE.config,
-          [obsoleteDelayKey]: { initial: 10, min: 0, max: 2000, step: 10, unit: 'milliseconds', mutability: 'immediate' },
-          [obsoleteErrorRateKey]: { initial: 2, min: 0, max: 100, step: 1, unit: 'percent', mutability: 'immediate' },
+          [obsoleteDelayKey]: {
+            initial: 10,
+            min: 0,
+            max: 2000,
+            step: 10,
+            unit: 'milliseconds',
+            mutability: 'immediate',
+          },
+          [obsoleteErrorRateKey]: {
+            initial: 2,
+            min: 0,
+            max: 100,
+            step: 1,
+            unit: 'percent',
+            mutability: 'immediate',
+          },
         },
       })
     },
   },
   {
     name: 'aggregate sender count has wrong type',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      sender: { ...VALID_WIRE.sender, inFlightWorkers: 'one' },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        sender: { ...VALID_WIRE.sender, inFlightWorkers: 'one' },
+      }),
   },
   ...(['starting'] as const).map((state) => ({
     name: `live Sender in ${state}`,
-    result: async () => mockResponse({
-      ...withRunState('starting'),
-      run: { ...VALID_WIRE.run, state },
-      sender: { ...VALID_WIRE.sender, liveWorkers: 1, idleWorkers: 1, drainingWorkers: 1, drainingIdleWorkers: 1 },
-    }),
+    result: async () =>
+      mockResponse({
+        ...withRunState('starting'),
+        run: { ...VALID_WIRE.run, state },
+        sender: {
+          ...VALID_WIRE.sender,
+          liveWorkers: 1,
+          idleWorkers: 1,
+          drainingWorkers: 1,
+          drainingIdleWorkers: 1,
+        },
+      }),
   })),
-  ...([
-    { liveWorkers: 31 },
-    { drainingWorkers: 2 },
-    { idleWorkers: -1 },
-    { inFlightWorkers: 0.5 },
-    { backoffWorkers: 'one' },
-    { drainingIdleWorkers: 29, drainingWorkers: 31 },
-    { drainingInFlightWorkers: 4, drainingWorkers: 6 },
-    { drainingBackoffWorkers: 2, drainingWorkers: 4 },
-  ] as const).map((sender, index) => ({
+  ...(
+    [
+      { liveWorkers: 31 },
+      { drainingWorkers: 2 },
+      { idleWorkers: -1 },
+      { inFlightWorkers: 0.5 },
+      { backoffWorkers: 'one' },
+      { drainingIdleWorkers: 29, drainingWorkers: 31 },
+      { drainingInFlightWorkers: 4, drainingWorkers: 6 },
+      { drainingBackoffWorkers: 2, drainingWorkers: 4 },
+    ] as const
+  ).map((sender, index) => ({
     name: `invalid stopping Sender partition ${index}`,
     result: async () => {
       const wire = withRunState('stopping')
@@ -717,43 +851,47 @@ const malformedCases: ReadonlyArray<{
   })),
   {
     name: 'missing metrics window config',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: (() => {
-        const { metricsWindowMs: _metricsWindow, ...config } = VALID_WIRE.config
-        return config
-      })(),
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: (() => {
+          const { metricsWindowMs: _metricsWindow, ...config } = VALID_WIRE.config
+          return config
+        })(),
+      }),
   },
   {
     name: 'malformed metrics window config',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: {
-        ...VALID_WIRE.config,
-        metricsWindowMs: {
-          ...VALID_WIRE.config.metricsWindowMs,
-          mutability: 'immediate',
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          metricsWindowMs: {
+            ...VALID_WIRE.config.metricsWindowMs,
+            mutability: 'immediate',
+          },
         },
-      },
-    }),
+      }),
   },
   {
     name: 'unknown throttler installation mode config field',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: {
-        ...VALID_WIRE.config,
-        throttlerInstalled: {
-          ...VALID_WIRE.config.throttlerInstalled,
-          unknown: true,
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          throttlerInstalled: {
+            ...VALID_WIRE.config.throttlerInstalled,
+            unknown: true,
+          },
         },
-      },
-    }),
+      }),
   },
   {
     name: 'wrong-type requested TPS value',
-    result: async () => mockResponse({ ...VALID_WIRE, throttler: { ...VALID_WIRE.throttler, requestedTps: '200' } }),
+    result: async () =>
+      mockResponse({ ...VALID_WIRE, throttler: { ...VALID_WIRE.throttler, requestedTps: '200' } }),
   },
   {
     name: 'missing throttler admitted TPS',
@@ -764,34 +902,41 @@ const malformedCases: ReadonlyArray<{
   },
   {
     name: 'wrong-type sender channel rate',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      senderChannel: { ...VALID_WIRE.senderChannel, inputTransactionsPerSecond: '75000.5' },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        senderChannel: { ...VALID_WIRE.senderChannel, inputTransactionsPerSecond: '75000.5' },
+      }),
   },
   {
     name: 'sender channel capacity outside config',
-    result: async () => mockResponse({ ...VALID_WIRE, senderChannel: { ...VALID_WIRE.senderChannel, capacity: 3 } }),
+    result: async () =>
+      mockResponse({ ...VALID_WIRE, senderChannel: { ...VALID_WIRE.senderChannel, capacity: 3 } }),
   },
   {
     name: 'unknown applied installation mode',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      throttler: { ...VALID_WIRE.throttler, installed: 'removed' },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        throttler: { ...VALID_WIRE.throttler, installed: 'removed' },
+      }),
   },
   ...([null, 0, 'false', 'installed', 'bypass'] as const).map((installed) => ({
     name: `invalid installed type ${installed}`,
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      throttler: { ...VALID_WIRE.throttler, installed },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        throttler: { ...VALID_WIRE.throttler, installed },
+      }),
   })),
   {
     name: 'legacy throttler field',
     result: async () => {
       const { installed: _installed, ...throttler } = VALID_WIRE.throttler
-      return mockResponse({ ...VALID_WIRE, throttler: { ...throttler, installationMode: 'installed' } })
+      return mockResponse({
+        ...VALID_WIRE,
+        throttler: { ...throttler, installationMode: 'installed' },
+      })
     },
   },
   {
@@ -803,17 +948,33 @@ const malformedCases: ReadonlyArray<{
   },
   ...([null, 0, 'false'] as const).map((initial) => ({
     name: `invalid installed initial ${initial}`,
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: { ...VALID_WIRE.config, throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, initial } },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, initial },
+        },
+      }),
   })),
-  ...([[true, true], [false, false], [true, null], [true, 0], [true, 'false']] as const).map((allowed) => ({
+  ...(
+    [
+      [true, true],
+      [false, false],
+      [true, null],
+      [true, 0],
+      [true, 'false'],
+    ] as const
+  ).map((allowed) => ({
     name: `invalid installed allowed ${JSON.stringify(allowed)}`,
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      config: { ...VALID_WIRE.config, throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, allowed } },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, allowed },
+        },
+      }),
   })),
   { name: 'null body', result: async () => mockResponse(null) },
   { name: 'array body', result: async () => mockResponse([VALID_WIRE]) },
@@ -823,10 +984,11 @@ const malformedCases: ReadonlyArray<{
   })),
   {
     name: 'numeric string',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      run: { ...VALID_WIRE.run, totalTransactions: '42000' },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        run: { ...VALID_WIRE.run, totalTransactions: '42000' },
+      }),
   },
   {
     name: 'negative elapsed time',
@@ -838,55 +1000,82 @@ const malformedCases: ReadonlyArray<{
   },
   {
     name: 'unsafe elapsed time',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      run: { ...VALID_WIRE.run, elapsedMs: Number.MAX_SAFE_INTEGER + 1 },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        run: { ...VALID_WIRE.run, elapsedMs: Number.MAX_SAFE_INTEGER + 1 },
+      }),
   },
   {
     name: 'empty Reader source error message',
-    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: '' } } }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        reader: {
+          ...VALID_WIRE.reader,
+          sourceError: {
+            category: 'source',
+            operation: 'read',
+            relativePath: 'broken.parquet',
+            message: '',
+          },
+        },
+      }),
   },
   {
     name: 'negative integer',
-    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, workers: -1 } }),
+    result: async () =>
+      mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, workers: -1 } }),
   },
   {
     name: 'fractional number',
-    result: async () => mockResponse({ ...VALID_WIRE, sender: { ...VALID_WIRE.sender, workers: 0.5 } }),
+    result: async () =>
+      mockResponse({ ...VALID_WIRE, sender: { ...VALID_WIRE.sender, workers: 0.5 } }),
   },
   {
     name: 'unsafe integer',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      run: { ...VALID_WIRE.run, totalTransactions: Number.MAX_SAFE_INTEGER + 1 },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        run: { ...VALID_WIRE.run, totalTransactions: Number.MAX_SAFE_INTEGER + 1 },
+      }),
   },
   {
     name: 'negative reader rate',
-    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, readTps: -0.5 } }),
+    result: async () =>
+      mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, readTps: -0.5 } }),
   },
   {
     name: 'unsafe reader rows',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      reader: { ...VALID_WIRE.reader, rowsRead: Number.MAX_SAFE_INTEGER + 1 },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        reader: { ...VALID_WIRE.reader, rowsRead: Number.MAX_SAFE_INTEGER + 1 },
+      }),
   },
   {
     name: 'negative channel capacity',
-    result: async () => mockResponse({ ...VALID_WIRE, readerChannel: { ...VALID_WIRE.readerChannel, capacity: -1 } }),
+    result: async () =>
+      mockResponse({ ...VALID_WIRE, readerChannel: { ...VALID_WIRE.readerChannel, capacity: -1 } }),
   },
   {
     name: 'fractional channel depth',
-    result: async () => mockResponse({ ...VALID_WIRE, readerChannel: { ...VALID_WIRE.readerChannel, depthBatches: 0.5 } }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        readerChannel: { ...VALID_WIRE.readerChannel, depthBatches: 0.5 },
+      }),
   },
   {
     name: 'unsafe buffered transactions',
-    result: async () => mockResponse({
-      ...VALID_WIRE,
-      readerChannel: { ...VALID_WIRE.readerChannel, bufferedTransactions: Number.MAX_SAFE_INTEGER + 1 },
-    }),
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        readerChannel: {
+          ...VALID_WIRE.readerChannel,
+          bufferedTransactions: Number.MAX_SAFE_INTEGER + 1,
+        },
+      }),
   },
   {
     name: 'wrong content type',
@@ -906,7 +1095,9 @@ const malformedCases: ReadonlyArray<{
   },
   {
     name: 'network rejection',
-    result: async () => { throw new TypeError('network unavailable') },
+    result: async () => {
+      throw new TypeError('network unavailable')
+    },
   },
 ]
 
@@ -923,17 +1114,30 @@ describe('HttpAdapter', () => {
     vi.useRealTimers()
   })
 
-  it.each(['readerReadBatchSize', 'readerWorkers', 'readerChannelCapacity', 'senderChannelCapacity', 'throttlerRequestedTps', 'throttlerInstalled', 'senderWorkers', 'metricsWindowMs'] as const)(
+  it.each([
+    'readerReadBatchSize',
+    'readerWorkers',
+    'readerChannelCapacity',
+    'senderChannelCapacity',
+    'throttlerRequestedTps',
+    'throttlerInstalled',
+    'senderWorkers',
+    'metricsWindowMs',
+  ] as const)(
     'requires initial without a legacy alias in %s and blocks stale dispatch',
     async (field) => {
       const valid = JSON.parse(JSON.stringify(VALID_WIRE))
-      if (field === 'readerChannelCapacity' || field === 'senderChannelCapacity') valid.config[field].initial = 0
+      if (field === 'readerChannelCapacity' || field === 'senderChannelCapacity')
+        valid.config[field].initial = 0
       if (field === 'throttlerInstalled') valid.config[field].initial = false
       for (const shape of ['initial-only', 'legacy-only', 'both', 'missing']) {
         const wire = structuredClone(valid)
-        if (shape === 'legacy-only' || shape === 'both') wire.config[field].default = wire.config[field].initial
+        if (shape === 'legacy-only' || shape === 'both')
+          wire.config[field].default = wire.config[field].initial
         if (shape === 'legacy-only' || shape === 'missing') delete wire.config[field].initial
-        fetchMock.mockResolvedValueOnce(mockResponse(valid)).mockResolvedValueOnce(mockResponse(wire))
+        fetchMock
+          .mockResolvedValueOnce(mockResponse(valid))
+          .mockResolvedValueOnce(mockResponse(wire))
         const adapter = new HttpAdapter()
         await flushPoll()
         expect(adapter.getSnapshot().connectionState).toBe('connected')
@@ -964,12 +1168,21 @@ describe('HttpAdapter', () => {
   })
 
   it('uses the Sender worker range from the snapshot', async () => {
-    const senderWorkers = { initial: 5, min: 2, max: 35, step: 3, unit: 'workers', mutability: 'immediate' }
-    fetchMock.mockResolvedValueOnce(mockResponse({
-      ...VALID_WIRE,
-      config: { ...VALID_WIRE.config, senderWorkers },
-      sender: { ...VALID_WIRE.sender, workers: 35 },
-    }))
+    const senderWorkers = {
+      initial: 5,
+      min: 2,
+      max: 35,
+      step: 3,
+      unit: 'workers',
+      mutability: 'immediate',
+    }
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({
+        ...VALID_WIRE,
+        config: { ...VALID_WIRE.config, senderWorkers },
+        sender: { ...VALID_WIRE.sender, workers: 35 },
+      }),
+    )
     const adapter = new HttpAdapter()
     await flushPoll()
 
@@ -984,7 +1197,10 @@ describe('HttpAdapter', () => {
   it.each(['readerReadBatchSize', 'readerChannelCapacity', 'senderChannelCapacity'] as const)(
     'rejects invalid mutability in %s',
     async (field) => {
-      const config = { ...VALID_WIRE.config, [field]: { ...VALID_WIRE.config[field], mutability: 'unsupported-mode' } }
+      const config = {
+        ...VALID_WIRE.config,
+        [field]: { ...VALID_WIRE.config[field], mutability: 'unsupported-mode' },
+      }
       fetchMock.mockResolvedValueOnce(mockResponse({ ...VALID_WIRE, config }))
       const adapter = new HttpAdapter()
       await flushPoll()
@@ -998,11 +1214,17 @@ describe('HttpAdapter', () => {
     async (shape) => {
       const { config: settings, ...telemetry } = VALID_WIRE
       const valid = { ...telemetry, config: settings }
-      const invalid = shape === 'legacy-only' ? { ...telemetry, ['policy']: settings }
-        : shape === 'both' ? { ...valid, ['policy']: settings }
-        : shape === 'missing' ? telemetry
-        : { ...telemetry, config: shape === 'null' ? null : [] }
-      fetchMock.mockResolvedValueOnce(mockResponse(valid)).mockResolvedValueOnce(mockResponse(invalid))
+      const invalid =
+        shape === 'legacy-only'
+          ? { ...telemetry, ['policy']: settings }
+          : shape === 'both'
+            ? { ...valid, ['policy']: settings }
+            : shape === 'missing'
+              ? telemetry
+              : { ...telemetry, config: shape === 'null' ? null : [] }
+      fetchMock
+        .mockResolvedValueOnce(mockResponse(valid))
+        .mockResolvedValueOnce(mockResponse(invalid))
       const adapter = new HttpAdapter()
       await flushPoll()
       expect(adapter.getSnapshot().connectionState).toBe('connected')
@@ -1038,10 +1260,9 @@ describe('HttpAdapter', () => {
   })
 
   it('maps only the exact valid wire fields into a fresh frozen snapshot', async () => {
-    fetchMock.mockResolvedValueOnce(mockResponse(
-      VALID_WIRE,
-      { contentType: 'application/json; charset=utf-8' },
-    ))
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(VALID_WIRE, { contentType: 'application/json; charset=utf-8' }),
+    )
     const adapter = new HttpAdapter()
     const initial = adapter.getSnapshot()
 
@@ -1138,14 +1359,18 @@ describe('HttpAdapter', () => {
   it.each([0, 1, 2, 8_192])(
     'maps readerChannel capacity %i to read-only telemetry',
     async (readerChannelCapacity) => {
-      const wire = { ...VALID_WIRE, readerChannel: { ...VALID_WIRE.readerChannel, capacity: readerChannelCapacity } }
+      const wire = {
+        ...VALID_WIRE,
+        readerChannel: { ...VALID_WIRE.readerChannel, capacity: readerChannelCapacity },
+      }
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
       const adapter = new HttpAdapter()
 
       await flushPoll()
 
-      expect(adapter.getSnapshot().readerChannel.capacity)
-        .toEqual(capacitySnapshot(readerChannelCapacity, 0, 8_192))
+      expect(adapter.getSnapshot().readerChannel.capacity).toEqual(
+        capacitySnapshot(readerChannelCapacity, 0, 8_192),
+      )
       adapter.dispose()
     },
   )
@@ -1153,9 +1378,34 @@ describe('HttpAdapter', () => {
   it('maps startup reader metrics as zero values', async () => {
     const startingWire: TestWireSnapshot = {
       ...withRunState('starting'),
-      reader: { ...VALID_WIRE.reader, liveWorkers: 0, idleWorkers: 0, readingWorkers: 0, blockedWorkers: 0, drainingWorkers: 0, drainingIdleWorkers: 0, drainingReadingWorkers: 0, drainingBlockedWorkers: 0, readTps: 0, rowsRead: 0 },
+      reader: {
+        ...VALID_WIRE.reader,
+        liveWorkers: 0,
+        idleWorkers: 0,
+        readingWorkers: 0,
+        blockedWorkers: 0,
+        drainingWorkers: 0,
+        drainingIdleWorkers: 0,
+        drainingReadingWorkers: 0,
+        drainingBlockedWorkers: 0,
+        readTps: 0,
+        rowsRead: 0,
+      },
       throttler: { ...VALID_WIRE.throttler, admittedTps: 0 },
-      senderChannel: { ...VALID_WIRE.senderChannel, sentBatchesTotal: 0, sentTransactionsTotal: 0, receivedBatchesTotal: 0, receivedTransactionsTotal: 0, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 0, inputBatchesPerSecond: 0, inputTransactionsPerSecond: 0, outputBatchesPerSecond: 0, outputTransactionsPerSecond: 0 },
+      senderChannel: {
+        ...VALID_WIRE.senderChannel,
+        sentBatchesTotal: 0,
+        sentTransactionsTotal: 0,
+        receivedBatchesTotal: 0,
+        receivedTransactionsTotal: 0,
+        blockedSenders: 0,
+        oldestBlockedSenderMs: 0,
+        blockedMs: 0,
+        inputBatchesPerSecond: 0,
+        inputTransactionsPerSecond: 0,
+        outputBatchesPerSecond: 0,
+        outputTransactionsPerSecond: 0,
+      },
     }
     fetchMock.mockResolvedValueOnce(mockResponse(startingWire))
     const adapter = new HttpAdapter()
@@ -1185,31 +1435,52 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it.each(malformedCases)(
-    'publishes one neutral error snapshot for $name',
-    async ({ result }) => {
-      fetchMock.mockImplementationOnce(result)
-      const adapter = new HttpAdapter()
-      const initial = adapter.getSnapshot()
+  it.each(malformedCases)('publishes one neutral error snapshot for $name', async ({ result }) => {
+    fetchMock.mockImplementationOnce(result)
+    const adapter = new HttpAdapter()
+    const initial = adapter.getSnapshot()
 
-      await flushPoll()
-      const snapshot = adapter.getSnapshot()
+    await flushPoll()
+    const snapshot = adapter.getSnapshot()
 
-      expect(snapshot).not.toBe(initial)
-      expect(snapshot).toEqual(expectedSnapshot(1, 'error'))
-      expectDeepFrozen(snapshot)
-      expect(fetchMock).toHaveBeenCalledTimes(1)
-      adapter.dispose()
-    },
-  )
+    expect(snapshot).not.toBe(initial)
+    expect(snapshot).toEqual(expectedSnapshot(1, 'error'))
+    expectDeepFrozen(snapshot)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    adapter.dispose()
+  })
 
   it('clears telemetry on failure and recovers on success', async () => {
     const recoveredWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'running', elapsedMs: 67_890, totalTransactions: 84_000 },
-      reader: { ...VALID_WIRE.reader, workers: 2, liveWorkers: 2, idleWorkers: 1, readingWorkers: 1, readTps: 2_000, readBatchSize: 25_000, rowsRead: 28_000 },
-      sender: { ...VALID_WIRE.sender, workers: 3, liveWorkers: 3, idleWorkers: 1, inFlightWorkers: 1, backoffWorkers: 1 },
-      readerChannel: { ...VALID_WIRE.readerChannel, capacity: 16, depthBatches: 4, bufferedTransactions: 100_000, blockedSenders: 0, oldestBlockedSenderMs: 0, blockedMs: 2_000 },
+      reader: {
+        ...VALID_WIRE.reader,
+        workers: 2,
+        liveWorkers: 2,
+        idleWorkers: 1,
+        readingWorkers: 1,
+        readTps: 2_000,
+        readBatchSize: 25_000,
+        rowsRead: 28_000,
+      },
+      sender: {
+        ...VALID_WIRE.sender,
+        workers: 3,
+        liveWorkers: 3,
+        idleWorkers: 1,
+        inFlightWorkers: 1,
+        backoffWorkers: 1,
+      },
+      readerChannel: {
+        ...VALID_WIRE.readerChannel,
+        capacity: 16,
+        depthBatches: 4,
+        bufferedTransactions: 100_000,
+        blockedSenders: 0,
+        oldestBlockedSenderMs: 0,
+        blockedMs: 2_000,
+      },
     }
     fetchMock
       .mockResolvedValueOnce(mockResponse(VALID_WIRE))
@@ -1218,8 +1489,7 @@ describe('HttpAdapter', () => {
     const adapter = new HttpAdapter()
 
     await flushPoll()
-    expect(adapter.getSnapshot())
-      .toEqual(expectedSnapshot(1, 'connected', VALID_WIRE))
+    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(1, 'connected', VALID_WIRE))
 
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPoll()
@@ -1227,8 +1497,7 @@ describe('HttpAdapter', () => {
 
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPoll()
-    expect(adapter.getSnapshot())
-      .toEqual(expectedSnapshot(3, 'connected', recoveredWire))
+    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(3, 'connected', recoveredWire))
     adapter.dispose()
   })
 
@@ -1246,8 +1515,9 @@ describe('HttpAdapter', () => {
       expect(snapshot.sender.workers.applyMode).toBe('unavailable')
       expect(snapshot.throttler.requestedTps.applyMode).toBe('unavailable')
       expect(snapshot.throttler.installed.writable).toBe(false)
-      await expect(adapter.dispatch({ type: 'set-reader-workers', value: 2 }))
-        .resolves.toMatchObject({ accepted: false })
+      await expect(
+        adapter.dispatch({ type: 'set-reader-workers', value: 2 }),
+      ).resolves.toMatchObject({ accepted: false })
       expect(commandFetchCalls()).toHaveLength(0)
       adapter.dispose()
     },
@@ -1255,9 +1525,7 @@ describe('HttpAdapter', () => {
 
   it('polls immediately and on free one-second ticks without overlap', async () => {
     const first = deferred<Response>()
-    fetchMock
-      .mockReturnValueOnce(first.promise)
-      .mockImplementation(pendingResponse)
+    fetchMock.mockReturnValueOnce(first.promise).mockImplementation(pendingResponse)
     const adapter = new HttpAdapter()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -1348,15 +1616,15 @@ describe('HttpAdapter', () => {
         },
       }
       let polls = 0
-      fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-        ? Promise.resolve(mockCommandResponse())
-        : Promise.resolve(mockResponse(++polls === 1 ? firstWire : appliedWire)))
+      fetchMock.mockImplementation((input) =>
+        input === COMMAND_ENDPOINT
+          ? Promise.resolve(mockCommandResponse())
+          : Promise.resolve(mockResponse(++polls === 1 ? firstWire : appliedWire)),
+      )
       const adapter = new HttpAdapter()
       await flushPoll()
 
-      for (const command of [
-        { type: 'set-sender-workers', value: 7 },
-      ] as const) {
+      for (const command of [{ type: 'set-sender-workers', value: 7 }] as const) {
         await expect(adapter.dispatch(command)).resolves.toMatchObject({
           accepted: true,
           applyMode: 'immediate',
@@ -1407,21 +1675,23 @@ describe('HttpAdapter', () => {
         reader: { ...oneReaderWire.reader, workers: 7 },
       }
       let polls = 0
-      fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-        ? Promise.resolve(mockCommandResponse())
-        : Promise.resolve(mockResponse([
-          firstWire,
-          oneReaderWire,
-          sevenReaderWire,
-        ][Math.min(polls++, 2)]!)))
+      fetchMock.mockImplementation((input) =>
+        input === COMMAND_ENDPOINT
+          ? Promise.resolve(mockCommandResponse())
+          : Promise.resolve(
+              mockResponse([firstWire, oneReaderWire, sevenReaderWire][Math.min(polls++, 2)]!),
+            ),
+      )
       const adapter = new HttpAdapter()
       await flushPoll()
 
       for (const value of [1, 7]) {
-        await expect(adapter.dispatch({
-          type: 'set-reader-workers',
-          value,
-        })).resolves.toMatchObject({
+        await expect(
+          adapter.dispatch({
+            type: 'set-reader-workers',
+            value,
+          }),
+        ).resolves.toMatchObject({
           accepted: true,
           applyMode: 'immediate',
         })
@@ -1443,11 +1713,20 @@ describe('HttpAdapter', () => {
       let wire: TestWireSnapshot = {
         ...VALID_WIRE,
         throttler: { ...VALID_WIRE.throttler, requestedTps: 0, installed: !installed },
-        config: { ...VALID_WIRE.config, throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, initial: false, allowed: [false, true] } },
+        config: {
+          ...VALID_WIRE.config,
+          throttlerInstalled: {
+            ...VALID_WIRE.config.throttlerInstalled,
+            initial: false,
+            allowed: [false, true],
+          },
+        },
       }
-      fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-        ? Promise.resolve(mockCommandResponse())
-        : Promise.resolve(mockResponse(wire)))
+      fetchMock.mockImplementation((input) =>
+        input === COMMAND_ENDPOINT
+          ? Promise.resolve(mockCommandResponse())
+          : Promise.resolve(mockResponse(wire)),
+      )
       const adapter = new HttpAdapter()
 
       await flushPoll()
@@ -1467,11 +1746,8 @@ describe('HttpAdapter', () => {
         }),
       ])
 
-      expect([tpsReceipt, modeReceipt].map(({ accepted }) => accepted))
-        .toEqual([true, true])
-      expect(commandFetchCalls().map(([, init]) =>
-        (init as RequestInit).body,
-      )).toEqual([
+      expect([tpsReceipt, modeReceipt].map(({ accepted }) => accepted)).toEqual([true, true])
+      expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
         '{"action":"set-requested-tps","value":400}',
         JSON.stringify({ action: 'set-throttler-installed', value: installed }),
       ])
@@ -1499,11 +1775,13 @@ describe('HttpAdapter', () => {
     fetchMock.mockImplementation((input) => {
       if (input === COMMAND_ENDPOINT) return firstCommand.promise
       snapshotRequests += 1
-      return Promise.resolve(mockResponse(
-        snapshotRequests === 1
-          ? { ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'running' } }
-          : { ...VALID_WIRE, throttler: { ...VALID_WIRE.throttler, requestedTps: '25' } },
-      ))
+      return Promise.resolve(
+        mockResponse(
+          snapshotRequests === 1
+            ? { ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'running' } }
+            : { ...VALID_WIRE, throttler: { ...VALID_WIRE.throttler, requestedTps: '25' } },
+        ),
+      )
     })
     const adapter = new HttpAdapter()
 
@@ -1525,9 +1803,11 @@ describe('HttpAdapter', () => {
   })
 
   it('accepts 204 without a response body and leaves snapshot authority intact', async () => {
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? Promise.resolve(mockCommandResponse(204))
-      : Promise.resolve(mockResponse(VALID_WIRE)))
+    fetchMock.mockImplementation((input) =>
+      input === COMMAND_ENDPOINT
+        ? Promise.resolve(mockCommandResponse(204))
+        : Promise.resolve(mockResponse(VALID_WIRE)),
+    )
     const adapter = new HttpAdapter()
     await flushPoll()
     const initial = adapter.getSnapshot()
@@ -1551,9 +1831,11 @@ describe('HttpAdapter', () => {
 
   it('accepts 299 without reading headers or a malformed body', async () => {
     const { response, accessors } = responseWithThrowingRepresentation(299)
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? Promise.resolve(response)
-      : Promise.resolve(mockResponse(VALID_WIRE)))
+    fetchMock.mockImplementation((input) =>
+      input === COMMAND_ENDPOINT
+        ? Promise.resolve(response)
+        : Promise.resolve(mockResponse(VALID_WIRE)),
+    )
     const adapter = new HttpAdapter()
     await flushPoll()
 
@@ -1603,12 +1885,14 @@ describe('HttpAdapter', () => {
     'maps HTTP $status to an unavailable receipt with retryable=$retryable',
     async ({ status, retryable }) => {
       const { response, accessors } = responseWithThrowingRepresentation(status)
-      fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-        ? Promise.resolve(response)
-        : Promise.resolve(mockResponse(VALID_WIRE)))
+      fetchMock.mockImplementation((input) =>
+        input === COMMAND_ENDPOINT
+          ? Promise.resolve(response)
+          : Promise.resolve(mockResponse(VALID_WIRE)),
+      )
       const adapter = new HttpAdapter()
       await flushPoll()
-    const initial = adapter.getSnapshot()
+      const initial = adapter.getSnapshot()
 
       const receipt = await adapter.dispatch({ type: 'set-throttler-installed', value: false })
 
@@ -1637,9 +1921,11 @@ describe('HttpAdapter', () => {
   )
 
   it('maps a network failure without leaking details or retrying', async () => {
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? Promise.reject(new TypeError('secret transport detail'))
-      : Promise.resolve(mockResponse(VALID_WIRE)))
+    fetchMock.mockImplementation((input) =>
+      input === COMMAND_ENDPOINT
+        ? Promise.reject(new TypeError('secret transport detail'))
+        : Promise.resolve(mockResponse(VALID_WIRE)),
+    )
     const adapter = new HttpAdapter()
     await flushPoll()
     const initial = adapter.getSnapshot()
@@ -1693,9 +1979,9 @@ describe('HttpAdapter', () => {
 
   it('lets an in-flight POST settle but disposes buffered commands without POST', async () => {
     const inFlight = deferred<Response>()
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? inFlight.promise
-      : Promise.resolve(mockResponse(VALID_WIRE)))
+    fetchMock.mockImplementation((input) =>
+      input === COMMAND_ENDPOINT ? inFlight.promise : Promise.resolve(mockResponse(VALID_WIRE)),
+    )
     const adapter = new HttpAdapter()
     await flushPoll()
     const first = adapter.dispatch({ type: 'set-requested-tps', value: 25 })
@@ -1709,11 +1995,7 @@ describe('HttpAdapter', () => {
     expect(commandInit.signal).toBeUndefined()
     inFlight.resolve(mockCommandResponse(204))
 
-    const [firstReceipt, secondReceipt, thirdReceipt] = await Promise.all([
-      first,
-      second,
-      third,
-    ])
+    const [firstReceipt, secondReceipt, thirdReceipt] = await Promise.all([first, second, third])
     expect(firstReceipt).toMatchObject({
       commandId: 'http-local-1',
       accepted: true,
@@ -1733,15 +2015,13 @@ describe('HttpAdapter', () => {
   })
 
   it('serializes live commands in FIFO order and continues after failure', async () => {
-    const responses = [
-      deferred<Response>(),
-      deferred<Response>(),
-      deferred<Response>(),
-    ]
+    const responses = [deferred<Response>(), deferred<Response>(), deferred<Response>()]
     let responseIndex = 0
-    fetchMock.mockImplementation((input) => input === COMMAND_ENDPOINT
-      ? responses[responseIndex++]!.promise
-      : Promise.resolve(mockResponse(VALID_WIRE)))
+    fetchMock.mockImplementation((input) =>
+      input === COMMAND_ENDPOINT
+        ? responses[responseIndex++]!.promise
+        : Promise.resolve(mockResponse(VALID_WIRE)),
+    )
     const adapter = new HttpAdapter()
 
     await flushPoll()
@@ -1819,20 +2099,24 @@ describe('HttpAdapter', () => {
   })
 
   it('assigns monotonic invocation IDs across local rejection and HTTP dispatch', async () => {
-    fetchMock.mockImplementation((input) => Promise.resolve(input === COMMAND_ENDPOINT
-      ? mockCommandResponse(204)
-      : mockResponse(VALID_WIRE)))
+    fetchMock.mockImplementation((input) =>
+      Promise.resolve(
+        input === COMMAND_ENDPOINT ? mockCommandResponse(204) : mockResponse(VALID_WIRE),
+      ),
+    )
     const adapter = new HttpAdapter()
     const unavailable = await adapter.dispatch({ type: 'set-requested-tps', value: 25 })
     await flushPoll()
     const first = adapter.dispatch({ type: 'set-reader-workers', value: 2 })
     const second = adapter.dispatch({ type: 'set-sender-workers', value: 7 })
-    const receipts = [unavailable, ...await Promise.all([first, second])]
-    expect(receipts.map(({ commandId }) => commandId))
-      .toEqual(['http-local-1', 'http-local-2', 'http-local-3'])
+    const receipts = [unavailable, ...(await Promise.all([first, second]))]
+    expect(receipts.map(({ commandId }) => commandId)).toEqual([
+      'http-local-1',
+      'http-local-2',
+      'http-local-3',
+    ])
     expect(receipts.map(({ accepted }) => accepted)).toEqual([false, true, true])
     receipts.forEach((receipt) => expectDeepFrozen(receipt))
     adapter.dispose()
   })
-
 })

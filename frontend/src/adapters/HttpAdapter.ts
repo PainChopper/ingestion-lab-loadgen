@@ -17,43 +17,143 @@ const POLL_INTERVAL_MS = 1_000
 const UNAVAILABLE_COMMAND_MESSAGE = 'command is not available in the HTTP adapter'
 const DISPOSED_COMMAND_MESSAGE = 'http adapter is disposed'
 const WIRE_KEYS = Object.freeze([
-  'config', 'reader', 'readerChannel', 'run', 'sender', 'senderChannel', 'throttler',
+  'config',
+  'reader',
+  'readerChannel',
+  'run',
+  'sender',
+  'senderChannel',
+  'throttler',
 ])
 const RUN_KEYS = Object.freeze(['elapsedMs', 'state', 'totalTransactions'])
-const READER_KEYS = Object.freeze(['blockedWorkers', 'drainingBlockedWorkers', 'drainingIdleWorkers', 'drainingReadingWorkers', 'drainingWorkers', 'idleWorkers', 'liveWorkers', 'readBatchSize', 'readTps', 'readingWorkers', 'rowsRead', 'sourceDirectory', 'sourceError', 'workers'])
+const READER_KEYS = Object.freeze([
+  'blockedWorkers',
+  'drainingBlockedWorkers',
+  'drainingIdleWorkers',
+  'drainingReadingWorkers',
+  'drainingWorkers',
+  'idleWorkers',
+  'liveWorkers',
+  'readBatchSize',
+  'readTps',
+  'readingWorkers',
+  'rowsRead',
+  'sourceDirectory',
+  'sourceError',
+  'workers',
+])
 const SOURCE_ERROR_KEYS = Object.freeze(['category', 'message', 'operation', 'relativePath'])
 const THROTTLER_KEYS = Object.freeze(['admittedTps', 'installed', 'requestedTps'])
-const SENDER_KEYS = Object.freeze(['backoffWorkers', 'drainingBackoffWorkers', 'drainingIdleWorkers', 'drainingInFlightWorkers', 'drainingWorkers', 'idleWorkers', 'inFlightWorkers', 'liveWorkers', 'workers'])
+const SENDER_KEYS = Object.freeze([
+  'backoffWorkers',
+  'drainingBackoffWorkers',
+  'drainingIdleWorkers',
+  'drainingInFlightWorkers',
+  'drainingWorkers',
+  'idleWorkers',
+  'inFlightWorkers',
+  'liveWorkers',
+  'workers',
+])
 const CHANNEL_KEYS = Object.freeze([
-  'blockedMs', 'blockedSenders', 'bufferedTransactions', 'capacity', 'depthBatches',
-  'inputBatchesPerSecond', 'inputTransactionsPerSecond', 'oldestBlockedSenderMs',
-  'outputBatchesPerSecond', 'outputTransactionsPerSecond', 'receivedBatchesTotal',
-  'receivedTransactionsTotal', 'sentBatchesTotal', 'sentTransactionsTotal',
+  'blockedMs',
+  'blockedSenders',
+  'bufferedTransactions',
+  'capacity',
+  'depthBatches',
+  'inputBatchesPerSecond',
+  'inputTransactionsPerSecond',
+  'oldestBlockedSenderMs',
+  'outputBatchesPerSecond',
+  'outputTransactionsPerSecond',
+  'receivedBatchesTotal',
+  'receivedTransactionsTotal',
+  'sentBatchesTotal',
+  'sentTransactionsTotal',
 ])
 const RANGE_CONFIG_KEYS = Object.freeze(['initial', 'max', 'min', 'mutability', 'step', 'unit'])
 const ALLOWED_CONFIG_KEYS = Object.freeze(['allowed', 'initial', 'mutability', 'unit'])
 const CONFIG_KEYS = Object.freeze([
-  'logging', 'metricsWindowMs', 'readerChannelCapacity', 'readerReadBatchSize',
-  'readerWorkers', 'senderChannelCapacity', 'senderWorkers', 'throttlerInstalled',
+  'logging',
+  'metricsWindowMs',
+  'readerChannelCapacity',
+  'readerReadBatchSize',
+  'readerWorkers',
+  'senderChannelCapacity',
+  'senderWorkers',
+  'throttlerInstalled',
   'throttlerRequestedTps',
 ])
 
 type WireRunState = 'starting' | 'running' | 'stopping' | 'faulted'
-interface WireRun { readonly state: WireRunState; readonly totalTransactions: number; readonly elapsedMs: number }
-interface WireReader { readonly workers: number; readonly liveWorkers: number; readonly idleWorkers: number; readonly readingWorkers: number; readonly blockedWorkers: number; readonly drainingWorkers: number; readonly drainingIdleWorkers: number; readonly drainingReadingWorkers: number; readonly drainingBlockedWorkers: number; readonly readBatchSize: number; readonly readTps: number; readonly rowsRead: number; readonly sourceDirectory: string; readonly sourceError: ReaderSourceErrorSnapshot | null }
-interface WireThrottler { readonly requestedTps: number; readonly admittedTps: number; readonly installed: boolean }
-interface WireSender { readonly workers: number; readonly liveWorkers: number; readonly idleWorkers: number; readonly inFlightWorkers: number; readonly backoffWorkers: number; readonly drainingWorkers: number; readonly drainingIdleWorkers: number; readonly drainingInFlightWorkers: number; readonly drainingBackoffWorkers: number }
-interface WireChannelSnapshot { readonly capacity: number; readonly depthBatches: number; readonly bufferedTransactions: number; readonly blockedSenders: number; readonly oldestBlockedSenderMs: number; readonly blockedMs: number; readonly sentBatchesTotal: number; readonly sentTransactionsTotal: number; readonly receivedBatchesTotal: number; readonly receivedTransactionsTotal: number; readonly inputBatchesPerSecond: number; readonly inputTransactionsPerSecond: number; readonly outputBatchesPerSecond: number; readonly outputTransactionsPerSecond: number }
-interface WireSnapshot { readonly run: WireRun; readonly reader: WireReader; readonly throttler: WireThrottler; readonly sender: WireSender; readonly readerChannel: WireChannelSnapshot; readonly senderChannel: WireChannelSnapshot; readonly config: LoadgenConfigSnapshot }
+interface WireRun {
+  readonly state: WireRunState
+  readonly totalTransactions: number
+  readonly elapsedMs: number
+}
+interface WireReader {
+  readonly workers: number
+  readonly liveWorkers: number
+  readonly idleWorkers: number
+  readonly readingWorkers: number
+  readonly blockedWorkers: number
+  readonly drainingWorkers: number
+  readonly drainingIdleWorkers: number
+  readonly drainingReadingWorkers: number
+  readonly drainingBlockedWorkers: number
+  readonly readBatchSize: number
+  readonly readTps: number
+  readonly rowsRead: number
+  readonly sourceDirectory: string
+  readonly sourceError: ReaderSourceErrorSnapshot | null
+}
+interface WireThrottler {
+  readonly requestedTps: number
+  readonly admittedTps: number
+  readonly installed: boolean
+}
+interface WireSender {
+  readonly workers: number
+  readonly liveWorkers: number
+  readonly idleWorkers: number
+  readonly inFlightWorkers: number
+  readonly backoffWorkers: number
+  readonly drainingWorkers: number
+  readonly drainingIdleWorkers: number
+  readonly drainingInFlightWorkers: number
+  readonly drainingBackoffWorkers: number
+}
+interface WireChannelSnapshot {
+  readonly capacity: number
+  readonly depthBatches: number
+  readonly bufferedTransactions: number
+  readonly blockedSenders: number
+  readonly oldestBlockedSenderMs: number
+  readonly blockedMs: number
+  readonly sentBatchesTotal: number
+  readonly sentTransactionsTotal: number
+  readonly receivedBatchesTotal: number
+  readonly receivedTransactionsTotal: number
+  readonly inputBatchesPerSecond: number
+  readonly inputTransactionsPerSecond: number
+  readonly outputBatchesPerSecond: number
+  readonly outputTransactionsPerSecond: number
+}
+interface WireSnapshot {
+  readonly run: WireRun
+  readonly reader: WireReader
+  readonly throttler: WireThrottler
+  readonly sender: WireSender
+  readonly readerChannel: WireChannelSnapshot
+  readonly senderChannel: WireChannelSnapshot
+  readonly config: LoadgenConfigSnapshot
+}
 
 type SupportedCommand = Extract<
   LoadgenCommand,
   {
     type:
-      | 'set-requested-tps'
-      | 'set-throttler-installed'
-      | 'set-reader-workers'
-      | 'set-sender-workers'
+      'set-requested-tps' | 'set-throttler-installed' | 'set-reader-workers' | 'set-sender-workers'
   }
 >
 
@@ -68,13 +168,13 @@ function deepFreeze<T>(value: T): T {
   return Object.freeze(value)
 }
 
-function isSupportedCommand(
-  command: LoadgenCommand,
-): command is SupportedCommand {
-  return command.type === 'set-requested-tps' ||
+function isSupportedCommand(command: LoadgenCommand): command is SupportedCommand {
+  return (
+    command.type === 'set-requested-tps' ||
     command.type === 'set-throttler-installed' ||
     command.type === 'set-reader-workers' ||
     command.type === 'set-sender-workers'
+  )
 }
 
 function unavailableControl(unit: string): NumericControlSnapshot {
@@ -154,22 +254,13 @@ function channelCapacity(
   }
 }
 
-function readerChannel(
-  wire: WireSnapshot | null,
-): ChannelTelemetrySnapshot {
-  const channel = neutralChannel(
-    'reader-to-throttler',
-    'reader',
-    'throttler',
-  )
+function readerChannel(wire: WireSnapshot | null): ChannelTelemetrySnapshot {
+  const channel = neutralChannel('reader-to-throttler', 'reader', 'throttler')
   if (wire === null) return channel
 
   return {
     ...channel,
-    capacity: channelCapacity(
-      wire.readerChannel.capacity,
-      wire.config.readerChannelCapacity,
-    ),
+    capacity: channelCapacity(wire.readerChannel.capacity, wire.config.readerChannelCapacity),
     depthBatches: wire.readerChannel.depthBatches,
     bufferedTransactions: wire.readerChannel.bufferedTransactions,
     sentBatchesTotal: wire.readerChannel.sentBatchesTotal,
@@ -189,22 +280,13 @@ function readerChannel(
   }
 }
 
-function senderChannel(
-  wire: WireSnapshot | null,
-): ChannelTelemetrySnapshot {
-  const channel = neutralChannel(
-    'throttler-to-sender',
-    'throttler',
-    'sender',
-  )
+function senderChannel(wire: WireSnapshot | null): ChannelTelemetrySnapshot {
+  const channel = neutralChannel('throttler-to-sender', 'throttler', 'sender')
   if (wire === null) return channel
 
   return {
     ...channel,
-    capacity: channelCapacity(
-      wire.senderChannel.capacity,
-      wire.config.senderChannelCapacity,
-    ),
+    capacity: channelCapacity(wire.senderChannel.capacity, wire.config.senderChannelCapacity),
     depthBatches: wire.senderChannel.depthBatches,
     bufferedTransactions: wire.senderChannel.bufferedTransactions,
     sentBatchesTotal: wire.senderChannel.sentBatchesTotal,
@@ -242,7 +324,11 @@ function createSnapshot(
     config: wire?.config ?? null,
     reader: {
       id: 'reader',
-      workers: senderControl(wire?.reader.workers ?? null, wire?.config.readerWorkers ?? null, writable),
+      workers: senderControl(
+        wire?.reader.workers ?? null,
+        wire?.config.readerWorkers ?? null,
+        writable,
+      ),
       liveWorkers: wire?.reader.liveWorkers ?? 0,
       drainingWorkers: wire?.reader.drainingWorkers ?? 0,
       idleWorkers: wire?.reader.idleWorkers ?? 0,
@@ -285,7 +371,11 @@ function createSnapshot(
     senderChannel: senderChannel(wire),
     sender: {
       id: 'sender',
-      workers: senderControl(wire?.sender.workers ?? null, wire?.config.senderWorkers ?? null, writable),
+      workers: senderControl(
+        wire?.sender.workers ?? null,
+        wire?.config.senderWorkers ?? null,
+        writable,
+      ),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
       timeoutMs: unavailableControl('ms'),
@@ -342,24 +432,22 @@ function createSnapshot(
 }
 
 function isWireInteger(value: unknown): value is number {
-  return typeof value === 'number' &&
-    Number.isFinite(value) &&
-    Number.isSafeInteger(value) &&
-    value >= 0
+  return (
+    typeof value === 'number' && Number.isFinite(value) && Number.isSafeInteger(value) && value >= 0
+  )
 }
 
 function isWireNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
-function isRangeValue(
-  value: unknown,
-  config: RangeControlConfigSnapshot,
-): value is number {
-  return isWireInteger(value) &&
+function isRangeValue(value: unknown, config: RangeControlConfigSnapshot): value is number {
+  return (
+    isWireInteger(value) &&
     value >= config.min &&
     value <= config.max &&
     (value - config.min) % config.step === 0
+  )
 }
 
 function throttlerRequestedTpsControl(
@@ -381,10 +469,7 @@ function throttlerRequestedTpsControl(
   }
 }
 
-function isExactObject(
-  value: unknown,
-  keys: readonly string[],
-): value is Record<string, unknown> {
+function isExactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return false
   }
@@ -395,18 +480,27 @@ function isExactObject(
 function decodeRangeControlConfig(
   value: unknown,
   name: string,
-  { unit, mutability, min, max }: Pick<RangeControlConfigSnapshot, 'unit' | 'mutability' | 'min'> & { max?: number },
+  {
+    unit,
+    mutability,
+    min,
+    max,
+  }: Pick<RangeControlConfigSnapshot, 'unit' | 'mutability' | 'min'> & { max?: number },
 ): RangeControlConfigSnapshot {
   if (!isExactObject(value, RANGE_CONFIG_KEYS)) {
     throw new Error(`snapshot ${name} config is invalid`)
   }
   if (
     !isWireInteger(value.initial) ||
-    !isWireInteger(value.min) || value.min < min ||
-    !isWireInteger(value.max) || value.max < value.min ||
+    !isWireInteger(value.min) ||
+    value.min < min ||
+    !isWireInteger(value.max) ||
+    value.max < value.min ||
     (max !== undefined && value.max > max) ||
-    !isWireInteger(value.step) || value.step === 0 ||
-    value.unit !== unit || value.mutability !== mutability
+    !isWireInteger(value.step) ||
+    value.step === 0 ||
+    value.unit !== unit ||
+    value.mutability !== mutability
   ) {
     throw new Error(`snapshot ${name} config is invalid`)
   }
@@ -425,17 +519,16 @@ function decodeRangeControlConfig(
   return Object.freeze(config)
 }
 
-function decodeAllowedControlConfig(
-  value: unknown,
-  name: string,
-): AllowedControlConfigSnapshot {
+function decodeAllowedControlConfig(value: unknown, name: string): AllowedControlConfigSnapshot {
   if (!isExactObject(value, ALLOWED_CONFIG_KEYS)) {
     throw new Error(`snapshot ${name} config is invalid`)
   }
   if (
-    !Array.isArray(value.allowed) || value.allowed.length === 0 ||
+    !Array.isArray(value.allowed) ||
+    value.allowed.length === 0 ||
     !value.allowed.every(isWireInteger) ||
-    value.unit !== 'batches' || value.mutability !== 'startup-only'
+    value.unit !== 'batches' ||
+    value.mutability !== 'startup-only'
   ) {
     throw new Error(`snapshot ${name} config is invalid`)
   }
@@ -443,7 +536,8 @@ function decodeAllowedControlConfig(
   const allowed = Object.freeze([...value.allowed])
   if (
     allowed.some((entry, index) => index > 0 && entry <= allowed[index - 1]!) ||
-    !isWireInteger(value.initial) || !allowed.includes(value.initial)
+    !isWireInteger(value.initial) ||
+    !allowed.includes(value.initial)
   ) {
     throw new Error(`snapshot ${name} config values are invalid`)
   }
@@ -457,23 +551,44 @@ function decodeAllowedControlConfig(
 
 function decodeConfig(value: unknown): LoadgenConfigSnapshot {
   if (!isExactObject(value, CONFIG_KEYS)) {
-    throw new Error('snapshot config must contain exactly reader, readerChannel, senderChannel, throttler, and metrics controls')
+    throw new Error(
+      'snapshot config must contain exactly reader, readerChannel, senderChannel, throttler, and metrics controls',
+    )
   }
 
   const readerReadBatchSize = decodeRangeControlConfig(value.readerReadBatchSize, 'reader', {
-    unit: 'transactions', mutability: 'startup-only', min: 1,
+    unit: 'transactions',
+    mutability: 'startup-only',
+    min: 1,
   })
   const readerWorkers = decodeRangeControlConfig(value.readerWorkers, 'reader workers', {
-    unit: 'workers', mutability: 'immediate', min: 1,
+    unit: 'workers',
+    mutability: 'immediate',
+    min: 1,
   })
   const metricsWindowMs = decodeRangeControlConfig(value.metricsWindowMs, 'metrics window', {
-    unit: 'milliseconds', mutability: 'startup-only', min: 100, max: 10_000,
+    unit: 'milliseconds',
+    mutability: 'startup-only',
+    min: 100,
+    max: 10_000,
   })
-  const readerChannelCapacity = decodeAllowedControlConfig(value.readerChannelCapacity, 'readerChannel')
-  const senderChannelCapacity = decodeAllowedControlConfig(value.senderChannelCapacity, 'senderChannel')
-  const throttlerRequestedTps = decodeRangeControlConfig(value.throttlerRequestedTps, 'throttler requested TPS', {
-    unit: 'transactions/s', mutability: 'immediate', min: 0,
-  })
+  const readerChannelCapacity = decodeAllowedControlConfig(
+    value.readerChannelCapacity,
+    'readerChannel',
+  )
+  const senderChannelCapacity = decodeAllowedControlConfig(
+    value.senderChannelCapacity,
+    'senderChannel',
+  )
+  const throttlerRequestedTps = decodeRangeControlConfig(
+    value.throttlerRequestedTps,
+    'throttler requested TPS',
+    {
+      unit: 'transactions/s',
+      mutability: 'immediate',
+      min: 0,
+    },
+  )
   if (throttlerRequestedTps.max === throttlerRequestedTps.min) {
     throw new Error('snapshot throttler requested TPS config is invalid')
   }
@@ -495,13 +610,17 @@ function decodeConfig(value: unknown): LoadgenConfigSnapshot {
   }
 
   const senderWorkers = decodeRangeControlConfig(value.senderWorkers, 'Sender', {
-    unit: 'workers', mutability: 'immediate', min: 1,
+    unit: 'workers',
+    mutability: 'immediate',
+    min: 1,
   })
   const logging = value.logging
   if (
     !isExactObject(logging, ['level', 'mutability']) ||
-    (logging.level !== 'debug' && logging.level !== 'info' &&
-      logging.level !== 'warn' && logging.level !== 'error') ||
+    (logging.level !== 'debug' &&
+      logging.level !== 'info' &&
+      logging.level !== 'warn' &&
+      logging.level !== 'error') ||
     logging.mutability !== 'startup-only'
   ) {
     throw new Error('snapshot logging config is invalid')
@@ -530,15 +649,23 @@ function decodeChannelSnapshot(
 ): WireChannelSnapshot {
   if (!isExactObject(value, CHANNEL_KEYS)) throw new Error('snapshot channel is invalid')
   if (
-    !isWireInteger(value.capacity) || !allowedCapacity.includes(value.capacity) ||
-    !isWireInteger(value.depthBatches) || !isWireInteger(value.bufferedTransactions) ||
-    !isWireInteger(value.blockedSenders) || !isWireInteger(value.oldestBlockedSenderMs) ||
-    !isWireInteger(value.blockedMs) || !isWireInteger(value.sentBatchesTotal) ||
-    !isWireInteger(value.sentTransactionsTotal) || !isWireInteger(value.receivedBatchesTotal) ||
+    !isWireInteger(value.capacity) ||
+    !allowedCapacity.includes(value.capacity) ||
+    !isWireInteger(value.depthBatches) ||
+    !isWireInteger(value.bufferedTransactions) ||
+    !isWireInteger(value.blockedSenders) ||
+    !isWireInteger(value.oldestBlockedSenderMs) ||
+    !isWireInteger(value.blockedMs) ||
+    !isWireInteger(value.sentBatchesTotal) ||
+    !isWireInteger(value.sentTransactionsTotal) ||
+    !isWireInteger(value.receivedBatchesTotal) ||
     !isWireInteger(value.receivedTransactionsTotal) ||
-    !isWireNumber(value.inputBatchesPerSecond) || !isWireNumber(value.inputTransactionsPerSecond) ||
-    !isWireNumber(value.outputBatchesPerSecond) || !isWireNumber(value.outputTransactionsPerSecond)
-  ) throw new Error('snapshot channel values are invalid')
+    !isWireNumber(value.inputBatchesPerSecond) ||
+    !isWireNumber(value.inputTransactionsPerSecond) ||
+    !isWireNumber(value.outputBatchesPerSecond) ||
+    !isWireNumber(value.outputTransactionsPerSecond)
+  )
+    throw new Error('snapshot channel values are invalid')
   return value as unknown as WireChannelSnapshot
 }
 
@@ -564,17 +691,23 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
   if (
     !isRangeValue(reader.workers, config.readerWorkers!) ||
     !isRangeValue(reader.readBatchSize, config.readerReadBatchSize) ||
-    !isWireNumber(reader.readTps) || !isWireInteger(reader.rowsRead) ||
-    !isWireInteger(reader.liveWorkers) || !isWireInteger(reader.idleWorkers) ||
-    !isWireInteger(reader.readingWorkers) || !isWireInteger(reader.blockedWorkers) ||
-    !isWireInteger(reader.drainingWorkers) || !isWireInteger(reader.drainingIdleWorkers) ||
-    !isWireInteger(reader.drainingReadingWorkers) || !isWireInteger(reader.drainingBlockedWorkers)
+    !isWireNumber(reader.readTps) ||
+    !isWireInteger(reader.rowsRead) ||
+    !isWireInteger(reader.liveWorkers) ||
+    !isWireInteger(reader.idleWorkers) ||
+    !isWireInteger(reader.readingWorkers) ||
+    !isWireInteger(reader.blockedWorkers) ||
+    !isWireInteger(reader.drainingWorkers) ||
+    !isWireInteger(reader.drainingIdleWorkers) ||
+    !isWireInteger(reader.drainingReadingWorkers) ||
+    !isWireInteger(reader.drainingBlockedWorkers)
   ) {
     throw new Error('snapshot reader values are invalid')
   }
   if (
     reader.liveWorkers !== reader.idleWorkers + reader.readingWorkers + reader.blockedWorkers ||
-    reader.drainingWorkers !== reader.drainingIdleWorkers + reader.drainingReadingWorkers + reader.drainingBlockedWorkers ||
+    reader.drainingWorkers !==
+      reader.drainingIdleWorkers + reader.drainingReadingWorkers + reader.drainingBlockedWorkers ||
     reader.drainingIdleWorkers > reader.idleWorkers ||
     reader.drainingReadingWorkers > reader.readingWorkers ||
     reader.drainingBlockedWorkers > reader.blockedWorkers ||
@@ -594,11 +727,17 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
     const { operation, relativePath, message } = sourceError
     if (
       sourceError.category !== 'source' ||
-      (operation !== 'glob' && operation !== 'open' && operation !== 'read' &&
-        operation !== 'close' && operation !== 'reader-close') ||
-      typeof relativePath !== 'string' || relativePath.length === 0 ||
-      relativePath.startsWith('/') || relativePath.startsWith('../') ||
-      typeof message !== 'string' || message.length === 0
+      (operation !== 'glob' &&
+        operation !== 'open' &&
+        operation !== 'read' &&
+        operation !== 'close' &&
+        operation !== 'reader-close') ||
+      typeof relativePath !== 'string' ||
+      relativePath.length === 0 ||
+      relativePath.startsWith('/') ||
+      relativePath.startsWith('../') ||
+      typeof message !== 'string' ||
+      message.length === 0
     ) {
       throw new Error('snapshot reader sourceError is invalid')
     }
@@ -615,16 +754,21 @@ function decodeWireSnapshot(value: unknown): WireSnapshot {
 
   if (
     !isRangeValue(sender.workers, config.senderWorkers) ||
-    !isWireInteger(sender.liveWorkers) || !isWireInteger(sender.idleWorkers) ||
-    !isWireInteger(sender.inFlightWorkers) || !isWireInteger(sender.backoffWorkers) ||
-    !isWireInteger(sender.drainingWorkers) || !isWireInteger(sender.drainingIdleWorkers) ||
-    !isWireInteger(sender.drainingInFlightWorkers) || !isWireInteger(sender.drainingBackoffWorkers)
+    !isWireInteger(sender.liveWorkers) ||
+    !isWireInteger(sender.idleWorkers) ||
+    !isWireInteger(sender.inFlightWorkers) ||
+    !isWireInteger(sender.backoffWorkers) ||
+    !isWireInteger(sender.drainingWorkers) ||
+    !isWireInteger(sender.drainingIdleWorkers) ||
+    !isWireInteger(sender.drainingInFlightWorkers) ||
+    !isWireInteger(sender.drainingBackoffWorkers)
   ) {
     throw new Error('snapshot sender values are invalid')
   }
   if (
     sender.liveWorkers !== sender.idleWorkers + sender.inFlightWorkers + sender.backoffWorkers ||
-    sender.drainingWorkers !== sender.drainingIdleWorkers + sender.drainingInFlightWorkers + sender.drainingBackoffWorkers ||
+    sender.drainingWorkers !==
+      sender.drainingIdleWorkers + sender.drainingInFlightWorkers + sender.drainingBackoffWorkers ||
     sender.drainingIdleWorkers > sender.idleWorkers ||
     sender.drainingInFlightWorkers > sender.inFlightWorkers ||
     sender.drainingBackoffWorkers > sender.backoffWorkers ||
@@ -667,7 +811,12 @@ function canDispatchConfigCommand(
   snapshot: LoadgenTelemetrySnapshot,
 ): boolean {
   const config = snapshot.config
-  if (snapshot.connectionState !== 'connected' || snapshot.runState !== 'running' || config === null) return false
+  if (
+    snapshot.connectionState !== 'connected' ||
+    snapshot.runState !== 'running' ||
+    config === null
+  )
+    return false
   switch (command.type) {
     case 'set-requested-tps':
       return isRangeValue(command.value, config.throttlerRequestedTps)
@@ -685,11 +834,7 @@ async function decodeResponse(response: Response): Promise<WireSnapshot> {
     throw new Error('snapshot response must be successful')
   }
 
-  const mediaType = response.headers
-    .get('Content-Type')
-    ?.split(';', 1)[0]
-    .trim()
-    .toLowerCase()
+  const mediaType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase()
   if (mediaType !== 'application/json') {
     throw new Error('snapshot response must be JSON')
   }
@@ -701,11 +846,7 @@ export class HttpAdapter implements LoadgenAdapter {
   readonly kind = 'http' as const
 
   private readonly listeners = new Set<LoadgenSnapshotListener>()
-  private snapshot: LoadgenTelemetrySnapshot = createSnapshot(
-    0,
-    'connecting',
-    null,
-  )
+  private snapshot: LoadgenTelemetrySnapshot = createSnapshot(0, 'connecting', null)
   private timer: ReturnType<typeof setInterval> | null
   private activeController: AbortController | null = null
   private requestInFlight = false
@@ -738,38 +879,24 @@ export class HttpAdapter implements LoadgenAdapter {
     const commandId = `http-local-${++this.commandSequence}`
 
     if (!isSupportedCommand(command)) {
-      return Promise.resolve(this.rejectCommand(
-        commandId,
-        command,
-        'unavailable',
-        UNAVAILABLE_COMMAND_MESSAGE,
-        false,
-      ))
+      return Promise.resolve(
+        this.rejectCommand(commandId, command, 'unavailable', UNAVAILABLE_COMMAND_MESSAGE, false),
+      )
     }
 
     if (this.disposed) {
-      return Promise.resolve(this.rejectCommand(
-        commandId,
-        command,
-        'disposed',
-        DISPOSED_COMMAND_MESSAGE,
-        false,
-      ))
+      return Promise.resolve(
+        this.rejectCommand(commandId, command, 'disposed', DISPOSED_COMMAND_MESSAGE, false),
+      )
     }
 
     if (!canDispatchConfigCommand(command, this.snapshot)) {
-      return Promise.resolve(this.rejectCommand(
-        commandId,
-        command,
-        'unavailable',
-        UNAVAILABLE_COMMAND_MESSAGE,
-        false,
-      ))
+      return Promise.resolve(
+        this.rejectCommand(commandId, command, 'unavailable', UNAVAILABLE_COMMAND_MESSAGE, false),
+      )
     }
 
-    const receipt = this.commandChannel.then(
-      () => this.sendCommand(commandId, command),
-    )
+    const receipt = this.commandChannel.then(() => this.sendCommand(commandId, command))
     this.commandChannel = receipt.then(
       () => undefined,
       () => undefined,
@@ -834,13 +961,7 @@ export class HttpAdapter implements LoadgenAdapter {
     command: SupportedCommand,
   ): Promise<CommandReceipt> => {
     if (this.disposed) {
-      return this.rejectCommand(
-        commandId,
-        command,
-        'disposed',
-        DISPOSED_COMMAND_MESSAGE,
-        false,
-      )
+      return this.rejectCommand(commandId, command, 'disposed', DISPOSED_COMMAND_MESSAGE, false)
     }
 
     if (!canDispatchConfigCommand(command, this.snapshot)) {

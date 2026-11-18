@@ -10,23 +10,16 @@ interface NumericControlProps {
   readonly className?: string
 }
 
-export function NumericControl({
-  label,
-  control,
-  desiredControl,
-  className,
-}: NumericControlProps) {
+export function NumericControl({ label, control, desiredControl, className }: NumericControlProps) {
   const inputId = useId()
   const unitId = `${inputId}-unit`
   const [draft, setDraft] = useState<string | null>(null)
   const suppressBlurCommit = useRef(false)
-  const unavailable = control.applyMode === 'unavailable' ||
-    !desiredControl.available
+  const unavailable = control.applyMode === 'unavailable' || !desiredControl.available
   const pending = desiredControl.phase === 'pending'
   const editable = !unavailable && !pending
-  const displayed = !unavailable && desiredControl.phase !== 'idle'
-    ? desiredControl.desired
-    : control.applied
+  const displayed =
+    !unavailable && desiredControl.phase !== 'idle' ? desiredControl.desired : control.applied
   const displayedValue = displayed === null ? '' : String(displayed)
   if (!editable && draft !== null) setDraft(null)
 
@@ -86,10 +79,7 @@ export function NumericControl({
   }
 
   return (
-    <label
-      className={`numeric-control${className ? ` ${className}` : ''}`}
-      htmlFor={inputId}
-    >
+    <label className={`numeric-control${className ? ` ${className}` : ''}`} htmlFor={inputId}>
       <span className="numeric-control__label">{label}</span>
       <input
         id={inputId}
@@ -97,7 +87,7 @@ export function NumericControl({
         min={control.min}
         max={control.max}
         step={control.step}
-        value={editable ? draft ?? displayedValue : displayedValue}
+        value={editable ? (draft ?? displayedValue) : displayedValue}
         disabled={!editable}
         inputMode="numeric"
         aria-describedby={unitId}

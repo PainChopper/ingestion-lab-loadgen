@@ -33,7 +33,9 @@ it('keeps one presentation per live snapshot and subscribes to the current adapt
     expect(switched).not.toBe(initial)
     expect(switched.liveSnapshot).toBe(second.getSnapshot())
 
-    await act(async () => { await second.dispatch({ type: 'set-requested-tps', value: 75_000 }) })
+    await act(async () => {
+      await second.dispatch({ type: 'set-requested-tps', value: 75_000 })
+    })
     const updated = view.result.current
     expect(updated).not.toBe(switched)
     expect(updated.liveSnapshot).toBe(second.getSnapshot())
@@ -73,7 +75,9 @@ it('preserves the pressure history across rerenders and starts fresh on adapter 
         getSnapshot: () => snapshot,
         subscribe: (listener) => {
           listeners.add(listener)
-          return () => { listeners.delete(listener) }
+          return () => {
+            listeners.delete(listener)
+          }
         },
         dispatch: vi.fn(),
         dispose: () => listeners.clear(),

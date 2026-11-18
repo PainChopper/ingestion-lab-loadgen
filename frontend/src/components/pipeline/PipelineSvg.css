@@ -282,16 +282,24 @@
   stroke: var(--cyan);
 }
 .pipeline-worker--reading .pipeline-worker-chip-pin,
-.pipeline-worker--reading .pipeline-worker-wave { stroke: var(--cyan); }
-.pipeline-worker--reading .pipeline-worker-led { fill: var(--cyan); }
+.pipeline-worker--reading .pipeline-worker-wave {
+  stroke: var(--cyan);
+}
+.pipeline-worker--reading .pipeline-worker-led {
+  fill: var(--cyan);
+}
 
 .pipeline-worker--blocked .pipeline-worker-chip {
   fill: color-mix(in srgb, var(--red) 14%, #0b314a);
   stroke: var(--red);
 }
 .pipeline-worker--blocked .pipeline-worker-chip-pin,
-.pipeline-worker--blocked .pipeline-worker-wave { stroke: var(--red); }
-.pipeline-worker--blocked .pipeline-worker-led { fill: var(--red); }
+.pipeline-worker--blocked .pipeline-worker-wave {
+  stroke: var(--red);
+}
+.pipeline-worker--blocked .pipeline-worker-led {
+  fill: var(--red);
+}
 
 .pipeline-worker--success .pipeline-worker-chip {
   fill: color-mix(in srgb, var(--green) 18%, #0b314a);
@@ -329,8 +337,12 @@
 }
 
 .pipeline-worker--draining .pipeline-worker-chip-pin,
-.pipeline-worker--draining .pipeline-worker-wave { stroke: var(--purple); }
-.pipeline-worker--draining .pipeline-worker-led { fill: var(--purple); }
+.pipeline-worker--draining .pipeline-worker-wave {
+  stroke: var(--purple);
+}
+.pipeline-worker--draining .pipeline-worker-led {
+  fill: var(--purple);
+}
 
 .pipeline-worker--terminal-error .pipeline-worker-chip {
   fill: color-mix(in srgb, var(--red) 14%, #0b314a);
@@ -338,8 +350,12 @@
 }
 
 .pipeline-worker--terminal-error .pipeline-worker-chip-pin,
-.pipeline-worker--terminal-error .pipeline-worker-wave { stroke: var(--red); }
-.pipeline-worker--terminal-error .pipeline-worker-led { fill: var(--red); }
+.pipeline-worker--terminal-error .pipeline-worker-wave {
+  stroke: var(--red);
+}
+.pipeline-worker--terminal-error .pipeline-worker-led {
+  fill: var(--red);
+}
 
 .pipeline-valve-flow-line {
   stroke: var(--pipeline-valve-flow-color);
@@ -478,8 +494,7 @@
   vector-effect: non-scaling-stroke;
 }
 
-.pipeline-valve-installation-control:focus-visible
-  .pipeline-valve-installation-focus-ring {
+.pipeline-valve-installation-control:focus-visible .pipeline-valve-installation-focus-ring {
   opacity: 1;
   filter: drop-shadow(0 0 3px rgba(39, 199, 234, 0.92));
 }
@@ -757,5 +772,4 @@
   .pipeline-valve-wheel-inner-motion {
     transition: none;
   }
-
 }

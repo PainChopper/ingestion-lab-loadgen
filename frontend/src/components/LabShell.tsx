@@ -1,32 +1,15 @@
-import {
-  FlaskConical,
-  MousePointer2,
-  X,
-} from 'lucide-react'
+import { FlaskConical, MousePointer2, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
-import type {
-  LoadgenSnapshot,
-  ChannelFlowState,
-  SelectableId,
-} from '../model/loadgen'
+import type { LoadgenSnapshot, ChannelFlowState, SelectableId } from '../model/loadgen'
 import { useLoadgenSnapshot } from '../hooks/useLoadgenSnapshot'
-import {
-  useDesiredControl,
-  type LiveControls,
-} from '../hooks/useDesiredControl'
-import {
-  getInspectorViewModel,
-  type InspectorRow,
-} from './inspectorViewModel'
+import { useDesiredControl, type LiveControls } from '../hooks/useDesiredControl'
+import { getInspectorViewModel, type InspectorRow } from './inspectorViewModel'
 import { NumericControl } from './NumericControl'
 import { formatInteger } from './pipeline/formatters'
 import { PipelineSvg } from './pipeline/PipelineSvg'
 import { createPipelineGeometry } from './pipeline/geometry'
-import {
-  usePipelineOrientation,
-  type PipelineOrientation,
-} from './pipeline/pipelineLayout'
+import { usePipelineOrientation, type PipelineOrientation } from './pipeline/pipelineLayout'
 
 interface AdapterProps {
   adapter: LoadgenAdapter
@@ -47,9 +30,7 @@ function formatDuration(elapsedMs: number): string {
   const hours = Math.floor(totalSeconds / 3_600)
   const minutes = Math.floor((totalSeconds % 3_600) / 60)
   const seconds = totalSeconds % 60
-  return [hours, minutes, seconds]
-    .map((part) => String(part).padStart(2, '0'))
-    .join(':')
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':')
 }
 
 function formatCount(value: number): string {
@@ -83,7 +64,6 @@ function TopBar({ snapshot }: { snapshot: LoadgenSnapshot }) {
           <dd>{formatCount(snapshot.totalTransactions)}</dd>
         </div>
       </dl>
-
     </header>
   )
 }
@@ -112,9 +92,7 @@ function PipelineViewport({
     if (viewport === null) return
     const updateWidth = (width: number) => {
       const resolved = Math.max(1120, Math.round(width))
-      setLandscapeContentWidth((current) =>
-        current === resolved ? current : resolved
-      )
+      setLandscapeContentWidth((current) => (current === resolved ? current : resolved))
     }
 
     updateWidth(viewport.clientWidth)
@@ -127,19 +105,29 @@ function PipelineViewport({
     return () => observer.disconnect()
   }, [orientation])
 
-  const geometry = useMemo(() => createPipelineGeometry({
-    orientation,
-    landscapeContentWidth,
-    readerWorkers: Math.max(liveControls.readerWorkers.desired, Math.min(32, snapshot.reader.liveWorkers)),
-    senderWorkers: Math.max(liveControls.senderWorkers.desired, Math.min(32, snapshot.sender.liveWorkers)),
-  }), [
-    landscapeContentWidth,
-    orientation,
-    liveControls.readerWorkers.desired,
-    liveControls.senderWorkers.desired,
-    snapshot.reader.liveWorkers,
-    snapshot.sender.liveWorkers,
-  ])
+  const geometry = useMemo(
+    () =>
+      createPipelineGeometry({
+        orientation,
+        landscapeContentWidth,
+        readerWorkers: Math.max(
+          liveControls.readerWorkers.desired,
+          Math.min(32, snapshot.reader.liveWorkers),
+        ),
+        senderWorkers: Math.max(
+          liveControls.senderWorkers.desired,
+          Math.min(32, snapshot.sender.liveWorkers),
+        ),
+      }),
+    [
+      landscapeContentWidth,
+      orientation,
+      liveControls.readerWorkers.desired,
+      liveControls.senderWorkers.desired,
+      snapshot.reader.liveWorkers,
+      snapshot.sender.liveWorkers,
+    ],
+  )
 
   return (
     <main className="pipeline-scroll" aria-label="Pipeline viewport">
@@ -149,9 +137,11 @@ function PipelineViewport({
         data-testid="pipeline-viewport"
         data-layout={orientation}
         data-content-width={geometry.viewBox.width}
-        style={orientation === 'portrait'
-          ? { aspectRatio: `480 / ${geometry.viewBox.height}` }
-          : undefined}
+        style={
+          orientation === 'portrait'
+            ? { aspectRatio: `480 / ${geometry.viewBox.height}` }
+            : undefined
+        }
       >
         <PipelineSvg
           snapshot={snapshot}
@@ -203,7 +193,9 @@ function InspectorControls({
             <input
               type="checkbox"
               checked={liveControls.installed.desired}
-              disabled={!liveControls.installed.available || liveControls.installed.phase === 'pending'}
+              disabled={
+                !liveControls.installed.available || liveControls.installed.phase === 'pending'
+              }
               onChange={(event) => {
                 liveControls.installed.preview(event.currentTarget.checked)
                 void liveControls.installed.commit()
@@ -236,23 +228,20 @@ function InspectorDock({
   liveControls,
 }: InspectorDockProps) {
   const model = getInspectorViewModel(snapshot, selectedId)
-  const controls = model?.id === 'sender'
-    ? (
+  const controls =
+    model?.id === 'sender' ? (
       <section className="inspector-section" aria-labelledby="sender-controls-title">
-        <h3 id="sender-controls-title" className="inspector-section__title">Controls</h3>
+        <h3 id="sender-controls-title" className="inspector-section__title">
+          Controls
+        </h3>
         <InspectorControls
           snapshot={snapshot}
           selectedId={selectedId}
           liveControls={liveControls}
         />
       </section>
-    )
-    : (
-        <InspectorControls
-          snapshot={snapshot}
-        selectedId={selectedId}
-        liveControls={liveControls}
-      />
+    ) : (
+      <InspectorControls snapshot={snapshot} selectedId={selectedId} liveControls={liveControls} />
     )
 
   return (
@@ -286,19 +275,31 @@ function InspectorDock({
           {controls}
           {model.sections === undefined ? (
             <dl className="inspector-data">
-              {model.rows.map((row) => <InspectorDataRow key={row.key ?? row.label} row={row} />)}
+              {model.rows.map((row) => (
+                <InspectorDataRow key={row.key ?? row.label} row={row} />
+              ))}
             </dl>
-          ) : model.sections.map((section) => (
-            <section className="inspector-section" key={section.title} aria-labelledby={`sender-${section.title}`}>
-              <h3 id={`sender-${section.title}`} className="inspector-section__title">{section.title}</h3>
-              <dl
-                className="inspector-data inspector-data--sender"
-                data-testid="sender-inspector-section-data"
+          ) : (
+            model.sections.map((section) => (
+              <section
+                className="inspector-section"
+                key={section.title}
+                aria-labelledby={`sender-${section.title}`}
               >
-                {section.rows.map((row) => <InspectorDataRow key={row.label} row={row} />)}
-              </dl>
-            </section>
-          ))}
+                <h3 id={`sender-${section.title}`} className="inspector-section__title">
+                  {section.title}
+                </h3>
+                <dl
+                  className="inspector-data inspector-data--sender"
+                  data-testid="sender-inspector-section-data"
+                >
+                  {section.rows.map((row) => (
+                    <InspectorDataRow key={row.label} row={row} />
+                  ))}
+                </dl>
+              </section>
+            ))
+          )}
         </div>
       )}
     </aside>
@@ -309,28 +310,42 @@ function InspectorDataRow({ row }: { row: InspectorRow }) {
   const className = [
     row.layout === 'full-width' ? 'inspector-data__row--full-width' : null,
     row.segments === undefined ? null : 'inspector-data__row--worker-states',
-  row.kind === 'source-error' ? 'inspector-data__row--source-error' : null,
-  ].filter(Boolean).join(' ')
+    row.kind === 'source-error' ? 'inspector-data__row--source-error' : null,
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return (
     <div className={className || undefined}>
-      {row.kind === 'source-error'
-        ? <span className="inspector-data__source-error-label" data-testid="reader-source-error-label">SOURCE ERROR</span>
-        : <dt>{row.label}</dt>}
+      {row.kind === 'source-error' ? (
+        <span
+          className="inspector-data__source-error-label"
+          data-testid="reader-source-error-label"
+        >
+          SOURCE ERROR
+        </span>
+      ) : (
+        <dt>{row.label}</dt>
+      )}
       <dd>
-        {row.segments === undefined
-          ? row.disclosureValue === undefined
-            ? row.value
-            : <details className="inspector-disclosure">
-                <summary>{row.value}</summary>
-                <span>{row.disclosureLabel}</span>
-                <code>{row.disclosureValue}</code>
-              </details>
-          : row.segments.map((segment, index) => (
+        {row.segments === undefined ? (
+          row.disclosureValue === undefined ? (
+            row.value
+          ) : (
+            <details className="inspector-disclosure">
+              <summary>{row.value}</summary>
+              <span>{row.disclosureLabel}</span>
+              <code>{row.disclosureValue}</code>
+            </details>
+          )
+        ) : (
+          row.segments.map((segment, index) => (
             <span className={`worker-state worker-state--${segment.tone}`} key={segment.value}>
-              {index > 0 && <span aria-hidden="true">· </span>}{segment.value}
+              {index > 0 && <span aria-hidden="true">· </span>}
+              {segment.value}
             </span>
-          ))}
+          ))
+        )}
       </dd>
     </div>
   )
@@ -398,9 +413,11 @@ export function LabShell({ adapter }: AdapterProps) {
     applied: liveSnapshot.reader.workers.applied ?? liveSnapshot.reader.workers.min,
     revision: liveSnapshot.revision,
     available: immediate(liveSnapshot.reader.workers),
-    dispatch: (value) => adapter.dispatch({
-      type: 'set-reader-workers', value,
-    }),
+    dispatch: (value) =>
+      adapter.dispatch({
+        type: 'set-reader-workers',
+        value,
+      }),
   })
   const requestedTps = useDesiredControl({
     applied: liveSnapshot.throttler.requestedTps.applied ?? liveSnapshot.throttler.requestedTps.min,
@@ -411,12 +428,15 @@ export function LabShell({ adapter }: AdapterProps) {
   const installed = useDesiredControl<boolean>({
     applied: liveSnapshot.throttler.installed.applied ?? true,
     revision: liveSnapshot.revision,
-    available: liveSnapshot.throttler.installed.applied !== null &&
+    available:
+      liveSnapshot.throttler.installed.applied !== null &&
       liveSnapshot.throttler.installed.writable &&
       liveSnapshot.throttler.installed.applyMode === 'immediate',
-    dispatch: (value) => adapter.dispatch({
-      type: 'set-throttler-installed', value,
-    }),
+    dispatch: (value) =>
+      adapter.dispatch({
+        type: 'set-throttler-installed',
+        value,
+      }),
     rejectionMessage: 'Valve mode change rejected',
     unavailableMessage: 'Valve mode change unavailable',
   })

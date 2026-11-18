@@ -20,9 +20,5 @@ export function useLoadgenSnapshot(adapter: LoadgenAdapter) {
     [adapter, deriver],
   )
 
-  return useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    getSnapshot,
-  )
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }

@@ -1,19 +1,18 @@
 import { Minus, Plus } from 'lucide-react'
-import { useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useLayoutEffect,
+  useRef,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import type { DesiredControl } from '../../hooks/useDesiredControl'
 import { useHoldRepeat } from '../../hooks/useHoldRepeat'
 import type { InspectorRowSegment } from '../inspectorViewModel'
-import type {
-  NumericControlSnapshot,
-  RunState,
-  SelectableId,
-} from '../../model/loadgen'
+import type { NumericControlSnapshot, RunState, SelectableId } from '../../model/loadgen'
 import type { Point, TextPlacement, WorkerActorBounds } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
-import {
-  getWorkerActorLayout,
-  type WorkerChipLayout,
-} from './workerActorLayout'
+import { getWorkerActorLayout, type WorkerChipLayout } from './workerActorLayout'
 
 export type WorkerActorId = 'reader' | 'sender'
 
@@ -35,7 +34,9 @@ interface WorkerActorProps {
   liveWorkers?: number
   drainingWorkers?: number
   activityCounts: Readonly<Record<'idle' | 'reading' | 'blocked' | 'in-flight' | 'backoff', number>>
-  drainingActivityCounts: Readonly<Record<'idle' | 'reading' | 'blocked' | 'in-flight' | 'backoff', number>>
+  drainingActivityCounts: Readonly<
+    Record<'idle' | 'reading' | 'blocked' | 'in-flight' | 'backoff', number>
+  >
   runState: RunState
   active?: boolean
   inputPort?: Point
@@ -76,52 +77,20 @@ function WorkerChip({
       className={`pipeline-worker--${state}${draining ? ' pipeline-worker--draining' : ''}`}
       transform={`translate(${x} ${y}) scale(${scale})`}
     >
-      <rect
-        x={chipX}
-        y={chipY}
-        width="31"
-        height="31"
-        rx="3"
-        className="pipeline-worker-chip"
-      />
+      <rect x={chipX} y={chipY} width="31" height="31" rx="3" className="pipeline-worker-chip" />
       {pinOffsets.map((offset) => (
         <g key={offset} className="pipeline-worker-chip-pin">
-          <line
-            x1={chipX + offset}
-            y1={chipY - 4}
-            x2={chipX + offset}
-            y2={chipY}
-          />
-          <line
-            x1={chipX + offset}
-            y1={chipY + 31}
-            x2={chipX + offset}
-            y2={chipY + 35}
-          />
-          <line
-            x1={chipX - 4}
-            y1={chipY + offset}
-            x2={chipX}
-            y2={chipY + offset}
-          />
-          <line
-            x1={chipX + 31}
-            y1={chipY + offset}
-            x2={chipX + 35}
-            y2={chipY + offset}
-          />
+          <line x1={chipX + offset} y1={chipY - 4} x2={chipX + offset} y2={chipY} />
+          <line x1={chipX + offset} y1={chipY + 31} x2={chipX + offset} y2={chipY + 35} />
+          <line x1={chipX - 4} y1={chipY + offset} x2={chipX} y2={chipY + offset} />
+          <line x1={chipX + 31} y1={chipY + offset} x2={chipX + 35} y2={chipY + offset} />
         </g>
       ))}
       <polyline
         points={`${chipX + 5},${chipY + 17} ${chipX + 10},${chipY + 17} ${chipX + 14},${chipY + 10} ${chipX + 18},${chipY + 23} ${chipX + 22},${chipY + 15} ${chipX + 27},${chipY + 15}`}
         className="pipeline-worker-wave"
       />
-      <circle
-        cx={chipX + 57}
-        cy={chipY + 15.5}
-        r="5.5"
-        className="pipeline-worker-led"
-      />
+      <circle cx={chipX + 57} cy={chipY + 15.5} r="5.5" className="pipeline-worker-led" />
     </g>
   )
 }
@@ -176,21 +145,30 @@ export function WorkerActor({
   )
   const workerMin = Math.round(workers.min)
   const workerStep = Math.max(1, Math.round(workers.step))
-  const workerMax = workerMin + Math.floor((Math.round(workers.max) - workerMin) / workerStep) * workerStep
+  const workerMax =
+    workerMin + Math.floor((Math.round(workers.max) - workerMin) / workerStep) * workerStep
   const workerControlDisabled = !desiredControl.available || desiredControl.phase === 'pending'
-  const states = actor === 'reader'
-    ? ['blocked', 'reading', 'idle'] as const
-    : ['backoff', 'in-flight', 'idle'] as const
-  const visibleStates = states.flatMap((state) => Array.from(
-    { length: activityCounts[state] },
-    (_, index) => ({ state, draining: index < drainingActivityCounts[state] }),
-  ))
-  const chipState = (index: number) => muted
-    ? { state: 'inactive' as const, draining: false }
-    : visibleStates[index] ?? { state: (active ?? (runState === 'running')) ? 'active' as const : 'inactive' as const, draining: false }
-  const actorAriaLabel = actor === 'reader' || liveWorkers === undefined
-    ? `Inspect ${actor}`
-    : `Inspect ${actor}, ${desiredWorkers} desired, ${liveWorkers} live, ${drainingWorkers ?? 0} draining`
+  const states =
+    actor === 'reader'
+      ? (['blocked', 'reading', 'idle'] as const)
+      : (['backoff', 'in-flight', 'idle'] as const)
+  const visibleStates = states.flatMap((state) =>
+    Array.from({ length: activityCounts[state] }, (_, index) => ({
+      state,
+      draining: index < drainingActivityCounts[state],
+    })),
+  )
+  const chipState = (index: number) =>
+    muted
+      ? { state: 'inactive' as const, draining: false }
+      : (visibleStates[index] ?? {
+          state: (active ?? runState === 'running') ? ('active' as const) : ('inactive' as const),
+          draining: false,
+        })
+  const actorAriaLabel =
+    actor === 'reader' || liveWorkers === undefined
+      ? `Inspect ${actor}`
+      : `Inspect ${actor}, ${desiredWorkers} desired, ${liveWorkers} live, ${drainingWorkers ?? 0} draining`
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
@@ -311,11 +289,7 @@ export function WorkerActor({
           className="pipeline-actor-box"
         />
         {layout.chips.slice(0, visibleWorkers).map((chip, index) => (
-          <WorkerChip
-            key={index}
-            {...chip}
-            {...chipState(index)}
-          />
+          <WorkerChip key={index} {...chip} {...chipState(index)} />
         ))}
         {overflowWorkers > 0 && (
           <text
@@ -355,20 +329,8 @@ export function WorkerActor({
             </text>
           </g>
         )}
-        {inputPort && (
-          <circle
-            cx={inputPort.x}
-            cy={inputPort.y}
-            r="7"
-            className="pipeline-port"
-          />
-        )}
-        <circle
-          cx={outputPort.x}
-          cy={outputPort.y}
-          r="7"
-          className="pipeline-port"
-        />
+        {inputPort && <circle cx={inputPort.x} cy={inputPort.y} r="7" className="pipeline-port" />}
+        <circle cx={outputPort.x} cy={outputPort.y} r="7" className="pipeline-port" />
         <text
           x={metricPoints.primary.x}
           y={metricPoints.primary.y}
@@ -401,7 +363,8 @@ export function WorkerActor({
                     key={segment.value}
                     className={`worker-state worker-state--${segment.tone}`}
                   >
-                    {index > 0 && ' · '}{segment.value}
+                    {index > 0 && ' · '}
+                    {segment.value}
                   </tspan>
                 ))}
           </text>

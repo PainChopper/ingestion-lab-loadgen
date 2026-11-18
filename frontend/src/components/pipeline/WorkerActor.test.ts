@@ -36,8 +36,7 @@ const LANDSCAPE_CASES = [
 describe('WorkerActor layout', () => {
   it('derives the landscape minimum height from the fixed anchors', () => {
     expect(LANDSCAPE_WORKER_ACTOR_MIN_HEIGHT).toBe(120)
-    expect(LANDSCAPE_WORKER_ACTOR_MIN_HEIGHT)
-      .toBe(2 * (ACTOR_BOTTOM - FLOW_BASELINE))
+    expect(LANDSCAPE_WORKER_ACTOR_MIN_HEIGHT).toBe(2 * (ACTOR_BOTTOM - FLOW_BASELINE))
     expect(ACTOR_GEOMETRY.reader.bounds.minHeight).toBe(120)
     expect(ACTOR_GEOMETRY.sender.bounds.minHeight).toBe(120)
   })
@@ -52,14 +51,18 @@ describe('WorkerActor layout', () => {
         layout: getWorkerActorLayout(actor, bounds, workers(testCase.count)),
       }))
 
-      expect(layouts.map(({ count, layout }) => ({
-        count,
-        top: layout.top,
-        height: layout.height,
-      }))).toEqual(LANDSCAPE_CASES.map((testCase) => ({
-        count: testCase.count,
-        ...testCase[actor],
-      })))
+      expect(
+        layouts.map(({ count, layout }) => ({
+          count,
+          top: layout.top,
+          height: layout.height,
+        })),
+      ).toEqual(
+        LANDSCAPE_CASES.map((testCase) => ({
+          count: testCase.count,
+          ...testCase[actor],
+        })),
+      )
 
       for (const { count, expected, layout } of layouts) {
         expect(layout.workerCount).toBe(count)
@@ -77,9 +80,7 @@ describe('WorkerActor layout', () => {
 
         for (const chip of layout.chips) {
           expect(chip.x).toBeGreaterThanOrEqual(bounds.x)
-          expect(chip.x + chip.width).toBeLessThanOrEqual(
-            bounds.x + bounds.width,
-          )
+          expect(chip.x + chip.width).toBeLessThanOrEqual(bounds.x + bounds.width)
           expect(chip.y).toBeGreaterThanOrEqual(layout.top)
           expect(chip.y + chip.height).toBeLessThanOrEqual(bounds.bottom)
         }
@@ -90,10 +91,10 @@ describe('WorkerActor layout', () => {
       }
 
       for (let index = 1; index < layouts.length; index += 1) {
-        expect(layouts[index].layout.height)
-          .toBeGreaterThanOrEqual(layouts[index - 1].layout.height)
-        expect(layouts[index].layout.top)
-          .toBeLessThanOrEqual(layouts[index - 1].layout.top)
+        expect(layouts[index].layout.height).toBeGreaterThanOrEqual(
+          layouts[index - 1].layout.height,
+        )
+        expect(layouts[index].layout.top).toBeLessThanOrEqual(layouts[index - 1].layout.top)
       }
     },
   )
@@ -101,8 +102,8 @@ describe('WorkerActor layout', () => {
   it('keeps detailed content bottom-aligned across the minimum boundary', () => {
     for (const actor of ['reader', 'sender'] as const) {
       const bounds = ACTOR_GEOMETRY[actor].bounds
-      const lastChipY = [1, 2, 3, 7].map((count) =>
-        getWorkerActorLayout(actor, bounds, workers(count)).chips.at(-1)?.y
+      const lastChipY = [1, 2, 3, 7].map(
+        (count) => getWorkerActorLayout(actor, bounds, workers(count)).chips.at(-1)?.y,
       )
 
       expect(lastChipY).toEqual([416, 416, 416, 416])
@@ -122,16 +123,12 @@ describe('WorkerActor layout', () => {
         expect(compact.height).toBe(seven.height)
         expect(compact.mode).toBe('compact')
       }
-    }
+    },
   )
 
   it('keeps the reader on the detailed one-to-seven layout', () => {
     const readerWorkers = { ...workers(7), max: 7 }
-    const layout = getWorkerActorLayout(
-      'reader',
-      ACTOR_GEOMETRY.reader.bounds,
-      readerWorkers,
-    )
+    const layout = getWorkerActorLayout('reader', ACTOR_GEOMETRY.reader.bounds, readerWorkers)
 
     expect(layout.mode).toBe('detailed')
     expect(layout.rows).toBe(7)
@@ -145,16 +142,48 @@ describe('WorkerActor layout', () => {
     { actor: 'reader', count: 3, displayed: 3, mode: 'detailed', columns: 3, rows: 1, height: 113 },
     { actor: 'reader', count: 7, displayed: 7, mode: 'detailed', columns: 4, rows: 2, height: 158 },
     { actor: 'reader', count: 8, displayed: 8, mode: 'compact', columns: 5, rows: 2, height: 108 },
-    { actor: 'reader', count: 16, displayed: 16, mode: 'compact', columns: 5, rows: 4, height: 138 },
-    { actor: 'reader', count: 32, displayed: 32, mode: 'compact', columns: 5, rows: 7, height: 184 },
+    {
+      actor: 'reader',
+      count: 16,
+      displayed: 16,
+      mode: 'compact',
+      columns: 5,
+      rows: 4,
+      height: 138,
+    },
+    {
+      actor: 'reader',
+      count: 32,
+      displayed: 32,
+      mode: 'compact',
+      columns: 5,
+      rows: 7,
+      height: 184,
+    },
     { actor: 'sender', count: 0, displayed: 1, mode: 'detailed', columns: 1, rows: 1, height: 113 },
     { actor: 'sender', count: 1, displayed: 1, mode: 'detailed', columns: 1, rows: 1, height: 113 },
     { actor: 'sender', count: 2, displayed: 2, mode: 'detailed', columns: 2, rows: 1, height: 113 },
     { actor: 'sender', count: 3, displayed: 3, mode: 'detailed', columns: 3, rows: 1, height: 113 },
     { actor: 'sender', count: 7, displayed: 7, mode: 'detailed', columns: 4, rows: 2, height: 158 },
     { actor: 'sender', count: 8, displayed: 8, mode: 'compact', columns: 5, rows: 2, height: 108 },
-    { actor: 'sender', count: 16, displayed: 16, mode: 'compact', columns: 5, rows: 4, height: 138 },
-    { actor: 'sender', count: 32, displayed: 32, mode: 'compact', columns: 5, rows: 7, height: 184 },
+    {
+      actor: 'sender',
+      count: 16,
+      displayed: 16,
+      mode: 'compact',
+      columns: 5,
+      rows: 4,
+      height: 138,
+    },
+    {
+      actor: 'sender',
+      count: 32,
+      displayed: 32,
+      mode: 'compact',
+      columns: 5,
+      rows: 7,
+      height: 184,
+    },
   ] as const)(
     'preserves portrait $actor output at $count workers',
     ({ actor, count, displayed, mode, columns, rows, height }) => {
@@ -165,12 +194,7 @@ describe('WorkerActor layout', () => {
       })
       const actorGeometry = geometry.actors[actor]
       const bounds = actorGeometry.bounds
-      const layout = getWorkerActorLayout(
-        actor,
-        bounds,
-        workers(count),
-        'portrait',
-      )
+      const layout = getWorkerActorLayout(actor, bounds, workers(count), 'portrait')
 
       expect(bounds).not.toHaveProperty('minHeight')
       expect(layout).toMatchObject({
@@ -183,10 +207,15 @@ describe('WorkerActor layout', () => {
       expect(layout.top + layout.height).toBe(bounds.bottom)
       expect(layout.chips).toHaveLength(count)
       expect(actorGeometry.ports.output.y).toBe(bounds.bottom)
-      expect(layout.chips.every((chip) => chip.x >= bounds.x &&
-        chip.x + chip.width <= bounds.x + bounds.width &&
-        chip.y >= layout.top && chip.y + chip.height < actorGeometry.metrics.primary.y))
-        .toBe(true)
+      expect(
+        layout.chips.every(
+          (chip) =>
+            chip.x >= bounds.x &&
+            chip.x + chip.width <= bounds.x + bounds.width &&
+            chip.y >= layout.top &&
+            chip.y + chip.height < actorGeometry.metrics.primary.y,
+        ),
+      ).toBe(true)
       expect(actorGeometry.metrics.status.y + 15).toBeLessThan(bounds.bottom)
     },
   )

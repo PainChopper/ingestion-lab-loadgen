@@ -10,7 +10,12 @@ interface HoldRepeatOptions {
   commitAtLimit?: boolean
 }
 
-export function useHoldRepeat({ step, onCommit, onCancel, commitAtLimit = false }: HoldRepeatOptions) {
+export function useHoldRepeat({
+  step,
+  onCommit,
+  onCancel,
+  commitAtLimit = false,
+}: HoldRepeatOptions) {
   const finishRef = useRef<((commit: boolean) => void) | null>(null)
   const optionsRef = useRef({ step, onCommit, onCancel, commitAtLimit })
 
@@ -25,9 +30,12 @@ export function useHoldRepeat({ step, onCommit, onCancel, commitAtLimit = false 
     return true
   }, [])
 
-  useLayoutEffect(() => () => {
-    cancel()
-  }, [cancel])
+  useLayoutEffect(
+    () => () => {
+      cancel()
+    },
+    [cancel],
+  )
 
   const start = (pointerId: number, direction: -1 | 1) => {
     if (finishRef.current !== null || !optionsRef.current.step(direction)) return false
