@@ -357,6 +357,17 @@
   fill: var(--red);
 }
 
+.pipeline-reader-source-error__background {
+  fill: var(--reader-source-error-background);
+  fill-opacity: 0.84;
+}
+
+.pipeline-reader-source-error__label {
+  fill: var(--reader-source-error-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .pipeline-valve-flow-line {
   stroke: var(--pipeline-valve-flow-color);
   stroke-linecap: round;
@@ -365,7 +376,7 @@
 }
 
 .pipeline-valve-vacuum {
-  fill: #03111f;
+  fill: var(--valve-vacuum-fill);
   pointer-events: none;
 }
 

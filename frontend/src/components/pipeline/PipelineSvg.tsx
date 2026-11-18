@@ -91,7 +91,6 @@ export function PipelineSvg({
         cy={VALVE_APERTURE.centerY}
         rx={VALVE_APERTURE.radiusX}
         ry={VALVE_APERTURE.radiusY}
-        fill="#03111f"
         className="pipeline-valve-vacuum"
         data-vacuum-fill="uniform"
         transform={
