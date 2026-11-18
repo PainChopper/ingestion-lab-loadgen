@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -37,16 +39,16 @@ const (
 )
 
 type config struct {
-	SchemaVersion int                 `mapstructure:"schema_version"`
-	HTTP          httpConfig          `mapstructure:"http"`
-	Source        sourceConfig        `mapstructure:"source"`
-	Reader        readerConfig        `mapstructure:"reader"`
-	ReaderChannel readerChannelConfig `mapstructure:"readerChannel"`
-	SenderChannel readerChannelConfig `mapstructure:"senderChannel"`
-	Throttler     throttlerConfig     `mapstructure:"throttler"`
-	Sender        senderConfig        `mapstructure:"sender"`
-	Metrics       metricsConfig       `mapstructure:"metrics"`
-	Logging       loggingConfig       `mapstructure:"logging"`
+	SchemaVersion int             `mapstructure:"schema_version"`
+	HTTP          httpConfig      `mapstructure:"http"`
+	Source        sourceConfig    `mapstructure:"source"`
+	Reader        readerConfig    `mapstructure:"reader"`
+	ReaderChannel channelConfig   `mapstructure:"readerChannel"`
+	SenderChannel channelConfig   `mapstructure:"senderChannel"`
+	Throttler     throttlerConfig `mapstructure:"throttler"`
+	Sender        senderConfig    `mapstructure:"sender"`
+	Metrics       metricsConfig   `mapstructure:"metrics"`
+	Logging       loggingConfig   `mapstructure:"logging"`
 }
 
 type httpConfig struct {
@@ -64,7 +66,7 @@ type readerConfig struct {
 	Workers       rangeConfig `mapstructure:"workers"`
 }
 
-type readerChannelConfig struct {
+type channelConfig struct {
 	Capacity allowedConfig `mapstructure:"capacity"`
 }
 
@@ -139,26 +141,13 @@ func loadConfig(configPath string) (config, error) {
 		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
 	}
 	if !viperConfig.IsSet("http.addr") {
-		return config{}, fmt.Errorf("http.addr is required")
-	}
-	if _, ok := viperConfig.Get("sender.api.timeout_ms").(int64); !ok {
-		return config{}, fmt.Errorf("sender.api.timeout_ms must be an integer")
-	}
-	if _, ok := viperConfig.Get("throttler.installed.initial").(bool); !ok {
-		return config{}, fmt.Errorf("throttler.installed.initial must be boolean")
-	}
-	allowed, ok := viperConfig.Get("throttler.installed.allowed").([]any)
-	if !ok {
-		return config{}, fmt.Errorf("throttler.installed.allowed must be boolean array")
-	}
-	for _, value := range allowed {
-		if _, ok := value.(bool); !ok {
-			return config{}, fmt.Errorf("throttler.installed.allowed must contain only booleans")
-		}
+		return config{}, errors.New("http.addr is required")
 	}
 	var cfg config
 	if err := viperConfig.UnmarshalExact(&cfg, func(decoderConfig *mapstructure.DecoderConfig) {
 		decoderConfig.ErrorUnset = true
+		decoderConfig.WeaklyTypedInput = false
+		decoderConfig.DecodeHook = rejectFractionalInt
 	}); err != nil {
 		return config{}, fmt.Errorf("decode config %q: %w", absConfigPath, err)
 	}
@@ -169,106 +158,126 @@ func loadConfig(configPath string) (config, error) {
 	return cfg, nil
 }
 
-func (p config) validate() error {
-	if p.SchemaVersion != configSchemaVersion {
+func rejectFractionalInt(from, to reflect.Type, data any) (any, error) {
+	if from.Kind() != reflect.Float32 && from.Kind() != reflect.Float64 {
+		return data, nil
+	}
+	switch to.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+	default:
+		return data, nil
+	}
+	value := reflect.ValueOf(data).Float()
+	if math.Trunc(value) != value || math.IsInf(value, 0) {
+		return nil, errors.New("must be an integer")
+	}
+	limit := math.Ldexp(1, to.Bits()-1)
+	if value < -limit || value >= limit {
+		return nil, errors.New("integer is out of range")
+	}
+	return data, nil
+}
+
+func (c config) validate() error {
+	if c.SchemaVersion != configSchemaVersion {
 		return fmt.Errorf("schema_version must be %d", configSchemaVersion)
 	}
-	if err := p.HTTP.validate(); err != nil {
+	if err := c.HTTP.validate(); err != nil {
 		return fmt.Errorf("http.addr: %w", err)
 	}
-	if p.Source.Path == "" || !filepath.IsAbs(p.Source.Path) {
-		return fmt.Errorf("source.path must be an absolute path")
+	if c.Source.Path == "" || !filepath.IsAbs(c.Source.Path) {
+		return errors.New("source.path must be an absolute path")
 	}
-	if p.Source.Unit != sourceUnit || p.Source.Mutability != startupOnly {
+	if c.Source.Unit != sourceUnit || c.Source.Mutability != startupOnly {
 		return fmt.Errorf("source must use unit %q and mutability %q", sourceUnit, startupOnly)
 	}
-	if err := p.Reader.ReadBatchSize.validate(); err != nil {
+	if err := c.Reader.ReadBatchSize.validateBatchSize(); err != nil {
 		return fmt.Errorf("reader.read_batch_size: %w", err)
 	}
-	if err := p.Reader.Workers.validateWorkers(); err != nil {
+	if err := c.Reader.Workers.validateWorkers(); err != nil {
 		return fmt.Errorf("reader.workers: %w", err)
 	}
-	if err := p.ReaderChannel.Capacity.validate(); err != nil {
+	if err := c.ReaderChannel.Capacity.validate(); err != nil {
 		return fmt.Errorf("readerChannel.capacity: %w", err)
 	}
-	if err := p.SenderChannel.Capacity.validate(); err != nil {
+	if err := c.SenderChannel.Capacity.validate(); err != nil {
 		return fmt.Errorf("senderChannel.capacity: %w", err)
 	}
-	if int64(p.Reader.ReadBatchSize.Max) > math.MaxInt64/int64(time.Second) {
-		return fmt.Errorf("reader.read_batch_size.max exceeds pacing duration limit")
+	if int64(c.Reader.ReadBatchSize.Max) > math.MaxInt64/int64(time.Second) {
+		return errors.New("reader.read_batch_size.max exceeds pacing duration limit")
 	}
-	if err := p.Throttler.RequestedTPS.validateRequestedTPS(); err != nil {
+	if err := c.Throttler.RequestedTPS.validateRequestedTPS(); err != nil {
 		return fmt.Errorf("throttler.requested_tps: %w", err)
 	}
-	if err := p.Throttler.Installed.validate(); err != nil {
+	if err := c.Throttler.Installed.validate(); err != nil {
 		return fmt.Errorf("throttler.installed: %w", err)
 	}
-	if err := p.Sender.validate(); err != nil {
+	if err := c.Sender.validate(); err != nil {
 		return fmt.Errorf("sender: %w", err)
 	}
-	if err := p.Metrics.WindowMS.validateMetricsWindow(); err != nil {
+	if err := c.Metrics.WindowMS.validateMetricsWindow(); err != nil {
 		return fmt.Errorf("metrics.window_ms: %w", err)
 	}
-	if err := p.Logging.validate(); err != nil {
+	if err := c.Logging.validate(); err != nil {
 		return fmt.Errorf("logging: %w", err)
 	}
 	return nil
 }
 
-func (p httpConfig) validate() error {
-	host, rawPort, err := net.SplitHostPort(p.Addr)
+func (c httpConfig) validate() error {
+	host, rawPort, err := net.SplitHostPort(c.Addr)
 	if err != nil {
 		return fmt.Errorf("must be host:port: %w", err)
 	}
 	if host == "" || strings.ContainsAny(host, " \t\r\n/\\?#") {
-		return fmt.Errorf("host must be non-empty and contain no whitespace or URL path")
+		return errors.New("host must be non-empty and contain no whitespace or URL path")
 	}
 	port, err := strconv.Atoi(rawPort)
 	if err != nil || strings.Trim(rawPort, "0123456789") != "" || port < 1 || port > 65535 {
-		return fmt.Errorf("port must be numeric and between 1 and 65535")
+		return errors.New("port must be numeric and between 1 and 65535")
 	}
 	return nil
 }
 
-func (p loggingConfig) validate() error {
-	if p.Mutability != startupOnly {
+func (c loggingConfig) validate() error {
+	if c.Mutability != startupOnly {
 		return fmt.Errorf("mutability must be %q", startupOnly)
 	}
-	if !slices.Contains([]string{"debug", "info", "warn", "error"}, p.Level) {
-		return fmt.Errorf("level must be debug, info, warn, or error")
+	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Level) {
+		return errors.New("level must be debug, info, warn, or error")
 	}
 	return nil
 }
 
-func (p senderConfig) validate() error {
-	if err := p.Workers.validateExact(32, 1, 32, 1, workersUnit, immediate); err != nil {
+func (c senderConfig) validate() error {
+	if err := c.Workers.validateWorkers(); err != nil {
 		return fmt.Errorf("workers: %w", err)
 	}
-	if err := p.API.validate(); err != nil {
+	if err := c.API.validate(); err != nil {
 		return fmt.Errorf("api: %w", err)
 	}
-	return p.Retry.validate()
+	return c.Retry.validate()
 }
 
-func (p senderRetryConfig) validate() error {
-	if p.Mutability != startupOnly {
+func (c senderRetryConfig) validate() error {
+	if c.Mutability != startupOnly {
 		return fmt.Errorf("mutability must be %q", startupOnly)
 	}
-	if p.JitterPercent != 20 {
-		return fmt.Errorf("jitter_percent must be 20")
+	if c.JitterPercent < 0 || c.JitterPercent > 50 {
+		return errors.New("jitter_percent must be between 0 and 50")
 	}
-	if len(p.DelaysMS) == 0 {
-		return fmt.Errorf("delays_ms must not be empty")
+	if len(c.DelaysMS) == 0 {
+		return errors.New("delays_ms must not be empty")
 	}
-	for index, delay := range p.DelaysMS {
+	for index, delay := range c.DelaysMS {
 		if delay <= 0 {
 			return fmt.Errorf("delays_ms[%d] must be positive", index)
 		}
-		if int64(delay) > senderRetryMaxDelayMS(p.JitterPercent) {
+		if int64(delay) > senderRetryMaxDelayMS(c.JitterPercent) {
 			return fmt.Errorf("delays_ms[%d] exceeds the maximum safe retry duration", index)
 		}
-		if index > 0 && delay < p.DelaysMS[index-1] {
-			return fmt.Errorf("delays_ms must be nondecreasing")
+		if index > 0 && delay < c.DelaysMS[index-1] {
+			return errors.New("delays_ms must be nondecreasing")
 		}
 	}
 	return nil
@@ -282,137 +291,139 @@ func senderRetryMaxDelayMS(jitterPercent int) int64 {
 	return math.MaxInt64 / factor
 }
 
-func (p senderAPIConfig) validate() error {
-	if p.URL == "" {
-		return fmt.Errorf("url must not be empty")
+func (c senderAPIConfig) validate() error {
+	if c.URL == "" {
+		return errors.New("url must not be empty")
 	}
-	if p.Mutability != startupOnly {
+	if c.Mutability != startupOnly {
 		return fmt.Errorf("mutability must be %q", startupOnly)
 	}
 	const maxTimeoutMS = math.MaxInt64 / int64(time.Millisecond)
-	if p.TimeoutMS < 1 || p.TimeoutMS > maxTimeoutMS {
+	if c.TimeoutMS < 1 || c.TimeoutMS > maxTimeoutMS {
 		return fmt.Errorf("timeout_ms must be between 1 and %d", maxTimeoutMS)
 	}
 
-	parsed, err := url.Parse(p.URL)
+	parsed, err := url.Parse(c.URL)
 	if err != nil {
 		return fmt.Errorf("sender.api.url must be a valid absolute HTTP(S) URL: %w", err)
 	}
 	if !parsed.IsAbs() || parsed.Host == "" {
-		return fmt.Errorf("url must be an absolute HTTP(S) URL with host")
+		return errors.New("url must be an absolute HTTP(S) URL with host")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("url must use http or https")
+		return errors.New("url must use http or https")
 	}
 	if parsed.Fragment != "" {
-		return fmt.Errorf("url must not contain a fragment")
+		return errors.New("url must not contain a fragment")
 	}
 	return nil
 }
 
-func (p rangeConfig) validateExact(initialValue, minValue, maxValue, stepValue int, unit, mutability string) error {
-	if p.Initial != initialValue || p.Min != minValue || p.Max != maxValue || p.Step != stepValue || p.Unit != unit || p.Mutability != mutability {
-		return fmt.Errorf("must match approved %s config", unit)
+func (c rangeConfig) validateWorkers() error {
+	if c.Unit != workersUnit || c.Mutability != immediate {
+		return fmt.Errorf("must use unit %q and mutability %q", workersUnit, immediate)
+	}
+	if c.Min < 1 || c.Max < c.Min || c.Step <= 0 {
+		return errors.New("min, max, and step must form a positive range")
+	}
+	if !c.contains(c.Initial) {
+		return errors.New("initial must be within the range and aligned to step from min")
 	}
 	return nil
 }
 
-func (p rangeConfig) validateWorkers() error {
-	return p.validateExact(1, 1, 7, 1, workersUnit, immediate)
-}
-
-func (p rangeConfig) validateMetricsWindow() error {
-	if p.Unit != metricsWindowUnit || p.Mutability != startupOnly {
+func (c rangeConfig) validateMetricsWindow() error {
+	if c.Unit != metricsWindowUnit || c.Mutability != startupOnly {
 		return fmt.Errorf("must use unit %q and mutability %q", metricsWindowUnit, startupOnly)
 	}
-	if p.Min < 100 || p.Max > 10_000 || p.Max < p.Min || p.Step <= 0 {
-		return fmt.Errorf("must stay within 100..10000 milliseconds with a positive step")
+	if c.Min < 100 || c.Max > 10_000 || c.Max < c.Min || c.Step <= 0 {
+		return errors.New("must stay within 100..10000 milliseconds with a positive step")
 	}
-	if !p.contains(p.Initial) {
-		return fmt.Errorf("initial must be within the range and aligned to step")
+	if !c.contains(c.Initial) {
+		return errors.New("initial must be within the range and aligned to step")
 	}
 	return nil
 }
 
-func (p rangeConfig) validateRequestedTPS() error {
-	if p.Unit != requestedTPSUnit || p.Mutability != immediate {
+func (c rangeConfig) validateRequestedTPS() error {
+	if c.Unit != requestedTPSUnit || c.Mutability != immediate {
 		return fmt.Errorf("must use unit %q and mutability %q", requestedTPSUnit, immediate)
 	}
-	if p.Min < 0 || p.Max <= p.Min || p.Step <= 0 {
-		return fmt.Errorf("min, max, and step must form a non-negative range")
+	if c.Min < 0 || c.Max <= c.Min || c.Step <= 0 {
+		return errors.New("min, max, and step must form a non-negative range")
 	}
-	if p.Initial < p.Min || p.Initial > p.Max {
+	if c.Initial < c.Min || c.Initial > c.Max {
 		return fmt.Errorf(
 			"initial=%d is outside range min=%d max=%d (step=%d)",
-			p.Initial,
-			p.Min,
-			p.Max,
-			p.Step,
+			c.Initial,
+			c.Min,
+			c.Max,
+			c.Step,
 		)
 	}
-	if (p.Initial-p.Min)%p.Step != 0 {
+	if (c.Initial-c.Min)%c.Step != 0 {
 		return fmt.Errorf(
 			"initial=%d is not aligned to step=%d from min=%d (max=%d)",
-			p.Initial,
-			p.Step,
-			p.Min,
-			p.Max,
+			c.Initial,
+			c.Step,
+			c.Min,
+			c.Max,
 		)
 	}
 	return nil
 }
 
-func (p installedConfig) validate() error {
-	if p.Mutability != immediate || len(p.Allowed) != 2 ||
-		!p.contains(true) || !p.contains(false) ||
-		!p.contains(p.Initial) {
+func (c installedConfig) validate() error {
+	if c.Mutability != immediate || len(c.Allowed) != 2 ||
+		!c.contains(true) || !c.contains(false) ||
+		!c.contains(c.Initial) {
 		return fmt.Errorf("allowed must be [true, false], initial must be allowed, and mutability must be %q", immediate)
 	}
 	return nil
 }
 
-func (p installedConfig) contains(value bool) bool {
-	return slices.Contains(p.Allowed, value)
+func (c installedConfig) contains(value bool) bool {
+	return slices.Contains(c.Allowed, value)
 }
 
-func (p rangeConfig) validate() error {
-	if p.Unit != batchSizeUnit || p.Mutability != startupOnly {
+func (c rangeConfig) validateBatchSize() error {
+	if c.Unit != batchSizeUnit || c.Mutability != startupOnly {
 		return fmt.Errorf("must use unit %q and mutability %q", batchSizeUnit, startupOnly)
 	}
-	if p.Min <= 0 || p.Max < p.Min || p.Step <= 0 {
-		return fmt.Errorf("min, max, and step must form a positive range")
+	if c.Min <= 0 || c.Max < c.Min || c.Step <= 0 {
+		return errors.New("min, max, and step must form a positive range")
 	}
-	if !p.contains(p.Initial) {
-		return fmt.Errorf("initial must be within the range and aligned to step")
+	if !c.contains(c.Initial) {
+		return errors.New("initial must be within the range and aligned to step")
 	}
 	return nil
 }
 
-func (p rangeConfig) contains(value int) bool {
-	return value >= p.Min && value <= p.Max && (value-p.Min)%p.Step == 0
+func (c rangeConfig) contains(value int) bool {
+	return value >= c.Min && value <= c.Max && (value-c.Min)%c.Step == 0
 }
 
-func (p allowedConfig) validate() error {
-	if p.Unit != unitBatches || p.Mutability != startupOnly {
+func (c allowedConfig) validate() error {
+	if c.Unit != unitBatches || c.Mutability != startupOnly {
 		return fmt.Errorf("must use unit %q and mutability %q", unitBatches, startupOnly)
 	}
-	if len(p.Allowed) == 0 {
-		return fmt.Errorf("allowed must not be empty")
+	if len(c.Allowed) == 0 {
+		return errors.New("allowed must not be empty")
 	}
-	for index, value := range p.Allowed {
+	for index, value := range c.Allowed {
 		if value < 0 {
 			return fmt.Errorf("allowed[%d] must not be negative", index)
 		}
-		if index > 0 && value <= p.Allowed[index-1] {
-			return fmt.Errorf("allowed must be strictly increasing")
+		if index > 0 && value <= c.Allowed[index-1] {
+			return errors.New("allowed must be strictly increasing")
 		}
 	}
-	if !p.contains(p.Initial) {
-		return fmt.Errorf("initial must be one of allowed")
+	if !c.contains(c.Initial) {
+		return errors.New("initial must be one of allowed")
 	}
 	return nil
 }
 
-func (p allowedConfig) contains(value int) bool {
-	return slices.Contains(p.Allowed, value)
+func (c allowedConfig) contains(value int) bool {
+	return slices.Contains(c.Allowed, value)
 }
