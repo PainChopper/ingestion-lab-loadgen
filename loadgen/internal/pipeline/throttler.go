@@ -1,31 +1,28 @@
-package main
+package pipeline
 
 import (
 	"context"
 	"time"
 )
 
-type throttlerSettings struct {
-	requestedTPS int
-	installed    bool
+type Rate struct {
+	TPS       int
+	Installed bool
 }
 
-func (s throttlerSettings) interval(batchSize int) time.Duration {
-	return time.Duration(batchSize) * time.Second / time.Duration(s.requestedTPS)
+func (s Rate) interval(batchSize int) time.Duration {
+	return time.Duration(batchSize) * time.Second / time.Duration(s.TPS)
 }
 
 type throttler struct {
-	readerBatches <-chan []Transaction
-	senderBatches chan<- []Transaction
-	readerChannel *channelTelemetry
-	senderChannel *channelTelemetry
-	updates       chan throttlerSettings
-	done          chan struct{}
+	input   *batchQueue
+	output  *batchQueue
+	updates chan Rate
+	done    chan struct{}
 }
 
-func (t *throttler) start(ctx context.Context, initial throttlerSettings) {
-	t.done = make(chan struct{})
-	t.updates = make(chan throttlerSettings)
+func startThrottler(ctx context.Context, input, output *batchQueue, initial Rate) *throttler {
+	t := &throttler{input: input, output: output, done: make(chan struct{}), updates: make(chan Rate)}
 	go func() {
 		defer close(t.done)
 		settings := initial
@@ -35,15 +32,15 @@ func (t *throttler) start(ctx context.Context, initial throttlerSettings) {
 			case <-ctx.Done():
 				return
 			case update := <-t.updates:
-				if update.installed && update.requestedTPS == 0 {
+				if update.Installed && update.TPS == 0 {
 					anchor = time.Time{}
 				}
 				settings = update
-			case batch, ok := <-t.readerBatches:
+			case batch, ok := <-t.input.ch:
 				if !ok {
 					return
 				}
-				t.readerChannel.recordReceive(len(batch))
+				t.input.recordReceive(len(batch))
 				nextAnchor, ok := t.forwardBatch(ctx, batch, &settings, anchor)
 				if !ok {
 					return
@@ -52,18 +49,19 @@ func (t *throttler) start(ctx context.Context, initial throttlerSettings) {
 			}
 		}
 	}()
+	return t
 }
 
 func (t *throttler) forwardBatch(
 	ctx context.Context,
 	batch []Transaction,
-	settings *throttlerSettings,
+	settings *Rate,
 	anchor time.Time,
 ) (time.Time, bool) {
-	senderChannel := t.senderChannel
+	senderChannel := t.output
 	slotStart := time.Now()
 	outputBlocked := false
-	if settings.installed && settings.requestedTPS > 0 && !anchor.IsZero() {
+	if settings.Installed && settings.TPS > 0 && !anchor.IsZero() {
 		// Carry timer overshoot forward, capped at one interval after idle input.
 		slotStart = slotStart.Add(-settings.interval(len(batch)))
 		if anchor.After(slotStart) {
@@ -71,7 +69,7 @@ func (t *throttler) forwardBatch(
 		}
 	}
 	for {
-		if settings.installed && settings.requestedTPS == 0 {
+		if settings.Installed && settings.TPS == 0 {
 			select {
 			case <-ctx.Done():
 				return time.Time{}, false
@@ -83,7 +81,7 @@ func (t *throttler) forwardBatch(
 		}
 
 		var deadline time.Time
-		if settings.installed {
+		if settings.Installed {
 			deadline = slotStart.Add(settings.interval(len(batch)))
 			if remaining := time.Until(deadline); remaining > 0 {
 				timer := time.NewTimer(remaining)
@@ -106,8 +104,8 @@ func (t *throttler) forwardBatch(
 		case update := <-t.updates:
 			*settings = update
 			continue
-		case t.senderBatches <- batch:
-			if !settings.installed || outputBlocked {
+		case t.output.ch <- batch:
+			if !settings.Installed || outputBlocked {
 				deadline = time.Now()
 			}
 			senderChannel.recordSend(len(batch))
@@ -124,7 +122,7 @@ func (t *throttler) forwardBatch(
 		case update := <-t.updates:
 			senderChannel.finishBlockedWriter(blockedID, time.Now())
 			*settings = update
-		case t.senderBatches <- batch:
+		case t.output.ch <- batch:
 			sentAt := time.Now()
 			senderChannel.finishBlockedWriter(blockedID, sentAt)
 			senderChannel.recordSend(len(batch))
@@ -133,7 +131,7 @@ func (t *throttler) forwardBatch(
 	}
 }
 
-func (t *throttler) update(settings throttlerSettings) {
+func (t *throttler) update(settings Rate) {
 	select {
 	case t.updates <- settings:
 	case <-t.done:

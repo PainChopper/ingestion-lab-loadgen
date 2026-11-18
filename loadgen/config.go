@@ -274,34 +274,12 @@ func (p senderRetryConfig) validate() error {
 	return nil
 }
 
-func (p senderRetryConfig) delay(attempt int, batch []Transaction) time.Duration {
-	index := min(attempt-1, len(p.DelaysMS)-1)
-	jitter := deterministicSenderValue(batch, attempt, uint64(2*p.JitterPercent+1)) - p.JitterPercent
-	return senderRetryDuration(p.DelaysMS[index], jitter)
-}
-
 func senderRetryMaxDelayMS(jitterPercent int) int64 {
 	factor := int64(time.Millisecond)
 	if jitterPercent > 0 {
 		factor += factor * int64(jitterPercent) / 100
 	}
 	return math.MaxInt64 / factor
-}
-
-func senderRetryDuration(delayMS, jitterPercent int) time.Duration {
-	if delayMS <= 0 || int64(delayMS) > math.MaxInt64/int64(time.Millisecond) {
-		return time.Duration(math.MaxInt64)
-	}
-	base := time.Duration(delayMS) * time.Millisecond
-	adjustment := base/100*time.Duration(jitterPercent) + base%100*time.Duration(jitterPercent)/100
-	if adjustment > 0 && adjustment > time.Duration(math.MaxInt64)-base {
-		return time.Duration(math.MaxInt64)
-	}
-	delay := base + adjustment
-	if delay <= 0 {
-		return time.Millisecond
-	}
-	return delay
 }
 
 func (p senderAPIConfig) validate() error {

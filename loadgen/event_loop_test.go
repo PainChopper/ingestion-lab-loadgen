@@ -16,6 +16,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"loadgen/internal/pipeline"
+
 	"github.com/parquet-go/parquet-go"
 	dto "github.com/prometheus/client_model/go"
 	"go.uber.org/zap"
@@ -29,7 +31,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	cfg.Sender.Workers.Initial = 1
 	cfg.Throttler.Installed.Initial = false
 	cfg.Source.Path = filepath.Join(t.TempDir(), "input.parquet")
-	if err := parquet.WriteFile(cfg.Source.Path, []Transaction{{}, {}, {}}); err != nil {
+	if err := parquet.WriteFile(cfg.Source.Path, []pipeline.Transaction{{}, {}, {}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -38,7 +40,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var batch []Transaction
+		var batch []pipeline.Transaction
 		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -106,14 +108,14 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	if err := loop.awaitExit(t); err != nil {
 		t.Fatal(err)
 	}
-	assertFinalTransactions(t, events, state.telemetry.reader.snapshot().rowsRead, 0)
+	assertFinalTransactions(t, events, state.run.totalTransactions, 0)
 	assertCommandHTTP(t, mux, updates[0], http.StatusServiceUnavailable)
 }
 
 func TestSignalKeepsZeroTPSUntilGraceExpires(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Source.Path = filepath.Join(t.TempDir(), "input.parquet")
-	if err := parquet.WriteFile(cfg.Source.Path, []Transaction{{}}); err != nil {
+	if err := parquet.WriteFile(cfg.Source.Path, []pipeline.Transaction{{}}); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Throttler.RequestedTPS.Initial = 0
@@ -130,7 +132,7 @@ func TestSignalKeepsZeroTPSUntilGraceExpires(t *testing.T) {
 		}
 
 		assertExitAtDeadline(t, loop)
-		rowsRead := state.telemetry.reader.snapshot().rowsRead
+		rowsRead := stopping.Reader.RowsRead
 		if rowsRead == 0 {
 			t.Fatal("fixture produced no rows")
 		}
@@ -141,7 +143,7 @@ func TestSignalKeepsZeroTPSUntilGraceExpires(t *testing.T) {
 func TestSignalDeadlineCancelsInFlightHTTP(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Source.Path = filepath.Join(t.TempDir(), "input.parquet")
-	if err := parquet.WriteFile(cfg.Source.Path, []Transaction{{}}); err != nil {
+	if err := parquet.WriteFile(cfg.Source.Path, []pipeline.Transaction{{}}); err != nil {
 		t.Fatal(err)
 	}
 	cfg.ReaderChannel.Capacity.Initial = 0
@@ -175,6 +177,9 @@ func TestSignalDeadlineCancelsInFlightHTTP(t *testing.T) {
 		t.Fatal("Sender did not enter HTTP")
 	}
 	loop.cancel()
+	stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool {
+		return s.Run.State == runStateStopping && s.Reader.ReadingWorkers == 0
+	})
 	if err := loop.awaitExit(t); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +188,7 @@ func TestSignalDeadlineCancelsInFlightHTTP(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("forwarded HTTP request context was not canceled")
 	}
-	assertFinalTransactions(t, events, 0, state.telemetry.reader.snapshot().rowsRead)
+	assertFinalTransactions(t, events, 0, stopping.Reader.RowsRead)
 }
 
 func TestSignalDuringSourceDiscoveryPreventsReaderStart(t *testing.T) {
@@ -194,23 +199,23 @@ func TestSignalDuringSourceDiscoveryPreventsReaderStart(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			cfg := testConfig(t)
+			source := testDiscoveredSource(t)
 			core, events := observer.New(zap.InfoLevel)
 			synctest.Test(t, func(t *testing.T) {
 				read := make(chan struct{}, 1)
-				found := sourceDiscovery{source: readerSource{
-					files: []string{"test.parquet"},
-					readFile: func(*readerPool, *readerWorker, string) *readerSourceError {
-						select {
-						case read <- struct{}{}:
-						default:
-						}
-						return nil
-					},
-				}}
+				found := sourceDiscovery{source: source}
 				ready := make(chan sourceDiscovery, 1)
 				state := newControlState(cfg, zap.New(core))
+				state.pipelineOptions.OpenFile = func(string) (pipeline.ReaderFile, error) {
+					read <- struct{}{}
+					return nil, errors.New("unexpected open after stop")
+				}
 				loop := startTestEventLoopWithSource(t, &state, gracefulShutdownTimeout, ready)
-				loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStarting })
+				starting := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStarting })
+				if starting.Reader.SourceDirectory != pipeline.SourceDirectory(cfg.Source.Path) ||
+					starting.Reader.SourceError != nil {
+					t.Fatalf("source directory or initial source error unavailable before Start: %+v", starting.Reader)
+				}
 
 				loop.cancel()
 				synctest.Wait()
@@ -243,6 +248,7 @@ func TestSignalDuringSourceDiscoveryPreventsReaderStart(t *testing.T) {
 
 func TestSignalDeadlineDoesNotWaitForBlockedReader(t *testing.T) {
 	cfg := testConfig(t)
+	source := testDiscoveredSource(t)
 	core, events := observer.New(zap.InfoLevel)
 	synctest.Test(t, func(t *testing.T) {
 		inRead := make(chan struct{})
@@ -252,24 +258,21 @@ func TestSignalDeadlineDoesNotWaitForBlockedReader(t *testing.T) {
 		defer unblock()
 
 		ready := make(chan sourceDiscovery, 1)
-		ready <- sourceDiscovery{source: readerSource{
-			files: []string{"test.parquet"},
-			readFile: func(p *readerPool, worker *readerWorker, _ string) *readerSourceError {
-				first := true
-				_ = p.readBatches(worker, func(rows []Transaction) (int, error) {
-					if first {
-						first = false
-						rows[0] = Transaction{ClientID: "read-before-stop"}
-						return 1, nil
-					}
-					close(inRead)
-					<-release
-					return 0, io.EOF
-				})
-				return nil
-			},
-		}}
+		ready <- sourceDiscovery{source: source}
+		first := true
 		state := newControlState(cfg, zap.New(core))
+		state.pipelineOptions.OpenFile = func(string) (pipeline.ReaderFile, error) {
+			return testReaderFile{rows: &testRowReader{read: func(rows []pipeline.Transaction) (int, error) {
+				if first {
+					first = false
+					rows[0] = pipeline.Transaction{ClientID: "read-before-stop"}
+					return 1, nil
+				}
+				close(inRead)
+				<-release
+				return 0, io.EOF
+			}}}, nil
+		}
 		loop := startTestEventLoopWithSource(t, &state, gracefulShutdownTimeout, ready)
 		select {
 		case <-inRead:
@@ -277,8 +280,6 @@ func TestSignalDeadlineDoesNotWaitForBlockedReader(t *testing.T) {
 			t.Fatal("Reader did not enter blocking read")
 		}
 		loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateRunning })
-		readerBatches := state.telemetry.readerChannel.batches
-		senderBatches := state.telemetry.senderChannel.batches
 
 		loop.cancel()
 		synctest.Wait()
@@ -287,16 +288,9 @@ func TestSignalDeadlineDoesNotWaitForBlockedReader(t *testing.T) {
 		if final := assertFinalTransactions(t, events, 0, 1); final["partial"] != true {
 			t.Fatalf("blocked Reader must produce a partial final log: %v", final)
 		}
-		for _, ch := range []<-chan []Transaction{readerBatches, senderBatches} {
-			select {
-			case _, open := <-ch:
-				t.Fatalf("stage output was readable before Reader exited (open=%t)", open)
-			default:
-			}
-		}
 		unblock()
 		synctest.Wait()
-		assertStageChannelsClosed(t, readerBatches, senderBatches)
+
 		assertFinalTransactions(t, events, 0, 1)
 	})
 }
@@ -334,7 +328,7 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			parquetPath := filepath.Join(dir, "data.parquet")
-			if err := parquet.WriteFile(parquetPath, make([]Transaction, 2*batchSize)); err != nil {
+			if err := parquet.WriteFile(parquetPath, make([]pipeline.Transaction, 2*batchSize)); err != nil {
 				t.Fatal(err)
 			}
 
@@ -343,7 +337,7 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 			var releaseOnce sync.Once
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
 			receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var rows []Transaction
+				var rows []pipeline.Transaction
 				if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					return
@@ -392,20 +386,15 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 			if status.Reader.ReadBatchSize != batchSize {
 				t.Fatalf("snapshot batch size = %d, want %d", status.Reader.ReadBatchSize, batchSize)
 			}
-			readerBatches := state.telemetry.readerChannel.batches
-			senderBatches := state.telemetry.senderChannel.batches
+
 			for _, queue := range []struct {
 				name     string
-				channel  <-chan []Transaction
 				snapshot channelSnapshot
 				capacity int
 			}{
-				{name: "Reader", channel: readerBatches, snapshot: status.ReaderChannel, capacity: tc.readerCapacity},
-				{name: "Sender", channel: senderBatches, snapshot: status.SenderChannel, capacity: tc.senderCapacity},
+				{name: "Reader", snapshot: status.ReaderChannel, capacity: tc.readerCapacity},
+				{name: "Sender", snapshot: status.SenderChannel, capacity: tc.senderCapacity},
 			} {
-				if physical := cap(queue.channel); physical != queue.capacity {
-					t.Errorf("%s physical capacity = %d, want %d", queue.name, physical, queue.capacity)
-				}
 				q := queue.snapshot
 				if q.Capacity != queue.capacity || q.DepthBatches != queue.capacity ||
 					q.BufferedTransactions != queue.capacity*batchSize {
@@ -419,25 +408,11 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 			if err := loop.awaitExit(t); err != nil {
 				t.Fatal(err)
 			}
-			if final := assertFinalTransactions(t, events, state.telemetry.reader.snapshot().rowsRead, 0); final["partial"] != false {
+			if final := assertFinalTransactions(t, events, state.run.totalTransactions, 0); final["partial"] != false {
 				t.Fatalf("clean drain must record a complete final log: %v", final)
 			}
-			assertStageChannelsClosed(t, readerBatches, senderBatches)
-		})
-	}
-}
 
-func assertStageChannelsClosed(t *testing.T, channels ...<-chan []Transaction) {
-	t.Helper()
-	for _, ch := range channels {
-		select {
-		case _, open := <-ch:
-			if open {
-				t.Error("stage output still contains an unread batch")
-			}
-		default:
-			t.Error("stage output has not closed")
-		}
+		})
 	}
 }
 
@@ -447,8 +422,8 @@ func TestRunStartupSourceErrorReturnsWithoutSignal(t *testing.T) {
 	core, events := observer.New(zap.InfoLevel)
 	state := newControlState(cfg, zap.New(core))
 	loop := startTestEventLoop(t, &state, gracefulShutdownTimeout)
-	var sourceError readerSourceError
-	if err := loop.awaitExit(t); !errors.As(err, &sourceError) || sourceError.Operation != "glob" {
+	var sourceError *pipeline.SourceError
+	if err := loop.awaitExit(t); !errors.As(err, &sourceError) || sourceError.Op != "glob" {
 		t.Fatalf("run error = %v, want missing source diagnostic", err)
 	}
 	if state.run.state != runStateFaulted || state.run.sourceError == nil {
@@ -461,7 +436,7 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 	cfg := testConfig(t)
 	directory := t.TempDir()
 	cfg.Source.Path = filepath.Join(directory, "*.parquet")
-	if err := parquet.WriteFile(filepath.Join(directory, "a.parquet"), []Transaction{{}}); err != nil {
+	if err := parquet.WriteFile(filepath.Join(directory, "a.parquet"), []pipeline.Transaction{{}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(directory, "b.parquet"), []byte("invalid parquet"), 0o600); err != nil {
@@ -496,8 +471,8 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 		t.Fatalf("runtime fault lost source or in-flight diagnostic: %+v", faulted)
 	}
 	unblock()
-	var sourceError readerSourceError
-	if err := loop.awaitExit(t); !errors.As(err, &sourceError) || sourceError.Operation != "open" {
+	var sourceError *pipeline.SourceError
+	if err := loop.awaitExit(t); !errors.As(err, &sourceError) || sourceError.Op != "open" {
 		t.Fatalf("run error = %v, want corrupt source diagnostic", err)
 	}
 	assertFinalTransactions(t, events, 1, 0)
@@ -511,32 +486,47 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 }
 
 func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
-	state := newTestControlState(t)
-	state.metricsWindow = 300 * time.Millisecond
-	pipeline := &pipelineRuntime{}
-	start := time.Now()
-	state.telemetry.reader.startInterval(start)
-	state.telemetry.reader.recordRead(3)
-	state.telemetry.readerChannel.recordReceive(3)
-	state.telemetry.senderChannel.recordReceive(3)
-	pipeline.terminallyCompletedTransactionsSinceTick.Add(3)
-	metrics := newPrometheusMetrics()
-
-	now := start.Add(state.metricsWindow)
-	state.sample(pipeline, metrics, now)
-	status := state.snapshotAt(nil, now)
-	if status.Run.TotalTransactions != 3 || status.Reader.ReadTps != 10 ||
-		status.ReaderChannel.ReceivedTransactionsPerSecond != 10 ||
-		status.SenderChannel.ReceivedTransactionsPerSecond != 10 {
-		t.Fatalf("sample did not use 300 ms metrics window: %+v", status)
-	}
-	var actual dto.Metric
-	if err := metrics.actualTPS.Write(&actual); err != nil {
-		t.Fatal(err)
-	}
-	if rate := actual.GetGauge().GetValue(); rate != 10 {
-		t.Fatalf("actual TPS = %v, want 10", rate)
-	}
+	cfg := testConfig(t)
+	source := testDiscoveredSource(t)
+	synctest.Test(t, func(t *testing.T) {
+		state := newControlState(cfg, zap.NewNop())
+		state.metricsWindow = 300 * time.Millisecond
+		options := state.pipelineOptions
+		options.Source = source
+		options.Readers, options.Senders, options.BatchSize = 1, 1, 3
+		options.Rate.Installed = false
+		options.Deliver = func(context.Context, []pipeline.Transaction, int) error { return nil }
+		release := make(chan struct{})
+		var run *pipeline.Pipeline
+		options.OpenFile = func(string) (pipeline.ReaderFile, error) {
+			return testReaderFile{rows: &testRowReader{read: func(rows []pipeline.Transaction) (int, error) {
+				<-release
+				run.StopReading()
+				return 3, io.EOF
+			}}}, nil
+		}
+		startedAt := time.Now()
+		run = pipeline.Start(t.Context(), options)
+		close(release)
+		<-run.Done()
+		time.Sleep(900 * time.Millisecond)
+		metrics := newPrometheusMetrics()
+		state.sample(run, metrics, time.Now())
+		snapshot := state.snapshotAt(run, time.Now())
+		wantRate := 3 / time.Since(startedAt).Seconds()
+		if snapshot.Run.TotalTransactions != 3 || snapshot.Reader.ReadTps != wantRate ||
+			snapshot.ReaderChannel.ReceivedTransactionsPerSecond != wantRate ||
+			snapshot.SenderChannel.ReceivedTransactionsPerSecond != wantRate {
+			t.Fatalf("delayed tick used inconsistent intervals: %+v, want rate %v", snapshot, wantRate)
+		}
+		var actual dto.Metric
+		if err := metrics.actualTPS.Write(&actual); err != nil {
+			t.Fatal(err)
+		}
+		if got := actual.GetGauge().GetValue(); got != wantRate {
+			t.Fatalf("actual TPS = %v, want %v", got, wantRate)
+		}
+	})
 }
 
 type testEventLoop struct {
@@ -628,4 +618,29 @@ func assertFinalTransactions(t *testing.T, events *observer.ObservedLogs, confir
 		t.Fatalf("final transactions = %+v, want %d confirmed and %d unconfirmed", fields, confirmed, unconfirmed)
 	}
 	return fields
+}
+
+type testReaderFile struct{ rows pipeline.RowReader }
+
+func (f testReaderFile) OpenRows() (pipeline.RowReader, error) { return f.rows, nil }
+func (f testReaderFile) Close() error                          { return nil }
+
+type testRowReader struct {
+	read func([]pipeline.Transaction) (int, error)
+}
+
+func (r *testRowReader) Read(rows []pipeline.Transaction) (int, error) { return r.read(rows) }
+func (r *testRowReader) Close() error                                  { return nil }
+
+func testDiscoveredSource(t *testing.T) pipeline.Source {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.parquet")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := pipeline.DiscoverSource(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return source
 }

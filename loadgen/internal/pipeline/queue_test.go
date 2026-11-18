@@ -1,4 +1,4 @@
-package main
+package pipeline
 
 import (
 	"context"
@@ -7,17 +7,17 @@ import (
 )
 
 func TestReaderChannelTelemetryReportsBufferedBatchesAndTransactions(t *testing.T) {
-	config := testConfig(t)
-	batches := make(chan []Transaction, config.ReaderChannel.Capacity.Initial)
+	batches := make(chan []Transaction, 2)
 	batches <- make([]Transaction, 3)
 	batches <- make([]Transaction, 3)
 
-	var telemetry channelTelemetry
-	telemetry.start(batches, 3)
+	var telemetry batchQueue
+	telemetry.ch = batches
+	telemetry.batchSize = 3
 	measurements := telemetry.snapshot(time.Now())
-	if measurements.depthBatches != 2 ||
-		measurements.bufferedTransactions != 6 || measurements.blockedSenders != 0 ||
-		measurements.oldestBlockedSenderMs != 0 || measurements.blockedMs != 0 {
+	if measurements.DepthBatches != 2 ||
+		measurements.BufferedTransactions != 6 || measurements.BlockedSenders != 0 ||
+		measurements.OldestBlockedSenderMS != 0 || measurements.BlockedMS != 0 {
 		t.Fatalf("readerChannel measurements = %+v", measurements)
 	}
 }
@@ -26,18 +26,19 @@ func TestReaderChannelTelemetryMeasuresBlockedSendUntilThrottlerReceives(t *test
 	batches := make(chan []Transaction, 1)
 	batches <- []Transaction{{}}
 
-	var telemetry channelTelemetry
-	telemetry.start(batches, 1)
+	var telemetry batchQueue
+	telemetry.ch = batches
+	telemetry.batchSize = 1
 	ctx := t.Context()
 	sent := make(chan bool, 1)
 	go func() {
-		sent <- telemetry.beginBlockedSend(batches, []Transaction{{}}).wait(ctx)
+		sent <- telemetry.beginBlockedSend([]Transaction{{}}).wait(ctx)
 	}()
 
 	waitForBlockedSender(t, &telemetry)
 	blocked := telemetry.snapshot(time.Now())
-	if blocked.blockedSenders != 1 || blocked.depthBatches != 1 || blocked.bufferedTransactions != 1 ||
-		blocked.sentBatchesTotal != 0 {
+	if blocked.BlockedSenders != 1 || blocked.DepthBatches != 1 || blocked.BufferedTransactions != 1 ||
+		blocked.SentBatchesTotal != 0 {
 		t.Fatalf("blocked readerChannel measurements = %+v", blocked)
 	}
 	time.Sleep(10 * time.Millisecond)
@@ -53,67 +54,68 @@ func TestReaderChannelTelemetryMeasuresBlockedSendUntilThrottlerReceives(t *test
 	}
 
 	completed := telemetry.snapshot(time.Now())
-	if completed.blockedSenders != 0 || completed.blockedMs <= 0 || completed.depthBatches != 1 ||
-		completed.sentBatchesTotal != 1 || completed.sentTransactionsTotal != 1 {
+	if completed.BlockedSenders != 0 || completed.BlockedMS <= 0 || completed.DepthBatches != 1 ||
+		completed.SentBatchesTotal != 1 || completed.SentTransactionsTotal != 1 {
 		t.Fatalf("completed readerChannel measurements = %+v", completed)
 	}
 }
 
 func TestReaderChannelTelemetryTrySendCountsImmediateSendWithoutBlockedMeasurement(t *testing.T) {
 	batches := make(chan []Transaction, 1)
-	var telemetry channelTelemetry
-	telemetry.start(batches, 1)
+	var telemetry batchQueue
+	telemetry.ch = batches
+	telemetry.batchSize = 1
 
-	if !telemetry.trySend(batches, []Transaction{{}}) {
+	if !telemetry.trySend([]Transaction{{}}) {
 		t.Fatal("immediate send failed")
 	}
 
 	measurements := telemetry.snapshot(time.Now())
-	if measurements.blockedSenders != 0 || measurements.blockedMs != 0 ||
-		measurements.sentBatchesTotal != 1 || measurements.sentTransactionsTotal != 1 {
+	if measurements.BlockedSenders != 0 || measurements.BlockedMS != 0 ||
+		measurements.SentBatchesTotal != 1 || measurements.SentTransactionsTotal != 1 {
 		t.Fatalf("immediate send measurements = %+v", measurements)
 	}
 }
 
 func TestReaderChannelTelemetrySnapshotAccumulatesSubMillisecondBlockedDurations(t *testing.T) {
 	now := time.Date(2026, time.September, 19, 0, 0, 0, 0, time.UTC)
-	telemetry := channelTelemetry{
-		measurements: channelTelemetryMeasurements{
+	telemetry := batchQueue{
+		measurements: queueMeasurements{
 			blockedAt: map[uint64]time.Time{1: now.Add(-800 * time.Microsecond)},
-			blockedMs: 800 * time.Microsecond,
+			blocked:   800 * time.Microsecond,
 		},
 	}
 
 	active := telemetry.snapshot(now)
-	if active.blockedSenders != 1 || active.oldestBlockedSenderMs != 0 || active.blockedMs != 1 {
+	if active.BlockedSenders != 1 || active.OldestBlockedSenderMS != 0 || active.BlockedMS != 1 {
 		t.Fatalf("active readerChannel measurements = %+v", active)
 	}
 
 	telemetry.finishBlockedWriter(1, now)
 	completed := telemetry.snapshot(now)
-	if completed.blockedSenders != 0 || completed.oldestBlockedSenderMs != 0 || completed.blockedMs != 1 {
+	if completed.BlockedSenders != 0 || completed.OldestBlockedSenderMS != 0 || completed.BlockedMS != 1 {
 		t.Fatalf("completed readerChannel measurements = %+v", completed)
 	}
 }
 
 func TestReaderChannelTelemetryTracksConcurrentBlockedWritersIndependently(t *testing.T) {
 	now := time.Date(2026, time.September, 19, 0, 0, 0, 0, time.UTC)
-	var telemetry channelTelemetry
+	var telemetry batchQueue
 	first := telemetry.startBlocked(now.Add(-3 * time.Millisecond))
 	second := telemetry.startBlocked(now.Add(-2 * time.Millisecond))
 	active := telemetry.snapshot(now)
-	if active.blockedSenders != 2 || active.oldestBlockedSenderMs != 3 || active.blockedMs != 5 {
+	if active.BlockedSenders != 2 || active.OldestBlockedSenderMS != 3 || active.BlockedMS != 5 {
 		t.Fatalf("two writers = %+v", active)
 	}
 
 	telemetry.finishBlockedWriter(first, now)
 	remaining := telemetry.snapshot(now.Add(time.Millisecond))
-	if remaining.blockedSenders != 1 || remaining.oldestBlockedSenderMs != 3 || remaining.blockedMs != 6 {
+	if remaining.BlockedSenders != 1 || remaining.OldestBlockedSenderMS != 3 || remaining.BlockedMS != 6 {
 		t.Fatalf("remaining writer = %+v", remaining)
 	}
 	telemetry.finishBlockedWriter(second, now.Add(time.Millisecond))
 	completed := telemetry.snapshot(now.Add(2 * time.Millisecond))
-	if completed.blockedSenders != 0 || completed.oldestBlockedSenderMs != 0 || completed.blockedMs != 6 {
+	if completed.BlockedSenders != 0 || completed.OldestBlockedSenderMS != 0 || completed.BlockedMS != 6 {
 		t.Fatalf("completed writers = %+v", completed)
 	}
 }
@@ -121,13 +123,14 @@ func TestReaderChannelTelemetryTracksConcurrentBlockedWritersIndependently(t *te
 func TestReaderChannelTelemetryConcurrentSendsKeepSecondWriterBlocked(t *testing.T) {
 	batches := make(chan []Transaction, 1)
 	batches <- []Transaction{{}}
-	var telemetry channelTelemetry
-	telemetry.start(batches, 1)
+	var telemetry batchQueue
+	telemetry.ch = batches
+	telemetry.batchSize = 1
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sent := make(chan bool, 2)
 	for range 2 {
-		go func() { sent <- telemetry.beginBlockedSend(batches, []Transaction{{}}).wait(ctx) }()
+		go func() { sent <- telemetry.beginBlockedSend([]Transaction{{}}).wait(ctx) }()
 	}
 	waitForBlockedSenders(t, &telemetry, 2)
 	<-batches
@@ -139,58 +142,60 @@ func TestReaderChannelTelemetryConcurrentSendsKeepSecondWriterBlocked(t *testing
 	if <-sent {
 		t.Fatal("second writer sent after cancellation")
 	}
-	if remaining := telemetry.snapshot(time.Now()); remaining.blockedSenders != 0 || remaining.sentBatchesTotal != 1 {
+	if remaining := telemetry.snapshot(time.Now()); remaining.BlockedSenders != 0 || remaining.SentBatchesTotal != 1 {
 		t.Fatalf("after cancellation = %+v", remaining)
 	}
 }
 
 func TestReaderChannelTelemetryCountsSuccessfulSendAndSamplesWindow(t *testing.T) {
 	batches := make(chan []Transaction, 2)
-	var telemetry channelTelemetry
-	telemetry.start(batches, 2)
-	if !telemetry.trySend(batches, make([]Transaction, 2)) {
+	var telemetry batchQueue
+	telemetry.ch = batches
+	telemetry.batchSize = 2
+	if !telemetry.trySend(make([]Transaction, 2)) {
 		t.Fatal("first send failed")
 	}
-	if !telemetry.trySend(batches, make([]Transaction, 3)) {
+	if !telemetry.trySend(make([]Transaction, 3)) {
 		t.Fatal("second send failed")
 	}
 	telemetry.recordReceive(len(<-batches))
 
 	beforeSample := telemetry.snapshot(time.Now())
-	if beforeSample.sentBatchesTotal != 2 || beforeSample.sentTransactionsTotal != 5 ||
-		beforeSample.receivedBatchesTotal != 1 || beforeSample.receivedTransactionsTotal != 2 ||
-		beforeSample.sentBatchesPerSecond != 0 || beforeSample.receivedBatchesPerSecond != 0 {
+	if beforeSample.SentBatchesTotal != 2 || beforeSample.SentTransactionsTotal != 5 ||
+		beforeSample.ReceivedBatchesTotal != 1 || beforeSample.ReceivedTransactionsTotal != 2 ||
+		beforeSample.SentBatchesPerSecond != 0 || beforeSample.ReceivedBatchesPerSecond != 0 {
 		t.Fatalf("before sample = %+v", beforeSample)
 	}
 
 	telemetry.sample(500 * time.Millisecond)
 	first := telemetry.snapshot(time.Now())
-	if first.sentBatchesPerSecond != 4 || first.sentTransactionsPerSecond != 10 ||
-		first.receivedBatchesPerSecond != 2 || first.receivedTransactionsPerSecond != 4 {
+	if first.SentBatchesPerSecond != 4 || first.SentTransactionsPerSecond != 10 ||
+		first.ReceivedBatchesPerSecond != 2 || first.ReceivedTransactionsPerSecond != 4 {
 		t.Fatalf("first window = %+v", first)
 	}
 	telemetry.sample(500 * time.Millisecond)
 	second := telemetry.snapshot(time.Now())
-	if second.sentBatchesTotal != 2 || second.receivedBatchesTotal != 1 ||
-		second.sentBatchesPerSecond != 0 || second.sentTransactionsPerSecond != 0 ||
-		second.receivedBatchesPerSecond != 0 || second.receivedTransactionsPerSecond != 0 {
+	if second.SentBatchesTotal != 2 || second.ReceivedBatchesTotal != 1 ||
+		second.SentBatchesPerSecond != 0 || second.SentTransactionsPerSecond != 0 ||
+		second.ReceivedBatchesPerSecond != 0 || second.ReceivedTransactionsPerSecond != 0 {
 		t.Fatalf("empty window = %+v", second)
 	}
 }
 
 func TestReaderChannelTelemetryUnbufferedHandoffCountsOnlyAfterSend(t *testing.T) {
 	batches := make(chan []Transaction)
-	var telemetry channelTelemetry
-	telemetry.start(batches, 2)
+	var telemetry batchQueue
+	telemetry.ch = batches
+	telemetry.batchSize = 2
 	ctx := t.Context()
 	sent := make(chan bool, 1)
 	go func() {
-		sent <- telemetry.beginBlockedSend(batches, make([]Transaction, 2)).wait(ctx)
+		sent <- telemetry.beginBlockedSend(make([]Transaction, 2)).wait(ctx)
 	}()
 
 	waitForBlockedSender(t, &telemetry)
 	blocked := telemetry.snapshot(time.Now())
-	if blocked.depthBatches != 0 || blocked.sentBatchesTotal != 0 {
+	if blocked.DepthBatches != 0 || blocked.SentBatchesTotal != 0 {
 		t.Fatalf("blocked unbuffered readerChannel = %+v", blocked)
 	}
 	batch := <-batches
@@ -200,24 +205,24 @@ func TestReaderChannelTelemetryUnbufferedHandoffCountsOnlyAfterSend(t *testing.T
 	}
 	telemetry.sample(time.Second)
 	handoff := telemetry.snapshot(time.Now())
-	if handoff.depthBatches != 0 || handoff.sentBatchesTotal != 1 ||
-		handoff.sentTransactionsTotal != 2 || handoff.receivedBatchesTotal != 1 ||
-		handoff.receivedTransactionsTotal != 2 || handoff.sentBatchesPerSecond != 1 ||
-		handoff.receivedBatchesPerSecond != 1 {
+	if handoff.DepthBatches != 0 || handoff.SentBatchesTotal != 1 ||
+		handoff.SentTransactionsTotal != 2 || handoff.ReceivedBatchesTotal != 1 ||
+		handoff.ReceivedTransactionsTotal != 2 || handoff.SentBatchesPerSecond != 1 ||
+		handoff.ReceivedBatchesPerSecond != 1 {
 		t.Fatalf("unbuffered handoff = %+v", handoff)
 	}
 }
 
-func waitForBlockedSender(t *testing.T, telemetry *channelTelemetry) {
+func waitForBlockedSender(t *testing.T, telemetry *batchQueue) {
 	waitForBlockedSenders(t, telemetry, 1)
 }
 
-func waitForBlockedSenders(t *testing.T, telemetry *channelTelemetry, want int) {
+func waitForBlockedSenders(t *testing.T, telemetry *batchQueue, want int) {
 	t.Helper()
 
 	deadline := time.After(time.Second)
 	for {
-		if telemetry.snapshot(time.Now()).blockedSenders == want {
+		if telemetry.snapshot(time.Now()).BlockedSenders == want {
 			return
 		}
 		select {

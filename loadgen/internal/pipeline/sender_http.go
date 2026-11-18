@@ -1,9 +1,10 @@
-package main
+package pipeline
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -18,41 +19,48 @@ func newSenderHTTPClient(maxWorkers int, timeout time.Duration) *http.Client {
 	return &http.Client{Transport: transport, Timeout: timeout}
 }
 
-type senderHTTPAttempt struct {
+type senderClient struct {
 	url    string
 	client *http.Client
 }
 
-func newSenderHTTPAttempt(url string, client *http.Client) senderHTTPAttempt {
-	return senderHTTPAttempt{url: url, client: client}
+func newSenderClient(url string, client *http.Client) senderClient {
+	return senderClient{url: url, client: client}
 }
 
-func (a senderHTTPAttempt) deliver(ctx context.Context, batch []Transaction, _ int) senderAttemptOutcome {
+func (c senderClient) deliver(ctx context.Context, batch []Transaction) error {
 	body, err := json.Marshal(batch)
 	if err != nil {
-		return senderAttemptFailure
+		return err
 	}
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, a.url, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
 	if err != nil {
-		return senderAttemptFailure
+		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
 
-	response, err := a.client.Do(request)
+	response, err := c.client.Do(request)
 	if err != nil {
-		if ctx.Err() != nil {
-			return senderAttemptCanceled
-		}
-		return senderAttemptFailure
+		return err
 	}
 	defer response.Body.Close()
 	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, maxSenderResponseDrainBytes)); err != nil {
-		return senderAttemptFailure
+		return err
 	}
 
 	if response.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	return fmt.Errorf("HTTP status %s", response.Status)
+}
+
+func (c senderClient) attempt(ctx context.Context, batch []Transaction, _ int) senderAttemptOutcome {
+	if err := c.deliver(ctx, batch); err == nil {
 		return senderAttemptSuccess
+	}
+	if ctx.Err() != nil {
+		return senderAttemptCanceled
 	}
 	return senderAttemptFailure
 }

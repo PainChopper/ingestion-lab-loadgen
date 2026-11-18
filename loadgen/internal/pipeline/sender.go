@@ -1,9 +1,9 @@
-package main
+package pipeline
 
 import (
 	"context"
-	"encoding/binary"
-	"hash/fnv"
+	"math"
+	"math/rand/v2"
 	"net/http"
 	"slices"
 	"sync"
@@ -32,59 +32,67 @@ type senderWorker struct {
 	backoff  bool
 }
 
-type senderPoolSnapshot struct {
-	liveWorkers             int
-	idleWorkers             int
-	inFlightWorkers         int
-	backoffWorkers          int
-	drainingWorkers         int
-	drainingIdleWorkers     int
-	drainingInFlightWorkers int
-	drainingBackoffWorkers  int
+type SenderSnapshot struct {
+	LiveWorkers             int
+	IdleWorkers             int
+	InFlightWorkers         int
+	BackoffWorkers          int
+	DrainingWorkers         int
+	DrainingIdleWorkers     int
+	DrainingInFlightWorkers int
+	DrainingBackoffWorkers  int
 }
 
 type senderPool struct {
 	// mu guards worker state.
-	mu                                       sync.Mutex
-	available                                *sync.Cond
-	ctx                                      context.Context
-	cancel                                   context.CancelFunc
-	done                                     chan struct{}
-	wg                                       sync.WaitGroup
-	workers                                  []*senderWorker
-	stopping                                 bool
-	retry                                    senderRetryConfig
-	batches                                  <-chan []Transaction
-	channelTelemetry                         *channelTelemetry
-	terminallyCompletedTransactionsSinceTick *atomic.Int64
-	attempt                                  senderAttempt
-	client                                   *http.Client
-	logger                                   *zap.Logger
+	mu        sync.Mutex
+	available *sync.Cond
+	ctx       context.Context
+	cancel    context.CancelFunc
+	done      chan struct{}
+	wg        sync.WaitGroup
+	workers   []*senderWorker
+	stopping  bool
+	retry     *retryPolicy
+	queue     *batchQueue
+	completed *atomic.Int64
+	attempt   senderAttempt
+	client    *http.Client
+	logger    *zap.Logger
 }
 
 func startSenderPool(
 	parent context.Context,
-	batches <-chan []Transaction,
-	channelTelemetry *channelTelemetry,
-	terminallyCompletedTransactionsSinceTick *atomic.Int64,
+	queue *batchQueue,
+	completed *atomic.Int64,
 	workers int,
-	cfg senderConfig,
+	cfg Options,
 	logger *zap.Logger,
 ) *senderPool {
 	ctx, cancel := context.WithCancel(parent)
-	client := newSenderHTTPClient(cfg.Workers.Max, time.Duration(cfg.API.TimeoutMS)*time.Millisecond)
+	client := newSenderHTTPClient(cfg.SenderMaxConns, cfg.SenderTimeout)
 	pool := &senderPool{
-		ctx:                                      ctx,
-		cancel:                                   cancel,
-		done:                                     make(chan struct{}),
-		workers:                                  make([]*senderWorker, 0, workers),
-		retry:                                    cfg.Retry,
-		batches:                                  batches,
-		channelTelemetry:                         channelTelemetry,
-		terminallyCompletedTransactionsSinceTick: terminallyCompletedTransactionsSinceTick,
-		attempt:                                  newSenderHTTPAttempt(cfg.API.URL, client).deliver,
-		client:                                   client,
-		logger:                                   logger,
+		ctx:       ctx,
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		workers:   make([]*senderWorker, 0, workers),
+		retry:     newRetryPolicy(cfg),
+		queue:     queue,
+		completed: completed,
+		attempt:   newSenderClient(cfg.SenderURL, client).attempt,
+		client:    client,
+		logger:    logger,
+	}
+	if cfg.Deliver != nil {
+		pool.attempt = func(ctx context.Context, batch []Transaction, number int) senderAttemptOutcome {
+			if err := cfg.Deliver(ctx, batch, number); err == nil {
+				return senderAttemptSuccess
+			}
+			if ctx.Err() != nil {
+				return senderAttemptCanceled
+			}
+			return senderAttemptFailure
+		}
 	}
 	pool.available = sync.NewCond(&pool.mu)
 	pool.reconcile(workers)
@@ -198,11 +206,11 @@ func (p *senderPool) runIntake() {
 		select {
 		case <-p.ctx.Done():
 			return
-		case batch, ok := <-p.batches:
+		case batch, ok := <-p.queue.ch:
 			if !ok {
 				return
 			}
-			p.channelTelemetry.recordReceive(len(batch))
+			p.queue.recordReceive(len(batch))
 			p.mu.Lock()
 			worker := p.availableWorkerLocked()
 			for worker == nil && p.ctx.Err() == nil {
@@ -266,7 +274,7 @@ func (p *senderPool) runWorker(worker *senderWorker) {
 
 func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transaction) {
 	if p.processBatch(worker, batch) {
-		p.terminallyCompletedTransactionsSinceTick.Add(int64(len(batch)))
+		p.completed.Add(int64(len(batch)))
 	}
 	p.mu.Lock()
 	worker.busy = false
@@ -305,33 +313,33 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		p.mu.Lock()
 		worker.backoff = true
 		p.mu.Unlock()
-		delay := p.retry.delay(attempt, batch)
+		delay := p.retry.delay(attempt)
 		if !p.waitBackoff(worker, delay) {
 			return false
 		}
 	}
 }
 
-func (p *senderPool) aggregateSnapshot() senderPoolSnapshot {
+func (p *senderPool) snapshot() SenderSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	snapshot := senderPoolSnapshot{liveWorkers: len(p.workers)}
+	snapshot := SenderSnapshot{LiveWorkers: len(p.workers)}
 	for _, worker := range p.workers {
 		var draining *int
 		switch {
 		case worker.backoff:
-			snapshot.backoffWorkers++
-			draining = &snapshot.drainingBackoffWorkers
+			snapshot.BackoffWorkers++
+			draining = &snapshot.DrainingBackoffWorkers
 		case worker.busy:
-			snapshot.inFlightWorkers++
-			draining = &snapshot.drainingInFlightWorkers
+			snapshot.InFlightWorkers++
+			draining = &snapshot.DrainingInFlightWorkers
 		default:
-			snapshot.idleWorkers++
-			draining = &snapshot.drainingIdleWorkers
+			snapshot.IdleWorkers++
+			draining = &snapshot.DrainingIdleWorkers
 		}
 		if worker.draining {
-			snapshot.drainingWorkers++
+			snapshot.DrainingWorkers++
 			(*draining)++
 		}
 	}
@@ -360,14 +368,41 @@ func (p *senderPool) waitBackoff(worker *senderWorker, duration time.Duration) b
 	}
 }
 
-func deterministicSenderValue(batch []Transaction, attempt int, modulus uint64) int {
-	hash := fnv.New64a()
-	var values [16]byte
-	binary.LittleEndian.PutUint64(values[:8], uint64(len(batch)))
-	binary.LittleEndian.PutUint64(values[8:], uint64(attempt))
-	_, _ = hash.Write(values[:])
-	if len(batch) > 0 {
-		_, _ = hash.Write([]byte(batch[0].ClientID))
+type retryPolicy struct {
+	delays        []time.Duration
+	jitterPercent int
+	mu            sync.Mutex
+	randomIntN    func(int) int
+}
+
+func newRetryPolicy(options Options) *retryPolicy {
+	randomIntN := options.RandomIntN
+	if randomIntN == nil {
+		randomIntN = rand.IntN
 	}
-	return int(hash.Sum64() % modulus)
+	return &retryPolicy{
+		delays:        slices.Clone(options.RetryDelays),
+		jitterPercent: options.RetryJitterPercent,
+		randomIntN:    randomIntN,
+	}
+}
+
+func (r *retryPolicy) delay(attempt int) time.Duration {
+	base := r.delays[min(attempt-1, len(r.delays)-1)]
+	r.mu.Lock()
+	jitter := r.randomIntN(2*r.jitterPercent+1) - r.jitterPercent
+	r.mu.Unlock()
+	return senderRetryDuration(base, jitter)
+}
+
+func senderRetryDuration(base time.Duration, jitterPercent int) time.Duration {
+	adjustment := base/100*time.Duration(jitterPercent) + base%100*time.Duration(jitterPercent)/100
+	if adjustment > 0 && adjustment > time.Duration(math.MaxInt64)-base {
+		return time.Duration(math.MaxInt64)
+	}
+	delay := base + adjustment
+	if delay <= 0 {
+		return time.Millisecond
+	}
+	return delay
 }
