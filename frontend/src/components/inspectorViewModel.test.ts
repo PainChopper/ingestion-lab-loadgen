@@ -272,7 +272,7 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
-  it('shows only the current Reader source error text', () => {
+  it('shows the current Reader source error and counts it in Worker states', () => {
     const adapter = new SimulationAdapter()
     const base = derivedSnapshot(adapter)
     const sourceDirectory = 'C:/dataset'
@@ -300,6 +300,9 @@ describe('inspector view model', () => {
       value: 'C:/dataset/broken/very-long-source.parquet: corrupt parquet',
       layout: 'full-width',
     })
+    const workerStates = model?.rows.find((row) => row.label === 'Worker states')
+    expect(workerStates?.value).toMatch(/ · 1 error$/)
+    expect(workerStates?.segments?.at(-1)).toEqual({ value: '1 error', tone: 'error' })
     expect(model?.rows.map((row) => row.label)).not.toEqual(
       expect.arrayContaining([
         'Source directory',

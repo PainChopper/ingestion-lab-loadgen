@@ -24,6 +24,8 @@ export function ReaderActor({
   geometry,
   orientation,
 }: ReaderActorProps) {
+  const { sourceError } = snapshot
+  const hasSourceError = sourceError !== null && sourceError !== undefined
   const workerStateSegments = [
     {
       value: `${formatInteger(snapshot.idleWorkers)} idle`,
@@ -38,7 +40,7 @@ export function ReaderActor({
       tone: 'backoff' as const,
     },
     {
-      value: snapshot.sourceError !== null ? '1 error' : '— errors',
+      value: hasSourceError ? '1 error' : '— errors',
       tone: 'error' as const,
     },
   ]
@@ -78,8 +80,8 @@ export function ReaderActor({
       selected={selected}
       onSelect={onSelect}
       desiredControl={desiredControl}
-      muted={snapshot.sourceError != null}
-      sourceErrorOperation={snapshot.sourceError?.operation}
+      muted={hasSourceError}
+      sourceErrorOperation={sourceError?.operation}
     />
   )
 }

@@ -1,8 +1,9 @@
+import { clsx } from 'clsx'
 import type { CSSProperties, KeyboardEvent } from 'react'
 import type { ChannelSnapshot, SelectableId } from '../../model/loadgen'
 import { channelPressureColor } from '../../model/channelFlowState'
 import { formatInteger, formatMilliseconds, formatRate } from './formatters'
-import type { PipelineChannelGeometry, Point } from './geometry'
+import type { PipelineChannelGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
   type Box,
@@ -13,9 +14,7 @@ import {
 interface ChannelCableProps {
   snapshot: ChannelSnapshot
   batchSize: ChannelSnapshot['capacity']
-  geometry?: PipelineChannelGeometry
-  start?: Point
-  end?: Point
+  geometry: PipelineChannelGeometry
   selected: boolean
   onSelect: (id: SelectableId) => void
   orientation?: PipelineOrientation
@@ -27,24 +26,13 @@ export function ChannelCable({
   snapshot,
   batchSize,
   geometry,
-  start: startProp,
-  end: endProp,
   selected,
   onSelect,
   orientation = 'landscape',
   capacityValues,
   hoseForbiddenBoxes,
 }: ChannelCableProps) {
-  const start = geometry?.start ?? startProp ?? { x: 0, y: 0 }
-  const end = geometry?.end ?? endProp ?? start
-  const metrics = geometry?.metrics ?? {
-    x: (start.x + end.x) / 2,
-    throughputY:
-      orientation === 'portrait' ? (snapshot.id === 'reader-to-throttler' ? 328 : 750) : 507,
-    depthY: orientation === 'portrait' ? (snapshot.id === 'reader-to-throttler' ? 349 : 771) : 528,
-    waitingY:
-      orientation === 'portrait' ? (snapshot.id === 'reader-to-throttler' ? 370 : 792) : 548,
-  }
+  const { start, end, metrics } = geometry
   const presentation = getChannelCapacityGeometryPresentation(
     snapshot.capacity,
     start,
@@ -83,7 +71,13 @@ export function ChannelCable({
   return (
     <g
       id={`channel-${snapshot.id}`}
-      className={`pipeline-channel pipeline-selectable pipeline-channel--${snapshot.flowState}${markersVisible ? ' pipeline-channel--markers-visible' : ''}${flowActive ? ' pipeline-channel--flow-active' : ''}${selected ? ' pipeline-selectable--selected' : ''}`}
+      className={clsx(
+        'pipeline-channel pipeline-selectable',
+        `pipeline-channel--${snapshot.flowState}`,
+        markersVisible && 'pipeline-channel--markers-visible',
+        flowActive && 'pipeline-channel--flow-active',
+        selected && 'pipeline-selectable--selected',
+      )}
       role="button"
       tabIndex={0}
       aria-label={`Inspect ${snapshot.from} to ${snapshot.to} channel`}

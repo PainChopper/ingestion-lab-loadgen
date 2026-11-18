@@ -3,6 +3,7 @@ import type { Point, WorkerActorBounds } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 
 const DETAILED_WORKER_LIMIT = 7
+export const MAX_VISIBLE_WORKER_MARKERS = 32
 const COMPACT_COLUMNS = 4
 const COMPACT_CHIP_SCALE = 0.43
 const COMPACT_COLUMN_PITCH = 29
@@ -47,6 +48,10 @@ export interface WorkerActorLayout {
 export function normalizedWorkerCount(workers: NumericControlSnapshot): number {
   const value = workers.applied ?? workers.min
   return Math.min(workers.max, Math.max(workers.min, Math.round(value)))
+}
+
+export function getWorkerGeometryCount(desired: number, live: number): number {
+  return Math.max(desired, Math.min(MAX_VISIBLE_WORKER_MARKERS, live))
 }
 
 export function getPortraitWorkerGridMetrics(

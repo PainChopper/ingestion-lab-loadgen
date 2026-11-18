@@ -186,18 +186,6 @@ function batchLabelGeometry(anchor: Point): PipelineBatchLabelGeometry {
   }
 }
 
-export const CHANNEL_CABLE_ENDPOINTS: Readonly<Record<ChannelId, ChannelCableEndpoints>> =
-  Object.freeze({
-    'reader-to-throttler': {
-      start: ACTOR_GEOMETRY.reader.ports.output,
-      end: ACTOR_GEOMETRY.throttler.ports.input,
-    },
-    'throttler-to-sender': {
-      start: ACTOR_GEOMETRY.throttler.ports.output,
-      end: ACTOR_GEOMETRY.sender.ports.input,
-    },
-  })
-
 export interface PipelineGeometryInput {
   readonly orientation: PipelineOrientation
   readonly landscapeContentWidth?: number

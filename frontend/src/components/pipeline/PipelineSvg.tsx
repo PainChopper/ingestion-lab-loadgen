@@ -1,16 +1,14 @@
 import { formatInteger } from './formatters'
 import type { LoadgenSnapshot, SelectableId } from '../../model/loadgen'
 import type { LiveControls } from '../../hooks/useDesiredControl'
-import { useMemo } from 'react'
 import { HttpLink } from './HttpLink'
-import { createPipelineGeometry, type PipelineGeometry } from './geometry'
+import type { PipelineGeometry } from './geometry'
 import { ChannelCable } from './ChannelCable'
 import { ReaderActor } from './ReaderActor'
 import { SenderActor } from './SenderActor'
 import { TargetActor } from './TargetActor'
 import { ThrottlerActor } from './ThrottlerActor'
 import { VALVE_APERTURE } from './throttlerValve'
-import type { PipelineOrientation } from './pipelineLayout'
 import './PipelineSvg.css'
 
 interface PipelineSvgProps {
@@ -18,8 +16,7 @@ interface PipelineSvgProps {
   selectedId: SelectableId | null
   onSelect: (id: SelectableId) => void
   liveControls: LiveControls
-  orientation?: PipelineOrientation
-  geometry?: PipelineGeometry
+  geometry: PipelineGeometry
 }
 
 export function PipelineSvg({
@@ -27,40 +24,17 @@ export function PipelineSvg({
   selectedId,
   onSelect,
   liveControls,
-  orientation = 'landscape',
   geometry,
 }: PipelineSvgProps) {
-  const resolvedGeometry = useMemo(
-    () =>
-      geometry ??
-      createPipelineGeometry({
-        orientation,
-        readerWorkers: Math.max(
-          liveControls.readerWorkers.desired,
-          Math.min(32, snapshot.reader.liveWorkers),
-        ),
-        senderWorkers: Math.max(
-          liveControls.senderWorkers.desired,
-          Math.min(32, snapshot.sender.liveWorkers),
-        ),
-      }),
-    [
-      geometry,
-      liveControls.readerWorkers.desired,
-      liveControls.senderWorkers.desired,
-      orientation,
-      snapshot.reader.liveWorkers,
-      snapshot.sender.liveWorkers,
-    ],
-  )
-  const readerChannelGeometry = resolvedGeometry.channels[snapshot.readerChannel.id]
-  const senderChannelGeometry = resolvedGeometry.channels[snapshot.senderChannel.id]
-  const throttlerTransform = resolvedGeometry.actors.throttler.transform
+  const { orientation } = geometry
+  const readerChannelGeometry = geometry.channels[snapshot.readerChannel.id]
+  const senderChannelGeometry = geometry.channels[snapshot.senderChannel.id]
+  const throttlerTransform = geometry.actors.throttler.transform
 
   return (
     <svg
       className={`pipeline-svg pipeline-svg--${orientation}`}
-      viewBox={resolvedGeometry.viewBox.value}
+      viewBox={geometry.viewBox.value}
       preserveAspectRatio="xMinYMin meet"
       role="group"
       aria-label="Reader to target load generation pipeline"
@@ -71,7 +45,7 @@ export function PipelineSvg({
         telemetryAvailable={snapshot.adapterKind !== 'http'}
         selected={selectedId === snapshot.http.id}
         onSelect={onSelect}
-        geometry={resolvedGeometry}
+        geometry={geometry}
       />
       <ChannelCable
         snapshot={snapshot.readerChannel}
@@ -89,7 +63,7 @@ export function PipelineSvg({
           orientation === 'portrait'
             ? [
                 { x: 70, y: readerChannelGeometry.end.y - 196, width: 340, height: 188 },
-                resolvedGeometry.batchLabel.guard,
+                geometry.batchLabel.guard,
               ]
             : undefined
         }
@@ -132,8 +106,8 @@ export function PipelineSvg({
         selected={selectedId === snapshot.reader.id}
         onSelect={onSelect}
         desiredControl={liveControls.readerWorkers}
-        geometry={resolvedGeometry.actors.reader}
-        orientation={resolvedGeometry.orientation}
+        geometry={geometry.actors.reader}
+        orientation={orientation}
       />
       <ThrottlerActor
         snapshot={snapshot.throttler}
@@ -142,13 +116,13 @@ export function PipelineSvg({
         installedControl={liveControls.installed}
         selected={selectedId === snapshot.throttler.id}
         onSelect={onSelect}
-        geometry={resolvedGeometry.actors.throttler}
-        orientation={resolvedGeometry.orientation}
+        geometry={geometry.actors.throttler}
+        orientation={orientation}
       />
       <text
         className="pipeline-batch-size"
-        x={resolvedGeometry.batchLabel.anchor.x}
-        y={resolvedGeometry.batchLabel.anchor.y + 5}
+        x={geometry.batchLabel.anchor.x}
+        y={geometry.batchLabel.anchor.y + 5}
         textAnchor="middle"
       >
         Batch {formatInteger(snapshot.reader.readBatchSize.applied)} tx
@@ -158,15 +132,15 @@ export function PipelineSvg({
         selected={selectedId === snapshot.sender.id}
         onSelect={onSelect}
         desiredControl={liveControls.senderWorkers}
-        geometry={resolvedGeometry.actors.sender}
-        orientation={resolvedGeometry.orientation}
+        geometry={geometry.actors.sender}
+        orientation={orientation}
       />
       <TargetActor
         snapshot={snapshot.target}
         telemetryAvailable={snapshot.adapterKind !== 'http'}
         selected={selectedId === snapshot.target.id}
         onSelect={onSelect}
-        geometry={resolvedGeometry.actors.target}
+        geometry={geometry.actors.target}
       />
     </svg>
   )

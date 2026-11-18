@@ -58,11 +58,11 @@ function unavailableControl(unit: string): NumericControlSnapshot {
   }
 }
 
-function senderControl(
+function numericControl(
   value: number | null,
-  config: LoadgenConfigSnapshot['senderWorkers'] | null,
-  writable: boolean,
-  unavailableUnit = 'workers',
+  config: RangeControlConfigSnapshot | null,
+  applyMode: NumericControlSnapshot['applyMode'],
+  unavailableUnit: string,
 ): NumericControlSnapshot {
   if (config === null) return unavailableControl(unavailableUnit)
   return {
@@ -73,7 +73,7 @@ function senderControl(
     max: config.max,
     step: config.step,
     unit: config.unit,
-    applyMode: writable ? 'immediate' : 'unavailable',
+    applyMode,
   }
 }
 
@@ -122,55 +122,37 @@ function channelCapacity(
   }
 }
 
-function readerChannel(wire: WireSnapshot | null): ChannelTelemetrySnapshot {
-  const channel = neutralChannel('reader-to-throttler', 'reader', 'throttler')
+function channelSnapshot(
+  wire: WireSnapshot | null,
+  side: 'reader' | 'sender',
+): ChannelTelemetrySnapshot {
+  const channel =
+    side === 'reader'
+      ? neutralChannel('reader-to-throttler', 'reader', 'throttler')
+      : neutralChannel('throttler-to-sender', 'throttler', 'sender')
   if (wire === null) return channel
 
+  const telemetry = wire[`${side}Channel`]
+  const config = wire.config[`${side}ChannelCapacity`]
   return {
     ...channel,
-    capacity: channelCapacity(wire.readerChannel.capacity, wire.config.readerChannelCapacity),
-    depthBatches: wire.readerChannel.depthBatches,
-    bufferedTransactions: wire.readerChannel.bufferedTransactions,
-    sentBatchesTotal: wire.readerChannel.sentBatchesTotal,
-    sentTransactionsTotal: wire.readerChannel.sentTransactionsTotal,
-    receivedBatchesTotal: wire.readerChannel.receivedBatchesTotal,
-    receivedTransactionsTotal: wire.readerChannel.receivedTransactionsTotal,
-    inputBatchesPerSecond: wire.readerChannel.inputBatchesPerSecond,
-    inputTransactionsPerSecond: wire.readerChannel.inputTransactionsPerSecond,
-    outputBatchesPerSecond: wire.readerChannel.outputBatchesPerSecond,
-    outputTransactionsPerSecond: wire.readerChannel.outputTransactionsPerSecond,
-    inputTps: wire.readerChannel.inputTransactionsPerSecond,
-    outputTps: wire.readerChannel.outputTransactionsPerSecond,
-    throughputTps: wire.readerChannel.outputTransactionsPerSecond,
-    blockedSenders: wire.readerChannel.blockedSenders,
-    oldestBlockedSenderMs: wire.readerChannel.oldestBlockedSenderMs,
-    blockedMs: wire.readerChannel.blockedMs,
-  }
-}
-
-function senderChannel(wire: WireSnapshot | null): ChannelTelemetrySnapshot {
-  const channel = neutralChannel('throttler-to-sender', 'throttler', 'sender')
-  if (wire === null) return channel
-
-  return {
-    ...channel,
-    capacity: channelCapacity(wire.senderChannel.capacity, wire.config.senderChannelCapacity),
-    depthBatches: wire.senderChannel.depthBatches,
-    bufferedTransactions: wire.senderChannel.bufferedTransactions,
-    sentBatchesTotal: wire.senderChannel.sentBatchesTotal,
-    sentTransactionsTotal: wire.senderChannel.sentTransactionsTotal,
-    receivedBatchesTotal: wire.senderChannel.receivedBatchesTotal,
-    receivedTransactionsTotal: wire.senderChannel.receivedTransactionsTotal,
-    inputBatchesPerSecond: wire.senderChannel.inputBatchesPerSecond,
-    inputTransactionsPerSecond: wire.senderChannel.inputTransactionsPerSecond,
-    outputBatchesPerSecond: wire.senderChannel.outputBatchesPerSecond,
-    outputTransactionsPerSecond: wire.senderChannel.outputTransactionsPerSecond,
-    inputTps: wire.senderChannel.inputTransactionsPerSecond,
-    outputTps: wire.senderChannel.outputTransactionsPerSecond,
-    throughputTps: wire.senderChannel.outputTransactionsPerSecond,
-    blockedSenders: wire.senderChannel.blockedSenders,
-    oldestBlockedSenderMs: wire.senderChannel.oldestBlockedSenderMs,
-    blockedMs: wire.senderChannel.blockedMs,
+    capacity: channelCapacity(telemetry.capacity, config),
+    depthBatches: telemetry.depthBatches,
+    bufferedTransactions: telemetry.bufferedTransactions,
+    sentBatchesTotal: telemetry.sentBatchesTotal,
+    sentTransactionsTotal: telemetry.sentTransactionsTotal,
+    receivedBatchesTotal: telemetry.receivedBatchesTotal,
+    receivedTransactionsTotal: telemetry.receivedTransactionsTotal,
+    inputBatchesPerSecond: telemetry.inputBatchesPerSecond,
+    inputTransactionsPerSecond: telemetry.inputTransactionsPerSecond,
+    outputBatchesPerSecond: telemetry.outputBatchesPerSecond,
+    outputTransactionsPerSecond: telemetry.outputTransactionsPerSecond,
+    inputTps: telemetry.inputTransactionsPerSecond,
+    outputTps: telemetry.outputTransactionsPerSecond,
+    throughputTps: telemetry.outputTransactionsPerSecond,
+    blockedSenders: telemetry.blockedSenders,
+    oldestBlockedSenderMs: telemetry.oldestBlockedSenderMs,
+    blockedMs: telemetry.blockedMs,
   }
 }
 
@@ -181,6 +163,7 @@ function createSnapshot(
 ): LoadgenTelemetrySnapshot {
   const runState = wire?.run.state ?? 'idle'
   const writable = connectionState === 'connected' && runState === 'running'
+  const applyMode = writable ? 'immediate' : 'unavailable'
 
   return deepFreeze({
     revision,
@@ -192,10 +175,11 @@ function createSnapshot(
     config: wire?.config ?? null,
     reader: {
       id: 'reader',
-      workers: senderControl(
+      workers: numericControl(
         wire?.reader.workers ?? null,
         wire?.config.readerWorkers ?? null,
-        writable,
+        applyMode,
+        'workers',
       ),
       liveWorkers: wire?.reader.liveWorkers ?? 0,
       drainingWorkers: wire?.reader.drainingWorkers ?? 0,
@@ -205,9 +189,11 @@ function createSnapshot(
       drainingIdleWorkers: wire?.reader.drainingIdleWorkers ?? 0,
       drainingReadingWorkers: wire?.reader.drainingReadingWorkers ?? 0,
       drainingBlockedWorkers: wire?.reader.drainingBlockedWorkers ?? 0,
-      readBatchSize: readBatchSizeControl(
+      readBatchSize: numericControl(
         wire?.reader.readBatchSize ?? null,
         wire?.config.readerReadBatchSize ?? null,
+        'unavailable',
+        'transactions',
       ),
       readTps: wire?.reader.readTps ?? null,
       configuredCapacityTps: null,
@@ -219,15 +205,16 @@ function createSnapshot(
     },
     throttler: {
       id: 'throttler',
-      requestedTps: throttlerRequestedTpsControl(
+      requestedTps: numericControl(
         wire?.throttler.requestedTps ?? null,
         wire?.config.throttlerRequestedTps ?? null,
-        writable,
+        applyMode,
+        'transactions/s',
       ),
       installed: {
         applied: wire?.throttler.installed ?? null,
         pending: null,
-        applyMode: writable ? 'immediate' : 'unavailable',
+        applyMode,
         writable,
         unavailableReason: writable ? null : 'Unavailable in HTTP mode',
       },
@@ -235,14 +222,15 @@ function createSnapshot(
       limitedMs: null,
       state: runState,
     },
-    readerChannel: readerChannel(wire),
-    senderChannel: senderChannel(wire),
+    readerChannel: channelSnapshot(wire, 'reader'),
+    senderChannel: channelSnapshot(wire, 'sender'),
     sender: {
       id: 'sender',
-      workers: senderControl(
+      workers: numericControl(
         wire?.sender.workers ?? null,
         wire?.config.senderWorkers ?? null,
-        writable,
+        applyMode,
+        'workers',
       ),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
@@ -312,25 +300,6 @@ function isRangeValue(value: unknown, config: RangeControlConfigSnapshot): value
     value <= config.max &&
     (value - config.min) % config.step === 0
   )
-}
-
-function throttlerRequestedTpsControl(
-  value: number | null,
-  config: LoadgenConfigSnapshot['throttlerRequestedTps'] | null,
-  writable: boolean,
-): NumericControlSnapshot {
-  if (config === null) return unavailableControl('transactions/s')
-
-  return {
-    applied: value,
-    preview: null,
-    pending: null,
-    min: config.min,
-    max: config.max,
-    step: config.step,
-    unit: config.unit,
-    applyMode: writable ? 'immediate' : 'unavailable',
-  }
 }
 
 const wireInteger = z.int().check(z.nonnegative())
@@ -567,24 +536,6 @@ function collectUnknownPaths(input: unknown, parsed: unknown, paths: string[], p
     } else {
       paths.push(path)
     }
-  }
-}
-
-function readBatchSizeControl(
-  value: number | null,
-  config: LoadgenConfigSnapshot['readerReadBatchSize'] | null,
-): NumericControlSnapshot {
-  if (config === null) return unavailableControl('transactions')
-
-  return {
-    applied: value,
-    preview: null,
-    pending: null,
-    min: config.min,
-    max: config.max,
-    step: config.step,
-    unit: config.unit,
-    applyMode: 'unavailable',
   }
 }
 

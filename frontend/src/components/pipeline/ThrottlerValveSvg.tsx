@@ -1,3 +1,4 @@
+import { clsx } from 'clsx'
 import {
   getValveWheelKnobs,
   VALVE_APERTURE,
@@ -129,7 +130,11 @@ export function ThrottlerValveDetachedAssembly({
       transform={detachedTransform}
       data-detached-anchor={`${VALVE_DETACHED_ASSEMBLY.wheelCenterX} ${VALVE_DETACHED_ASSEMBLY.wheelCenterY}`}
     >
-      <g className={className.includes('--applied') ? 'pipeline-valve-detached-sway' : undefined}>
+      <g
+        className={
+          clsx(className.includes('--applied') && 'pipeline-valve-detached-sway') || undefined
+        }
+      >
         <ThrottlerValveWheel wheelPhase={wheelPhase} className="pipeline-valve-wheel" />
         <rect x="424" y="363" width="12" height="12" rx="1" className="pipeline-valve-neck" />
         <line x1="430" y1="375" x2="430" y2="405" className="pipeline-valve-stem" />

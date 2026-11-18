@@ -1,3 +1,4 @@
+import { clsx } from 'clsx'
 import type { KeyboardEvent } from 'react'
 import type { SelectableId, TargetSnapshot } from '../../model/loadgen'
 import { formatRate } from './formatters'
@@ -37,7 +38,10 @@ export function TargetActor({
       </text>
       <g
         id="target-actor"
-        className={`pipeline-actor pipeline-selectable${selected ? ' pipeline-selectable--selected' : ''}`}
+        className={clsx(
+          'pipeline-actor pipeline-selectable',
+          selected && 'pipeline-selectable--selected',
+        )}
         role="button"
         tabIndex={0}
         aria-label="Inspect ingestion service"

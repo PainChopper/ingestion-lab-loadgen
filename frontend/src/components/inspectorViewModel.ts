@@ -84,6 +84,8 @@ export function getInspectorViewModel(
     case 'reader': {
       const { idleWorkers, readingWorkers, blockedWorkers } = snapshot.reader
       const sourceError = snapshot.reader.sourceError
+      const hasSourceError = sourceError !== null && sourceError !== undefined
+      const errorCount = hasSourceError ? '1 error' : '— errors'
       const rows: InspectorRow[] = [
         {
           label: 'Workers desired / live / draining',
@@ -94,19 +96,19 @@ export function getInspectorViewModel(
           value:
             `${formatInteger(idleWorkers)} idle · ` +
             `${formatInteger(readingWorkers)} reading · ` +
-            `${formatInteger(blockedWorkers)} blocked · — errors`,
+            `${formatInteger(blockedWorkers)} blocked · ${errorCount}`,
           layout: 'full-width',
           segments: [
             { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
             { value: `${formatInteger(readingWorkers)} reading`, tone: 'in-flight' },
             { value: `${formatInteger(blockedWorkers)} blocked`, tone: 'backoff' },
-            { value: '— errors', tone: 'error' },
+            { value: errorCount, tone: 'error' },
           ],
         },
         { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
         { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
       ]
-      if (sourceError != null) {
+      if (hasSourceError) {
         const sourcePath = `${snapshot.reader.sourceDirectory ?? ''}/${sourceError.relativePath}`
           .replace(/\/+/g, '/')
           .replace(/\/$/, '')
