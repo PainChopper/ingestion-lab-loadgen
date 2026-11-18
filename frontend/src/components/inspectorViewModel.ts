@@ -4,11 +4,7 @@ import type {
   ChannelSnapshot,
   SelectableId,
 } from '../model/loadgen'
-import {
-  formatInteger,
-  formatMilliseconds,
-  formatRate,
-} from './pipeline/formatters'
+import { formatInteger, formatMilliseconds, formatRate } from './pipeline/formatters'
 
 export interface InspectorRow {
   readonly label: string
@@ -39,10 +35,7 @@ export interface InspectorViewModel {
   readonly sections?: ReadonlyArray<InspectorSection>
 }
 
-function formatControl(
-  control: ChannelCapacitySnapshot,
-  unit = control.unit,
-): string {
+function formatControl(control: ChannelCapacitySnapshot, unit = control.unit): string {
   const value = formatInteger(control.applied)
   return value === '—' ? value : `${value} ${unit}`
 }
@@ -77,10 +70,7 @@ function channelViewModel(channel: ChannelSnapshot): InspectorViewModel {
       },
       {
         label: 'Oldest wait',
-        value:
-          channel.blockedSenders > 0
-            ? formatMilliseconds(channel.oldestBlockedSenderMs)
-            : '—',
+        value: channel.blockedSenders > 0 ? formatMilliseconds(channel.oldestBlockedSenderMs) : '—',
       },
     ],
   }
@@ -91,59 +81,56 @@ export function getInspectorViewModel(
   selectedId: SelectableId | null,
 ): InspectorViewModel | null {
   switch (selectedId) {
-    case 'reader':
-      {
-        const { idleWorkers, readingWorkers, blockedWorkers } = snapshot.reader
-        const sourceError = snapshot.reader.sourceError
-        const rows: InspectorRow[] = [
-      {
-      label: 'Workers desired / live / draining',
-      value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
-      },
-          {
-            label: 'Worker states',
-            value:
-              `${formatInteger(idleWorkers)} idle · ` +
-              `${formatInteger(readingWorkers)} reading · ` +
-              `${formatInteger(blockedWorkers)} blocked · — errors`,
-            layout: 'full-width',
-            segments: [
-              { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
-              { value: `${formatInteger(readingWorkers)} reading`, tone: 'in-flight' },
-              { value: `${formatInteger(blockedWorkers)} blocked`, tone: 'backoff' },
-              { value: '— errors', tone: 'error' },
-            ],
-          },
-          { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
-          { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
-    ]
-    if (sourceError != null) {
-      const sourcePath = `${snapshot.reader.sourceDirectory ?? ''}/${sourceError.relativePath}`
-        .replace(/\/+/g, '/')
-        .replace(/\/$/, '')
-      rows.push({
-        label: '',
-        key: 'source-error',
-        kind: 'source-error',
-              value: `${sourcePath}: ${sourceError.message}`,
-        layout: 'full-width',
-      })
+    case 'reader': {
+      const { idleWorkers, readingWorkers, blockedWorkers } = snapshot.reader
+      const sourceError = snapshot.reader.sourceError
+      const rows: InspectorRow[] = [
+        {
+          label: 'Workers desired / live / draining',
+          value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
+        },
+        {
+          label: 'Worker states',
+          value:
+            `${formatInteger(idleWorkers)} idle · ` +
+            `${formatInteger(readingWorkers)} reading · ` +
+            `${formatInteger(blockedWorkers)} blocked · — errors`,
+          layout: 'full-width',
+          segments: [
+            { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
+            { value: `${formatInteger(readingWorkers)} reading`, tone: 'in-flight' },
+            { value: `${formatInteger(blockedWorkers)} blocked`, tone: 'backoff' },
+            { value: '— errors', tone: 'error' },
+          ],
+        },
+        { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
+        { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
+      ]
+      if (sourceError != null) {
+        const sourcePath = `${snapshot.reader.sourceDirectory ?? ''}/${sourceError.relativePath}`
+          .replace(/\/+/g, '/')
+          .replace(/\/$/, '')
+        rows.push({
+          label: '',
+          key: 'source-error',
+          kind: 'source-error',
+          value: `${sourcePath}: ${sourceError.message}`,
+          layout: 'full-width',
+        })
+      }
+      return {
+        id: selectedId,
+        title: 'READER',
+        kind: 'Parquet source',
+        rows,
+      }
     }
-    return {
-      id: selectedId,
-      title: 'READER',
-      kind: 'Parquet source',
-      rows,
-    }
-  }
     case 'throttler':
       return {
         id: selectedId,
         title: 'THROTTLER',
         kind: 'Rate control',
-        rows: [
-          { label: 'Admitted TPS', value: formatRate(snapshot.throttler.admittedTps) },
-        ],
+        rows: [{ label: 'Admitted TPS', value: formatRate(snapshot.throttler.admittedTps) }],
       }
     case 'sender': {
       const { idleWorkers, inFlightWorkers, backoffWorkers } = snapshot.sender
@@ -151,7 +138,8 @@ export function getInspectorViewModel(
       const poolRows: ReadonlyArray<InspectorRow> = [
         {
           label: 'Workers desired / live / draining',
-          value: `${formatInteger(snapshot.sender.workers.applied)} / ` +
+          value:
+            `${formatInteger(snapshot.sender.workers.applied)} / ` +
             `${formatInteger(snapshot.sender.liveWorkers)} / ` +
             `${formatInteger(snapshot.sender.drainingWorkers)}`,
         },
@@ -220,7 +208,8 @@ export function getInspectorViewModel(
         },
         {
           label: 'Diagnostic interpretation',
-          value: 'Retries, timeouts, terminal failures, and ambiguous outcomes are counted separately.',
+          value:
+            'Retries, timeouts, terminal failures, and ambiguous outcomes are counted separately.',
           layout: 'full-width',
         },
       ]

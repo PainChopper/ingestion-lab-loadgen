@@ -16,11 +16,7 @@ import {
   RETRYABLE_STATUS_CODES,
   SNAPSHOT_INTERVAL_MS,
 } from '../model/simulation'
-import type {
-  ChannelTelemetry,
-  SimulationConfig,
-  SimulationTelemetry,
-} from '../model/simulation'
+import type { ChannelTelemetry, SimulationConfig, SimulationTelemetry } from '../model/simulation'
 
 const TARGET_ENDPOINT = 'http://target:8080/ingest'
 const RETRY_POLICY = Object.freeze({
@@ -68,8 +64,7 @@ function numericControl(
 
 function normalizeNumericValue(value: number, range: NumericRange): number {
   const bounded = Math.min(range.max, Math.max(range.min, value))
-  const stepped =
-    range.min + Math.round((bounded - range.min) / range.step) * range.step
+  const stepped = range.min + Math.round((bounded - range.min) / range.step) * range.step
   return Math.min(range.max, Math.max(range.min, stepped))
 }
 
@@ -127,10 +122,10 @@ function freezeSnapshot(
     drainingSenderWorkerStates.idle +
     drainingSenderWorkerStates.inFlight +
     drainingSenderWorkerStates.backoff
-  const readerLimitationReason = telemetry.readerChannel.blockedSenders > 0 &&
-      readerReadTps < readerCapacityTps
-    ? 'downstream-backpressure'
-    : null
+  const readerLimitationReason =
+    telemetry.readerChannel.blockedSenders > 0 && readerReadTps < readerCapacityTps
+      ? 'downstream-backpressure'
+      : null
 
   return Object.freeze({
     revision,
@@ -142,11 +137,7 @@ function freezeSnapshot(
     config: null,
     reader: Object.freeze({
       id: 'reader',
-      workers: numericControl(
-        config.readerWorkers,
-        RANGES.readerWorkers,
-        'workers',
-      ),
+      workers: numericControl(config.readerWorkers, RANGES.readerWorkers, 'workers'),
       liveWorkers: config.readerWorkers,
       idleWorkers: readerReadTps === 0 ? config.readerWorkers : 0,
       readingWorkers: readerReadTps > 0 ? config.readerWorkers : 0,
@@ -170,11 +161,7 @@ function freezeSnapshot(
     }),
     throttler: Object.freeze({
       id: 'throttler',
-      requestedTps: numericControl(
-        config.requestedTps,
-        RANGES.requestedTps,
-        'tx/s',
-      ),
+      requestedTps: numericControl(config.requestedTps, RANGES.requestedTps, 'tx/s'),
       installed: Object.freeze({
         applied: config.throttlerInstalled,
         pending: null,
@@ -200,11 +187,7 @@ function freezeSnapshot(
     }),
     sender: Object.freeze({
       id: 'sender',
-      workers: numericControl(
-        config.senderWorkers,
-        RANGES.senderWorkers,
-        'workers',
-      ),
+      workers: numericControl(config.senderWorkers, RANGES.senderWorkers, 'workers'),
       liveWorkers: telemetry.sender.liveWorkers,
       idleWorkers: senderWorkerStates.idle + drainingSenderWorkerStates.idle,
       inFlightWorkers: senderWorkerStates.inFlight + drainingSenderWorkerStates.inFlight,
@@ -213,38 +196,23 @@ function freezeSnapshot(
       drainingIdleWorkers: drainingSenderWorkerStates.idle,
       drainingInFlightWorkers: drainingSenderWorkerStates.inFlight,
       drainingBackoffWorkers: drainingSenderWorkerStates.backoff,
-      timeoutMs: numericControl(
-        config.httpTimeoutMs,
-        RANGES.httpTimeoutMs,
-        'ms',
-        'unavailable',
-      ),
+      timeoutMs: numericControl(config.httpTimeoutMs, RANGES.httpTimeoutMs, 'ms', 'unavailable'),
       retryPolicy: RETRY_POLICY,
       attemptedTps: Math.round(telemetry.attemptedTransactionsPerSecond),
-      retryAttemptedTps: Math.round(
-        telemetry.sender.retryAttemptedTransactionsPerSecond,
-      ),
-      terminalFailedTps: Math.round(
-        telemetry.sender.terminalFailedTransactionsPerSecond,
-      ),
+      retryAttemptedTps: Math.round(telemetry.sender.retryAttemptedTransactionsPerSecond),
+      terminalFailedTps: Math.round(telemetry.sender.terminalFailedTransactionsPerSecond),
       inFlightRequests: telemetry.http.inFlightRequests,
       attemptsStartedTotal: telemetry.http.requestsStartedTotal,
-      retryAttemptsStartedTotal:
-        telemetry.sender.retryAttemptsStartedTotal,
+      retryAttemptsStartedTotal: telemetry.sender.retryAttemptsStartedTotal,
       successfulResponses: telemetry.http.requestsSucceededTotal,
       failedResponses: telemetry.http.responsesRejectedTotal,
       retries: telemetry.sender.retryAttemptsStartedTotal,
       timeoutsTotal: telemetry.http.requestsTimedOutTotal,
-      terminalFailedBatchesTotal:
-        telemetry.sender.terminalFailedBatchesTotal,
-      terminalFailedTransactionsTotal:
-        telemetry.sender.terminalFailedTransactionsTotal,
-      ambiguousTimeoutTransactionsTotal:
-        telemetry.sender.ambiguousTimeoutTransactionsTotal,
-      duplicateRiskTransactionsTotal:
-        telemetry.sender.duplicateRiskTransactionsTotal,
-      ambiguousTerminalTransactionsTotal:
-        telemetry.sender.ambiguousTerminalTransactionsTotal,
+      terminalFailedBatchesTotal: telemetry.sender.terminalFailedBatchesTotal,
+      terminalFailedTransactionsTotal: telemetry.sender.terminalFailedTransactionsTotal,
+      ambiguousTimeoutTransactionsTotal: telemetry.sender.ambiguousTimeoutTransactionsTotal,
+      duplicateRiskTransactionsTotal: telemetry.sender.duplicateRiskTransactionsTotal,
+      ambiguousTerminalTransactionsTotal: telemetry.sender.ambiguousTerminalTransactionsTotal,
       state: 'running',
     }),
     http: Object.freeze({
@@ -267,8 +235,7 @@ function freezeSnapshot(
       endpoint: TARGET_ENDPOINT,
       acceptedTps: Math.round(telemetry.acceptedTransactionsPerSecond),
       rejectedTps: Math.round(telemetry.rejectedTransactionsPerSecond),
-      latencyP95Ms:
-        telemetry.http.latestResponseLatencyMs,
+      latencyP95Ms: telemetry.http.latestResponseLatencyMs,
       http200Responses: telemetry.http.requestsSucceededTotal,
       http503Responses: simulation.http503ResponsesTotal,
       connectionState: 'connected',
@@ -353,7 +320,10 @@ export class SimulationAdapter implements LoadgenAdapter {
         if (!Number.isFinite(command.value)) {
           return this.rejectInvalidNumber(commandId, command, 'sender workers')
         }
-        changed = this.updateConfig('senderWorkers', normalizeNumericValue(command.value, RANGES.senderWorkers))
+        changed = this.updateConfig(
+          'senderWorkers',
+          normalizeNumericValue(command.value, RANGES.senderWorkers),
+        )
         break
       case 'set-throttler-installed':
         changed = this.updateConfig('throttlerInstalled', command.value)
@@ -437,11 +407,7 @@ export class SimulationAdapter implements LoadgenAdapter {
     this.listeners.forEach((listener) => listener(this.snapshot))
   }
 
-  private reject(
-    commandId: string,
-    command: LoadgenCommand,
-    error: AdapterError,
-  ): CommandReceipt {
+  private reject(commandId: string, command: LoadgenCommand, error: AdapterError): CommandReceipt {
     return Object.freeze({
       commandId,
       commandType: command.type,
@@ -451,10 +417,7 @@ export class SimulationAdapter implements LoadgenAdapter {
       snapshotRevision: this.snapshot.revision,
       error: Object.freeze({
         ...error,
-        details:
-          error.details === null
-            ? null
-            : Object.freeze({ ...error.details }),
+        details: error.details === null ? null : Object.freeze({ ...error.details }),
       }),
     })
   }

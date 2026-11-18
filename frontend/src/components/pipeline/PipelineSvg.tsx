@@ -1,15 +1,9 @@
 import { formatInteger } from './formatters'
-import type {
-  LoadgenSnapshot,
-  SelectableId,
-} from '../../model/loadgen'
+import type { LoadgenSnapshot, SelectableId } from '../../model/loadgen'
 import type { LiveControls } from '../../hooks/useDesiredControl'
 import { useMemo } from 'react'
 import { HttpLink } from './HttpLink'
-import {
-  createPipelineGeometry,
-  type PipelineGeometry,
-} from './geometry'
+import { createPipelineGeometry, type PipelineGeometry } from './geometry'
 import { ChannelCable } from './ChannelCable'
 import { ReaderActor } from './ReaderActor'
 import { SenderActor } from './SenderActor'
@@ -37,12 +31,27 @@ export function PipelineSvg({
   geometry,
 }: PipelineSvgProps) {
   const resolvedGeometry = useMemo(
-    () => geometry ?? createPipelineGeometry({
+    () =>
+      geometry ??
+      createPipelineGeometry({
+        orientation,
+        readerWorkers: Math.max(
+          liveControls.readerWorkers.desired,
+          Math.min(32, snapshot.reader.liveWorkers),
+        ),
+        senderWorkers: Math.max(
+          liveControls.senderWorkers.desired,
+          Math.min(32, snapshot.sender.liveWorkers),
+        ),
+      }),
+    [
+      geometry,
+      liveControls.readerWorkers.desired,
+      liveControls.senderWorkers.desired,
       orientation,
-      readerWorkers: Math.max(liveControls.readerWorkers.desired, Math.min(32, snapshot.reader.liveWorkers)),
-      senderWorkers: Math.max(liveControls.senderWorkers.desired, Math.min(32, snapshot.sender.liveWorkers)),
-    }),
-    [geometry, liveControls.readerWorkers.desired, liveControls.senderWorkers.desired, orientation, snapshot.reader.liveWorkers, snapshot.sender.liveWorkers],
+      snapshot.reader.liveWorkers,
+      snapshot.sender.liveWorkers,
+    ],
   )
   const readerChannelGeometry = resolvedGeometry.channels[snapshot.readerChannel.id]
   const senderChannelGeometry = resolvedGeometry.channels[snapshot.senderChannel.id]
@@ -71,15 +80,19 @@ export function PipelineSvg({
         selected={selectedId === snapshot.readerChannel.id}
         onSelect={onSelect}
         orientation={orientation}
-        capacityValues={snapshot.adapterKind === 'http'
-          ? snapshot.config?.readerChannelCapacity.allowed
-          : undefined}
-        hoseForbiddenBoxes={orientation === 'portrait'
-          ? [
-              { x: 70, y: readerChannelGeometry.end.y - 196, width: 340, height: 188 },
-              resolvedGeometry.batchLabel.guard,
-            ]
-          : undefined}
+        capacityValues={
+          snapshot.adapterKind === 'http'
+            ? snapshot.config?.readerChannelCapacity.allowed
+            : undefined
+        }
+        hoseForbiddenBoxes={
+          orientation === 'portrait'
+            ? [
+                { x: 70, y: readerChannelGeometry.end.y - 196, width: 340, height: 188 },
+                resolvedGeometry.batchLabel.guard,
+              ]
+            : undefined
+        }
       />
       <ChannelCable
         snapshot={snapshot.senderChannel}
@@ -88,12 +101,16 @@ export function PipelineSvg({
         selected={selectedId === snapshot.senderChannel.id}
         onSelect={onSelect}
         orientation={orientation}
-        capacityValues={snapshot.adapterKind === 'http'
-          ? snapshot.config?.senderChannelCapacity.allowed
-          : undefined}
-        hoseForbiddenBoxes={orientation === 'portrait'
-          ? [{ x: 70, y: senderChannelGeometry.end.y - 196, width: 340, height: 188 }]
-          : undefined}
+        capacityValues={
+          snapshot.adapterKind === 'http'
+            ? snapshot.config?.senderChannelCapacity.allowed
+            : undefined
+        }
+        hoseForbiddenBoxes={
+          orientation === 'portrait'
+            ? [{ x: 70, y: senderChannelGeometry.end.y - 196, width: 340, height: 188 }]
+            : undefined
+        }
       />
       <ellipse
         cx={VALVE_APERTURE.centerX}
@@ -103,9 +120,11 @@ export function PipelineSvg({
         fill="#03111f"
         className="pipeline-valve-vacuum"
         data-vacuum-fill="uniform"
-        transform={throttlerTransform.x === 0 && throttlerTransform.y === 0
-          ? undefined
-          : `translate(${throttlerTransform.x} ${throttlerTransform.y})`}
+        transform={
+          throttlerTransform.x === 0 && throttlerTransform.y === 0
+            ? undefined
+            : `translate(${throttlerTransform.x} ${throttlerTransform.y})`
+        }
       />
       <ReaderActor
         snapshot={snapshot.reader}

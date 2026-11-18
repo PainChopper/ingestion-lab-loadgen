@@ -38,10 +38,7 @@ export function occupancyPressure(
   return clampPressure(depthBatches / appliedCapacity)
 }
 
-export function blockingPressure(
-  blockedSenders: number,
-  oldestBlockedSenderMs: number,
-): number {
+export function blockingPressure(blockedSenders: number, oldestBlockedSenderMs: number): number {
   if (
     blockedSenders <= 0 ||
     !Number.isFinite(oldestBlockedSenderMs) ||
@@ -60,9 +57,7 @@ function hasRendezvousWaiter(channel: ChannelTelemetrySnapshot): boolean {
   return channel.capacity.applied === 0 && channel.blockedSenders > 0
 }
 
-export function effectiveChannelPressure(
-  channel: ChannelTelemetrySnapshot,
-): number {
+export function effectiveChannelPressure(channel: ChannelTelemetrySnapshot): number {
   if (hasRendezvousWaiter(channel)) return 1
 
   return Math.max(
@@ -71,15 +66,11 @@ export function effectiveChannelPressure(
   )
 }
 
-function moveDisplayedPressure(
-  current: number,
-  target: number,
-  elapsedMs: number,
-): number {
+function moveDisplayedPressure(current: number, target: number, elapsedMs: number): number {
   if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return current
 
   const difference = target - current
-  const maxChange = PRESSURE_UNITS_PER_SECOND * elapsedMs / 1_000
+  const maxChange = (PRESSURE_UNITS_PER_SECOND * elapsedMs) / 1_000
   if (Math.abs(difference) <= maxChange) return target
 
   const next = current + Math.sign(difference) * maxChange
@@ -153,10 +144,7 @@ export class ChannelFlowStateDeriver {
   private readonly channelStates = new Map<string, ChannelDerivationState>()
   private presentation: LoadgenSnapshotPresentation | null = null
 
-  derive(
-    snapshot: LoadgenTelemetrySnapshot,
-    observedAtMs: number,
-  ): LoadgenSnapshot {
+  derive(snapshot: LoadgenTelemetrySnapshot, observedAtMs: number): LoadgenSnapshot {
     return this.derivePresentation(snapshot, observedAtMs).snapshot
   }
 
@@ -202,9 +190,7 @@ export class ChannelFlowStateDeriver {
 
     if (mode === null) {
       const elapsedMs =
-        state.pressureActive && state.observedAtMs !== null
-          ? observedAtMs - state.observedAtMs
-          : 0
+        state.pressureActive && state.observedAtMs !== null ? observedAtMs - state.observedAtMs : 0
       state.displayedPressure = hasRendezvousWaiter(channel)
         ? 1
         : moveDisplayedPressure(

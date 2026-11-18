@@ -28,7 +28,10 @@ function renderPreviewParent(removeChild: boolean) {
 
   function Parent() {
     const { cancel, desired, phase, preview } = useDesiredControl({
-      applied: 4, revision: 10, available: true, dispatch,
+      applied: 4,
+      revision: 10,
+      available: true,
+      dispatch,
     })
     const [trigger, setTrigger] = useState(false)
     const handlePreview = () => {
@@ -37,8 +40,12 @@ function renderPreviewParent(removeChild: boolean) {
     }
     return (
       <>
-        <button type="button" onClick={handlePreview}>Preview</button>
-        <output aria-label="Parent control">{phase}: {desired}</output>
+        <button type="button" onClick={handlePreview}>
+          Preview
+        </button>
+        <output aria-label="Parent control">
+          {phase}: {desired}
+        </output>
         {(!removeChild || !trigger) && <Child cancel={cancel} trigger={trigger} />}
       </>
     )
@@ -83,9 +90,16 @@ describe('useDesiredControl', () => {
 
   it('previews and commits after StrictMode restarts layout effects', async () => {
     const dispatch = vi.fn().mockResolvedValue({ accepted: true })
-    const { result } = renderHook(() => useDesiredControl({
-      applied: 4, revision: 10, available: true, dispatch,
-    }), { wrapper: StrictMode })
+    const { result } = renderHook(
+      () =>
+        useDesiredControl({
+          applied: 4,
+          revision: 10,
+          available: true,
+          dispatch,
+        }),
+      { wrapper: StrictMode },
+    )
 
     act(() => result.current.preview(7))
     expect(result.current).toMatchObject({ desired: 7, phase: 'preview' })
@@ -103,13 +117,20 @@ describe('useDesiredControl', () => {
       rejectReceipt = reject
     })
     const dispatch = vi.fn().mockResolvedValue({ accepted: true }).mockReturnValueOnce(receipt)
-    const { result, unmount } = renderHook(() => useDesiredControl({
-      applied: 4, revision: 10, available: true, dispatch,
-    }))
+    const { result, unmount } = renderHook(() =>
+      useDesiredControl({
+        applied: 4,
+        revision: 10,
+        available: true,
+        dispatch,
+      }),
+    )
     const { commit, preview } = result.current
 
     let inFlight!: Promise<boolean>
-    act(() => { inFlight = commit(7) })
+    act(() => {
+      inFlight = commit(7)
+    })
     expect(result.current).toMatchObject({ desired: 7, phase: 'pending' })
     unmount()
 
@@ -125,18 +146,21 @@ describe('useDesiredControl', () => {
   it('keeps accepted false desired pending through stale snapshots until an exact newer snapshot', async () => {
     const dispatch = vi.fn().mockResolvedValue({ accepted: true })
     const view = renderHook(
-      ({ applied, revision }) => useDesiredControl({
-        applied,
-        revision,
-        available: true,
-        dispatch,
-      }),
+      ({ applied, revision }) =>
+        useDesiredControl({
+          applied,
+          revision,
+          available: true,
+          dispatch,
+        }),
       { initialProps: { applied: true, revision: 10 } },
     )
 
     act(() => view.result.current.preview(false))
     expect(view.result.current).toMatchObject({ desired: false, phase: 'preview' })
-    await act(async () => { await view.result.current.commit() })
+    await act(async () => {
+      await view.result.current.commit()
+    })
     expect(dispatch).toHaveBeenCalledOnce()
     expect(dispatch).toHaveBeenCalledWith(false)
     expect(view.result.current).toMatchObject({ desired: false, phase: 'pending' })
@@ -150,23 +174,29 @@ describe('useDesiredControl', () => {
   it('rolls rejected and unavailable commands back to the latest applied value', async () => {
     let resolveReceipt!: (receipt: { accepted: boolean }) => void
     let rejectReceipt!: (reason: Error) => void
-    const dispatch = vi.fn(() => new Promise<{ accepted: boolean }>((resolve, reject) => {
-      resolveReceipt = resolve
-      rejectReceipt = reject
-    }))
+    const dispatch = vi.fn(
+      () =>
+        new Promise<{ accepted: boolean }>((resolve, reject) => {
+          resolveReceipt = resolve
+          rejectReceipt = reject
+        }),
+    )
     const view = renderHook(
-      ({ applied, revision }) => useDesiredControl({
-        applied,
-        revision,
-        available: true,
-        dispatch,
-      }),
+      ({ applied, revision }) =>
+        useDesiredControl({
+          applied,
+          revision,
+          available: true,
+          dispatch,
+        }),
       { initialProps: { applied: 4, revision: 10 } },
     )
 
     act(() => view.result.current.preview(8))
     let rejected!: Promise<boolean>
-    act(() => { rejected = view.result.current.commit() })
+    act(() => {
+      rejected = view.result.current.commit()
+    })
     expect(dispatch).toHaveBeenNthCalledWith(1, 8)
     view.rerender({ applied: 5, revision: 11 })
     expect(view.result.current).toMatchObject({ applied: 5, desired: 8, phase: 'pending' })
@@ -182,7 +212,9 @@ describe('useDesiredControl', () => {
 
     act(() => view.result.current.preview(9))
     let unavailable!: Promise<boolean>
-    act(() => { unavailable = view.result.current.commit() })
+    act(() => {
+      unavailable = view.result.current.commit()
+    })
     expect(dispatch).toHaveBeenNthCalledWith(2, 9)
     view.rerender({ applied: 6, revision: 12 })
     expect(view.result.current).toMatchObject({ applied: 6, desired: 9, phase: 'pending' })
@@ -200,15 +232,20 @@ describe('useDesiredControl', () => {
 
   it('cancels preview without dispatch and blocks a second commit while pending', async () => {
     let resolveReceipt: ((receipt: { accepted: boolean }) => void) | undefined
-    const dispatch = vi.fn(() => new Promise<{ accepted: boolean }>((resolve) => {
-      resolveReceipt = resolve
-    }))
-    const view = renderHook(() => useDesiredControl({
-      applied: 4,
-      revision: 10,
-      available: true,
-      dispatch,
-    }))
+    const dispatch = vi.fn(
+      () =>
+        new Promise<{ accepted: boolean }>((resolve) => {
+          resolveReceipt = resolve
+        }),
+    )
+    const view = renderHook(() =>
+      useDesiredControl({
+        applied: 4,
+        revision: 10,
+        available: true,
+        dispatch,
+      }),
+    )
 
     act(() => view.result.current.preview(6))
     act(() => view.result.current.cancel())
@@ -217,7 +254,9 @@ describe('useDesiredControl', () => {
 
     act(() => view.result.current.preview(7))
     let first!: Promise<boolean>
-    act(() => { first = view.result.current.commit() })
+    act(() => {
+      first = view.result.current.commit()
+    })
     await act(async () => {
       expect(await view.result.current.commit(8)).toBe(false)
     })
@@ -231,9 +270,12 @@ describe('useDesiredControl', () => {
 
   it('ignores a late rejection after availability is lost and a newer value is dispatched', async () => {
     let rejectFirstCommand!: (receipt: { accepted: boolean }) => void
-    const firstDispatch = vi.fn(() => new Promise<{ accepted: boolean }>((resolve) => {
-      rejectFirstCommand = resolve
-    }))
+    const firstDispatch = vi.fn(
+      () =>
+        new Promise<{ accepted: boolean }>((resolve) => {
+          rejectFirstCommand = resolve
+        }),
+    )
     const nextDispatch = vi.fn(async () => ({ accepted: true }))
     const { result, rerender } = renderHook(useDesiredControl<number>, {
       initialProps: { applied: 4, revision: 10, available: true, dispatch: firstDispatch },

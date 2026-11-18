@@ -11,10 +11,10 @@ export type RoundedPathCommand =
   | { readonly kind: 'horizontal'; readonly x: number }
   | { readonly kind: 'vertical'; readonly y: number }
   | {
-    readonly kind: 'quadratic'
-    readonly control: Point
-    readonly end: Point
-  }
+      readonly kind: 'quadratic'
+      readonly control: Point
+      readonly end: Point
+    }
 
 export interface RoundedPathGeometry {
   readonly start: Point
@@ -48,19 +48,14 @@ export const PIPELINE_VIEW_BOX = Object.freeze({
   height: 650,
 })
 
-export const PIPELINE_VIEW_BOX_VALUE =
-  `0 0 ${PIPELINE_VIEW_BOX.width} ${PIPELINE_VIEW_BOX.height}`
+export const PIPELINE_VIEW_BOX_VALUE = `0 0 ${PIPELINE_VIEW_BOX.width} ${PIPELINE_VIEW_BOX.height}`
 
 export const FLOW_BASELINE = 415
 export const ACTOR_BOTTOM = 475
 export const PORTRAIT_THROTTLER_LIFT = 48
-export const LANDSCAPE_WORKER_ACTOR_MIN_HEIGHT =
-  2 * (ACTOR_BOTTOM - FLOW_BASELINE)
+export const LANDSCAPE_WORKER_ACTOR_MIN_HEIGHT = 2 * (ACTOR_BOTTOM - FLOW_BASELINE)
 
-function roundedPath(
-  start: Point,
-  commands: readonly RoundedPathCommand[],
-): RoundedPathGeometry {
+function roundedPath(start: Point, commands: readonly RoundedPathCommand[]): RoundedPathGeometry {
   let current = start
   const d = [
     `M${start.x} ${start.y}`,
@@ -191,18 +186,17 @@ function batchLabelGeometry(anchor: Point): PipelineBatchLabelGeometry {
   }
 }
 
-export const CHANNEL_CABLE_ENDPOINTS: Readonly<
-  Record<ChannelId, ChannelCableEndpoints>
-> = Object.freeze({
-  'reader-to-throttler': {
-    start: ACTOR_GEOMETRY.reader.ports.output,
-    end: ACTOR_GEOMETRY.throttler.ports.input,
-  },
-  'throttler-to-sender': {
-    start: ACTOR_GEOMETRY.throttler.ports.output,
-    end: ACTOR_GEOMETRY.sender.ports.input,
-  },
-})
+export const CHANNEL_CABLE_ENDPOINTS: Readonly<Record<ChannelId, ChannelCableEndpoints>> =
+  Object.freeze({
+    'reader-to-throttler': {
+      start: ACTOR_GEOMETRY.reader.ports.output,
+      end: ACTOR_GEOMETRY.throttler.ports.input,
+    },
+    'throttler-to-sender': {
+      start: ACTOR_GEOMETRY.throttler.ports.output,
+      end: ACTOR_GEOMETRY.sender.ports.input,
+    },
+  })
 
 export interface PipelineGeometryInput {
   readonly orientation: PipelineOrientation
@@ -317,10 +311,36 @@ function landscapeGeometry(contentWidth: number) {
       anchor: ACTOR_GEOMETRY.target.title.anchor,
     },
     stages: [
-      { x: 914 + targetOffset, y: 240, width: 162, height: 64, request: { x: 995 + targetOffset, y: 256, anchor: 'middle' } satisfies TextPlacement, label: { x: 995 + targetOffset, y: 276, anchor: 'middle' } satisfies TextPlacement, detail: { x: 995 + targetOffset, y: 296, anchor: 'middle' } satisfies TextPlacement },
-      { x: 914 + targetOffset, y: 315, width: 162, height: 34, label: { x: 995 + targetOffset, y: 337, anchor: 'middle' } satisfies TextPlacement },
-      { x: 914 + targetOffset, y: 370, width: 162, height: 34, label: { x: 995 + targetOffset, y: 392, anchor: 'middle' } satisfies TextPlacement },
-      { x: 914 + targetOffset, y: 425, width: 162, height: 34, label: { x: 995 + targetOffset, y: 447, anchor: 'middle' } satisfies TextPlacement },
+      {
+        x: 914 + targetOffset,
+        y: 240,
+        width: 162,
+        height: 64,
+        request: { x: 995 + targetOffset, y: 256, anchor: 'middle' } satisfies TextPlacement,
+        label: { x: 995 + targetOffset, y: 276, anchor: 'middle' } satisfies TextPlacement,
+        detail: { x: 995 + targetOffset, y: 296, anchor: 'middle' } satisfies TextPlacement,
+      },
+      {
+        x: 914 + targetOffset,
+        y: 315,
+        width: 162,
+        height: 34,
+        label: { x: 995 + targetOffset, y: 337, anchor: 'middle' } satisfies TextPlacement,
+      },
+      {
+        x: 914 + targetOffset,
+        y: 370,
+        width: 162,
+        height: 34,
+        label: { x: 995 + targetOffset, y: 392, anchor: 'middle' } satisfies TextPlacement,
+      },
+      {
+        x: 914 + targetOffset,
+        y: 425,
+        width: 162,
+        height: 34,
+        label: { x: 995 + targetOffset, y: 447, anchor: 'middle' } satisfies TextPlacement,
+      },
     ],
     connectors: [
       { x: 995 + targetOffset, y1: 304, y2: 315 },
@@ -467,53 +487,47 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       },
     },
     portraitPipe: {
-      input: roundedPath(
-        { x: 430, y: 282 },
-        [
-          { kind: 'vertical', y: 306 },
-          {
-            kind: 'quadratic',
-            control: { x: 430, y: 322 },
-            end: { x: 414, y: 322 },
-          },
-          { kind: 'horizontal', x: 390 },
-          {
-            kind: 'quadratic',
-            control: { x: 374, y: 322 },
-            end: { x: 374, y: 338 },
-          },
-          { kind: 'vertical', y: 399 },
-          {
-            kind: 'quadratic',
-            control: { x: 374, y: 415 },
-            end: { x: 390, y: 415 },
-          },
-          { kind: 'horizontal', x: 401 },
-        ],
-      ),
-      output: roundedPath(
-        { x: 459, y: 415 },
-        [
-          { kind: 'horizontal', x: 470 },
-          {
-            kind: 'quadratic',
-            control: { x: 486, y: 415 },
-            end: { x: 486, y: 431 },
-          },
-          { kind: 'vertical', y: 443 },
-          {
-            kind: 'quadratic',
-            control: { x: 486, y: 459 },
-            end: { x: 470, y: 459 },
-          },
-          { kind: 'horizontal', x: 446 },
-          {
-            kind: 'quadratic',
-            control: { x: 430, y: 459 },
-            end: { x: 430, y: 475 },
-          },
-        ],
-      ),
+      input: roundedPath({ x: 430, y: 282 }, [
+        { kind: 'vertical', y: 306 },
+        {
+          kind: 'quadratic',
+          control: { x: 430, y: 322 },
+          end: { x: 414, y: 322 },
+        },
+        { kind: 'horizontal', x: 390 },
+        {
+          kind: 'quadratic',
+          control: { x: 374, y: 322 },
+          end: { x: 374, y: 338 },
+        },
+        { kind: 'vertical', y: 399 },
+        {
+          kind: 'quadratic',
+          control: { x: 374, y: 415 },
+          end: { x: 390, y: 415 },
+        },
+        { kind: 'horizontal', x: 401 },
+      ]),
+      output: roundedPath({ x: 459, y: 415 }, [
+        { kind: 'horizontal', x: 470 },
+        {
+          kind: 'quadratic',
+          control: { x: 486, y: 415 },
+          end: { x: 486, y: 431 },
+        },
+        { kind: 'vertical', y: 443 },
+        {
+          kind: 'quadratic',
+          control: { x: 486, y: 459 },
+          end: { x: 470, y: 459 },
+        },
+        { kind: 'horizontal', x: 446 },
+        {
+          kind: 'quadratic',
+          control: { x: 430, y: 459 },
+          end: { x: 430, y: 475 },
+        },
+      ]),
     },
     transform: { x: -190, y: throttlerTop - 282 } satisfies Point,
   }
@@ -568,10 +582,36 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       anchor: 'middle',
     } satisfies TextPlacement,
     stages: [
-      { x: 78, y: targetTop + 28, width: 324, height: 72, request: { x: 240, y: targetTop + 44, anchor: 'middle' } satisfies TextPlacement, label: { x: 240, y: targetTop + 62, anchor: 'middle' } satisfies TextPlacement, detail: { x: 240, y: targetTop + 83, anchor: 'middle' } satisfies TextPlacement },
-      { x: 78, y: targetTop + 120, width: 324, height: 38, label: { x: 240, y: targetTop + 144, anchor: 'middle' } satisfies TextPlacement },
-      { x: 78, y: targetTop + 180, width: 324, height: 38, label: { x: 240, y: targetTop + 204, anchor: 'middle' } satisfies TextPlacement },
-      { x: 78, y: targetTop + 240, width: 324, height: 38, label: { x: 240, y: targetTop + 264, anchor: 'middle' } satisfies TextPlacement },
+      {
+        x: 78,
+        y: targetTop + 28,
+        width: 324,
+        height: 72,
+        request: { x: 240, y: targetTop + 44, anchor: 'middle' } satisfies TextPlacement,
+        label: { x: 240, y: targetTop + 62, anchor: 'middle' } satisfies TextPlacement,
+        detail: { x: 240, y: targetTop + 83, anchor: 'middle' } satisfies TextPlacement,
+      },
+      {
+        x: 78,
+        y: targetTop + 120,
+        width: 324,
+        height: 38,
+        label: { x: 240, y: targetTop + 144, anchor: 'middle' } satisfies TextPlacement,
+      },
+      {
+        x: 78,
+        y: targetTop + 180,
+        width: 324,
+        height: 38,
+        label: { x: 240, y: targetTop + 204, anchor: 'middle' } satisfies TextPlacement,
+      },
+      {
+        x: 78,
+        y: targetTop + 240,
+        width: 324,
+        height: 38,
+        label: { x: 240, y: targetTop + 264, anchor: 'middle' } satisfies TextPlacement,
+      },
     ],
     connectors: [
       { x: 240, y1: targetTop + 100, y2: targetTop + 120 },

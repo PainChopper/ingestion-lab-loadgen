@@ -25,23 +25,23 @@ export function ReaderActor({
   orientation,
 }: ReaderActorProps) {
   const workerStateSegments = [
-        {
-          value: `${formatInteger(snapshot.idleWorkers)} idle`,
-          tone: 'idle' as const,
-        },
-        {
-          value: `${formatInteger(snapshot.readingWorkers)} reading`,
-          tone: 'in-flight' as const,
-        },
-        {
-          value: `${formatInteger(snapshot.blockedWorkers)} blocked`,
-          tone: 'backoff' as const,
-        },
-        {
-          value: snapshot.sourceError !== null ? '1 error' : '— errors',
-          tone: 'error' as const,
-        },
-      ]
+    {
+      value: `${formatInteger(snapshot.idleWorkers)} idle`,
+      tone: 'idle' as const,
+    },
+    {
+      value: `${formatInteger(snapshot.readingWorkers)} reading`,
+      tone: 'in-flight' as const,
+    },
+    {
+      value: `${formatInteger(snapshot.blockedWorkers)} blocked`,
+      tone: 'backoff' as const,
+    },
+    {
+      value: snapshot.sourceError !== null ? '1 error' : '— errors',
+      tone: 'error' as const,
+    },
+  ]
 
   return (
     <WorkerActor
@@ -54,12 +54,22 @@ export function ReaderActor({
       workers={snapshot.workers}
       liveWorkers={snapshot.liveWorkers}
       drainingWorkers={snapshot.drainingWorkers}
-      activityCounts={{ idle: snapshot.idleWorkers, reading: snapshot.readingWorkers, blocked: snapshot.blockedWorkers, 'in-flight': 0, backoff: 0 }}
-      drainingActivityCounts={{ idle: snapshot.drainingIdleWorkers, reading: snapshot.drainingReadingWorkers, blocked: snapshot.drainingBlockedWorkers, 'in-flight': 0, backoff: 0 }}
+      activityCounts={{
+        idle: snapshot.idleWorkers,
+        reading: snapshot.readingWorkers,
+        blocked: snapshot.blockedWorkers,
+        'in-flight': 0,
+        backoff: 0,
+      }}
+      drainingActivityCounts={{
+        idle: snapshot.drainingIdleWorkers,
+        reading: snapshot.drainingReadingWorkers,
+        blocked: snapshot.drainingBlockedWorkers,
+        'in-flight': 0,
+        backoff: 0,
+      }}
       runState={snapshot.state}
-      active={rateDriven
-        ? snapshot.readTps !== null && snapshot.readTps > 0
-        : undefined}
+      active={rateDriven ? snapshot.readTps !== null && snapshot.readTps > 0 : undefined}
       outputPort={geometry.ports.output}
       primaryMetric={`Read ${formatRate(snapshot.readTps)}`}
       statusMetricSegments={workerStateSegments}

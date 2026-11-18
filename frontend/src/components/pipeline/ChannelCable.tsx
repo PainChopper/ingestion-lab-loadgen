@@ -1,11 +1,7 @@
 import type { CSSProperties, KeyboardEvent } from 'react'
 import type { ChannelSnapshot, SelectableId } from '../../model/loadgen'
 import { channelPressureColor } from '../../model/channelFlowState'
-import {
-  formatInteger,
-  formatMilliseconds,
-  formatRate,
-} from './formatters'
+import { formatInteger, formatMilliseconds, formatRate } from './formatters'
 import type { PipelineChannelGeometry, Point } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
@@ -43,15 +39,11 @@ export function ChannelCable({
   const end = geometry?.end ?? endProp ?? start
   const metrics = geometry?.metrics ?? {
     x: (start.x + end.x) / 2,
-    throughputY: orientation === 'portrait'
-      ? snapshot.id === 'reader-to-throttler' ? 328 : 750
-      : 507,
-    depthY: orientation === 'portrait'
-      ? snapshot.id === 'reader-to-throttler' ? 349 : 771
-      : 528,
-    waitingY: orientation === 'portrait'
-      ? snapshot.id === 'reader-to-throttler' ? 370 : 792
-      : 548,
+    throughputY:
+      orientation === 'portrait' ? (snapshot.id === 'reader-to-throttler' ? 328 : 750) : 507,
+    depthY: orientation === 'portrait' ? (snapshot.id === 'reader-to-throttler' ? 349 : 771) : 528,
+    waitingY:
+      orientation === 'portrait' ? (snapshot.id === 'reader-to-throttler' ? 370 : 792) : 548,
   }
   const presentation = getChannelCapacityGeometryPresentation(
     snapshot.capacity,
@@ -62,30 +54,25 @@ export function ChannelCable({
     hoseForbiddenBoxes,
   )
   const portrait = orientation === 'portrait'
-  const flowActive = (
+  const flowActive =
     (snapshot.flowState === 'normal' ||
       snapshot.flowState === 'near-limit' ||
       snapshot.flowState === 'backpressure') &&
-    (snapshot.inputTransactionsPerSecond > 0 ||
-      snapshot.outputTransactionsPerSecond > 0)
-  )
-  const markersVisible = (
-    snapshot.inputTransactionsPerSecond > 0 ||
-    snapshot.outputTransactionsPerSecond > 0
-  )
+    (snapshot.inputTransactionsPerSecond > 0 || snapshot.outputTransactionsPerSecond > 0)
+  const markersVisible =
+    snapshot.inputTransactionsPerSecond > 0 || snapshot.outputTransactionsPerSecond > 0
   const channelStyle = {
-    '--pipeline-channel-pressure-color': channelPressureColor(
-      snapshot.displayedPressure,
-    ),
+    '--pipeline-channel-pressure-color': channelPressureColor(snapshot.displayedPressure),
   } as CSSProperties
-  const batchStrokeWidth = 2.5 + 7.5 * (
-    batchSize.applied === null || batchSize.max <= batchSize.min
-      ? 0
-      : Math.min(1, Math.max(0,
-          (batchSize.applied - batchSize.min) /
-          (batchSize.max - batchSize.min),
-        ))
-  )
+  const batchStrokeWidth =
+    2.5 +
+    7.5 *
+      (batchSize.applied === null || batchSize.max <= batchSize.min
+        ? 0
+        : Math.min(
+            1,
+            Math.max(0, (batchSize.applied - batchSize.min) / (batchSize.max - batchSize.min)),
+          ))
 
   const handleSelectionKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -109,11 +96,7 @@ export function ChannelCable({
       onClick={() => onSelect(snapshot.id)}
       onKeyDown={handleSelectionKeyDown}
     >
-      <path
-        d={presentation.cablePath}
-        className="pipeline-link-hit-area"
-        aria-hidden="true"
-      />
+      <path d={presentation.cablePath} className="pipeline-link-hit-area" aria-hidden="true" />
 
       <path
         d={presentation.cablePath}
@@ -134,7 +117,8 @@ export function ChannelCable({
         textAnchor="middle"
         className="pipeline-small pipeline-channel-metric"
       >
-        Depth {formatInteger(snapshot.depthBatches)} / {formatInteger(snapshot.capacity.applied)} batches
+        Depth {formatInteger(snapshot.depthBatches)} / {formatInteger(snapshot.capacity.applied)}{' '}
+        batches
       </text>
       {snapshot.blockedSenders > 0 && (
         <text
@@ -146,7 +130,9 @@ export function ChannelCable({
           {portrait ? (
             <>
               <tspan x={metrics.x}>Waiting upstream {formatInteger(snapshot.blockedSenders)}</tspan>
-              <tspan x={metrics.x} dy="16">oldest {formatMilliseconds(snapshot.oldestBlockedSenderMs)}</tspan>
+              <tspan x={metrics.x} dy="16">
+                oldest {formatMilliseconds(snapshot.oldestBlockedSenderMs)}
+              </tspan>
             </>
           ) : (
             `Waiting upstream ${formatInteger(snapshot.blockedSenders)}, oldest ${formatMilliseconds(snapshot.oldestBlockedSenderMs)}`

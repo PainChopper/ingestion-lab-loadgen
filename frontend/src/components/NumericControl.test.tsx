@@ -38,8 +38,12 @@ function LiveNumericControl({
   })
   return (
     <>
-      <button type="button" onClick={() => liveControl.preview(7)}>Preview 7</button>
-      <button type="button" onClick={liveControl.cancel}>Cancel preview</button>
+      <button type="button" onClick={() => liveControl.preview(7)}>
+        Preview 7
+      </button>
+      <button type="button" onClick={liveControl.cancel}>
+        Cancel preview
+      </button>
       <output aria-label="Control phase">{liveControl.phase}</output>
       <NumericControl label="Capacity" control={snapshot} desiredControl={liveControl} />
     </>
@@ -159,9 +163,12 @@ describe('NumericControl', () => {
   it('returns to the latest applied value when the pending command is rejected', async () => {
     const user = userEvent.setup()
     let resolveReceipt!: (receipt: { accepted: boolean }) => void
-    const dispatch = vi.fn(() => new Promise<{ accepted: boolean }>((resolve) => {
-      resolveReceipt = resolve
-    }))
+    const dispatch = vi.fn(
+      () =>
+        new Promise<{ accepted: boolean }>((resolve) => {
+          resolveReceipt = resolve
+        }),
+    )
     const { rerender } = render(<LiveNumericControl snapshot={control(4)} dispatch={dispatch} />)
     const input = screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Capacity/ })
 
@@ -171,7 +178,9 @@ describe('NumericControl', () => {
     expect(input.value).toBe('8')
     expect(screen.getByLabelText('Control phase').textContent).toBe('pending')
 
-    await act(async () => { resolveReceipt({ accepted: false }) })
+    await act(async () => {
+      resolveReceipt({ accepted: false })
+    })
     expect(input.disabled).toBe(false)
     expect(input.value).toBe('5')
     expect(screen.getByLabelText('Control phase').textContent).toBe('idle')
@@ -190,7 +199,13 @@ describe('NumericControl', () => {
     expect(input.value).toBe('7')
     expect(phase.textContent).toBe('preview')
 
-    rerender(<LiveNumericControl snapshot={control(null, 'unavailable')} revision={2} dispatch={dispatch} />)
+    rerender(
+      <LiveNumericControl
+        snapshot={control(null, 'unavailable')}
+        revision={2}
+        dispatch={dispatch}
+      />,
+    )
     expect(input.disabled).toBe(true)
     expect(input.value).toBe('')
     expect(phase.textContent).toBe('idle')
@@ -295,7 +310,9 @@ describe('NumericControl', () => {
     await user.clear(input)
     await user.type(input, '7')
     expect(phase.textContent).toBe('preview')
-    rerender(<LiveNumericControl snapshot={control(4, 'unavailable')} revision={2} dispatch={dispatch} />)
+    rerender(
+      <LiveNumericControl snapshot={control(4, 'unavailable')} revision={2} dispatch={dispatch} />,
+    )
 
     expect(input.disabled).toBe(true)
     expect(input.value).toBe('4')

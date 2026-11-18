@@ -6,11 +6,7 @@ export type SelectableId = ActorId | ChannelId | 'http'
 
 export type AdapterKind = 'simulation' | 'http'
 
-export type ConnectionState =
-  | 'connecting'
-  | 'connected'
-  | 'disconnected'
-  | 'error'
+export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
 export type RunState = 'idle' | 'starting' | 'running' | 'stopping' | 'faulted'
 
@@ -27,20 +23,12 @@ export interface RetryPolicySnapshot {
   readonly retryTimeouts: boolean
 }
 
-export type HttpLastOutcome =
-  | 'http-response'
-  | 'timeout'
-  | 'network-error'
-  | null
+export type HttpLastOutcome = 'http-response' | 'timeout' | 'network-error' | null
 
 export type ChannelTrend = 'rising' | 'steady' | 'falling' | 'unknown'
 
 export type ChannelFlowState =
-  | 'normal'
-  | 'near-limit'
-  | 'backpressure'
-  | 'stopped'
-  | 'connection-error'
+  'normal' | 'near-limit' | 'backpressure' | 'stopped' | 'connection-error'
 
 export interface NumericControlSnapshot {
   readonly applied: number | null
@@ -130,7 +118,10 @@ export interface ThrottlerSnapshot {
   readonly state: RunState
 }
 
-export type ChannelCapacitySnapshot = Pick<NumericControlSnapshot, 'applied' | 'min' | 'max' | 'step' | 'unit'>
+export type ChannelCapacitySnapshot = Pick<
+  NumericControlSnapshot,
+  'applied' | 'min' | 'max' | 'step' | 'unit'
+>
 
 export interface ChannelTelemetrySnapshot {
   readonly id: ChannelId
@@ -263,11 +254,7 @@ export type LoadgenCommand =
   | { type: 'set-sender-workers'; value: number }
 
 export interface AdapterError {
-  readonly code:
-    | 'invalid-command'
-    | 'disposed'
-    | 'unavailable'
-    | 'internal'
+  readonly code: 'invalid-command' | 'disposed' | 'unavailable' | 'internal'
   readonly message: string
   readonly retryable: boolean
   readonly details: Readonly<Record<string, unknown>> | null

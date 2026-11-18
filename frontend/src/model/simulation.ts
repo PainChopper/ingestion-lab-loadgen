@@ -1,7 +1,4 @@
-import type {
-  HttpLastOutcome,
-  ChannelTrend,
-} from './loadgen'
+import type { HttpLastOutcome, ChannelTrend } from './loadgen'
 
 export const FIXED_STEP_MS = 10
 export const SNAPSHOT_INTERVAL_MS = 100
@@ -9,15 +6,7 @@ export const RETRY_MAX_ATTEMPTS = 3
 export const RETRY_BACKOFF_BASE_MS = 250
 export const RETRY_BACKOFF_MULTIPLIER = 2
 export const RETRY_JITTER_PERCENT = 20
-export const RETRYABLE_STATUS_CODES = Object.freeze([
-  408,
-  425,
-  429,
-  500,
-  502,
-  503,
-  504,
-])
+export const RETRYABLE_STATUS_CODES = Object.freeze([408, 425, 429, 500, 502, 503, 504])
 
 const RATE_WINDOW_STEPS = 100
 const READER_TRANSACTIONS_PER_WORKER_SECOND = 50_000
@@ -233,14 +222,10 @@ function roundedStepDuration(durationMs: number): number {
   return Math.ceil(Math.max(0, finiteDuration) / FIXED_STEP_MS) * FIXED_STEP_MS
 }
 
-export function deterministicRetryDelayMs(
-  batchSequence: number,
-  retryNumber: 1 | 2,
-): number {
-  const nominal = RETRY_BACKOFF_BASE_MS *
-    RETRY_BACKOFF_MULTIPLIER ** (retryNumber - 1)
-  const factorIndex = ((batchSequence + retryNumber) %
-    RETRY_JITTER_FACTORS.length + RETRY_JITTER_FACTORS.length) %
+export function deterministicRetryDelayMs(batchSequence: number, retryNumber: 1 | 2): number {
+  const nominal = RETRY_BACKOFF_BASE_MS * RETRY_BACKOFF_MULTIPLIER ** (retryNumber - 1)
+  const factorIndex =
+    (((batchSequence + retryNumber) % RETRY_JITTER_FACTORS.length) + RETRY_JITTER_FACTORS.length) %
     RETRY_JITTER_FACTORS.length
   return roundedStepDuration(nominal * RETRY_JITTER_FACTORS[factorIndex])
 }
@@ -259,10 +244,7 @@ class StatefulChannel<TItem> {
   blockedMsTotal = 0
   blockedSenders = 0
 
-  constructor(
-    capacity: number,
-    transactionsOf: (item: TItem) => number,
-  ) {
+  constructor(capacity: number, transactionsOf: (item: TItem) => number) {
     this.capacity = capacity
     this.transactionsOf = transactionsOf
   }
@@ -272,10 +254,7 @@ class StatefulChannel<TItem> {
   }
 
   get bufferedTransactions(): number {
-    return this.items.reduce(
-      (total, item) => total + this.transactionsOf(item),
-      0,
-    )
+    return this.items.reduce((total, item) => total + this.transactionsOf(item), 0)
   }
 
   get oldestBlockedSenderMs(): number {
@@ -312,32 +291,26 @@ class StatefulChannel<TItem> {
   observeBlocked(blocked: boolean, senderProgressed: boolean): void {
     this.blockedSenders = blocked ? 1 : 0
     if (blocked) {
-      this.blockedForMs = senderProgressed
-        ? FIXED_STEP_MS
-        : this.blockedForMs + FIXED_STEP_MS
+      this.blockedForMs = senderProgressed ? FIXED_STEP_MS : this.blockedForMs + FIXED_STEP_MS
       this.blockedMsTotal += FIXED_STEP_MS
     } else {
       this.blockedForMs = 0
     }
   }
 
-  telemetry(
-    activity: ChannelActivity,
-    rateSeconds: number,
-  ): ChannelTelemetry {
-    const inputBatchesPerSecond =
-      rateSeconds === 0 ? 0 : activity.inputBatches / rateSeconds
-    const outputBatchesPerSecond =
-      rateSeconds === 0 ? 0 : activity.outputBatches / rateSeconds
+  telemetry(activity: ChannelActivity, rateSeconds: number): ChannelTelemetry {
+    const inputBatchesPerSecond = rateSeconds === 0 ? 0 : activity.inputBatches / rateSeconds
+    const outputBatchesPerSecond = rateSeconds === 0 ? 0 : activity.outputBatches / rateSeconds
     const inputTransactionsPerSecond =
       rateSeconds === 0 ? 0 : activity.inputTransactions / rateSeconds
     const outputTransactionsPerSecond =
       rateSeconds === 0 ? 0 : activity.outputTransactions / rateSeconds
-    const trend: ChannelTrend = inputTransactionsPerSecond > outputTransactionsPerSecond
-      ? 'rising'
-      : inputTransactionsPerSecond < outputTransactionsPerSecond
-        ? 'falling'
-        : 'steady'
+    const trend: ChannelTrend =
+      inputTransactionsPerSecond > outputTransactionsPerSecond
+        ? 'rising'
+        : inputTransactionsPerSecond < outputTransactionsPerSecond
+          ? 'falling'
+          : 'steady'
     return {
       capacity: this.capacity,
       sentBatchesTotal: this.sentBatchesTotal,
@@ -374,7 +347,6 @@ class StatefulChannel<TItem> {
     activity.outputBatches += 1
     activity.outputTransactions += transactions
   }
-
 }
 
 export class FixedStepSimulation {
@@ -383,9 +355,7 @@ export class FixedStepSimulation {
   private readonly readerChannel: StatefulChannel<SimulationBatch>
   private readonly senderChannel: StatefulChannel<SimulationBatch>
   private readonly activities: StepActivity[] = []
-  private readonly attemptOutcomeSource:
-    | SimulationAttemptOutcomeSource
-    | undefined
+  private readonly attemptOutcomeSource: SimulationAttemptOutcomeSource | undefined
   private workers: SenderWorker[]
   private nextWorkerIndex = 0
   private readerTransactionCredit = 0
@@ -426,18 +396,11 @@ export class FixedStepSimulation {
     attemptOutcomeSource?: SimulationAttemptOutcomeSource,
   ) {
     this.config = { ...config, throttlerInstalled: config.throttlerInstalled ?? true }
-    this.readerChannel = new StatefulChannel(
-      readerChannelCapacity,
-      (batch) => batch.transactions,
-    )
-    this.senderChannel = new StatefulChannel(
-      senderChannelCapacity,
-      (batch) => batch.transactions,
-    )
+    this.readerChannel = new StatefulChannel(readerChannelCapacity, (batch) => batch.transactions)
+    this.senderChannel = new StatefulChannel(senderChannelCapacity, (batch) => batch.transactions)
     this.attemptOutcomeSource = attemptOutcomeSource
-    this.workers = Array.from(
-      { length: config.senderWorkers },
-      (_, ordinal) => createWorker(ordinal),
+    this.workers = Array.from({ length: config.senderWorkers }, (_, ordinal) =>
+      createWorker(ordinal),
     )
     this.nextWorkerIndex = 0
   }
@@ -473,9 +436,14 @@ export class FixedStepSimulation {
     if (this.activities.length > RATE_WINDOW_STEPS) this.activities.shift()
   }
 
-  updateConfig(values: Partial<Pick<
-    SimulationConfig, 'readerWorkers' | 'senderWorkers' | 'requestedTps' | 'throttlerInstalled'
-  >>): void {
+  updateConfig(
+    values: Partial<
+      Pick<
+        SimulationConfig,
+        'readerWorkers' | 'senderWorkers' | 'requestedTps' | 'throttlerInstalled'
+      >
+    >,
+  ): void {
     const senderWorkers = values.senderWorkers
     Object.assign(this.config, values)
     if (senderWorkers !== undefined) {
@@ -495,12 +463,11 @@ export class FixedStepSimulation {
 
   telemetry(): SimulationTelemetry {
     const aggregate = this.aggregateActivity()
-    const rateSeconds = RATE_WINDOW_STEPS * FIXED_STEP_MS / 1_000
+    const rateSeconds = (RATE_WINDOW_STEPS * FIXED_STEP_MS) / 1_000
     const readerChannel = this.readerChannel.telemetry(aggregate.readerChannel, rateSeconds)
     const senderChannel = this.senderChannel.telemetry(aggregate.senderChannel, rateSeconds)
     const divisor = rateSeconds === 0 ? 1 : rateSeconds
-    const { active: workerStates, draining: drainingWorkerStates } =
-      this.workerStateCounts()
+    const { active: workerStates, draining: drainingWorkerStates } = this.workerStateCounts()
 
     return {
       elapsedMs: this.elapsedMs,
@@ -523,11 +490,9 @@ export class FixedStepSimulation {
         terminalFailedTransactionsPerSecond: aggregate.terminalFailedTransactions / divisor,
         terminalFailedBatchesTotal: this.terminalFailedBatchesTotal,
         terminalFailedTransactionsTotal: this.terminalFailedTransactionsTotal,
-        ambiguousTimeoutTransactionsTotal:
-          this.ambiguousTimeoutTransactionsTotal,
+        ambiguousTimeoutTransactionsTotal: this.ambiguousTimeoutTransactionsTotal,
         duplicateRiskTransactionsTotal: this.duplicateRiskTransactionsTotal,
-        ambiguousTerminalTransactionsTotal:
-          this.ambiguousTerminalTransactionsTotal,
+        ambiguousTerminalTransactionsTotal: this.ambiguousTerminalTransactionsTotal,
       },
       http: {
         requestsStartedTotal: this.requestStartedTotal,
@@ -539,8 +504,7 @@ export class FixedStepSimulation {
         networkErrorsTotal: this.networkErrorTotal,
         successfulTransactionsTotal: this.successfulTransactionsTotal,
         failedAttemptTransactionsTotal: this.failedAttemptTransactionsTotal,
-        inFlightRequests:
-          workerStates.inFlight + drainingWorkerStates.inFlight,
+        inFlightRequests: workerStates.inFlight + drainingWorkerStates.inFlight,
         startedTransactionsPerSecond: aggregate.httpStartedTransactions / divisor,
         completedTransactionsPerSecond: aggregate.httpCompletedTransactions / divisor,
         succeededTransactionsPerSecond: aggregate.httpSucceededTransactions / divisor,
@@ -591,20 +555,14 @@ export class FixedStepSimulation {
 
   private completeDueAttempts(activity: StepActivity): void {
     for (const worker of this.workers) {
-      if (
-        worker.state !== 'in-flight' ||
-        worker.completeAtMs > this.elapsedMs
-      ) {
+      if (worker.state !== 'in-flight' || worker.completeAtMs > this.elapsedMs) {
         continue
       }
       this.completeAttempt(worker, activity)
     }
   }
 
-  private completeAttempt(
-    worker: SenderWorker,
-    activity: StepActivity,
-  ): void {
+  private completeAttempt(worker: SenderWorker, activity: StepActivity): void {
     const batch = worker.batch
     const outcome = worker.outcome
     if (batch === null || outcome === null) {
@@ -671,17 +629,13 @@ export class FixedStepSimulation {
     }
     const retryNumber = worker.attempt as 1 | 2
     worker.state = 'backoff'
-    worker.retryAtMs =
-      this.elapsedMs + deterministicRetryDelayMs(batch.sequence, retryNumber)
+    worker.retryAtMs = this.elapsedMs + deterministicRetryDelayMs(batch.sequence, retryNumber)
     worker.completeAtMs = 0
     worker.outcome = null
     worker.attemptLatencyMs = 0
   }
 
-  private failTerminally(
-    worker: SenderWorker,
-    activity: StepActivity,
-  ): void {
+  private failTerminally(worker: SenderWorker, activity: StepActivity): void {
     const batch = worker.batch
     if (batch === null) throw new Error('terminal failure requires owned batch')
     this.terminalFailedBatchesTotal += 1
@@ -707,10 +661,7 @@ export class FixedStepSimulation {
 
   private startDueRetries(activity: StepActivity): void {
     for (const worker of this.workers) {
-      if (
-        worker.state !== 'backoff' ||
-        worker.retryAtMs > this.elapsedMs
-      ) {
+      if (worker.state !== 'backoff' || worker.retryAtMs > this.elapsedMs) {
         continue
       }
       this.startAttempt(worker, worker.attempt + 1, activity)
@@ -720,15 +671,10 @@ export class FixedStepSimulation {
   private refillThrottlerTokens(): void {
     if (!this.config.throttlerInstalled) return
 
-    const refill = this.config.requestedTps * FIXED_STEP_MS / 1_000
-    const headTransactions = this.readerChannel.peek()?.transactions ??
-      this.config.readBatchSize
-    const tokenCapacity = Math.max(headTransactions, this.config.readBatchSize) +
-      refill
-    this.throttlerTokens = Math.min(
-      tokenCapacity,
-      this.throttlerTokens + refill,
-    )
+    const refill = (this.config.requestedTps * FIXED_STEP_MS) / 1_000
+    const headTransactions = this.readerChannel.peek()?.transactions ?? this.config.readBatchSize
+    const tokenCapacity = Math.max(headTransactions, this.config.readBatchSize) + refill
+    this.throttlerTokens = Math.min(tokenCapacity, this.throttlerTokens + refill)
   }
 
   private tryTakeThrottlerTokens(transactions: number): boolean {
@@ -814,8 +760,7 @@ export class FixedStepSimulation {
     const transactions = this.config.readBatchSize
     this.readerTransactionCredit = Math.min(
       this.config.readerWorkers * transactions,
-      this.readerTransactionCredit +
-        this.readerCapacityTps * FIXED_STEP_MS / 1_000,
+      this.readerTransactionCredit + (this.readerCapacityTps * FIXED_STEP_MS) / 1_000,
     )
     if (this.readerTransactionCredit < transactions) {
       return {
@@ -852,10 +797,7 @@ export class FixedStepSimulation {
           }
         }
       } else {
-        if (
-          this.readerChannel.depthBatches >=
-          this.readerChannel.capacity
-        ) {
+        if (this.readerChannel.depthBatches >= this.readerChannel.capacity) {
           return {
             readerChannelBlocked: true,
             senderChannelBlocked: false,
@@ -877,11 +819,7 @@ export class FixedStepSimulation {
     }
   }
 
-  private startAttempt(
-    worker: SenderWorker,
-    attempt: number,
-    activity: StepActivity,
-  ): void {
+  private startAttempt(worker: SenderWorker, attempt: number, activity: StepActivity): void {
     const batch = worker.batch
     if (batch === null) throw new Error('attempt requires an owned batch')
     const context: SimulationAttemptContext = {
@@ -892,12 +830,10 @@ export class FixedStepSimulation {
       targetErrorRatePercent: this.config.targetErrorRatePercent,
       httpTimeoutMs: this.config.httpTimeoutMs,
     }
-    const selected = this.attemptOutcomeSource?.(context) ??
-      this.defaultAttemptOutcome(context)
+    const selected = this.attemptOutcomeSource?.(context) ?? this.defaultAttemptOutcome(context)
     const latencyMs = roundedStepDuration(selected.latencyMs)
-    const outcome = selected.kind === 'http-response'
-      ? { ...selected, latencyMs }
-      : { ...selected, latencyMs }
+    const outcome =
+      selected.kind === 'http-response' ? { ...selected, latencyMs } : { ...selected, latencyMs }
 
     worker.state = 'in-flight'
     worker.attempt = attempt
@@ -916,9 +852,7 @@ export class FixedStepSimulation {
     }
   }
 
-  private defaultAttemptOutcome(
-    context: SimulationAttemptContext,
-  ): SimulationAttemptOutcome {
+  private defaultAttemptOutcome(context: SimulationAttemptContext): SimulationAttemptOutcome {
     const targetLatencyMs = context.targetDelayMs + 5
     if (targetLatencyMs > context.httpTimeoutMs) {
       return {
@@ -965,11 +899,7 @@ export class FixedStepSimulation {
     if (requested === this.workers.length) return
 
     const retireCount = this.workers.length - requested
-    for (
-      let index = this.workers.length - retireCount;
-      index < this.workers.length;
-      index += 1
-    ) {
+    for (let index = this.workers.length - retireCount; index < this.workers.length; index += 1) {
       this.workers[index].retiring = true
     }
     this.finalizeSenderScaleDown()
@@ -977,10 +907,7 @@ export class FixedStepSimulation {
 
   private finalizeSenderScaleDown(): void {
     const retiring = this.workers.filter((worker) => worker.retiring)
-    if (
-      retiring.length === 0 ||
-      retiring.some((worker) => worker.state !== 'idle')
-    ) {
+    if (retiring.length === 0 || retiring.some((worker) => worker.state !== 'idle')) {
       return
     }
     this.workers = this.workers.filter((worker) => !worker.retiring)
@@ -1001,13 +928,11 @@ export class FixedStepSimulation {
       aggregate.senderChannel.outputTransactions += activity.senderChannel.outputTransactions
       aggregate.senderChannel.handoffBatches += activity.senderChannel.handoffBatches
       aggregate.httpStartedTransactions += activity.httpStartedTransactions
-      aggregate.httpRetryStartedTransactions +=
-        activity.httpRetryStartedTransactions
+      aggregate.httpRetryStartedTransactions += activity.httpRetryStartedTransactions
       aggregate.httpCompletedTransactions += activity.httpCompletedTransactions
       aggregate.httpSucceededTransactions += activity.httpSucceededTransactions
       aggregate.httpRejectedTransactions += activity.httpRejectedTransactions
-      aggregate.terminalFailedTransactions +=
-        activity.terminalFailedTransactions
+      aggregate.terminalFailedTransactions += activity.terminalFailedTransactions
     }
     return aggregate
   }

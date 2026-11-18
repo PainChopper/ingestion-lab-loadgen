@@ -20,15 +20,17 @@ describe('SimulationAdapter', () => {
       backoffWorkers: 0,
       drainingWorkers: 0,
     })
-    expect(Object.keys(snapshot.sender)).toEqual(expect.arrayContaining([
-      'workers',
-      'liveWorkers',
-      'idleWorkers',
-      'inFlightWorkers',
-      'backoffWorkers',
-      'drainingWorkers',
-      'timeoutMs',
-    ]))
+    expect(Object.keys(snapshot.sender)).toEqual(
+      expect.arrayContaining([
+        'workers',
+        'liveWorkers',
+        'idleWorkers',
+        'inFlightWorkers',
+        'backoffWorkers',
+        'drainingWorkers',
+        'timeoutMs',
+      ]),
+    )
     adapter.dispose()
   })
 
@@ -63,8 +65,9 @@ describe('SimulationAdapter', () => {
     expect(adapter.getSnapshot()).toBe(disposedSnapshot)
     expect(afterDispose).not.toHaveBeenCalled()
     expect(vi.getTimerCount()).toBe(0)
-    await expect(adapter.dispatch({ type: 'set-sender-workers', value: 4 }))
-      .resolves.toMatchObject({ accepted: false, error: { code: 'disposed' } })
+    await expect(adapter.dispatch({ type: 'set-sender-workers', value: 4 })).resolves.toMatchObject(
+      { accepted: false, error: { code: 'disposed' } },
+    )
   })
 
   it('applies Reader, Sender, and TPS changes while running', async () => {
@@ -73,12 +76,15 @@ describe('SimulationAdapter', () => {
 
     await vi.advanceTimersByTimeAsync(200)
     const initial = adapter.getSnapshot()
-    await expect(adapter.dispatch({ type: 'set-reader-workers', value: 7 }))
-      .resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })
-    await expect(adapter.dispatch({ type: 'set-sender-workers', value: 4 }))
-      .resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })
-    await expect(adapter.dispatch({ type: 'set-requested-tps', value: 75_000 }))
-      .resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })
+    await expect(adapter.dispatch({ type: 'set-reader-workers', value: 7 })).resolves.toMatchObject(
+      { accepted: true, applyMode: 'immediate' },
+    )
+    await expect(adapter.dispatch({ type: 'set-sender-workers', value: 4 })).resolves.toMatchObject(
+      { accepted: true, applyMode: 'immediate' },
+    )
+    await expect(
+      adapter.dispatch({ type: 'set-requested-tps', value: 75_000 }),
+    ).resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })
 
     const updated = adapter.getSnapshot()
     expect(updated).toMatchObject({
@@ -113,8 +119,9 @@ describe('SimulationAdapter', () => {
         await vi.advanceTimersByTimeAsync(30_000)
         const after = adapter.getSnapshot()
         const deliveredTps =
-          (after.sender.successfulResponses! - before.sender.successfulResponses!) *
-          initial.reader.readBatchSize.applied! / 30
+          ((after.sender.successfulResponses! - before.sender.successfulResponses!) *
+            initial.reader.readBatchSize.applied!) /
+          30
 
         expect(after.sender.timeoutsTotal).toBe(0)
         expect(after.sender.terminalFailedTransactionsTotal).toBe(0)

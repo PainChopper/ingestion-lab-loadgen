@@ -6,15 +6,10 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
-import type {
-  ChannelSnapshot,
-  SelectableId,
-} from '../../model/loadgen'
+import type { ChannelSnapshot, SelectableId } from '../../model/loadgen'
 import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import { CHANNEL_CABLE_ENDPOINTS } from './geometry'
-import {
-  getChannelCapacityGeometryPresentation,
-} from './channelCableGeometry'
+import { getChannelCapacityGeometryPresentation } from './channelCableGeometry'
 import { ChannelCable } from './ChannelCable'
 
 const styleElement = document.createElement('style')
@@ -36,10 +31,7 @@ function derivedSnapshot(adapter: SimulationAdapter) {
   return new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0)
 }
 
-function channelSnapshot(
-  channel: ChannelSnapshot,
-  applied: number,
-): ChannelSnapshot {
+function channelSnapshot(channel: ChannelSnapshot, applied: number): ChannelSnapshot {
   return {
     ...channel,
     depthBatches: applied,
@@ -68,10 +60,12 @@ function renderCable(
         selected={false}
         onSelect={options.onSelect ?? (() => undefined)}
         capacityValues={options.capacityValues}
-        batchSize={options.batchSize ?? {
-          ...snapshot.capacity,
-          applied: snapshot.capacity.min,
-        }}
+        batchSize={
+          options.batchSize ?? {
+            ...snapshot.capacity,
+            applied: snapshot.capacity.min,
+          }
+        }
       />
     </svg>,
   )
@@ -97,22 +91,20 @@ describe('ChannelCable mounted behavior', () => {
     })
     const thickCable = thickView.container.querySelector('.pipeline-channel-cable')!
     expect(thickCable.getAttribute('d')).toBe(lowPath)
-    expect(Number.parseFloat(getComputedStyle(thickCable).strokeWidth))
-      .toBeGreaterThan(lowWidth)
+    expect(Number.parseFloat(getComputedStyle(thickCable).strokeWidth)).toBeGreaterThan(lowWidth)
     thickView.unmount()
 
     const capacityView = renderCable(channelSnapshot(channel, 12), {
       batchSize: lowBatch,
     })
-    const capacityCable = capacityView.container.querySelector(
-      '.pipeline-channel-cable',
-    )!
+    const capacityCable = capacityView.container.querySelector('.pipeline-channel-cable')!
     expect(capacityCable.getAttribute('d')).not.toBe(lowPath)
-    expect(Number.parseFloat(getComputedStyle(capacityCable).strokeWidth))
-      .toBe(lowWidth)
-    expect(capacityView.container.querySelector(
-      '#channel-reader-to-throttler',
-    )?.getAttribute('data-leg-count')).toBe('14')
+    expect(Number.parseFloat(getComputedStyle(capacityCable).strokeWidth)).toBe(lowWidth)
+    expect(
+      capacityView.container
+        .querySelector('#channel-reader-to-throttler')
+        ?.getAttribute('data-leg-count'),
+    ).toBe('14')
     capacityView.unmount()
     adapter.dispose()
   })
@@ -154,9 +146,7 @@ describe('ChannelCable mounted behavior', () => {
         inputTransactionsPerSecond: 500,
         outputTransactionsPerSecond: 0,
       })
-      const group = view.container.querySelector(
-        '#channel-reader-to-throttler',
-      )!
+      const group = view.container.querySelector('#channel-reader-to-throttler')!
 
       expect(group.classList.contains('pipeline-channel--markers-visible')).toBe(true)
       expect(group.classList.contains('pipeline-channel--flow-active')).toBe(true)
@@ -172,9 +162,7 @@ describe('ChannelCable mounted behavior', () => {
         inputTransactionsPerSecond: 500,
         outputTransactionsPerSecond: 0,
       })
-      const group = view.container.querySelector(
-        '#channel-reader-to-throttler',
-      )!
+      const group = view.container.querySelector('#channel-reader-to-throttler')!
 
       expect(group.classList.contains('pipeline-channel--markers-visible')).toBe(true)
       expect(group.classList.contains('pipeline-channel--flow-active')).toBe(false)
@@ -188,9 +176,7 @@ describe('ChannelCable mounted behavior', () => {
       inputTransactionsPerSecond: 0,
       outputTransactionsPerSecond: 0,
     })
-    const idleGroup = idleView.container.querySelector(
-      '#channel-reader-to-throttler',
-    )!
+    const idleGroup = idleView.container.querySelector('#channel-reader-to-throttler')!
     expect(idleGroup.classList.contains('pipeline-channel--markers-visible')).toBe(false)
     expect(idleGroup.classList.contains('pipeline-channel--flow-active')).toBe(false)
     idleView.unmount()
@@ -228,11 +214,8 @@ describe('ChannelCable mounted behavior', () => {
     })
 
     expect(control.getAttribute('data-pressure')).toBe('0.50')
-    expect(control.getAttribute('style')).toContain(
-      '--pipeline-channel-pressure-color: #ffd31f',
-    )
-    expect(control.querySelector('.pipeline-channel-cable')?.getAttribute('stroke'))
-      .toBeNull()
+    expect(control.getAttribute('style')).toContain('--pipeline-channel-pressure-color: #ffd31f')
+    expect(control.querySelector('.pipeline-channel-cable')?.getAttribute('stroke')).toBeNull()
     expect(screen.queryByRole('slider')).toBeNull()
     expect(screen.getByText('Depth 0 / 4 batches')).not.toBeNull()
 

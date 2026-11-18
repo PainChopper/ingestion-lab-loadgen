@@ -21,10 +21,7 @@ function linkStateClass(
     return 'pipeline-http--stopped'
   }
   if (snapshot.connectionState === 'connecting') return 'pipeline-http--warning'
-  if (
-    presentedOutcome === 'timeout' ||
-    presentedOutcome === 'network-error'
-  ) {
+  if (presentedOutcome === 'timeout' || presentedOutcome === 'network-error') {
     return 'pipeline-http--error'
   }
   if (presentedStatusCode !== null && presentedStatusCode >= 500) {
@@ -48,20 +45,18 @@ export function HttpLink({
   const path = portrait
     ? `M${start.x} ${start.y} V${start.y + 16} Q${start.x} ${start.y + 24} ${start.x - 8} ${start.y + 24} H88 Q80 ${start.y + 24} 80 ${start.y + 32} V${end.y - 8} Q80 ${end.y} 88 ${end.y} H${end.x}`
     : `M${start.x} ${start.y} H${end.x}`
-  const isIdle =
-    snapshot.throughputTps === 0 &&
-    snapshot.inFlightRequests === 0
+  const isIdle = snapshot.throughputTps === 0 && snapshot.inFlightRequests === 0
   const presentedStatusCode = telemetryAvailable && !isIdle ? snapshot.statusCode : null
   const presentedOutcome = telemetryAvailable && !isIdle ? snapshot.lastOutcome : null
   const status = !telemetryAvailable
     ? 'TELEMETRY UNAVAILABLE'
     : presentedOutcome === 'timeout'
-    ? 'TIMEOUT'
-    : presentedOutcome === 'network-error'
-      ? 'NETWORK ERROR'
-      : presentedStatusCode === null
-        ? 'HTTP —'
-        : `HTTP ${presentedStatusCode}`
+      ? 'TIMEOUT'
+      : presentedOutcome === 'network-error'
+        ? 'NETWORK ERROR'
+        : presentedStatusCode === null
+          ? 'HTTP —'
+          : `HTTP ${presentedStatusCode}`
   const inFlight = formatInteger(snapshot.inFlightRequests)
   const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -80,19 +75,10 @@ export function HttpLink({
       onClick={() => onSelect(snapshot.id)}
       onKeyDown={handleKeyDown}
     >
+      <path d={path} className="pipeline-link-hit-area" aria-hidden="true" />
+      <path d={path} className="pipeline-http-line" />
       <path
-        d={path}
-        className="pipeline-link-hit-area"
-        aria-hidden="true"
-      />
-      <path
-        d={path}
-        className="pipeline-http-line"
-      />
-      <path
-        d={portrait
-          ? `M${end.x} ${end.y} l-12 -7 v14 z`
-          : `M${end.x} ${end.y} l-12 -7 v14 z`}
+        d={portrait ? `M${end.x} ${end.y} l-12 -7 v14 z` : `M${end.x} ${end.y} l-12 -7 v14 z`}
         className="pipeline-http-arrow"
       />
       <text
@@ -105,10 +91,20 @@ export function HttpLink({
       </text>
       {telemetryAvailable && (
         <>
-          <text x={metrics.x} y={metrics.throughputY} textAnchor="middle" className="pipeline-small pipeline-http-throughput">
+          <text
+            x={metrics.x}
+            y={metrics.throughputY}
+            textAnchor="middle"
+            className="pipeline-small pipeline-http-throughput"
+          >
             {formatRate(snapshot.throughputTps)}
           </text>
-          <text x={metrics.x} y={metrics.detailY} textAnchor="middle" className="pipeline-small pipeline-http-detail">
+          <text
+            x={metrics.x}
+            y={metrics.detailY}
+            textAnchor="middle"
+            className="pipeline-small pipeline-http-detail"
+          >
             {inFlight === '—' ? '—' : `${inFlight} in-flight`} · p95{' '}
             {formatMilliseconds(snapshot.latencyP95Ms)}
           </text>

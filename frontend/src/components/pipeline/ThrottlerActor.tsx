@@ -1,20 +1,6 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react'
-import type {
-  CSSProperties,
-  KeyboardEvent,
-  PointerEvent as ReactPointerEvent,
-} from 'react'
-import type {
-  ChannelSnapshot,
-  SelectableId,
-  ThrottlerSnapshot,
-} from '../../model/loadgen'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
+import type { ChannelSnapshot, SelectableId, ThrottlerSnapshot } from '../../model/loadgen'
 import type { DesiredControl } from '../../hooks/useDesiredControl'
 import { useHoldRepeat } from '../../hooks/useHoldRepeat'
 import { channelPressureColor } from '../../model/channelFlowState'
@@ -70,30 +56,27 @@ export function ThrottlerActor({
   const localGeometry = ACTOR_GEOMETRY.throttler
   const resolvedGeometry = geometry
   const portrait = orientation === 'portrait'
-  const actorTransform = resolvedGeometry.transform.x === 0 &&
-      resolvedGeometry.transform.y === 0
-    ? undefined
-    : `translate(${resolvedGeometry.transform.x} ${resolvedGeometry.transform.y})`
-  const portraitPipe = 'portraitPipe' in resolvedGeometry
-    ? resolvedGeometry.portraitPipe
-    : null
+  const actorTransform =
+    resolvedGeometry.transform.x === 0 && resolvedGeometry.transform.y === 0
+      ? undefined
+      : `translate(${resolvedGeometry.transform.x} ${resolvedGeometry.transform.y})`
+  const portraitPipe = 'portraitPipe' in resolvedGeometry ? resolvedGeometry.portraitPipe : null
   const targets = getValveTargets(snapshot.requestedTps)
-  const adjustable = valveIsAdjustable(snapshot.requestedTps) &&
-    requestedTpsControl.available && requestedTpsControl.phase !== 'pending'
+  const adjustable =
+    valveIsAdjustable(snapshot.requestedTps) &&
+    requestedTpsControl.available &&
+    requestedTpsControl.phase !== 'pending'
   const appliedIndex = valueToOpeningIndex(
     snapshot.requestedTps.applied,
     snapshot.requestedTps,
     targets,
   )
-  const candidateValue = requestedTpsControl.phase === 'idle'
-    ? null
-    : requestedTpsControl.desired
-  const candidateIndex = candidateValue === null
-    ? null
-    : valueToOpeningIndex(candidateValue, snapshot.requestedTps, targets)
-  const candidateKind = requestedTpsControl.phase === 'idle'
-    ? null
-    : requestedTpsControl.phase
+  const candidateValue = requestedTpsControl.phase === 'idle' ? null : requestedTpsControl.desired
+  const candidateIndex =
+    candidateValue === null
+      ? null
+      : valueToOpeningIndex(candidateValue, snapshot.requestedTps, targets)
+  const candidateKind = requestedTpsControl.phase === 'idle' ? null : requestedTpsControl.phase
   const [initialAppliedIndex] = useState(appliedIndex)
   const [installationDragProgress, setInstallationDragProgress] = useState(0)
   const previousAppliedMode = useRef(snapshot.installed.applied)
@@ -164,10 +147,7 @@ export function ThrottlerActor({
     if (!openingHold.cancel()) requestedTpsControl.cancel()
   }
 
-  const handlePointerDown = (
-    event: ReactPointerEvent<SVGRectElement>,
-    delta: -1 | 1,
-  ) => {
+  const handlePointerDown = (event: ReactPointerEvent<SVGRectElement>, delta: -1 | 1) => {
     event.preventDefault()
     event.stopPropagation()
     openingHold.start(event.pointerId, delta)
@@ -197,27 +177,26 @@ export function ThrottlerActor({
     if (requestDelta(delta)) void requestedTpsControl.commit()
   }
 
-  const handleWheelKeyDown = (
-    event: KeyboardEvent<SVGRectElement>,
-    delta: -1 | 1,
-  ) => {
-    if (!['Enter', ' ', 'ArrowLeft', 'ArrowRight'].includes(event.key) ||
-      event.repeat) return
+  const handleWheelKeyDown = (event: KeyboardEvent<SVGRectElement>, delta: -1 | 1) => {
+    if (!['Enter', ' ', 'ArrowLeft', 'ArrowRight'].includes(event.key) || event.repeat) return
     event.preventDefault()
     event.stopPropagation()
     if (requestDelta(delta)) void requestedTpsControl.commit()
   }
 
   const appliedInstalled = snapshot.installed.applied
-  const metricGeometry = appliedInstalled === false
-    ? resolvedGeometry.metrics.bypass
-    : resolvedGeometry.metrics.installed
-  const installationCandidate = installedControl === undefined || installedControl.phase === 'idle'
-    ? null
-    : installedControl.desired
-  const installationCandidateKind = installedControl === undefined || installedControl.phase === 'idle'
-    ? null
-    : installedControl.phase
+  const metricGeometry =
+    appliedInstalled === false
+      ? resolvedGeometry.metrics.bypass
+      : resolvedGeometry.metrics.installed
+  const installationCandidate =
+    installedControl === undefined || installedControl.phase === 'idle'
+      ? null
+      : installedControl.desired
+  const installationCandidateKind =
+    installedControl === undefined || installedControl.phase === 'idle'
+      ? null
+      : installedControl.phase
   const targetInstalled = !appliedInstalled
   const installationControlAvailable =
     appliedInstalled !== null &&
@@ -234,16 +213,9 @@ export function ThrottlerActor({
       installationControlRef.current?.focus()
       installationFocusRequested.current = false
     })
-  }, [
-    installationControlAvailable,
-    commitInstalled,
-    previewInstalled,
-    targetInstalled,
-  ])
+  }, [installationControlAvailable, commitInstalled, previewInstalled, targetInstalled])
 
-  const handleInstallationPointerDown = (
-    event: ReactPointerEvent<SVGGElement>,
-  ) => {
+  const handleInstallationPointerDown = (event: ReactPointerEvent<SVGGElement>) => {
     event.preventDefault()
     event.stopPropagation()
     if (!installationControlAvailable) return
@@ -259,18 +231,17 @@ export function ThrottlerActor({
     event.currentTarget.setPointerCapture?.(event.pointerId)
   }
 
-  const handleInstallationPointerMove = (
-    event: ReactPointerEvent<SVGGElement>,
-  ) => {
+  const handleInstallationPointerMove = (event: ReactPointerEvent<SVGGElement>) => {
     const drag = installationDrag.current
     if (drag === null) return
     event.preventDefault()
     event.stopPropagation()
     const dx = event.clientX - drag.startX
     const dy = event.clientY - drag.startY
-    const projection = appliedInstalled === false
-      ? Math.max(dy, (-dx + dy) / Math.sqrt(2))
-      : Math.max(-dy, (dx - dy) / Math.sqrt(2))
+    const projection =
+      appliedInstalled === false
+        ? Math.max(dy, (-dx + dy) / Math.sqrt(2))
+        : Math.max(-dy, (dx - dy) / Math.sqrt(2))
     if (Math.hypot(dx, dy) >= 4) drag.moved = true
     const progress = Math.min(
       1,
@@ -280,9 +251,7 @@ export function ThrottlerActor({
     setInstallationDragProgress(progress)
   }
 
-  const handleInstallationPointerUp = (
-    event: ReactPointerEvent<SVGGElement>,
-  ) => {
+  const handleInstallationPointerUp = (event: ReactPointerEvent<SVGGElement>) => {
     const drag = installationDrag.current
     if (drag === null) return
     event.preventDefault()
@@ -313,16 +282,15 @@ export function ThrottlerActor({
       cancelInstallationPreview()
       return
     }
-    if (event.key !== 'Enter' && event.key !== ' ' || event.repeat) return
+    if ((event.key !== 'Enter' && event.key !== ' ') || event.repeat) return
     event.preventDefault()
     event.stopPropagation()
     requestInstalled()
   }
 
   const appliedGateY = valvePistonCenterY(appliedIndex)
-  const candidateGateY = candidateIndex === null
-    ? null
-    : valvePistonCenterY(candidateIndex ?? appliedIndex)
+  const candidateGateY =
+    candidateIndex === null ? null : valvePistonCenterY(candidateIndex ?? appliedIndex)
   const candidateState = candidateKind === null ? 'applied' : candidateKind
   const rangeIndex = openingIndex
   const rangeText = `${openingPercent(rangeIndex)}% open, ${candidateState}; applied ${openingPercent(appliedIndex)}% open`
@@ -330,9 +298,10 @@ export function ThrottlerActor({
     '--pipeline-valve-flow-color': flowColor(upstreamChannel),
   } as CSSProperties
 
-  const installationStatus = installationCandidate === null
-    ? `${appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'} applied`
-    : `${installationCandidate ? 'installed' : 'bypass'} ${installationCandidateKind}; ${appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'} applied`
+  const installationStatus =
+    installationCandidate === null
+      ? `${appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'} applied`
+      : `${installationCandidate ? 'installed' : 'bypass'} ${installationCandidateKind}; ${appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'} applied`
 
   return (
     <g transform={actorTransform} data-pipeline-orientation={orientation}>
@@ -461,29 +430,33 @@ export function ThrottlerActor({
           <>
             <rect x="424" y="361" width="12" height="12" rx="1" className="pipeline-valve-neck" />
             <line x1="430" y1="373" x2="430" y2="398" className="pipeline-valve-stem" />
-            <ThrottlerValveGate gateY={appliedGateY} className="pipeline-valve-gate" kind="applied" />
+            <ThrottlerValveGate
+              gateY={appliedGateY}
+              className="pipeline-valve-gate"
+              kind="applied"
+            />
           </>
         )}
         {appliedInstalled === true &&
           candidateGateY !== null &&
           candidateIndex !== null &&
           candidateIndex !== appliedIndex && (
-          <>
-            <ThrottlerValveGate
-              gateY={candidateGateY}
-              className={`pipeline-valve-ghost pipeline-valve-ghost--${candidateKind ?? 'pending'}`}
-              kind={candidateKind ?? 'pending'}
-            />
-            <text
-              x="430"
-              y="468"
-              textAnchor="middle"
-              className={`pipeline-valve-ghost-label pipeline-valve-ghost-label--${candidateKind ?? 'pending'}`}
-            >
-              {openingPercent(candidateIndex)}% target
-            </text>
-          </>
-        )}
+            <>
+              <ThrottlerValveGate
+                gateY={candidateGateY}
+                className={`pipeline-valve-ghost pipeline-valve-ghost--${candidateKind ?? 'pending'}`}
+                kind={candidateKind ?? 'pending'}
+              />
+              <text
+                x="430"
+                y="468"
+                textAnchor="middle"
+                className={`pipeline-valve-ghost-label pipeline-valve-ghost-label--${candidateKind ?? 'pending'}`}
+              >
+                {openingPercent(candidateIndex)}% target
+              </text>
+            </>
+          )}
         <path
           d="M401 398 H411 A19 19 0 0 1 449 398 H459 V432 H449 A19 19 0 0 1 411 432 H401 Z M415 415 A15 12.3 0 1 0 445 415 A15 12.3 0 1 0 415 415"
           fillRule="evenodd"
@@ -579,8 +552,7 @@ export function ThrottlerActor({
           />
         )}
 
-        {installationCandidate === false &&
-          appliedInstalled === true && (
+        {installationCandidate === false && appliedInstalled === true && (
           <>
             <ThrottlerValveDetachedAssembly
               wheelPhase={wheelPhase}
@@ -592,11 +564,16 @@ export function ThrottlerActor({
             />
           </>
         )}
-        {installationCandidate === true &&
-          appliedInstalled === false && (
+        {installationCandidate === true && appliedInstalled === false && (
           <>
-            <g className={`pipeline-valve-installation-ghost pipeline-valve-installation-ghost--${installationCandidateKind}`}>
-              <ThrottlerValveGate gateY={appliedGateY} className="pipeline-valve-gate" kind="applied" />
+            <g
+              className={`pipeline-valve-installation-ghost pipeline-valve-installation-ghost--${installationCandidateKind}`}
+            >
+              <ThrottlerValveGate
+                gateY={appliedGateY}
+                className="pipeline-valve-gate"
+                kind="applied"
+              />
               <rect x="424" y="361" width="12" height="12" rx="1" className="pipeline-valve-neck" />
               <line x1="430" y1="373" x2="430" y2="398" className="pipeline-valve-stem" />
               <ThrottlerValveWheel wheelPhase={wheelPhase} className="pipeline-valve-wheel" />
@@ -614,13 +591,15 @@ export function ThrottlerActor({
             className={`pipeline-valve-installation-control${installationControlAvailable ? '' : ' pipeline-valve-installation-control--disabled'}`}
             role="button"
             tabIndex={0}
-            aria-label={appliedInstalled === false
-              ? 'Reinsert throttler valve'
-              : 'Remove throttler valve'}
+            aria-label={
+              appliedInstalled === false ? 'Reinsert throttler valve' : 'Remove throttler valve'
+            }
             aria-pressed={appliedInstalled === false}
             aria-valuetext={installationStatus}
             aria-disabled={!installationControlAvailable}
-            data-applied-mode={appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'}
+            data-applied-mode={
+              appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'
+            }
             data-candidate-mode={installationCandidate ?? ''}
             data-candidate-kind={installationCandidateKind ?? ''}
             data-drag-progress={installationDragProgress.toFixed(2)}
@@ -666,18 +645,26 @@ export function ThrottlerActor({
               />
             )}
             <rect
-              x={appliedInstalled === false
-                ? VALVE_INSTALLATION_CONTROL.bypassTarget.x
-                : VALVE_INSTALLATION_CONTROL.installedTarget.x}
-              y={appliedInstalled === false
-                ? VALVE_INSTALLATION_CONTROL.bypassTarget.y
-                : VALVE_INSTALLATION_CONTROL.installedTarget.y}
-              width={appliedInstalled === false
-                ? VALVE_INSTALLATION_CONTROL.bypassTarget.width
-                : VALVE_INSTALLATION_CONTROL.installedTarget.width}
-              height={appliedInstalled === false
-                ? VALVE_INSTALLATION_CONTROL.bypassTarget.height
-                : VALVE_INSTALLATION_CONTROL.installedTarget.height}
+              x={
+                appliedInstalled === false
+                  ? VALVE_INSTALLATION_CONTROL.bypassTarget.x
+                  : VALVE_INSTALLATION_CONTROL.installedTarget.x
+              }
+              y={
+                appliedInstalled === false
+                  ? VALVE_INSTALLATION_CONTROL.bypassTarget.y
+                  : VALVE_INSTALLATION_CONTROL.installedTarget.y
+              }
+              width={
+                appliedInstalled === false
+                  ? VALVE_INSTALLATION_CONTROL.bypassTarget.width
+                  : VALVE_INSTALLATION_CONTROL.installedTarget.width
+              }
+              height={
+                appliedInstalled === false
+                  ? VALVE_INSTALLATION_CONTROL.bypassTarget.height
+                  : VALVE_INSTALLATION_CONTROL.installedTarget.height
+              }
               rx="10"
               className="pipeline-valve-installation-focus-ring"
             />

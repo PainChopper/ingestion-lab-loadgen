@@ -23,7 +23,11 @@ export function ThrottlerValveApertureClip() {
   )
 }
 
-export function ThrottlerValveGate({ gateY, className, kind }: {
+export function ThrottlerValveGate({
+  gateY,
+  className,
+  kind,
+}: {
   gateY: number
   className: string
   kind: 'applied' | 'preview' | 'pending'
@@ -34,17 +38,10 @@ export function ThrottlerValveGate({ gateY, className, kind }: {
       clipPath={`url(#${apertureClipId})`}
       data-gate-kind={kind}
       data-gate-y={gateY.toFixed(3)}
-      data-piston-axis-ratio={(
-        VALVE_PISTON.radiusY / VALVE_PISTON.radiusX
-      ).toFixed(2)}
+      data-piston-axis-ratio={(VALVE_PISTON.radiusY / VALVE_PISTON.radiusX).toFixed(2)}
     >
       <line x1="430" y1="395" x2="430" y2={gateY} />
-      <ellipse
-        cx="430"
-        cy={gateY}
-        rx={VALVE_PISTON.radiusX}
-        ry={VALVE_PISTON.radiusY}
-      />
+      <ellipse cx="430" cy={gateY} rx={VALVE_PISTON.radiusX} ry={VALVE_PISTON.radiusY} />
     </g>
   )
 }
@@ -64,7 +61,11 @@ function renderKnob(knob: ValveWheelKnob, index: number) {
   )
 }
 
-export function ThrottlerValveWheel({ wheelPhase, className, transform }: {
+export function ThrottlerValveWheel({
+  wheelPhase,
+  className,
+  transform,
+}: {
   wheelPhase: number
   className: string
   transform?: string
@@ -87,7 +88,7 @@ export function ThrottlerValveWheel({ wheelPhase, className, transform }: {
           data-internal-phase={wheelPhase}
         >
           {Array.from({ length: 5 }, (_, index) => {
-            const angle = index * 72 * Math.PI / 180
+            const angle = (index * 72 * Math.PI) / 180
             return (
               <line
                 key={index}
@@ -115,7 +116,10 @@ const detachedTransform = [
   `rotate(${VALVE_DETACHED_ASSEMBLY.rotationDegrees} 430 350)`,
 ].join(' ')
 
-export function ThrottlerValveDetachedAssembly({ wheelPhase, className }: {
+export function ThrottlerValveDetachedAssembly({
+  wheelPhase,
+  className,
+}: {
   wheelPhase: number
   className: string
 }) {
@@ -125,9 +129,7 @@ export function ThrottlerValveDetachedAssembly({ wheelPhase, className }: {
       transform={detachedTransform}
       data-detached-anchor={`${VALVE_DETACHED_ASSEMBLY.wheelCenterX} ${VALVE_DETACHED_ASSEMBLY.wheelCenterY}`}
     >
-      <g className={className.includes('--applied')
-        ? 'pipeline-valve-detached-sway'
-        : undefined}>
+      <g className={className.includes('--applied') ? 'pipeline-valve-detached-sway' : undefined}>
         <ThrottlerValveWheel wheelPhase={wheelPhase} className="pipeline-valve-wheel" />
         <rect x="424" y="363" width="12" height="12" rx="1" className="pipeline-valve-neck" />
         <line x1="430" y1="375" x2="430" y2="405" className="pipeline-valve-stem" />

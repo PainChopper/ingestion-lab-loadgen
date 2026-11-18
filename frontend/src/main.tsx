@@ -5,9 +5,7 @@ import App from './App.tsx'
 import { HttpAdapter } from './adapters/HttpAdapter.ts'
 import { SimulationAdapter } from './adapters/SimulationAdapter.ts'
 
-const adapter = import.meta.env.MODE === 'backend'
-  ? new HttpAdapter()
-  : new SimulationAdapter()
+const adapter = import.meta.env.MODE === 'backend' ? new HttpAdapter() : new SimulationAdapter()
 
 window.addEventListener('beforeunload', adapter.dispose, { once: true })
 

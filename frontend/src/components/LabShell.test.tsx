@@ -21,7 +21,11 @@ describe('LabShell', () => {
   it('autostarts in StrictMode and advances the counters without input', () => {
     vi.useFakeTimers()
     adapter = new SimulationAdapter()
-    const view = render(<StrictMode><LabShell adapter={adapter} /></StrictMode>)
+    const view = render(
+      <StrictMode>
+        <LabShell adapter={adapter} />
+      </StrictMode>,
+    )
 
     expect(screen.getByText('running')).not.toBeNull()
     expect(screen.getByText('00:00:00')).not.toBeNull()
@@ -39,12 +43,18 @@ describe('LabShell', () => {
     const simulation = new SimulationAdapter()
     let snapshot: LoadgenTelemetrySnapshot = {
       ...simulation.getSnapshot(),
-    runState: 'faulted',
-    reader: {
-      ...simulation.getSnapshot().reader,
-      state: 'faulted',
-      sourceDirectory: 'C:/dataset', sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt parquet' },
-    },
+      runState: 'faulted',
+      reader: {
+        ...simulation.getSnapshot().reader,
+        state: 'faulted',
+        sourceDirectory: 'C:/dataset',
+        sourceError: {
+          category: 'source',
+          operation: 'read',
+          relativePath: 'broken.parquet',
+          message: 'corrupt parquet',
+        },
+      },
     }
     const listeners = new Set<(next: LoadgenTelemetrySnapshot) => void>()
     const errorAdapter: LoadgenAdapter = {
@@ -69,7 +79,11 @@ describe('LabShell', () => {
     expect(label.parentElement?.querySelectorAll('dd')).toHaveLength(1)
 
     act(() => {
-      snapshot = { ...snapshot, runState: 'idle', reader: { ...snapshot.reader, state: 'idle', sourceError: null } }
+      snapshot = {
+        ...snapshot,
+        runState: 'idle',
+        reader: { ...snapshot.reader, state: 'idle', sourceError: null },
+      }
       listeners.forEach((listener) => listener(snapshot))
     })
     expect(screen.queryByRole('alert')).toBeNull()
@@ -173,7 +187,10 @@ describe('LabShell', () => {
         ...initial.throttler,
         installed: { ...initial.throttler.installed, applyMode: 'immediate', writable: true },
       },
-      reader: { ...initial.reader, readBatchSize: { ...initial.reader.readBatchSize, applied: 1_000 } },
+      reader: {
+        ...initial.reader,
+        readBatchSize: { ...initial.reader.readBatchSize, applied: 1_000 },
+      },
       readerChannel: {
         ...initial.readerChannel,
         depthBatches: 1,
@@ -188,7 +205,9 @@ describe('LabShell', () => {
       subscribe: (listener) => {
         listeners.add(listener)
         listener(snapshot)
-        return () => { listeners.delete(listener) }
+        return () => {
+          listeners.delete(listener)
+        }
       },
       dispatch,
       dispose: adapter.dispose,
@@ -197,7 +216,9 @@ describe('LabShell', () => {
     render(<LabShell adapter={backend} />)
 
     expect(within(screen.getByRole('banner')).queryAllByRole('button')).toHaveLength(0)
-    expect(screen.getAllByRole('slider')).toEqual([screen.getByRole('slider', { name: 'Throttle opening' })])
+    expect(screen.getAllByRole('slider')).toEqual([
+      screen.getByRole('slider', { name: 'Throttle opening' }),
+    ])
     expect(screen.getByText('Batch 1,000 tx')).not.toBeNull()
     expect(screen.getByText('Depth 1 / 2 batches')).not.toBeNull()
 
@@ -221,12 +242,19 @@ describe('LabShell', () => {
 
     await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
     const inspector = within(screen.getByRole('complementary'))
-    expect(inspector.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent))
-      .toEqual(['Controls', 'Pool'])
-    expect(screen.getAllByRole('spinbutton')).toEqual([screen.getByRole('spinbutton', { name: /^Workers/ })])
+    expect(
+      inspector.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent),
+    ).toEqual(['Controls', 'Pool'])
+    expect(screen.getAllByRole('spinbutton')).toEqual([
+      screen.getByRole('spinbutton', { name: /^Workers/ }),
+    ])
     await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
-    expect(screen.getAllByRole('spinbutton')).toEqual([screen.getByRole('spinbutton', { name: /^Requested TPS/ })])
-    expect(screen.getAllByRole('checkbox')).toEqual([screen.getByRole('checkbox', { name: 'Valve mode' })])
+    expect(screen.getAllByRole('spinbutton')).toEqual([
+      screen.getByRole('spinbutton', { name: /^Requested TPS/ }),
+    ])
+    expect(screen.getAllByRole('checkbox')).toEqual([
+      screen.getByRole('checkbox', { name: 'Valve mode' }),
+    ])
     expect(screen.getByRole('button', { name: 'Remove throttler valve' })).not.toBeNull()
   })
 
@@ -240,13 +268,15 @@ describe('LabShell', () => {
 
     expect(screen.getByRole('heading', { name: 'READER' })).not.toBeNull()
     expect(screen.getByLabelText('Reader configuration')).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Inspect reader' })
-      .getAttribute('aria-pressed')).toBe('true')
+    expect(
+      screen.getByRole('button', { name: 'Inspect reader' }).getAttribute('aria-pressed'),
+    ).toBe('true')
 
     await user.click(screen.getByRole('button', { name: 'Clear selection' }))
     expect(screen.getByText('No pipeline object selected')).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Inspect reader' })
-      .getAttribute('aria-pressed')).toBe('false')
+    expect(
+      screen.getByRole('button', { name: 'Inspect reader' }).getAttribute('aria-pressed'),
+    ).toBe('false')
   })
 
   it('offers the supported canvas and Inspector controls in simulation', async () => {
@@ -257,12 +287,17 @@ describe('LabShell', () => {
 
     expect(within(screen.getByRole('banner')).queryAllByRole('button')).toHaveLength(0)
     const diagram = within(screen.getByRole('group', { name: /Reader to target/ }))
-    const settingsButtons = diagram.getAllByRole('button')
+    const settingsButtons = diagram
+      .getAllByRole('button')
       .map((button) => button.getAttribute('aria-label'))
       .filter((label) => !label?.startsWith('Inspect'))
     expect(settingsButtons.sort()).toEqual([
-      'Add reader worker', 'Add sender worker', 'Decrease throttle opening',
-      'Increase throttle opening', 'Remove reader worker', 'Remove sender worker',
+      'Add reader worker',
+      'Add sender worker',
+      'Decrease throttle opening',
+      'Increase throttle opening',
+      'Remove reader worker',
+      'Remove sender worker',
       'Remove throttler valve',
     ])
     expect(diagram.getAllByRole('slider')).toEqual([
@@ -380,14 +415,10 @@ describe('LabShell', () => {
 
     await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
 
-    const sectionTitles = screen.getAllByRole('heading', { level: 3 })
+    const sectionTitles = screen
+      .getAllByRole('heading', { level: 3 })
       .map((heading) => heading.textContent)
-    expect(sectionTitles).toEqual([
-      'Controls',
-      'Pool',
-      'Delivery',
-      'Diagnostics',
-    ])
+    expect(sectionTitles).toEqual(['Controls', 'Pool', 'Delivery', 'Diagnostics'])
     for (const label of [
       'Workers desired / live / draining',
       'Worker states',
@@ -410,13 +441,13 @@ describe('LabShell', () => {
     ]) {
       expect(screen.getByText(label)).not.toBeNull()
     }
-    expect(screen.getByText('Diagnostic interpretation').parentElement?.className)
-      .toContain('inspector-data__row--full-width')
+    expect(screen.getByText('Diagnostic interpretation').parentElement?.className).toContain(
+      'inspector-data__row--full-width',
+    )
     const workerSummary = screen.getByText('Worker states').parentElement
     expect(workerSummary?.className).toContain('inspector-data__row--full-width')
     expect(workerSummary?.querySelectorAll('.worker-state')).toHaveLength(3)
-    expect(screen.getAllByTestId('sender-inspector-section-data'))
-      .toHaveLength(3)
+    expect(screen.getAllByTestId('sender-inspector-section-data')).toHaveLength(3)
   })
 
   it('preserves adapter state, selection, and valve focus on live resize', async () => {
@@ -465,17 +496,14 @@ describe('LabShell', () => {
     const valve = screen.getByRole('slider', { name: 'Throttle opening' })
     valve.focus()
     await user.keyboard('{End}')
-    expect(screen.getByTestId('pipeline-viewport').dataset.layout)
-      .toBe('landscape')
+    expect(screen.getByTestId('pipeline-viewport').dataset.layout).toBe('landscape')
     const callback = resizeCallbacks[0]
     if (callback === undefined) throw new Error('ResizeObserver was not attached')
-    act(() => callback([
-      { contentRect: { width: 1440 } } as ResizeObserverEntry,
-    ], {} as ResizeObserver))
-    expect(screen.getByTestId('pipeline-viewport').dataset.contentWidth)
-      .toBe('1440')
-    expect(document.querySelector('.pipeline-svg')?.getAttribute('viewBox'))
-      .toBe('0 0 1440 650')
+    act(() =>
+      callback([{ contentRect: { width: 1440 } } as ResizeObserverEntry], {} as ResizeObserver),
+    )
+    expect(screen.getByTestId('pipeline-viewport').dataset.contentWidth).toBe('1440')
+    expect(document.querySelector('.pipeline-svg')?.getAttribute('viewBox')).toBe('0 0 1440 650')
     expect(document.activeElement).toBe(valve)
 
     portrait = true
@@ -485,19 +513,22 @@ describe('LabShell', () => {
     })
     act(() => orientationListeners.forEach((listener) => listener()))
 
-    expect(screen.getByTestId('pipeline-viewport').dataset.layout)
-      .toBe('portrait')
-    expect(screen.getByLabelText('Load generator laboratory')
-      .getAttribute('data-layout')).toBe('portrait')
+    expect(screen.getByTestId('pipeline-viewport').dataset.layout).toBe('portrait')
+    expect(screen.getByLabelText('Load generator laboratory').getAttribute('data-layout')).toBe(
+      'portrait',
+    )
     expect(screen.getByRole('heading', { name: 'THROTTLER' })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Inspect throttler' })
-      .getAttribute('aria-pressed')).toBe('true')
+    expect(
+      screen.getByRole('button', { name: 'Inspect throttler' }).getAttribute('aria-pressed'),
+    ).toBe('true')
     expect(screen.getByText('running')).not.toBeNull()
     expect(adapter.getSnapshot().throttler.requestedTps.applied).toBe(250_000)
     expect(document.activeElement).toBe(valve)
-    expect(document.querySelector('.pipeline-svg')?.getAttribute('viewBox'))
-      .toMatch(/^0 0 480 \d+$/)
-    expect(Number(document.querySelector('.pipeline-svg')?.getAttribute('viewBox')?.split(' ')[3]))
-      .toBeGreaterThan(1200)
+    expect(document.querySelector('.pipeline-svg')?.getAttribute('viewBox')).toMatch(
+      /^0 0 480 \d+$/,
+    )
+    expect(
+      Number(document.querySelector('.pipeline-svg')?.getAttribute('viewBox')?.split(' ')[3]),
+    ).toBeGreaterThan(1200)
   })
 })

@@ -5,9 +5,7 @@ import type {
   LoadgenTelemetrySnapshot,
 } from '../model/loadgen'
 
-export type LoadgenSnapshotListener = (
-  snapshot: LoadgenTelemetrySnapshot,
-) => void
+export type LoadgenSnapshotListener = (snapshot: LoadgenTelemetrySnapshot) => void
 
 export interface LoadgenAdapter {
   readonly kind: AdapterKind

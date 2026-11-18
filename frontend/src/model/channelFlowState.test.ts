@@ -48,21 +48,14 @@ function channelInput(
     connectionState: values.connectionState ?? snapshot.connectionState,
     readerChannel: {
       ...snapshot.readerChannel,
-      depthBatches:
-        values.depth === undefined
-          ? snapshot.readerChannel.depthBatches
-          : values.depth,
-      blockedSenders:
-        values.blockedSenders ?? snapshot.readerChannel.blockedSenders,
+      depthBatches: values.depth === undefined ? snapshot.readerChannel.depthBatches : values.depth,
+      blockedSenders: values.blockedSenders ?? snapshot.readerChannel.blockedSenders,
       oldestBlockedSenderMs:
-        values.oldestBlockedSenderMs ??
-        snapshot.readerChannel.oldestBlockedSenderMs,
+        values.oldestBlockedSenderMs ?? snapshot.readerChannel.oldestBlockedSenderMs,
       capacity: {
         ...snapshot.readerChannel.capacity,
         applied:
-          values.applied === undefined
-            ? snapshot.readerChannel.capacity.applied
-            : values.applied,
+          values.applied === undefined ? snapshot.readerChannel.capacity.applied : values.applied,
       },
     },
   }
@@ -94,34 +87,34 @@ describe('channel flow state derivation', () => {
       occupancyPressure(0, 0),
       occupancyPressure(null, 20),
     ]).toEqual([0, 0.5, 1, 0, 0])
-    expect([0, 10, 100, 300, 500, 900].map((oldest) =>
-      blockingPressure(oldest === 0 ? 0 : 1, oldest),
-    )).toEqual([0, 0, 0, 0.5, 1, 1])
-    expect(effectiveChannelPressure({
-      ...telemetry,
-      depthBatches: 10,
-      blockedSenders: 1,
-      oldestBlockedSenderMs: 200,
-      capacity: {
-        ...telemetry.capacity,
-        applied: 20,
-      },
-    })).toBe(0.5)
-    expect(effectiveChannelPressure({
-      ...telemetry,
-      depthBatches: 10,
-      blockedSenders: 0,
-      oldestBlockedSenderMs: 0,
-      capacity: {
-        ...telemetry.capacity,
-        applied: 10,
-      },
-    })).toBe(1)
-    expect([
-      channelPressureColor(0),
-      channelPressureColor(0.5),
-      channelPressureColor(1),
-    ]).toEqual([
+    expect(
+      [0, 10, 100, 300, 500, 900].map((oldest) => blockingPressure(oldest === 0 ? 0 : 1, oldest)),
+    ).toEqual([0, 0, 0, 0.5, 1, 1])
+    expect(
+      effectiveChannelPressure({
+        ...telemetry,
+        depthBatches: 10,
+        blockedSenders: 1,
+        oldestBlockedSenderMs: 200,
+        capacity: {
+          ...telemetry.capacity,
+          applied: 20,
+        },
+      }),
+    ).toBe(0.5)
+    expect(
+      effectiveChannelPressure({
+        ...telemetry,
+        depthBatches: 10,
+        blockedSenders: 0,
+        oldestBlockedSenderMs: 0,
+        capacity: {
+          ...telemetry.capacity,
+          applied: 10,
+        },
+      }),
+    ).toBe(1)
+    expect([channelPressureColor(0), channelPressureColor(0.5), channelPressureColor(1)]).toEqual([
       CHANNEL_PRESSURE_GREEN,
       CHANNEL_PRESSURE_YELLOW,
       CHANNEL_PRESSURE_RED,
@@ -131,12 +124,15 @@ describe('channel flow state derivation', () => {
   it('applies rendezvous waiter pressure immediately at every waiter age', () => {
     const base = baseTelemetry()
     const deriver = new ChannelFlowStateDeriver()
-    const idle = deriver.derive(channelInput(base, {
-      depth: 0,
-      applied: 0,
-      blockedSenders: 0,
-      oldestBlockedSenderMs: 0,
-    }), 0).readerChannel
+    const idle = deriver.derive(
+      channelInput(base, {
+        depth: 0,
+        applied: 0,
+        blockedSenders: 0,
+        oldestBlockedSenderMs: 0,
+      }),
+      0,
+    ).readerChannel
 
     expect(idle).toMatchObject({
       depthBatches: 0,
@@ -144,21 +140,27 @@ describe('channel flow state derivation', () => {
       flowState: 'normal',
     })
 
-    const waiting = deriveSequence(deriver, base, [10, 20, 50].map((age) => ({
-      atMs: age,
-      values: {
-        depth: 0,
-        applied: 0,
-        blockedSenders: 1,
-        oldestBlockedSenderMs: age,
-      },
-    })))
+    const waiting = deriveSequence(
+      deriver,
+      base,
+      [10, 20, 50].map((age) => ({
+        atMs: age,
+        values: {
+          depth: 0,
+          applied: 0,
+          blockedSenders: 1,
+          oldestBlockedSenderMs: age,
+        },
+      })),
+    )
 
-    expect(waiting.map((channel) => [
-      channel.displayedPressure,
-      channel.flowState,
-      channelPressureColor(channel.displayedPressure),
-    ])).toEqual([
+    expect(
+      waiting.map((channel) => [
+        channel.displayedPressure,
+        channel.flowState,
+        channelPressureColor(channel.displayedPressure),
+      ]),
+    ).toEqual([
       [1, 'backpressure', CHANNEL_PRESSURE_RED],
       [1, 'backpressure', CHANNEL_PRESSURE_RED],
       [1, 'backpressure', CHANNEL_PRESSURE_RED],
@@ -176,8 +178,10 @@ describe('channel flow state derivation', () => {
     })
 
     expect(deriver.derive(waiting, 0).readerChannel.displayedPressure).toBe(1)
-    const recovery = deriveSequence(deriver, waiting, [100, 200, 300, 400, 500]
-      .map((atMs) => ({
+    const recovery = deriveSequence(
+      deriver,
+      waiting,
+      [100, 200, 300, 400, 500].map((atMs) => ({
         atMs,
         values: {
           depth: 0,
@@ -185,15 +189,10 @@ describe('channel flow state derivation', () => {
           blockedSenders: 0,
           oldestBlockedSenderMs: 0,
         },
-      })))
+      })),
+    )
 
-    expect(recovery.map((channel) => channel.displayedPressure)).toEqual([
-      0.8,
-      0.6,
-      0.4,
-      0.2,
-      0,
-    ])
+    expect(recovery.map((channel) => channel.displayedPressure)).toEqual([0.8, 0.6, 0.4, 0.2, 0])
     expect(recovery.map((channel) => channel.flowState)).toEqual([
       'near-limit',
       'near-limit',
@@ -223,11 +222,7 @@ describe('channel flow state derivation', () => {
       })),
     )
     expect(rapid.map((channel) => channel.displayedPressure)).toEqual([
-      0.002,
-      0.004,
-      0.006,
-      0.008,
-      0.01,
+      0.002, 0.004, 0.006, 0.008, 0.01,
     ])
 
     const bottleneckDeriver = new ChannelFlowStateDeriver()
@@ -238,12 +233,7 @@ describe('channel flow state derivation', () => {
       { atMs: 499, values: { depth: 10, applied: 10 } },
       { atMs: 500, values: { depth: 10, applied: 10 } },
     ])
-    expect(bottleneck.map((channel) => channel.displayedPressure)).toEqual([
-      0.2,
-      0.5,
-      0.998,
-      1,
-    ])
+    expect(bottleneck.map((channel) => channel.displayedPressure)).toEqual([0.2, 0.5, 0.998, 1])
     expect(bottleneck.at(-1)?.flowState).toBe('backpressure')
 
     const invalidTime = deriveSequence(bottleneckDeriver, base, [
@@ -251,11 +241,7 @@ describe('channel flow state derivation', () => {
       { atMs: Number.NaN, values: { depth: 0, applied: 160 } },
       { atMs: 600, values: { depth: 0, applied: 160 } },
     ])
-    expect(invalidTime.map((channel) => channel.displayedPressure)).toEqual([
-      1,
-      1,
-      1,
-    ])
+    expect(invalidTime.map((channel) => channel.displayedPressure)).toEqual([1, 1, 1])
   })
 
   it('overrides stopped and error immediately without resume catch-up', () => {
@@ -307,10 +293,7 @@ describe('channel flow state derivation', () => {
       },
     ])
 
-    expect(states.map((channel) => [
-      channel.displayedPressure,
-      channel.flowState,
-    ])).toEqual([
+    expect(states.map((channel) => [channel.displayedPressure, channel.flowState])).toEqual([
       [1, 'backpressure'],
       [1, 'stopped'],
       [1, 'connection-error'],
@@ -361,8 +344,7 @@ describe('channel flow state derivation', () => {
         retries: 8_000,
       },
     }
-    expect(deriver.derive(retryCountersOnly, 600).senderChannel.displayedPressure)
-      .toBe(1)
+    expect(deriver.derive(retryCountersOnly, 600).senderChannel.displayedPressure).toBe(1)
 
     const unsaturated: LoadgenTelemetrySnapshot = {
       ...retryCountersOnly,
