@@ -5,13 +5,17 @@ import (
 	"strings"
 )
 
-const cliUsage = `usage:
-  ingestion-lab-loadgen serve [--config <path>]
-  ingestion-lab-loadgen status [--url <url>]
-  ingestion-lab-loadgen set readers <N> [--url <url>]
-  ingestion-lab-loadgen set senders <N> [--url <url>]
-  ingestion-lab-loadgen set tps <N> [--url <url>]
-  ingestion-lab-loadgen set throttle <true|false> [--url <url>]`
+const cliUsage = `usage: ingestion-lab-loadgen <command> [arguments]
+
+  serve [--config <path>]    start with config.toml or the specified file
+  status                     show the current run status
+  set readers <N>            set Reader workers
+  set senders <N>            set Sender workers
+  set tps <N>                set target TPS
+  set throttle <true|false>  enable or bypass the TPS limit
+
+  --url <url>  for status and set (default: http://127.0.0.1:8080)
+  --help       show this help`
 
 type cliCommand struct {
 	configPath   string
