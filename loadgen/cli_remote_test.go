@@ -60,19 +60,19 @@ func TestParseSetCLI(t *testing.T) {
 		wantHelp   bool
 		wantErr    bool
 	}{
-		{name: "reader workers", args: []string{"set", "reader-workers", "3"}, wantTarget: "reader-workers", wantAction: "set-reader-workers", wantValue: 3, wantURL: defaultCLIBaseURL},
-		{name: "sender workers custom URL", args: []string{"set", "sender-workers", "4", "--url", "https://example.test/"}, wantTarget: "sender-workers", wantAction: "set-sender-workers", wantValue: 4, wantURL: "https://example.test"},
-		{name: "requested TPS", args: []string{"set", "requested-tps", "0"}, wantTarget: "requested-tps", wantAction: "set-requested-tps", wantValue: 0, wantURL: defaultCLIBaseURL},
-		{name: "throttler mode", args: []string{"set", "throttler-installed", "false"}, wantTarget: "throttler-installed", wantAction: "set-throttler-installed", wantValue: false, wantURL: defaultCLIBaseURL},
-		{name: "throttler true", args: []string{"set", "throttler-installed", "true"}, wantTarget: "throttler-installed", wantAction: "set-throttler-installed", wantValue: true, wantURL: defaultCLIBaseURL},
-		{name: "bool alias", args: []string{"set", "throttler-installed", "1"}, wantErr: true},
-		{name: "old value", args: []string{"set", "throttler-installed", "bypass"}, wantErr: true},
+		{name: "reader workers", args: []string{"set", "readers", "3"}, wantTarget: "readers", wantAction: "set-reader-workers", wantValue: 3, wantURL: defaultCLIBaseURL},
+		{name: "sender workers custom URL", args: []string{"set", "senders", "4", "--url", "https://example.test/"}, wantTarget: "senders", wantAction: "set-sender-workers", wantValue: 4, wantURL: "https://example.test"},
+		{name: "requested TPS", args: []string{"set", "tps", "0"}, wantTarget: "tps", wantAction: "set-requested-tps", wantValue: 0, wantURL: defaultCLIBaseURL},
+		{name: "throttler mode", args: []string{"set", "throttle", "false"}, wantTarget: "throttle", wantAction: "set-throttler-installed", wantValue: false, wantURL: defaultCLIBaseURL},
+		{name: "throttler true", args: []string{"set", "throttle", "true"}, wantTarget: "throttle", wantAction: "set-throttler-installed", wantValue: true, wantURL: defaultCLIBaseURL},
+		{name: "bool alias", args: []string{"set", "throttle", "1"}, wantErr: true},
+		{name: "old value", args: []string{"set", "throttle", "bypass"}, wantErr: true},
 		{name: "set help", args: []string{"set", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
-		{name: "target help", args: []string{"set", "reader-workers", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
+		{name: "target help", args: []string{"set", "readers", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
 		{name: "unknown target", args: []string{"set", "other", "1"}, wantErr: true},
-		{name: "missing value", args: []string{"set", "reader-workers"}, wantErr: true},
-		{name: "non integer", args: []string{"set", "requested-tps", "not-an-integer"}, wantErr: true},
-		{name: "invalid URL", args: []string{"set", "reader-workers", "2", "--url", "ftp://example.test"}, wantErr: true},
+		{name: "missing value", args: []string{"set", "readers"}, wantErr: true},
+		{name: "non integer", args: []string{"set", "tps", "not-an-integer"}, wantErr: true},
+		{name: "invalid URL", args: []string{"set", "readers", "2", "--url", "ftp://example.test"}, wantErr: true},
 	}
 
 	for _, test := range tests {
@@ -101,11 +101,11 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		value         any
 		update        func(*runtimeStatus)
 	}{
-		{target: "reader-workers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *runtimeStatus) { snapshot.Reader.Workers = 3 }},
-		{target: "sender-workers", requestAction: "set-sender-workers", value: 4, update: func(snapshot *runtimeStatus) { snapshot.Sender.Workers = 4 }},
-		{target: "requested-tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *runtimeStatus) { snapshot.Throttler.RequestedTps = 0 }},
-		{target: "throttler-installed", requestAction: "set-throttler-installed", value: false, update: func(snapshot *runtimeStatus) { snapshot.Throttler.Installed = false }},
-		{target: "throttler-installed", requestAction: "set-throttler-installed", value: true, update: func(snapshot *runtimeStatus) { snapshot.Throttler.Installed = true }},
+		{target: "readers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *runtimeStatus) { snapshot.Reader.Workers = 3 }},
+		{target: "senders", requestAction: "set-sender-workers", value: 4, update: func(snapshot *runtimeStatus) { snapshot.Sender.Workers = 4 }},
+		{target: "tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *runtimeStatus) { snapshot.Throttler.RequestedTps = 0 }},
+		{target: "throttle", requestAction: "set-throttler-installed", value: false, update: func(snapshot *runtimeStatus) { snapshot.Throttler.Installed = false }},
+		{target: "throttle", requestAction: "set-throttler-installed", value: true, update: func(snapshot *runtimeStatus) { snapshot.Throttler.Installed = true }},
 	} {
 		t.Run(test.target, func(t *testing.T) {
 			snapshot := testRemoteSnapshot(t)
@@ -156,7 +156,7 @@ func TestRunRemoteCLISetRejectsMismatchedVerificationSnapshot(t *testing.T) {
 	defer server.Close()
 
 	var output bytes.Buffer
-	err := runRemoteCLI(context.Background(), cliCommand{remoteAction: "set", remoteURL: server.URL, remoteSet: remoteSetCommand{target: "reader-workers", requestAction: "set-reader-workers", value: 3}}, &output)
+	err := runRemoteCLI(context.Background(), cliCommand{remoteAction: "set", remoteURL: server.URL, remoteSet: remoteSetCommand{target: "readers", requestAction: "set-reader-workers", value: 3}}, &output)
 	if err == nil || !strings.Contains(err.Error(), "verification snapshot reader.workers") {
 		t.Fatalf("runRemoteCLI error = %v", err)
 	}
@@ -357,7 +357,7 @@ func TestRunCLIExitCodes(t *testing.T) {
 	defer server.Close()
 	stdout.Reset()
 	stderr.Reset()
-	if got := runCLI([]string{"set", "requested-tps", "0", "--url", server.URL}, &stdout, &stderr); got != cliExitHTTP {
+	if got := runCLI([]string{"set", "tps", "0", "--url", server.URL}, &stdout, &stderr); got != cliExitHTTP {
 		t.Fatalf("HTTP exit = %d, want %d", got, cliExitHTTP)
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "HTTP 409") {
@@ -365,7 +365,7 @@ func TestRunCLIExitCodes(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if got := runCLI([]string{"set", "requested-tps", "not-an-integer"}, &stdout, &stderr); got != cliExitUsage {
+	if got := runCLI([]string{"set", "tps", "not-an-integer"}, &stdout, &stderr); got != cliExitUsage {
 		t.Fatalf("invalid set value exit = %d, want %d", got, cliExitUsage)
 	}
 	if stdout.Len() != 0 || !strings.Contains(stderr.String(), cliSetUsage) {
