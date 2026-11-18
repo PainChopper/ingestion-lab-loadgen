@@ -12,37 +12,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type fixtureRows struct {
-	read     func([]Transaction) (int, error)
-	closeErr error
-	closed   bool
-}
-
-func (r *fixtureRows) Read(rows []Transaction) (int, error) { return r.read(rows) }
-func (r *fixtureRows) Close() error {
-	r.closed = true
-	return r.closeErr
-}
-
-type fixtureFile struct {
-	rows     RowReader
-	openErr  error
-	onOpen   func()
-	closeErr error
-	closed   bool
-}
-
-func (f *fixtureFile) OpenRows() (RowReader, error) {
-	if f.onOpen != nil {
-		f.onOpen()
-	}
-	return f.rows, f.openErr
-}
-func (f *fixtureFile) Close() error {
-	f.closed = true
-	return f.closeErr
-}
-
 func TestPipelineSetRateIsReadyAfterStart(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())

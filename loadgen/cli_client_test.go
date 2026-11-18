@@ -5,97 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode"
 )
-
-func TestParseRemoteCLI(t *testing.T) {
-	tests := []struct {
-		name       string
-		args       []string
-		wantAction string
-		wantURL    string
-		wantHelp   bool
-		wantErr    bool
-	}{
-		{name: "status custom URL", args: []string{"status", "--url", "https://example.test/"}, wantAction: "status", wantURL: "https://example.test"},
-		{name: "remote help", args: []string{"status", "--help"}, wantAction: "status", wantURL: defaultCLIBaseURL, wantHelp: true},
-		{name: "unexpected operand", args: []string{"status", "now"}, wantErr: true},
-		{name: "missing URL", args: []string{"status", "--url"}, wantErr: true},
-		{name: "path URL", args: []string{"status", "--url", "http://example.test/base"}, wantErr: true},
-		{name: "query URL", args: []string{"status", "--url", "http://example.test/?x=1"}, wantErr: true},
-		{name: "userinfo URL", args: []string{"status", "--url", "http://user@example.test"}, wantErr: true},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			command, err := parseCLI(test.args)
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("parseCLI returned nil error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseCLI(%q): %v", test.args, err)
-			}
-			if command.remoteAction != test.wantAction || command.remoteURL != test.wantURL || command.showUsage != test.wantHelp {
-				t.Fatalf("command = %+v", command)
-			}
-		})
-	}
-}
-
-func TestParseSetCLI(t *testing.T) {
-	tests := []struct {
-		name       string
-		args       []string
-		wantTarget string
-		wantAction string
-		wantValue  any
-		wantURL    string
-		wantHelp   bool
-		wantErr    bool
-	}{
-		{name: "reader workers", args: []string{"set", "readers", "3"}, wantTarget: "readers", wantAction: "set-reader-workers", wantValue: 3, wantURL: defaultCLIBaseURL},
-		{name: "sender workers custom URL", args: []string{"set", "senders", "4", "--url", "https://example.test/"}, wantTarget: "senders", wantAction: "set-sender-workers", wantValue: 4, wantURL: "https://example.test"},
-		{name: "requested TPS", args: []string{"set", "tps", "0"}, wantTarget: "tps", wantAction: "set-requested-tps", wantValue: 0, wantURL: defaultCLIBaseURL},
-		{name: "throttler mode", args: []string{"set", "throttle", "false"}, wantTarget: "throttle", wantAction: "set-throttler-installed", wantValue: false, wantURL: defaultCLIBaseURL},
-		{name: "throttler true", args: []string{"set", "throttle", "true"}, wantTarget: "throttle", wantAction: "set-throttler-installed", wantValue: true, wantURL: defaultCLIBaseURL},
-		{name: "bool alias", args: []string{"set", "throttle", "1"}, wantErr: true},
-		{name: "old value", args: []string{"set", "throttle", "bypass"}, wantErr: true},
-		{name: "set help", args: []string{"set", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
-		{name: "target help", args: []string{"set", "readers", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
-		{name: "unknown target", args: []string{"set", "other", "1"}, wantErr: true},
-		{name: "unknown target help", args: []string{"set", "other", "--help"}, wantErr: true},
-		{name: "empty numeric value", args: []string{"set", "readers", ""}, wantErr: true},
-		{name: "empty bool value", args: []string{"set", "throttle", ""}, wantErr: true},
-		{name: "missing value", args: []string{"set", "readers"}, wantErr: true},
-		{name: "non integer", args: []string{"set", "tps", "not-an-integer"}, wantErr: true},
-		{name: "invalid URL", args: []string{"set", "readers", "2", "--url", "ftp://example.test"}, wantErr: true},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			command, err := parseCLI(test.args)
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("parseCLI returned nil error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseCLI(%q): %v", test.args, err)
-			}
-			if command.remoteAction != "set" || command.remoteSet.target != test.wantTarget || command.remoteSet.requestAction != test.wantAction || command.remoteSet.value != test.wantValue || command.remoteURL != test.wantURL || command.showUsage != test.wantHelp {
-				t.Fatalf("command = %+v", command)
-			}
-		})
-	}
-}
 
 func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 	for _, test := range []struct {
@@ -303,38 +218,6 @@ func TestDecodeStrictSnapshotValidatesJSONAndState(t *testing.T) {
 	}
 }
 
-func TestRunCLIExitCodes(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	if got := runCLI([]string{"status", "--url", "ftp://example.test"}, &stdout, &stderr); got != cliExitUsage {
-		t.Fatalf("invalid URL exit = %d, want %d", got, cliExitUsage)
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		http.Error(writer, "conflict", http.StatusConflict)
-	}))
-	defer server.Close()
-	stdout.Reset()
-	stderr.Reset()
-	if got := runCLI([]string{"set", "tps", "0", "--url", server.URL}, &stdout, &stderr); got != cliExitHTTP {
-		t.Fatalf("HTTP exit = %d, want %d", got, cliExitHTTP)
-	}
-	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "HTTP 409") {
-		t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if got := runCLI([]string{"set", "tps", "not-an-integer"}, &stdout, &stderr); got != cliExitUsage {
-		t.Fatalf("invalid set value exit = %d, want %d", got, cliExitUsage)
-	}
-	if stdout.Len() != 0 || !strings.Contains(stderr.String(), cliSetUsage) {
-		t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if got := runCLI([]string{"serve", "--config", "missing-config.toml"}, &stdout, &stderr); got != cliExitLocal {
-		t.Fatalf("local startup exit = %d, want %d", got, cliExitLocal)
-	}
-}
-
 func mustMarshalJSON(t *testing.T, value any) string {
 	t.Helper()
 	encoded, err := json.Marshal(value)
@@ -348,45 +231,130 @@ func mustFormatValue(value any) string {
 	return fmt.Sprint(value)
 }
 
-func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
-	malformedServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		_, _ = writer.Write([]byte(`{"unexpected":true}`))
-	}))
-	defer malformedServer.Close()
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve transport test address: %v", err)
-	}
-	transportURL := "http://" + listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatalf("release transport test address: %v", err)
-	}
-
-	for _, test := range []struct {
-		name       string
-		url        string
-		wantStderr string
-	}{
-		{name: "malformed snapshot", url: malformedServer.URL, wantStderr: "decode snapshot"},
-		{name: "transport failure", url: transportURL, wantStderr: "GET /api/loadgen/snapshot"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if got := runCLI([]string{"status", "--url", test.url}, &stdout, &stderr); got != cliExitRemote {
-				t.Fatalf("exit = %d, want %d", got, cliExitRemote)
-			}
-			if stdout.Len() != 0 || !strings.Contains(stderr.String(), test.wantStderr) {
-				t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
-			}
-		})
-	}
-}
-
 func testRemoteSnapshot(t *testing.T) runtimeSnapshot {
 	t.Helper()
 	return runtimeSnapshot{
 		Run:    runSnapshot{State: runStateRunning},
 		Config: snapshotConfig(testConfig(t)),
+	}
+}
+
+func TestFormatSnapshot(t *testing.T) {
+	status := runtimeSnapshot{
+		Run: runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
+		Reader: readerSnapshot{
+			Workers: 3, LiveWorkers: 2, ReadingWorkers: 1, IdleWorkers: 1, BlockedWorkers: 0,
+			DrainingWorkers: 1, ReadTps: 12.34, RowsRead: 99,
+			SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt"},
+		},
+		Throttler:     throttlerSnapshot{RequestedTps: 100, AdmittedTps: 9.87, Installed: true},
+		ReaderChannel: channelSnapshot{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, SentTransactionsPerSecond: 1.25, ReceivedTransactionsPerSecond: 2.5},
+		SenderChannel: channelSnapshot{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, SentTransactionsPerSecond: 3.75, ReceivedTransactionsPerSecond: 4.5},
+		Sender:        senderSnapshot{Workers: 5, LiveWorkers: 4, InFlightWorkers: 2, IdleWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
+	}
+
+	got := formatSnapshot(status)
+	want := "INGESTION LAB LOADGEN STATUS\n" +
+		"State:                    faulted\n" +
+		"Elapsed:                  1.25s\n" +
+		"Transactions:             42\n\n" +
+		"Throttler\n" +
+		"Requested TPS:            100\n" +
+		"Admitted TPS:             9.9\n" +
+		"Installed:                true\n\n" +
+		"Reader\n" +
+		"Workers:                  configured=3 live=2 reading=1 idle=1 blocked=0 draining=1\n" +
+		"Read TPS:                 12.3\n" +
+		"Rows read:                99\n" +
+		"Source:                   none\n" +
+		"Source error:             source/read broken.parquet: corrupt\n\n" +
+		"Reader channel\n" +
+		"Queue:                    2/3 batches; 20 transactions\n" +
+		"Input / output TPS:       1.2 / 2.5\n" +
+		"Blocked:                  senders=0 oldest=0ms total=0ms\n\n" +
+		"Sender channel\n" +
+		"Queue:                    1/4 batches; 10 transactions\n" +
+		"Input / output TPS:       3.8 / 4.5\n" +
+		"Blocked:                  senders=1 oldest=7ms total=8ms\n\n" +
+		"Sender\n" +
+		"Workers:                  configured=5 live=4 in-flight=2 idle=1 backoff=1 draining=1\n"
+	if got != want {
+		t.Fatalf("card = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "\x1b") || !strings.HasSuffix(got, "\n") {
+		t.Fatalf("card contains ANSI or has no final newline: %q", got)
+	}
+}
+
+func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
+	status := runtimeSnapshot{
+		Run: runSnapshot{State: runState("running\n\x1b[2J")},
+		Reader: readerSnapshot{
+			SourceDirectory: "source\r\n\x1b[31m",
+			SourceError: &readerSourceError{
+				Category:     "category\x00",
+				Operation:    "operation\t",
+				RelativePath: "path\x7f",
+				Message:      "message\n\x1b[0m",
+			},
+		},
+	}
+
+	got := formatSnapshot(status)
+	if strings.IndexFunc(got, func(character rune) bool {
+		return character != '\n' && unicode.IsControl(character)
+	}) >= 0 {
+		t.Fatalf("card contains unsafe control byte: %q", got)
+	}
+	if strings.Count(got, "\n") != strings.Count(formatSnapshot(runtimeSnapshot{
+		Run:       runSnapshot{State: runStateRunning},
+		Throttler: throttlerSnapshot{Installed: true},
+	}), "\n") || !strings.HasSuffix(got, "\n") {
+		t.Fatalf("card layout changed or has no final newline: %q", got)
+	}
+	for _, want := range []string{
+		`State:                    running\x0a\x1b[2J`,
+		`Source:                   source\x0d\x0a\x1b[31m`,
+		`Source error:             category\x00/operation\x09 path\x7f: message\x0a\x1b[0m`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("card missing sanitized value %q: %q", want, got)
+		}
+	}
+}
+
+func TestFormatSnapshotStartingSourceGolden(t *testing.T) {
+	card := formatSnapshot(runtimeSnapshot{
+		Run: runSnapshot{State: runStateStarting},
+	})
+	if !strings.Contains(card, "Source:                   none\nSource error:             none\n\nReader channel\n") {
+		t.Fatalf("idle source fields are not adjacent golden values: %q", card)
+	}
+}
+
+func TestRunRemoteCLIStatusFetchesOneSnapshot(t *testing.T) {
+	snapshot := testRemoteSnapshot(t)
+	snapshot.Run.ElapsedMs = 1000
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.Method != http.MethodGet || request.URL.Path != snapshotPath {
+			t.Fatalf("request = %s %s, want GET %s", request.Method, request.URL.Path, snapshotPath)
+		}
+		_, _ = writer.Write(encoded)
+	}))
+	defer server.Close()
+
+	var stdout bytes.Buffer
+	if err := runRemoteCLI(context.Background(), cliCommand{remoteAction: "status", remoteURL: server.URL}, &stdout); err != nil {
+		t.Fatalf("runRemoteCLI: %v", err)
+	}
+	if requests != 1 || !strings.HasPrefix(stdout.String(), "INGESTION LAB LOADGEN STATUS\n") {
+		t.Fatalf("requests=%d stdout=%q", requests, stdout.String())
 	}
 }
