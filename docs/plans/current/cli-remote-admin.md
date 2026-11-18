@@ -13,10 +13,10 @@ LoadGen запускает один прогон на процесс и обсл
 ```text
 loadgen serve [--config FILE]
 loadgen status [--url URL]
-loadgen set reader-workers N [--url URL]
-loadgen set sender-workers N [--url URL]
-loadgen set requested-tps N [--url URL]
-loadgen set throttler-installed <true|false> [--url URL]
+loadgen set readers N [--url URL]
+loadgen set senders N [--url URL]
+loadgen set tps N [--url URL]
+loadgen set throttle <true|false> [--url URL]
 ```
 
 ## Решение
@@ -39,10 +39,10 @@ loadgen serve [--config FILE]
 
 ```text
 loadgen status   [--url URL]
-loadgen set reader-workers N [--url URL]
-loadgen set sender-workers N [--url URL]
-loadgen set requested-tps N [--url URL]
-loadgen set throttler-installed <true|false> [--url URL]
+loadgen set readers N [--url URL]
+loadgen set senders N [--url URL]
+loadgen set tps N [--url URL]
+loadgen set throttle <true|false> [--url URL]
 ```
 
 - `status` читает `/api/loadgen/snapshot`; JSON также доступен напрямую через
@@ -68,6 +68,6 @@ loadgen set throttler-installed <true|false> [--url URL]
 - Неизвестная CLI-команда получает общий отказ с кодом usage; неизвестное
   HTTP-действие получает `400 Bad Request`.
 - `status` показывает читаемое состояние; JSON snapshot доступен по HTTP.
-- `set` принимает только `reader-workers`, `sender-workers`, `requested-tps` и
-  `throttler-installed`; команды используют HTTP validation.
+- `set` принимает только `readers`, `senders`, `tps` и
+  `throttle`; команды используют HTTP validation.
 - Сетевые/HTTP/validation ошибки имеют понятный stderr и ненулевой exit code.

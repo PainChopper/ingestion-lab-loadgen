@@ -100,10 +100,10 @@ From the `loadgen/` directory, with the backend already running:
 
 ```bash
 go run . status --url http://127.0.0.1:8080
-go run . set reader-workers 2 --url http://127.0.0.1:8080
-go run . set sender-workers 4 --url http://127.0.0.1:8080
-go run . set requested-tps 200000 --url http://127.0.0.1:8080
-go run . set throttler-installed true --url http://127.0.0.1:8080
+go run . set readers 2 --url http://127.0.0.1:8080
+go run . set senders 4 --url http://127.0.0.1:8080
+go run . set tps 200000 --url http://127.0.0.1:8080
+go run . set throttle true --url http://127.0.0.1:8080
 ```
 
 ## Configuration and delivery

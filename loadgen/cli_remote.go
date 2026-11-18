@@ -67,10 +67,10 @@ func (command cliCommand) usage() string {
 }
 
 const cliSetUsage = `usage:
-  ingestion-lab-loadgen set reader-workers <N> [--url <url>]
-  ingestion-lab-loadgen set sender-workers <N> [--url <url>]
-  ingestion-lab-loadgen set requested-tps <N> [--url <url>]
-  ingestion-lab-loadgen set throttler-installed <true|false> [--url <url>]`
+  ingestion-lab-loadgen set readers <N> [--url <url>]
+  ingestion-lab-loadgen set senders <N> [--url <url>]
+  ingestion-lab-loadgen set tps <N> [--url <url>]
+  ingestion-lab-loadgen set throttle <true|false> [--url <url>]`
 
 type remoteSetCommand struct {
 	target        string
@@ -142,13 +142,13 @@ func parseSetCLI(args []string) (cliCommand, error) {
 func newRemoteSetCommand(target, rawValue string) (remoteSetCommand, error) {
 	setCommand := remoteSetCommand{target: target}
 	switch target {
-	case "reader-workers":
+	case "readers":
 		setCommand.requestAction = "set-reader-workers"
-	case "sender-workers":
+	case "senders":
 		setCommand.requestAction = "set-sender-workers"
-	case "requested-tps":
+	case "tps":
 		setCommand.requestAction = "set-requested-tps"
-	case "throttler-installed":
+	case "throttle":
 		setCommand.requestAction = "set-throttler-installed"
 		if rawValue == "" {
 			return setCommand, nil
@@ -253,7 +253,7 @@ func (client remoteCLIClient) commandWithValue(ctx context.Context, action strin
 
 func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 	switch command.target {
-	case "reader-workers":
+	case "readers":
 		expected, err := command.numericValue()
 		if err != nil {
 			return err
@@ -261,7 +261,7 @@ func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 		if snapshot.Reader.Workers != expected {
 			return fmt.Errorf("verification snapshot reader.workers = %v, want %v", snapshot.Reader.Workers, expected)
 		}
-	case "sender-workers":
+	case "senders":
 		expected, err := command.numericValue()
 		if err != nil {
 			return err
@@ -269,7 +269,7 @@ func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 		if snapshot.Sender.Workers != expected {
 			return fmt.Errorf("verification snapshot sender.workers = %v, want %v", snapshot.Sender.Workers, expected)
 		}
-	case "requested-tps":
+	case "tps":
 		expected, err := command.numericValue()
 		if err != nil {
 			return err
@@ -277,10 +277,10 @@ func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 		if snapshot.Throttler.RequestedTps != expected {
 			return fmt.Errorf("verification snapshot throttler.requestedTps = %v, want %v", snapshot.Throttler.RequestedTps, expected)
 		}
-	case "throttler-installed":
+	case "throttle":
 		expected, ok := command.value.(bool)
 		if !ok {
-			return fmt.Errorf("verification snapshot throttler-installed value has invalid type")
+			return fmt.Errorf("verification snapshot throttle value has invalid type")
 		}
 		if snapshot.Throttler.Installed != expected {
 			return fmt.Errorf("verification snapshot throttler.installed = %v, want %v", snapshot.Throttler.Installed, expected)

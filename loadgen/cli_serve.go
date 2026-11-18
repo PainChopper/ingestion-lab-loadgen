@@ -8,10 +8,10 @@ import (
 const cliUsage = `usage:
   ingestion-lab-loadgen serve [--config <path>]
   ingestion-lab-loadgen status [--url <url>]
-  ingestion-lab-loadgen set reader-workers <N> [--url <url>]
-  ingestion-lab-loadgen set sender-workers <N> [--url <url>]
-  ingestion-lab-loadgen set requested-tps <N> [--url <url>]
-  ingestion-lab-loadgen set throttler-installed <true|false> [--url <url>]`
+  ingestion-lab-loadgen set readers <N> [--url <url>]
+  ingestion-lab-loadgen set senders <N> [--url <url>]
+  ingestion-lab-loadgen set tps <N> [--url <url>]
+  ingestion-lab-loadgen set throttle <true|false> [--url <url>]`
 
 type cliCommand struct {
 	configPath   string
