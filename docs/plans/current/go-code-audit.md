@@ -7,13 +7,13 @@
 
 На проверенном `main` (`1b064c5`) дерево `loadgen/` и `receiver/` совпадает с ревизией аудита `900546b`. В рабочем дереве Git показывал только неотслеживаемый `docs/reports/`, в `00_STATE.md` не было исполняемых тикетов. Из старого плана Receiver уже реализованы отдельный бинарник, обработчик, агрегаты и lab-режимы. Из варианта B пересекаются resize Sender, транспорт, таймаут, jitter и точность троттлера. Для этих изменений применяются решения Astra: `sender.api.timeout_ms`, текущая форма snapshot, подтверждение только по `204` и действующая политика повторов. Ограничение числа попыток и расширение контура хранения остаются в плане B. [Аудит Astra](../../../docs/reports/go_code_audit_combined_astra.md#L617) · [Состояние работ](../../../../ingestion-lab-agents-runtime/00_STATE.md#L3) · [Вариант B](../../../../ingestion-lab-agents/Docs/loadgen-variant-b-plan.md#L144)
 
-T8249 и T8259 дают исходную проверку живых команд, конфликта UI с CLI, остановки и восстановления. Текущий `TestCLIBinaryServeStartsDeliveryAutomatically` запускает настоящий LoadGen с подставным HTTP-получателем. Поэтому для изменённых бинарников предусмотрена отдельная проверка их стыка на этапе 11. [T8249](../../../../ingestion-lab-agents-runtime/MAIL/TESTER/OUT/T8249_20261118-1054_TESTER_backend-checkpoint_report.md) · [T8259](../../../../ingestion-lab-agents-runtime/MAIL/TESTER/OUT/T8259_20261118-1215_TESTER_final-ui_report.md) · [Black-box тест LoadGen](../../../loadgen/cli_blackbox_test.go#L105)
+T8249 и T8259 дают исходную проверку живых команд, конфликта UI с CLI, остановки и восстановления. Текущий `TestCLIBinaryServeStartsDeliveryAutomatically` запускает настоящий LoadGen с подставным HTTP-получателем. Поэтому для изменённых бинарников предусмотрена отдельная проверка их стыка на этапе 11. [T8249](../../../../ingestion-lab-agents-runtime/MAIL/TESTER/OUT/T8249_20261118-1054_TESTER_backend-checkpoint_report.md) · [T8259](../../../../ingestion-lab-agents-runtime/MAIL/TESTER/OUT/T8259_20261118-1215_TESTER_final-ui_report.md) · [Black-box тест LoadGen](https://github.com/PainChopper/ingestion-lab-loadgen/blob/900546b/loadgen/cli_blackbox_test.go#L105)
 
 ## Поведение, которое закрепляет план
 
-**Доставка.** `serve` → `runServe` → открытие HTTP → асинхронный glob → `startPipeline`. Пока идёт обнаружение, snapshot уже доступен в `starting`. Reader циклически занимает файлы под мьютексом и отправляет полные батчи и остаток каждого файла. Троттлер применяет TPS или bypass и передаёт батч в sender-очередь. Сегодня `runIntake` сначала учитывает получение батча, затем назначает его воркеру. Sender делает JSON POST. Receiver проверяет запрос, применяет lab-режим и увеличивает агрегаты перед ответом `204`. Sender учитывает подтверждение после получения успешного ответа; `run.totalTransactions` обновляется при сборе подтверждений на тике и при завершении. При потере ответа возможен повторный приём запроса. [Пайплайн](../../../loadgen/pipeline_runtime.go#L18) · [Sender](../../../loadgen/sender_pool.go#L182) · [Receiver](../../../receiver/internal/receiver/server.go#L83)
+**Доставка.** `serve` → `runServe` → открытие HTTP → асинхронный glob → `startPipeline`. Пока идёт обнаружение, snapshot уже доступен в `starting`. Reader циклически занимает файлы под мьютексом и отправляет полные батчи и остаток каждого файла. Троттлер применяет TPS или bypass и передаёт батч в sender-очередь. Сегодня `runIntake` сначала учитывает получение батча, затем назначает его воркеру. Sender делает JSON POST. Receiver проверяет запрос, применяет lab-режим и увеличивает агрегаты перед ответом `204`. Sender учитывает подтверждение после получения успешного ответа; `run.totalTransactions` обновляется при сборе подтверждений на тике и при завершении. При потере ответа возможен повторный приём запроса. [Пайплайн](https://github.com/PainChopper/ingestion-lab-loadgen/blob/900546b/loadgen/pipeline_runtime.go#L18) · [Sender](https://github.com/PainChopper/ingestion-lab-loadgen/blob/900546b/loadgen/sender_pool.go#L182) · [Receiver](https://github.com/PainChopper/ingestion-lab-loadgen/blob/900546b/receiver/internal/receiver/server.go#L83)
 
-**Управление и остановка.** CLI и frontend отправляют `{action,value}` в `/api/loadgen/commands`. В состоянии `running` event loop применяет настройку к пулу или троттлеру и возвращает пустой `200`. CLI подтверждает значение отдельным GET. Snapshot различает заданное число воркеров, живых и уходящих. При первом сигнале LoadGen переходит в `stopping`, продолжает отдавать snapshot и отвечает `409` на валидные команды. `stopReading()` останавливает новое чтение. Уже прочитанный остаток проходит вниз, очереди закрываются после выхода их производителей. По дедлайну отменяются HTTP и backoff, event loop собирает доступные подтверждения и пишет `partial`, не дожидаясь зависшей файловой операции. Receiver отдельно выполняет `Shutdown` в пределах `shutdown_timeout_ms`, при ошибке вызывает `Close`. [Event loop](../../../loadgen/control_state.go#L66) · [Тесты остановки](../../../loadgen/event_loop_test.go#L39) · [Остановка Receiver](../../../receiver/cmd/receiver/main.go#L36)
+**Управление и остановка.** CLI и frontend отправляют `{action,value}` в `/api/loadgen/commands`. В состоянии `running` event loop применяет настройку к пулу или троттлеру и возвращает пустой `200`. CLI подтверждает значение отдельным GET. Snapshot различает заданное число воркеров, живых и уходящих. При первом сигнале LoadGen переходит в `stopping`, продолжает отдавать snapshot и отвечает `409` на валидные команды. `stopReading()` останавливает новое чтение. Уже прочитанный остаток проходит вниз, очереди закрываются после выхода их производителей. По дедлайну отменяются HTTP и backoff, event loop собирает доступные подтверждения и пишет `partial`, не дожидаясь зависшей файловой операции. Receiver отдельно выполняет `Shutdown` в пределах `shutdown_timeout_ms`, при ошибке вызывает `Close`. [Event loop](https://github.com/PainChopper/ingestion-lab-loadgen/blob/900546b/loadgen/control_state.go#L66) · [Тесты остановки](https://github.com/PainChopper/ingestion-lab-loadgen/blob/900546b/loadgen/event_loop_test.go#L39) · [Остановка Receiver](https://github.com/PainChopper/ingestion-lab-loadgen/blob/900546b/receiver/cmd/receiver/main.go#L36)
 
 ## Этапы
 
@@ -118,3 +118,97 @@ T8249 и T8259 дают исходную проверку живых коман�
 | Архитектура | **A1** → 4 · **A2** → 1, ID блокировки, и 4, тип очереди · **A3** → 5 · **A4** → 6 · **A5** → 2 · **A6** → 3 · **A7** → 4 · **A8** → 5 |
 | Go-код | **I1** → 2 и 9 · **I2** → 2 · **I3** → 8 · **I4** → 4 · **I5** → 8 · **I6** → 4, 7, 8 и 9 по владельцу кода · **I7** → 8 и 9 · **I8** → 8 · **I9** → 2 · **I10** → 4 · **I11** → 4 · **I12** → 4 · **I13** → 3 · **I14** → 3, 4 и 7 · **I15** → 9 |
 | Тесты | **T1** → 9 и 10 · **T2** → 10 · **T3** → 2 · **T4** → 1, 9 и 10 · **T5** → 5 · **T6** → 6 · **T7** → 8 · **T8** → 2 |
+
+
+## Фактическое завершение реализации — 18 ноября 2026
+
+Этапы 1–10 находятся в `main` и `origin/main`, итоговая ревизия — [b262311][C10]. Проверки `go vet/test/test -race` последнего LoadGen (156 тестов) и Receiver (17 тестов) прошли в [этапе 10][R10] и [этапе 9][R9]; здесь повторно не запускались. Ниже закрыты все **43 ID: 42 реализацией, D10 — принятым решением владельца**. Изначальный текст и последовательность плана сохранены; только targets семи исторических Go-ссылок закреплены на blob/900546b с прежними названиями и номерами строк по отдельному разрешению LEAD. Актуальные владельцы указаны в таблице.
+
+Один совместный прогон двух реальных бинарников на Windows/Go 1.27.1 выполнен из `b262311`: LoadGen schema 3, Receiver schema 2, существующий Parquet из одной строки (3125 байт), 100 TPS и согласованный путь `/audit/ingest`. Receiver: счётчики батчей/транзакций `0→51→55`; LoadGen в `running`: `run.totalTransactions 39→49`, финал `confirmed=55`, `unconfirmed=0`, `partial=false`. Первым остановлен LoadGen (PID 28184, exit 0, 49.06ms), Receiver оставался доступен для drain; затем Receiver (PID 45300, exit 0, 6.09ms). Оба собственных порта 54255/54256 освобождены. [Результат и SHA бинарников/конфигов][SMOKE] · [OUT этапа 11][R11].
+
+Оба build-info содержат `vcs.revision=b2623118f5c87a4006e0a2e203c26311f9195c76` и `vcs.modified=true`: до сборки в checkout уже был только неотслеживаемый `docs/reports/`; tracked `loadgen/` и `receiver/` совпадали с коммитом. Это проверка итогового product-кода, а не заявление о полностью чистом checkout. [Исходное состояние][STATUS] · [LoadGen build-info][BL] · [Receiver build-info][BR]. При подготовке собственного runtime исправлен regex replacement Windows-пути до запуска процессов; фактическая пара запускалась один раз. [Preflight][PREFLIGHT]. Итоговый smoke и дополнение переданы на независимое ревью; SHA будущего документационного коммита не предполагается.
+
+| ID | Фактические этапы и коммиты | Закрытый критерий и проверяемое доказательство |
+|---|---|---|
+| D1 | 1 [24f6fdb][C1]; 5 [a8a6770][C5] | Ограниченная реактивация `3→1→2`, предпочтение вне backoff и сохранённый `2→1→2`; [регрессии][R5]. |
+| D2 | 1 [24f6fdb][C1] | Собственный HTTP client, timeout/schema 3, границы ms, bounded drain body; две волны по четыре запроса без новых соединений во второй и timeout→backoff; [до/после][R1], сохранено в [Sender tests](../../../loadgen/internal/pipeline/sender_test.go). |
+| D3 | 1 [24f6fdb][C1] | Пейсер по расписанию; Windows без race: 96.69%, 96.78%, 96.51% при пороге 95%, до 48.59%; [методика/замер][R1]. |
+| D4 | 5 [a8a6770][C5] | Ordered и concurrent переходы: B остаётся в очереди либо принадлежит конкретному воркеру; после drain B ровно один раз, отдельный all-workers-backoff сохранён; [red/green][R5]. |
+| D5 | 1 [24f6fdb][C1] | Смена TPS сохраняет уже прошедший слот, готовый батч не ждёт повторно; [virtual-time regression][R1]. |
+| D6 | 5 [a8a6770][C5] | Удерживаемый выход воркера не задерживает reconcile и snapshot; [барьер/проверка][R5]. |
+| D7 | 1 [24f6fdb][C1], оба бинарника | Signal.Stop до app cancel; второй адресный сигнал прерывает удерживаемый grace; [OS-level before/after][R1]. В [финальном smoke][SMOKE] первый сигнал завершает каждый процесс штатно. |
+| D8 | 7 [6411987][C7]; 9 [c117f4e][C9] | В обоих модулях Viper exact/required/без weak conversion, fractional hook; реальные ключи `reader.workers.initial=1.9` и `lab.response_delay_ms=1.9`, типы и старые схемы; [LoadGen][R7], [Receiver][R9]. |
+| D9 | 7 [6411987][C7]; 9 [c117f4e][C9] | LoadGen: собственные диапазоны workers и jitter 0..50 с границами; Receiver: clean exact configured path/encoded aliases без panic; [профили][R7], [пути][R9], [реальный `/audit/ingest`][SMOKE]. |
+| D10 | Решение владельца, зафиксировано этапом 7 | pprof остаётся на основном listener пульта для loopback; защита не добавлялась. [Принятое решение](../../reports/go_code_audit_combined_astra.md#принятые), [фиксация][R7]. |
+| D11 | 9 [c117f4e][C9] | `[]transaction` вместо массива указателей; null-элемент отвергается, `[{}]` принимается, поля транзакций **не валидируются** по решению владельца; [handler/tests][R9]. |
+| D12 | 1 [24f6fdb][C1]; 5 [a8a6770][C5] | Атомарные уход/удаление, уже принятый батч сохраняет владельца; рост до/после удаления, A/B/C доставлены ровно по одному; [исходный red][R1], [сохранённые границы][R5]. |
+| A1 | 4 [4ea7c6b][C4] | `internal/pipeline` владеет стадиями/очередями/подтверждениями, main использует API и собирает wire DTO; [граница][R4]. |
+| A2 | 1 [24f6fdb][C1]; 4 [4ea7c6b][C4] | В 1 закрывается свой blocked ID; в 4 канал и telemetry объединены в batchQueue, main не получает канал, все interruptible send закрывают свой ID; [регрессии][R1], [владение][R4]. |
+| A3 | 5 [a8a6770][C5] | Sender читает общую очередь напрямую; атомарный уход, supervisor/Wait, максимум один новый батч каждому уже ожидающему уходящему; [D4/per-worker/cancel][R5]. |
+| A4 | 6 [25deb31][C6] | Общие DTO/пути/queue mapper; status проверяет unknown/state, set — наличие/тип/значение целевого поля, включая 0/false; [32 confirm cases][R6]. |
+| A5 | 2 [f6b1e75][C2] | Ненужная цепочка detach после окончания loop удалена; [scope/diff][R2]. Полезная регрессия отмены восстановлена в [T8276][RF]. |
+| A6 | 3 [ae6e656][C3A] и [74a7100][C3B] | Управляющий main собран по владельцам; чистый перенос доказан отдельно от типов/упрощений; [declarations/literals][R3]. |
+| A7 | 4 [4ea7c6b][C4] | Retry math в Sender, rand/v2 в рабочем пути, injected source до старта; точные lower/middle/upper delays и хвост списка, serialisation random; [проверки][R4]. |
+| A8 | 5 [a8a6770][C5] | Reader без sync.Cond, атомарный claim, wake всех idle, StopReading при живом контексте, W2 продолжает без новой команды; [Reader boundaries][R5]. |
+| I1 | 2 [f6b1e75][C2]; 9 [c117f4e][C9] | LoadGen: test-only reset/stop/clear/detach и лишняя capacity удалены; [очистка][R2], [T8276][RF]. Receiver: logging.level действует через slog lifecycle/error; [уровни/логи][R9]. |
+| I2 | 2 [f6b1e75][C2] | Недостижимый cliUsageError удалён, exit-коды сохранены; [очистка и CLI][R2]. |
+| I3 | 8 [6d38bca][C8] | Таблица target→parse/action/actual, target до help, один разбор значения, confirm без type assertions; [CLI cases][R8]. |
+| I4 | 4 [4ea7c6b][C4] | `SourceError{Op,Path,Err}` с Unwrap; errors.Is/As сохраняют причину, wire DTO строится в main; [source/resources tests][R4]. |
+| I5 | 8 [6d38bca][C8] | Строчные согласованные HTTP errors при сохранённых кодах/CLI exit; [mux/CLI tests][R8]. |
+| I6 | 4 [4ea7c6b][C4]; 7 [6411987][C7]; 8 [6d38bca][C8]; 9 [c117f4e][C9] | Reader: n>0 до errors.Is(EOF), причины/close errors [R4]; config: errors.New [R7]; CLI/HTTP: errors.Is(EOF) [R8]; Receiver: bounded ReadAll+Unmarshal вместо EOF-tail, errors.New и общий validator [R9]. |
+| I7 | 8 [6d38bca][C8]; 9 [c117f4e][C9] | LoadGen: явный 503, HEAD/405/Allow и OpenAPI, strict decoder/trailing check, 413 прежде JSON [R8]; Receiver: method mux, MaxBytesReader+Unmarshal, пустой Encode-guard удалён [R9]. |
+| I8 | 8 [6d38bca][C8] | Один service_started после bind с фактическим адресом, snapshot Warn с cause, точные HTTP/drain events; [logs/tests][R8]. |
+| I9 | 2 [f6b1e75][C2] | Nil-защиты ради тестов удалены, тесты передают logger/metrics; [рабочие вызовы и проверки][R2]. |
+| I10 | 4 [4ea7c6b][C4] | Source хранит только каталог/файлы, opener задаётся в Options до запуска; [controlled resources/boundary][R4]. |
+| I11 | 4 [4ea7c6b][C4] | startThrottler возвращает готовые updates/done; SetRate сразу после Start работает; [readiness test][R4]. |
+| I12 | 4 [4ea7c6b][C4] | Общий фактический elapsed для Reader, обеих очередей и actualTPS; задержанный тик/пустое окно; [sampling tests][R4]. |
+| I13 | 3 [74a7100][C3B] | Одна FIFO типизированных snapshot/control requests, буферный runtimeSnapshot/bool reply, ready receipt сохраняется при закрытии loop; [RPC tests][R3]. |
+| I14 | 3 [ae6e656][C3A]/[74a7100][C3B]; 4 [4ea7c6b][C4]; 7 [6411987][C7]; 9 [c117f4e][C9] | Main: короткие receivers, snapshot/metrics/ticker [R3]; pipeline: Queue/Source/Transaction/retry/blocked/completed [R4]; config: c/channelConfig/validateBatchSize [R7]. Receiver receivers согласованы в [этапе 9][R9]. |
+| I15 | 9 [c117f4e][C9] | Handler.ServeHTTP отделён от http.Server; slog level/lifecycle, единый semantic validator, nil/204/0, Milliseconds и graceful/forced Close; [Receiver][R9]. |
+| T1 | 9 [c117f4e][C9]; 10 [b262311][C10] | Receiver tests рядом с config/handler/main [R9]; LoadGen оба пакета рядом с владельцами, HTTP 4xx pool test и helpers перенесены, каждому удалённому дублю дан surviving case [R10]. |
+| T2 | 10 [b262311][C10] | Имена Throttler/BatchQueue/SenderClient/formatSnapshot и retained Reader отражают текущие сущности; [полная mapping160→156][R10]. |
+| T3 | 2 [f6b1e75][C2]; follow-up [d2770dc][CF] | Только dead reset/detach tests удалены [R2]; замечание T8275 об утраченной длительности закрыто T8276: точные 25ms/нулевые totals, mutant ловится [RF]; принятие [T8279][V4]. |
+| T4 | 1 [24f6fdb][C1]; 9 [c117f4e][C9]; 10 [b262311][C10] | Throttler virtual regressions [R1]; Receiver delay/cancel [R9]; остаток LoadGen: spin/5 polling loops→0, все 18 Sleep pipeline virtual, Reader 1100ms→virtual hour [R10]. T8276 и этап 5 сохранены. |
+| T5 | 5 [a8a6770][C5] | Sender: deliverer в конструкторе вместо подмены pool.attempt после старта; прежний ручной draining-тест заменён проверкой ≤1 нового батча каждому уходящему. Reader: opener/Read + snapshot вместо polling active/busy в busy-downscale; управляемые beforeReceive/beforeClaim [R5]. Допустимые адресные private-state проверки сохранены. |
+| T6 | 6 [25deb31][C6] | Удалены дубли ключей/obsolete fields; сохранены OpenAPI/reflection, examples dispatch, validator+свой negative test и wire 0/null values; [контракт][R6]. |
+| T7 | 8 [6d38bca][C8] | Свободный ненулевой порт, URL от helper, bounded retry только своего bind conflict, занятый 8080 без skip; настоящий конфликт и доставка [R8]. |
+| T8 | 2 [f6b1e75][C2] | Тест отсутствующих метрик и его защитная product-ветка удалены; реальные metrics передаются штатно; [очистка][R2]. |
+
+Этапы 1–10 приняты независимыми ревью [T8272][V1], [T8275][V3] с узким исправлением [T8276][RF], подтверждённым [T8279][V4], затем [T8281][V5], [T8284][V8], [T8287][V9] и [T8289][V10]. Этап 11 добавляет только проверку стыка и эту фактическую привязку. Известные границы сохранены: pprof/loopback — принятое решение; `[{}]` допустим; доставка после потери HTTP-ответа может повториться. Performance D3 и UI повторно не проверялись; финальный smoke не используется как throughput benchmark.
+
+[C1]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/24f6fdbeaa7668b31304c410c8e76881522deae4
+[C2]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/f6b1e75cf3c8de325c18e1b3f481a5c1caafa74a
+[C3A]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/ae6e65641786758fb9181fc42f87b6d6b0f51980
+[C3B]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/74a710094ac9f25e4d3fe6d2312870ab41f00f41
+[CF]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/d2770dca6867525ea108402b673013457b966e16
+[C4]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/4ea7c6b8ee2aca740f641e0cec12ec8eb0d6b561
+[C5]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/a8a677008540bea3001a05380f59cc9434c6c214
+[C6]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/25deb31fc154804cc224fae333723094d33c0f2f
+[C7]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/641198780710f064657b8c165219ab0c74ed47ab
+[C8]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/6d38bca3df66e09d3238639f6f16c05e5aac94d8
+[C9]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/c117f4e11a17841589bc9f1016da451079c7f045
+[C10]: https://github.com/PainChopper/ingestion-lab-loadgen/commit/b2623118f5c87a4006e0a2e203c26311f9195c76
+[R1]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8270_20261118-1429_CODER_pipeline-delivery-defects_report.md
+[R2]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8273_20261118-1448_CODER_remove-dead-paths_report.md
+[R3]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8274_20261118-1452_CODER_regroup-control-main_report.md
+[RF]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8276_20261118-1504_CODER_restore-reader-cancel-duration_report.md
+[R4]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8277_20261118-1506_CODER_extract-pipeline_report.md
+[R5]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8280_20261118-1518_CODER_rewrite-worker-pools_report.md
+[R6]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8282_20261118-1531_CODER_deduplicate-snapshot-contract_report.md
+[R7]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8283_20261118-1538_CODER_strict-loadgen-config_report.md
+[R8]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8285_20261118-1545_CODER_http-cli-and-logs_report.md
+[R9]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8286_20261118-1555_CODER_receiver-schema-two_report.md
+[R10]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8288_20261118-1621_CODER_regroup-loadgen-tests_report.md
+[R11]: ../../../../ingestion-lab-agents-runtime/MAIL/CODER/OUT/T8290_20261118-1637_CODER_final-two-process-and-id-map_report.md
+[V1]: ../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8272_20261118-1443_REVIEWER_review-first-stage_report.md
+[V3]: ../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8275_20261118-1455_REVIEWER_review-cleanup-and-control_report.md
+[V4]: ../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8279_20261118-1514_REVIEWER_review-extraction_report.md
+[V5]: ../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8281_20261118-1527_REVIEWER_review-pools_report.md
+[V8]: ../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8284_20261118-1541_REVIEWER_review-contract-stages_report.md
+[V9]: ../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8287_20261118-1612_REVIEWER_review-receiver-schema_report.md
+[V10]: ../../../../ingestion-lab-agents-runtime/MAIL/REVIEWER/OUT/T8289_20261118-1632_REVIEWER_review-test-layout_report.md
+[SMOKE]: ../../../../ingestion-lab-agents-runtime/RUNLOGS/T8290/two-process-result.json
+[STATUS]: ../../../../ingestion-lab-agents-runtime/RUNLOGS/T8290/git-status-before.log
+[BL]: ../../../../ingestion-lab-agents-runtime/RUNLOGS/T8290/loadgen-build-info.log
+[BR]: ../../../../ingestion-lab-agents-runtime/RUNLOGS/T8290/receiver-build-info.log
+[PREFLIGHT]: ../../../../ingestion-lab-agents-runtime/RUNLOGS/T8290/preflight-failure.log
