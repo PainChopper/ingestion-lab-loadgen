@@ -138,22 +138,37 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
-  it('uses neutral placeholders for unavailable HTTP telemetry', () => {
+  it('only shows the HTTP Sender pool and neutral placeholders for the connection and Target', () => {
     const adapter = new SimulationAdapter()
-    const snapshot = {
+    const range = { initial: 1, min: 1, max: 1, step: 1, unit: 'workers', mutability: 'immediate' }
+    const capacity = { initial: 0, allowed: [0], unit: 'batches', mutability: 'startup-only' }
+    const snapshot: LoadgenSnapshot = {
       ...derivedSnapshot(adapter),
-      adapterKind: 'http' as const,
+      adapterKind: 'http',
+      config: {
+        readerReadBatchSize: range,
+        readerChannelCapacity: capacity,
+        senderChannelCapacity: capacity,
+        metricsWindowMs: range,
+        throttlerRequestedTps: range,
+        throttlerInstalled: { initial: true, allowed: [true, false], mutability: 'immediate' },
+        senderWorkers: range,
+        logging: { level: 'info', mutability: 'startup-only' },
+      },
     }
 
     expect(getInspectorViewModel(snapshot, 'http')?.rows).toEqual([
-		{ label: 'Telemetry', value: '—' },
+    { label: 'Telemetry', value: '—' },
     ])
     expect(getInspectorViewModel(snapshot, 'target')?.rows).toEqual([
       { label: 'Telemetry', value: '—' },
     ])
-    expect(getInspectorViewModel(snapshot, 'sender')?.sections?.[1].rows).toEqual([
-      { label: 'Delivery telemetry', value: '—' },
+    const sender = getInspectorViewModel(snapshot, 'sender')
+    expect(sender?.rows.map((row) => row.label)).toEqual([
+      'Workers desired / live / draining',
+      'Worker states',
     ])
+    expect(sender?.sections).toEqual([{ title: 'Pool', rows: sender?.rows }])
     adapter.dispose()
   })
 

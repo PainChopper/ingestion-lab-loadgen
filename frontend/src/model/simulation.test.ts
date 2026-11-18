@@ -9,6 +9,7 @@ const CONFIG: SimulationConfig = {
   readerWorkers: 1,
   senderWorkers: 1,
   requestedTps: 50_000,
+  throttlerInstalled: true,
   readBatchSize: 5_000,
   httpTimeoutMs: 500,
   targetDelayMs: 0,
@@ -16,6 +17,44 @@ const CONFIG: SimulationConfig = {
 }
 
 describe('FixedStepSimulation pipeline batch', () => {
+  it.each([0, 2])('bypasses the token bucket and preserves backpressure at capacity %i', (capacity) => {
+    const simulation = new FixedStepSimulation(
+      { ...CONFIG, readerWorkers: 5, requestedTps: 0, targetDelayMs: 100 },
+      capacity,
+      capacity,
+    )
+
+    for (let step = 0; step < 50; step += 1) simulation.advanceStep()
+    const installed = simulation.telemetry()
+    expect(installed.senderChannel.sentBatchesTotal).toBe(0)
+    expect(installed.limitedMs).toBeGreaterThan(0)
+
+    simulation.updateConfig({ throttlerInstalled: false })
+    for (let step = 0; step < 50; step += 1) simulation.advanceStep()
+    const bypassed = simulation.telemetry()
+    expect(bypassed.senderChannel.sentBatchesTotal).toBeGreaterThan(0)
+    expect(bypassed.senderChannel.blockedMsTotal).toBeGreaterThan(0)
+    expect(bypassed.senderChannel.depthBatches).toBe(capacity)
+    expect(bypassed.senderChannel.handoffBatchesTotal > 0).toBe(capacity === 0)
+    expect(bypassed.readerChannel.handoffBatchesTotal > 0).toBe(capacity === 0)
+    expect(bypassed.limitedMs).toBe(installed.limitedMs)
+    expect(bypassed.readerChannel.receivedBatchesTotal)
+      .toBe(bypassed.senderChannel.sentBatchesTotal + 1)
+
+    simulation.updateConfig({ throttlerInstalled: true })
+    for (let step = 0; step < 50; step += 1) simulation.advanceStep()
+    const reinstalled = simulation.telemetry()
+    expect(simulation.config.requestedTps).toBe(0)
+    expect(reinstalled.readerChannel.receivedBatchesTotal).toBe(bypassed.readerChannel.receivedBatchesTotal)
+    expect(reinstalled.senderChannel.sentBatchesTotal).toBe(bypassed.senderChannel.sentBatchesTotal)
+    expect(reinstalled.limitedMs).toBeGreaterThan(bypassed.limitedMs)
+
+    simulation.updateConfig({ requestedTps: CONFIG.requestedTps })
+    for (let step = 0; step < 50; step += 1) simulation.advanceStep()
+    expect(simulation.telemetry().senderChannel.sentBatchesTotal)
+      .toBeGreaterThan(reinstalled.senderChannel.sentBatchesTotal)
+  })
+
   it('forwards each Reader batch unchanged through both channels', () => {
     const attempts: SimulationAttemptContext[] = []
     const simulation = new FixedStepSimulation(

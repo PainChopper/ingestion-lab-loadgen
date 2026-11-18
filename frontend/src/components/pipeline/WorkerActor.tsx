@@ -1,6 +1,7 @@
 import { Minus, Plus } from 'lucide-react'
-import { useCallback, useEffect, useRef, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useRef, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { DesiredControl } from '../../hooks/useDesiredControl'
+import { useHoldRepeat } from '../../hooks/useHoldRepeat'
 import type { InspectorRowSegment } from '../inspectorViewModel'
 import type {
   NumericControlSnapshot,
@@ -153,32 +154,14 @@ export function WorkerActor({
   muted = false,
   sourceErrorOperation,
 }: WorkerActorProps) {
-  const holdTimer = useRef<number | null>(null)
-  const repeatTimer = useRef<number | null>(null)
-  const releaseListeners = useRef<(() => void) | null>(null)
-  const holdActive = useRef(false)
   const suppressClick = useRef(false)
   const desiredRef = useRef(desiredControl.desired)
-  const commitDesired = desiredControl.commit
-  const cancelDesired = desiredControl.cancel
   const previewDesired = desiredControl.preview
-
-
-  const stopHold = useCallback((commit: boolean) => {
-    if (holdTimer.current !== null) window.clearTimeout(holdTimer.current)
-    if (repeatTimer.current !== null) window.clearInterval(repeatTimer.current)
-    holdTimer.current = null
-    repeatTimer.current = null
-    releaseListeners.current?.()
-    releaseListeners.current = null
-    if (!holdActive.current) return
-    holdActive.current = false
-    if (commit) void commitDesired()
-    else cancelDesired()
-  }, [cancelDesired, commitDesired])
-
-  useEffect(() => () => stopHold(false), [stopHold])
-
+  const hold = useHoldRepeat({
+    onCommit: desiredControl.commit,
+    onCancel: desiredControl.cancel,
+    commitAtLimit: true,
+  })
 
   const desiredWorkers = Math.min(
     Math.round(workers.max),
@@ -196,8 +179,8 @@ export function WorkerActor({
     Math.min(desiredWorkers, MAX_VISIBLE_WORKER_MARKERS),
   )
   const workerMin = Math.round(workers.min)
-  const workerMax = Math.round(workers.max)
   const workerStep = Math.max(1, Math.round(workers.step))
+  const workerMax = workerMin + Math.floor((Math.round(workers.max) - workerMin) / workerStep) * workerStep
   const workerControlDisabled = !desiredControl.available || desiredControl.phase === 'pending'
   const states = actor === 'reader'
     ? ['blocked', 'reading', 'idle'] as const
@@ -219,53 +202,29 @@ export function WorkerActor({
   }
   const stepWorkers = useCallback((delta: number) => {
     const next = Math.min(
-      Math.round(workers.max),
-      Math.max(Math.round(workers.min), desiredRef.current + delta),
+      workerMax,
+      Math.max(workerMin, desiredRef.current + delta),
     )
     if (next === desiredRef.current) return false
     desiredRef.current = next
     previewDesired(next)
     return true
-  }, [previewDesired, workers.max, workers.min])
+  }, [previewDesired, workerMax, workerMin])
   const handleWorkerPointerDown = (
     event: ReactPointerEvent<HTMLButtonElement>,
     delta: number,
   ) => {
     event.preventDefault()
-    if (!desiredControl.available) return
-    stopHold(false)
-    if (desiredControl.phase === 'pending' || !stepWorkers(delta)) return
-    holdActive.current = true
+    if (workerControlDisabled || !hold.start(event.pointerId, () => stepWorkers(delta))) return
     suppressClick.current = true
-    const release = () => stopHold(true)
-    const cancel = () => stopHold(false)
-    const cancelKey = (keyboardEvent: globalThis.KeyboardEvent) => {
-      if (keyboardEvent.key === 'Escape') cancel()
-    }
-    releaseListeners.current = () => {
-      window.removeEventListener('pointerup', release)
-      window.removeEventListener('pointercancel', cancel)
-      window.removeEventListener('blur', cancel)
-      window.removeEventListener('keydown', cancelKey)
-    }
-    window.addEventListener('pointerup', release)
-    window.addEventListener('pointercancel', cancel)
-    window.addEventListener('blur', cancel)
-    window.addEventListener('keydown', cancelKey)
     event.currentTarget.setPointerCapture?.(event.pointerId)
-    holdTimer.current = window.setTimeout(() => {
-      repeatTimer.current = window.setInterval(() => {
-        if (!stepWorkers(delta)) stopHold(true)
-      }, 120)
-    }, 420)
   }
-  const handleWorkerClick = (delta: number) => {
-    if (!desiredControl.available) return
-    if (suppressClick.current) {
+  const handleWorkerClick = (event: MouseEvent<HTMLButtonElement>, delta: number) => {
+    if (event.detail > 0 && suppressClick.current) {
       suppressClick.current = false
       return
     }
-    if (desiredControl.phase === 'pending' || !stepWorkers(delta)) return
+    if (workerControlDisabled || !stepWorkers(delta)) return
     void desiredControl.commit()
   }
 
@@ -294,8 +253,8 @@ export function WorkerActor({
             id={`${actor}-minus`}
             type="button"
             onPointerDown={(event) => handleWorkerPointerDown(event, -workerStep)}
-            onLostPointerCapture={() => stopHold(false)}
-            onClick={() => handleWorkerClick(-workerStep)}
+            onLostPointerCapture={hold.cancel}
+            onClick={(event) => handleWorkerClick(event, -workerStep)}
             disabled={workerControlDisabled || desiredWorkers <= workerMin}
             title={`Remove ${actor} worker`}
             aria-label={`Remove ${actor} worker`}
@@ -316,8 +275,8 @@ export function WorkerActor({
             id={`${actor}-plus`}
             type="button"
             onPointerDown={(event) => handleWorkerPointerDown(event, workerStep)}
-            onLostPointerCapture={() => stopHold(false)}
-            onClick={() => handleWorkerClick(workerStep)}
+            onLostPointerCapture={hold.cancel}
+            onClick={(event) => handleWorkerClick(event, workerStep)}
             disabled={workerControlDisabled || desiredWorkers >= workerMax}
             title={`Add ${actor} worker`}
             aria-label={`Add ${actor} worker`}

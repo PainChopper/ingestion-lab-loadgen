@@ -120,7 +120,7 @@ export function PipelineSvg({
         snapshot={snapshot.throttler}
         upstreamChannel={snapshot.readerChannel}
         requestedTpsControl={liveControls.requestedTps}
-        installedControl={snapshot.adapterKind === 'http' ? liveControls.installed : undefined}
+        installedControl={liveControls.installed}
         selected={selectedId === snapshot.throttler.id}
         onSelect={onSelect}
         geometry={resolvedGeometry.actors.throttler}

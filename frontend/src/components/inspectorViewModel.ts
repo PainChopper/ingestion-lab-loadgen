@@ -47,8 +47,8 @@ function formatControl(
   return value === '—' ? value : `${value} ${unit}`
 }
 
-function unavailableRow(label = 'Telemetry'): InspectorRow {
-  return { label, value: '—' }
+function unavailableRow(): InspectorRow {
+  return { label: 'Telemetry', value: '—' }
 }
 
 export function formatStateLabel(value: string): string {
@@ -96,10 +96,10 @@ export function getInspectorViewModel(
         const { idleWorkers, readingWorkers, blockedWorkers } = snapshot.reader
         const sourceError = snapshot.reader.sourceError
         const rows: InspectorRow[] = [
-		  {
-			label: 'Workers desired / live / draining',
-			value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
-		  },
+      {
+      label: 'Workers desired / live / draining',
+      value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
+      },
           {
             label: 'Worker states',
             value:
@@ -116,43 +116,38 @@ export function getInspectorViewModel(
           },
           { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
           { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
-		]
-		if (sourceError != null) {
-			const sourcePath = `${snapshot.reader.sourceDirectory ?? ''}/${sourceError.relativePath}`
-				.replace(/\/+/g, '/')
-				.replace(/\/$/, '')
-			rows.push({
-				label: '',
-				key: 'source-error',
-				kind: 'source-error',
+    ]
+    if (sourceError != null) {
+      const sourcePath = `${snapshot.reader.sourceDirectory ?? ''}/${sourceError.relativePath}`
+        .replace(/\/+/g, '/')
+        .replace(/\/$/, '')
+      rows.push({
+        label: '',
+        key: 'source-error',
+        kind: 'source-error',
               value: `${sourcePath}: ${sourceError.message}`,
-				layout: 'full-width',
-			})
-		}
-		return {
-			id: selectedId,
-			title: 'READER',
-			kind: 'Parquet source',
-			rows,
-		}
-	}
+        layout: 'full-width',
+      })
+    }
+    return {
+      id: selectedId,
+      title: 'READER',
+      kind: 'Parquet source',
+      rows,
+    }
+  }
     case 'throttler':
       return {
         id: selectedId,
         title: 'THROTTLER',
         kind: 'Rate control',
         rows: [
-          ...(snapshot.adapterKind === 'simulation' ? [{
-            label: 'Requested TPS',
-            value: formatRate(snapshot.throttler.requestedTps.applied),
-          }] : []),
           { label: 'Admitted TPS', value: formatRate(snapshot.throttler.admittedTps) },
         ],
       }
     case 'sender': {
       const { idleWorkers, inFlightWorkers, backoffWorkers } = snapshot.sender
-      const hasWorkerStateTelemetry = true
-      const hasSenderTelemetry = snapshot.adapterKind !== 'http'
+      const sender = { id: selectedId, title: 'SENDER', kind: 'HTTP sender' }
       const poolRows: ReadonlyArray<InspectorRow> = [
         {
           label: 'Workers desired / live / draining',
@@ -160,23 +155,25 @@ export function getInspectorViewModel(
             `${formatInteger(snapshot.sender.liveWorkers)} / ` +
             `${formatInteger(snapshot.sender.drainingWorkers)}`,
         },
-        hasWorkerStateTelemetry
-          ? {
-              label: 'Worker states',
-              value:
-                `${formatInteger(idleWorkers)} idle · ` +
-                `${formatInteger(inFlightWorkers)} in-flight · ` +
-                `${formatInteger(backoffWorkers)} backoff`,
-              layout: 'full-width',
-              segments: [
-                { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
-                { value: `${formatInteger(inFlightWorkers)} in-flight`, tone: 'in-flight' },
-                { value: `${formatInteger(backoffWorkers)} backoff`, tone: 'backoff' },
-              ],
-            }
-          : unavailableRow('Worker states'),
+        {
+          label: 'Worker states',
+          value:
+            `${formatInteger(idleWorkers)} idle · ` +
+            `${formatInteger(inFlightWorkers)} in-flight · ` +
+            `${formatInteger(backoffWorkers)} backoff`,
+          layout: 'full-width',
+          segments: [
+            { value: `${formatInteger(idleWorkers)} idle`, tone: 'idle' },
+            { value: `${formatInteger(inFlightWorkers)} in-flight`, tone: 'in-flight' },
+            { value: `${formatInteger(backoffWorkers)} backoff`, tone: 'backoff' },
+          ],
+        },
       ]
-      const deliveryRows: ReadonlyArray<InspectorRow> = hasSenderTelemetry ? [
+      const poolSection = { title: 'Pool', rows: poolRows }
+      if (snapshot.adapterKind === 'http') {
+        return { ...sender, rows: poolRows, sections: [poolSection] }
+      }
+      const deliveryRows: ReadonlyArray<InspectorRow> = [
         { label: 'Attempted TPS', value: formatRate(snapshot.sender.attemptedTps) },
         { label: 'Retry TPS', value: formatRate(snapshot.sender.retryAttemptedTps) },
         {
@@ -194,8 +191,8 @@ export function getInspectorViewModel(
           value: formatInteger(snapshot.sender.failedResponses),
         },
         { label: 'Timeouts', value: formatInteger(snapshot.sender.timeoutsTotal) },
-      ] : [unavailableRow('Delivery telemetry')]
-      const diagnosticsRows: ReadonlyArray<InspectorRow> = hasSenderTelemetry ? [
+      ]
+      const diagnosticsRows: ReadonlyArray<InspectorRow> = [
         { label: 'Attempts', value: formatInteger(snapshot.sender.attemptsStartedTotal) },
         {
           label: 'Retry attempts',
@@ -226,16 +223,14 @@ export function getInspectorViewModel(
           value: 'Retries, timeouts, terminal failures, and ambiguous outcomes are counted separately.',
           layout: 'full-width',
         },
-      ] : [unavailableRow('Diagnostics telemetry')]
+      ]
       const sections: ReadonlyArray<InspectorSection> = [
-        { title: 'Pool', rows: poolRows },
+        poolSection,
         { title: 'Delivery', rows: deliveryRows },
         { title: 'Diagnostics', rows: diagnosticsRows },
       ]
       return {
-        id: selectedId,
-        title: 'SENDER',
-        kind: 'HTTP sender',
+        ...sender,
         rows: [...poolRows, ...deliveryRows, ...diagnosticsRows],
         sections,
       }
@@ -273,9 +268,7 @@ export function getInspectorViewModel(
           id: selectedId,
           title: 'HTTP',
           kind: 'Sender to target',
-			rows: snapshot.config?.logging === undefined
-				? [unavailableRow()]
-				: [{ label: 'Logging level', value: snapshot.config.logging.level }],
+          rows: [unavailableRow()],
         }
       }
       return {
