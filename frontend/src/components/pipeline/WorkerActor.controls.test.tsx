@@ -9,18 +9,18 @@ import { WorkerActor } from './WorkerActor'
 const sender = ACTOR_GEOMETRY.sender
 const activityCounts = { idle: 0, reading: 0, blocked: 0, 'in-flight': 0, backoff: 0 }
 
-function SenderWorkers({ onCommand }: { onCommand: (value: number) => void }) {
+function SenderWorkers({ onCommand, max = 10 }: { onCommand: (value: number) => void; max?: number }) {
   const [applied, setApplied] = useState(5)
   const [revision, setRevision] = useState(0)
   const desiredControl = useDesiredControl({
     applied,
     revision,
     available: true,
-    dispatch: async (value) => {
+    dispatch: (value) => {
       onCommand(value)
       setApplied(value)
       setRevision((current) => current + 1)
-      return { accepted: true }
+      return Promise.resolve({ accepted: true })
     },
   })
 
@@ -38,7 +38,7 @@ function SenderWorkers({ onCommand }: { onCommand: (value: number) => void }) {
           preview: null,
           pending: null,
           min: 2,
-          max: 10,
+          max,
           step: 3,
           unit: 'workers',
           applyMode: 'immediate',
@@ -74,6 +74,24 @@ describe('WorkerActor controls', () => {
     expect(onCommand.mock.calls).toEqual([[8]])
   })
 
+  it('retries the same worker step after a synchronous dispatch failure', async () => {
+    const user = userEvent.setup()
+    const onCommand = vi.fn().mockImplementationOnce(() => {
+      throw new Error('Dispatch unavailable')
+    })
+    render(<SenderWorkers onCommand={onCommand} max={13} />)
+    const increase = screen.getByRole('button', { name: 'Add sender worker' })
+    increase.focus()
+
+    await user.keyboard('{Enter}')
+    expect(onCommand.mock.calls).toEqual([[8]])
+    expect(screen.getByLabelText('Sender worker count, 5 applied').textContent).toBe('5')
+
+    await user.keyboard('{Enter}')
+    expect(onCommand.mock.calls).toEqual([[8], [8]])
+    expect(screen.getByLabelText('Sender worker count, 8 applied').textContent).toBe('8')
+  })
+
   it.each([
     { name: 'Add sender worker', expected: 8 },
     { name: 'Remove sender worker', expected: 2 },
@@ -96,5 +114,24 @@ describe('WorkerActor controls', () => {
     fireEvent.click(button, { detail: 1 })
     act(() => vi.advanceTimersByTime(1_000))
     expect(onCommand.mock.calls).toEqual([[expected]])
+  })
+
+  it('uses the current worker range and dispatch during an active hold', async () => {
+    vi.useFakeTimers()
+    const originalCommand = vi.fn()
+    const currentCommand = vi.fn()
+    const { rerender } = render(<SenderWorkers onCommand={originalCommand} />)
+    const increase = screen.getByRole('button', { name: 'Add sender worker' })
+
+    fireEvent.pointerDown(increase, { pointerId: 1 })
+    expect(screen.getByRole('status').textContent).toBe('8')
+    rerender(<SenderWorkers onCommand={currentCommand} max={13} />)
+    act(() => vi.advanceTimersByTime(540))
+    expect(screen.getByRole('status').textContent).toBe('11')
+    expect(currentCommand).not.toHaveBeenCalled()
+
+    await act(async () => { fireEvent.pointerUp(window, { pointerId: 1 }) })
+    expect(originalCommand).not.toHaveBeenCalled()
+    expect(currentCommand.mock.calls).toEqual([[11]])
   })
 })

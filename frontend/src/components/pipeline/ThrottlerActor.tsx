@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react'
@@ -93,15 +94,11 @@ export function ThrottlerActor({
   const candidateKind = requestedTpsControl.phase === 'idle'
     ? null
     : requestedTpsControl.phase
-  const [confirmedWheelPhase, setConfirmedWheelPhase] = useState(0)
-  const [candidateWheelPhase, setCandidateWheelPhase] = useState<number | null>(null)
+  const [initialAppliedIndex] = useState(appliedIndex)
   const [installationDragProgress, setInstallationDragProgress] = useState(0)
-  const previousAppliedIndex = useRef(appliedIndex)
   const previousAppliedMode = useRef(snapshot.installed.applied)
-  const candidateIndexRef = useRef(candidateIndex ?? appliedIndex)
-  const wheelPhaseRef = useRef(confirmedWheelPhase)
-  const targetsRef = useRef(targets)
-  const adjustableRef = useRef(adjustable)
+  const openingIndex = candidateIndex ?? appliedIndex
+  const openingIndexRef = useRef(openingIndex)
   const installationControlRef = useRef<SVGGElement>(null)
   const installationFocusRequested = useRef(false)
   const installationDragProgressRef = useRef(0)
@@ -114,34 +111,12 @@ export function ThrottlerActor({
   const cancelInstalled = installedControl?.cancel
   const previewInstalled = installedControl?.preview
   const commitInstalled = installedControl?.commit
-  const previewRequestedTps = requestedTpsControl.preview
+  const wheelPhase = nextWheelPhase(0, openingIndex - initialAppliedIndex)
 
-  const derivedCandidatePhase = candidateIndex === null
-    ? confirmedWheelPhase
-    : nextWheelPhase(
-      confirmedWheelPhase,
-      candidateIndex - appliedIndex,
-    )
-  const wheelPhase = candidateWheelPhase ?? derivedCandidatePhase
-  candidateIndexRef.current = candidateIndex ?? appliedIndex
-  wheelPhaseRef.current = wheelPhase
-  targetsRef.current = targets
-  adjustableRef.current = adjustable
-
-  useEffect(() => {
-    const previous = previousAppliedIndex.current
-    if (previous !== appliedIndex) {
-      setConfirmedWheelPhase((phase) =>
-        nextWheelPhase(phase, appliedIndex - previous)
-      )
-      setCandidateWheelPhase(null)
-      previousAppliedIndex.current = appliedIndex
-    }
-  }, [appliedIndex])
-
-  useEffect(() => {
-    if (candidateValue === null) setCandidateWheelPhase(null)
-  }, [candidateValue])
+  // A batched rollback can leave the rendered index unchanged after the ref advances.
+  useLayoutEffect(() => {
+    openingIndexRef.current = openingIndex
+  })
 
   const cancelInstallationPreview = useCallback(() => {
     installationDrag.current = null
@@ -167,30 +142,22 @@ export function ThrottlerActor({
     }
   }, [cancelInstallationPreview, snapshot.installed.applied])
 
-  const requestDelta = useCallback((delta: number) => {
-    const availableTargets = targetsRef.current
-    if (!adjustableRef.current || availableTargets === null) return false
+  const requestDelta = (delta: number) => {
+    if (!adjustable || targets === null) return false
 
-    const sourceIndex = candidateIndexRef.current
+    const sourceIndex = openingIndexRef.current
     const targetIndex = Math.min(11, Math.max(0, sourceIndex + delta))
-    const actualDelta = targetIndex - sourceIndex
-    if (actualDelta === 0) return false
+    if (targetIndex === sourceIndex) return false
 
-    const targetTps = availableTargets[targetIndex]
-    const targetPhase = nextWheelPhase(wheelPhaseRef.current, actualDelta)
-    candidateIndexRef.current = targetIndex
-    wheelPhaseRef.current = targetPhase
-    setCandidateWheelPhase(targetPhase)
-    previewRequestedTps(targetTps)
+    openingIndexRef.current = targetIndex
+    requestedTpsControl.preview(targets[targetIndex])
     return true
-  }, [previewRequestedTps])
+  }
 
   const openingHold = useHoldRepeat({
+    step: requestDelta,
     onCommit: requestedTpsControl.commit,
-    onCancel: () => {
-      requestedTpsControl.cancel()
-      setCandidateWheelPhase(null)
-    },
+    onCancel: requestedTpsControl.cancel,
   })
 
   const cancelOpening = () => {
@@ -203,7 +170,7 @@ export function ThrottlerActor({
   ) => {
     event.preventDefault()
     event.stopPropagation()
-    openingHold.start(event.pointerId, () => requestDelta(delta))
+    openingHold.start(event.pointerId, delta)
   }
 
   const handleSelectKeyDown = (event: KeyboardEvent<SVGGElement>) => {
@@ -357,7 +324,7 @@ export function ThrottlerActor({
     ? null
     : valvePistonCenterY(candidateIndex ?? appliedIndex)
   const candidateState = candidateKind === null ? 'applied' : candidateKind
-  const rangeIndex = candidateIndex ?? appliedIndex
+  const rangeIndex = openingIndex
   const rangeText = `${openingPercent(rangeIndex)}% open, ${candidateState}; applied ${openingPercent(appliedIndex)}% open`
   const valveStyle = {
     '--pipeline-valve-flow-color': flowColor(upstreamChannel),

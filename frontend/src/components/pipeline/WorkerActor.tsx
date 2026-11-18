@@ -1,5 +1,5 @@
 import { Minus, Plus } from 'lucide-react'
-import { useCallback, useRef, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { DesiredControl } from '../../hooks/useDesiredControl'
 import { useHoldRepeat } from '../../hooks/useHoldRepeat'
 import type { InspectorRowSegment } from '../inspectorViewModel'
@@ -155,19 +155,15 @@ export function WorkerActor({
   sourceErrorOperation,
 }: WorkerActorProps) {
   const suppressClick = useRef(false)
-  const desiredRef = useRef(desiredControl.desired)
-  const previewDesired = desiredControl.preview
-  const hold = useHoldRepeat({
-    onCommit: desiredControl.commit,
-    onCancel: desiredControl.cancel,
-    commitAtLimit: true,
-  })
-
   const desiredWorkers = Math.min(
     Math.round(workers.max),
     Math.max(Math.round(workers.min), Math.round(desiredControl.desired)),
   )
-  desiredRef.current = desiredWorkers
+  const desiredRef = useRef(desiredWorkers)
+  // A batched rollback can leave the rendered value unchanged after the ref advances.
+  useLayoutEffect(() => {
+    desiredRef.current = desiredWorkers
+  })
   const visibleWorkers = Math.min(liveWorkers ?? 0, MAX_VISIBLE_WORKER_MARKERS)
   const overflowWorkers = Math.max(0, (liveWorkers ?? 0) - visibleWorkers)
   const layout = getWorkerActorLayout(
@@ -200,31 +196,38 @@ export function WorkerActor({
     event.preventDefault()
     onSelect(actor)
   }
-  const stepWorkers = useCallback((delta: number) => {
+  const stepWorkers = (direction: -1 | 1) => {
+    if (workerControlDisabled) return false
     const next = Math.min(
       workerMax,
-      Math.max(workerMin, desiredRef.current + delta),
+      Math.max(workerMin, desiredRef.current + direction * workerStep),
     )
     if (next === desiredRef.current) return false
     desiredRef.current = next
-    previewDesired(next)
+    desiredControl.preview(next)
     return true
-  }, [previewDesired, workerMax, workerMin])
+  }
+  const hold = useHoldRepeat({
+    step: stepWorkers,
+    onCommit: desiredControl.commit,
+    onCancel: desiredControl.cancel,
+    commitAtLimit: true,
+  })
   const handleWorkerPointerDown = (
     event: ReactPointerEvent<HTMLButtonElement>,
-    delta: number,
+    direction: -1 | 1,
   ) => {
     event.preventDefault()
-    if (workerControlDisabled || !hold.start(event.pointerId, () => stepWorkers(delta))) return
+    if (!hold.start(event.pointerId, direction)) return
     suppressClick.current = true
     event.currentTarget.setPointerCapture?.(event.pointerId)
   }
-  const handleWorkerClick = (event: MouseEvent<HTMLButtonElement>, delta: number) => {
+  const handleWorkerClick = (event: MouseEvent<HTMLButtonElement>, direction: -1 | 1) => {
     if (event.detail > 0 && suppressClick.current) {
       suppressClick.current = false
       return
     }
-    if (workerControlDisabled || !stepWorkers(delta)) return
+    if (!stepWorkers(direction)) return
     void desiredControl.commit()
   }
 
@@ -252,9 +255,9 @@ export function WorkerActor({
           <button
             id={`${actor}-minus`}
             type="button"
-            onPointerDown={(event) => handleWorkerPointerDown(event, -workerStep)}
+            onPointerDown={(event) => handleWorkerPointerDown(event, -1)}
             onLostPointerCapture={hold.cancel}
-            onClick={(event) => handleWorkerClick(event, -workerStep)}
+            onClick={(event) => handleWorkerClick(event, -1)}
             disabled={workerControlDisabled || desiredWorkers <= workerMin}
             title={`Remove ${actor} worker`}
             aria-label={`Remove ${actor} worker`}
@@ -274,9 +277,9 @@ export function WorkerActor({
           <button
             id={`${actor}-plus`}
             type="button"
-            onPointerDown={(event) => handleWorkerPointerDown(event, workerStep)}
+            onPointerDown={(event) => handleWorkerPointerDown(event, 1)}
             onLostPointerCapture={hold.cancel}
-            onClick={(event) => handleWorkerClick(event, workerStep)}
+            onClick={(event) => handleWorkerClick(event, 1)}
             disabled={workerControlDisabled || desiredWorkers >= workerMax}
             title={`Add ${actor} worker`}
             aria-label={`Add ${actor} worker`}

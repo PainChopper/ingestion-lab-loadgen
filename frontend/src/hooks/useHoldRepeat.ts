@@ -1,16 +1,22 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef } from 'react'
 
 const HOLD_DELAY_MS = 420
 const HOLD_REPEAT_MS = 120
 
 interface HoldRepeatOptions {
+  step: (direction: -1 | 1) => boolean
   onCommit: () => void
   onCancel: () => void
   commitAtLimit?: boolean
 }
 
-export function useHoldRepeat({ onCommit, onCancel, commitAtLimit = false }: HoldRepeatOptions) {
+export function useHoldRepeat({ step, onCommit, onCancel, commitAtLimit = false }: HoldRepeatOptions) {
   const finishRef = useRef<((commit: boolean) => void) | null>(null)
+  const optionsRef = useRef({ step, onCommit, onCancel, commitAtLimit })
+
+  useLayoutEffect(() => {
+    optionsRef.current = { step, onCommit, onCancel, commitAtLimit }
+  }, [step, onCommit, onCancel, commitAtLimit])
 
   const cancel = useCallback(() => {
     const finish = finishRef.current
@@ -19,12 +25,12 @@ export function useHoldRepeat({ onCommit, onCancel, commitAtLimit = false }: Hol
     return true
   }, [])
 
-  useEffect(() => () => {
+  useLayoutEffect(() => () => {
     cancel()
   }, [cancel])
 
-  const start = (pointerId: number, step: () => boolean) => {
-    if (finishRef.current !== null || !step()) return false
+  const start = (pointerId: number, direction: -1 | 1) => {
+    if (finishRef.current !== null || !optionsRef.current.step(direction)) return false
 
     let delayTimer: number | undefined
     let repeatTimer: number | undefined
@@ -51,8 +57,8 @@ export function useHoldRepeat({ onCommit, onCancel, commitAtLimit = false }: Hol
       window.removeEventListener('blur', handleBlur)
       window.removeEventListener('keydown', handleKeyDown)
       finishRef.current = null
-      if (commit) onCommit()
-      else onCancel()
+      if (commit) optionsRef.current.onCommit()
+      else optionsRef.current.onCancel()
     }
 
     finishRef.current = finish
@@ -62,8 +68,9 @@ export function useHoldRepeat({ onCommit, onCancel, commitAtLimit = false }: Hol
     window.addEventListener('keydown', handleKeyDown)
     delayTimer = window.setTimeout(() => {
       repeatTimer = window.setInterval(() => {
-        if (step()) return
-        if (commitAtLimit) finish(true)
+        const options = optionsRef.current
+        if (options.step(direction)) return
+        if (options.commitAtLimit) finish(true)
         else clearTimers()
       }, HOLD_REPEAT_MS)
     }, HOLD_DELAY_MS)

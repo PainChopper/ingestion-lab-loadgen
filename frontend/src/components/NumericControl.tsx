@@ -22,86 +22,82 @@ export function NumericControl({
 }: NumericControlProps) {
   const inputId = useId()
   const unitId = `${inputId}-unit`
-  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState<string | null>(null)
   const suppressBlurCommit = useRef(false)
-  const displayed = desiredControl?.desired ?? control.applied
-  const [draft, setDraft] = useState(displayed === null ? '' : String(displayed))
-  const appliedDraft = displayed === null ? '' : String(displayed)
   const unavailable = control.applyMode === 'unavailable' ||
     desiredControl?.available === false
   const pending = desiredControl?.phase === 'pending'
+  const editable = !unavailable && !pending
+  const displayed = !unavailable && desiredControl !== undefined && desiredControl.phase !== 'idle'
+    ? desiredControl.desired
+    : control.applied
+  const displayedValue = displayed === null ? '' : String(displayed)
   const wasUnavailable = useRef(unavailable)
+  const cancelPreview = desiredControl?.cancel
+
+  if (!editable && draft !== null) setDraft(null)
 
   useEffect(() => {
-    if (unavailable) {
-      const becameUnavailable = !wasUnavailable.current
-      wasUnavailable.current = true
-      setEditing(false)
-      setDraft(appliedDraft)
-      if (becameUnavailable) onPreviewChange?.(null)
-      return
+    const becameUnavailable = unavailable && !wasUnavailable.current
+    wasUnavailable.current = unavailable
+    if (becameUnavailable) {
+      onPreviewChange?.(null)
     }
+  }, [onPreviewChange, unavailable])
 
-    wasUnavailable.current = false
-    if (!editing) {
-      setDraft(appliedDraft)
-    }
-  }, [appliedDraft, editing, onPreviewChange, unavailable])
+  const handleFocus = () => {
+    if (!editable) return
+    suppressBlurCommit.current = false
+  }
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (!editable) return
     setDraft(event.currentTarget.value)
     const value = event.currentTarget.valueAsNumber
-    onPreviewChange?.(
-      event.currentTarget.checkValidity() && Number.isFinite(value)
-        ? value
-        : null,
-    )
-    if (event.currentTarget.checkValidity() && Number.isFinite(value)) {
-      desiredControl?.preview(value)
-    }
+    const valid = event.currentTarget.checkValidity() && Number.isFinite(value)
+    onPreviewChange?.(valid ? value : null)
+    if (valid) desiredControl?.preview(value)
   }
 
   const commitDraft = (input: HTMLInputElement) => {
-    if (unavailable) {
-      setDraft(appliedDraft)
-      return
-    }
+    if (!editable) return
 
     const value = input.valueAsNumber
     if (input.checkValidity() && Number.isFinite(value)) {
       if (desiredControl === undefined) onValueChange?.(value)
       else void desiredControl.commit(value)
     } else {
-      setDraft(appliedDraft)
       onPreviewChange?.(null)
-      desiredControl?.cancel()
+      cancelPreview?.()
     }
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!editable || draft === null) return
     if (event.key === 'Enter') {
       event.preventDefault()
       suppressBlurCommit.current = true
+      setDraft(null)
       commitDraft(event.currentTarget)
       event.currentTarget.blur()
     }
     if (event.key === 'Escape') {
       event.preventDefault()
       suppressBlurCommit.current = true
-      setDraft(appliedDraft)
+      setDraft(null)
       onPreviewChange?.(null)
-      desiredControl?.cancel()
+      cancelPreview?.()
       event.currentTarget.blur()
     }
   }
 
   const handleBlur = (event: ChangeEvent<HTMLInputElement>) => {
-    setEditing(false)
+    setDraft(null)
     if (suppressBlurCommit.current) {
       suppressBlurCommit.current = false
       return
     }
-    commitDraft(event.currentTarget)
+    if (draft !== null) commitDraft(event.currentTarget)
   }
 
   return (
@@ -116,11 +112,11 @@ export function NumericControl({
         min={control.min}
         max={control.max}
         step={control.step}
-        value={draft}
-        disabled={unavailable || pending}
+        value={editable ? draft ?? displayedValue : displayedValue}
+        disabled={!editable}
         inputMode="numeric"
         aria-describedby={unitId}
-        onFocus={() => setEditing(true)}
+        onFocus={handleFocus}
         onBlur={handleBlur}
         onChange={handleChange}
         onKeyDown={handleKeyDown}

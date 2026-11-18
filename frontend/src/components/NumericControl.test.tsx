@@ -1,12 +1,13 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
+import { useDesiredControl } from '../hooks/useDesiredControl'
 import type { NumericControlSnapshot } from '../model/loadgen'
 import { NumericControl } from './NumericControl'
 
 function control(
-  applied: number,
+  applied: number | null,
   applyMode: NumericControlSnapshot['applyMode'] = 'immediate',
 ): NumericControlSnapshot {
   return {
@@ -39,7 +40,160 @@ function StatefulNumericControl({
   )
 }
 
+function LiveNumericControl({
+  snapshot,
+  dispatch,
+  onPreviewChange,
+  revision = 1,
+}: {
+  snapshot: NumericControlSnapshot
+  dispatch: (value: number) => Promise<{ accepted: boolean }>
+  onPreviewChange?: (value: number | null) => void
+  revision?: number
+}) {
+  const liveControl = useDesiredControl({
+    applied: snapshot.applied ?? snapshot.min,
+    revision,
+    available: snapshot.applied !== null && snapshot.applyMode === 'immediate',
+    dispatch,
+  })
+  return (
+    <>
+      <button type="button" onClick={() => liveControl.preview(7)}>Preview 7</button>
+      <button type="button" onClick={liveControl.cancel}>Cancel preview</button>
+      <NumericControl
+        label="Capacity"
+        control={snapshot}
+        desiredControl={liveControl}
+        onPreviewChange={onPreviewChange}
+      />
+    </>
+  )
+}
+
 describe('NumericControl', () => {
+  it('shows the applied value after external cancellation while focused without committing on Tab', async () => {
+    const user = userEvent.setup()
+    const dispatch = vi.fn().mockResolvedValue({ accepted: true })
+    render(<LiveNumericControl snapshot={control(4)} dispatch={dispatch} />)
+    const input = screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Capacity/ })
+
+    await user.click(screen.getByRole('button', { name: 'Preview 7' }))
+    await user.click(input)
+    expect(input.value).toBe('7')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel preview' }))
+    expect(document.activeElement).toBe(input)
+    expect(input.value).toBe('4')
+
+    await user.tab()
+    expect(document.activeElement).not.toBe(input)
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it('does not commit an external preview on Enter without editing', async () => {
+    const user = userEvent.setup()
+    const dispatch = vi.fn().mockResolvedValue({ accepted: true })
+    render(<LiveNumericControl snapshot={control(4)} dispatch={dispatch} />)
+    const input = screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Capacity/ })
+
+    await user.click(screen.getByRole('button', { name: 'Preview 7' }))
+    await user.click(input)
+    await user.keyboard('{Enter}')
+
+    expect(input.value).toBe('7')
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it.each(['Escape', 'Enter'])(
+    'clears an external preview when %s ends an empty draft',
+    async (key) => {
+      const user = userEvent.setup()
+      const dispatch = vi.fn()
+      render(<LiveNumericControl snapshot={control(4)} dispatch={dispatch} />)
+      const input = screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Capacity/ })
+
+      await user.click(screen.getByRole('button', { name: 'Preview 7' }))
+      expect(input.value).toBe('7')
+      await user.click(input)
+      expect(input.value).toBe('7')
+      await user.clear(input)
+      expect(input.value).toBe('')
+
+      await user.keyboard('{' + key + '}')
+      expect(input.value).toBe('4')
+      expect(dispatch).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps the Enter value pending until an acknowledging snapshot', async () => {
+    const user = userEvent.setup()
+    const dispatch = vi.fn().mockResolvedValue({ accepted: true })
+    const { rerender } = render(<LiveNumericControl snapshot={control(4)} dispatch={dispatch} />)
+    const input = screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Capacity/ })
+
+    await user.clear(input)
+    await user.type(input, '8{Enter}')
+    expect(dispatch.mock.calls).toEqual([[8]])
+    expect(input.disabled).toBe(true)
+    expect(input.value).toBe('8')
+
+    rerender(<LiveNumericControl snapshot={control(5)} dispatch={dispatch} revision={2} />)
+    expect(input.disabled).toBe(true)
+    expect(input.value).toBe('8')
+
+    rerender(<LiveNumericControl snapshot={control(8)} dispatch={dispatch} revision={3} />)
+    expect(input.disabled).toBe(false)
+    expect(input.value).toBe('8')
+    expect(dispatch.mock.calls).toEqual([[8]])
+  })
+
+  it('returns to the latest applied value when the pending command is rejected', async () => {
+    const user = userEvent.setup()
+    let resolveReceipt!: (receipt: { accepted: boolean }) => void
+    const dispatch = vi.fn(() => new Promise<{ accepted: boolean }>((resolve) => {
+      resolveReceipt = resolve
+    }))
+    const { rerender } = render(<LiveNumericControl snapshot={control(4)} dispatch={dispatch} />)
+    const input = screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Capacity/ })
+
+    await user.clear(input)
+    await user.type(input, '8{Enter}')
+    rerender(<LiveNumericControl snapshot={control(5)} dispatch={dispatch} revision={2} />)
+    expect(input.value).toBe('8')
+
+    await act(async () => { resolveReceipt({ accepted: false }) })
+    expect(input.disabled).toBe(false)
+    expect(input.value).toBe('5')
+    expect(dispatch.mock.calls).toEqual([[8]])
+  })
+
+  it('clears a live preview once on loss of availability and displays the applied value on recovery', async () => {
+    const user = userEvent.setup()
+    const dispatch = vi.fn()
+    const onPreviewChange = vi.fn()
+    const callbacks = { dispatch, onPreviewChange }
+    const { rerender } = render(<LiveNumericControl snapshot={control(4)} {...callbacks} />)
+    const input = screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Capacity/ })
+
+    expect(input.value).toBe('4')
+    await user.click(screen.getByRole('button', { name: 'Preview 7' }))
+    expect(input.value).toBe('7')
+
+    rerender(<LiveNumericControl snapshot={control(null, 'unavailable')} revision={2} {...callbacks} />)
+    expect(input.disabled).toBe(true)
+    expect(input.value).toBe('')
+    expect(onPreviewChange.mock.calls).toEqual([[null]])
+
+    await user.click(screen.getByRole('button', { name: 'Preview 7' }))
+    expect(input.value).toBe('')
+    rerender(<LiveNumericControl snapshot={control(5)} revision={3} {...callbacks} />)
+    expect(input.disabled).toBe(false)
+    expect(input.value).toBe('5')
+    expect(onPreviewChange.mock.calls).toEqual([[null]])
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
   it('keeps typing local and commits once with Enter or blur', async () => {
     const user = userEvent.setup()
     const onValueChange = vi.fn()
@@ -154,12 +308,8 @@ describe('NumericControl', () => {
     const user = userEvent.setup()
     const onValueChange = vi.fn()
     const onPreviewChange = vi.fn()
-    let renderCount = 0
-
     function Parent({ applyMode }: { applyMode: NumericControlSnapshot['applyMode'] }) {
       const [, setPreview] = useState<{ value: number | null }>({ value: null })
-      renderCount += 1
-      if (renderCount > 20) throw new Error('NumericControl render loop')
 
       return (
         <NumericControl
@@ -195,6 +345,13 @@ describe('NumericControl', () => {
 
     fireEvent.blur(input)
     rerender(<Parent applyMode="unavailable" />)
+    expect(onPreviewChange).toHaveBeenCalledTimes(1)
+    expect(onValueChange).not.toHaveBeenCalled()
+
+    rerender(<Parent applyMode="immediate" />)
+    expect((input as HTMLInputElement).value).toBe('4')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.blur(input)
     expect(onPreviewChange).toHaveBeenCalledTimes(1)
     expect(onValueChange).not.toHaveBeenCalled()
   })

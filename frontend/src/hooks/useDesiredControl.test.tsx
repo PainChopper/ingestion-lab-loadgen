@@ -109,4 +109,38 @@ describe('useDesiredControl', () => {
     })
     expect(view.result.current.phase).toBe('pending')
   })
+
+  it('ignores a late rejection after availability is lost and a newer value is dispatched', async () => {
+    let rejectFirstCommand!: (receipt: { accepted: boolean }) => void
+    const firstDispatch = vi.fn(() => new Promise<{ accepted: boolean }>((resolve) => {
+      rejectFirstCommand = resolve
+    }))
+    const nextDispatch = vi.fn(async () => ({ accepted: true }))
+    const { result, rerender } = renderHook(useDesiredControl<number>, {
+      initialProps: { applied: 4, revision: 10, available: true, dispatch: firstDispatch },
+    })
+
+    let first!: Promise<boolean>
+    act(() => {
+      result.current.preview(6)
+      first = result.current.commit()
+    })
+    expect(firstDispatch.mock.calls).toEqual([[6]])
+
+    rerender({ applied: 5, revision: 11, available: false, dispatch: nextDispatch })
+    expect(result.current).toMatchObject({ desired: 5, phase: 'idle', error: null })
+    rerender({ applied: 5, revision: 12, available: true, dispatch: nextDispatch })
+
+    await act(async () => {
+      result.current.preview(7)
+      expect(await result.current.commit()).toBe(true)
+    })
+    await act(async () => {
+      rejectFirstCommand({ accepted: false })
+      expect(await first).toBe(false)
+    })
+
+    expect(nextDispatch.mock.calls).toEqual([[7]])
+    expect(result.current).toMatchObject({ desired: 7, phase: 'pending', error: null })
+  })
 })
