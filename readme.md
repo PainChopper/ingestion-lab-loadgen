@@ -121,7 +121,7 @@ See [loadgen/config.toml](loadgen/config.toml) for the current configuration exa
 | `throttler.installed` | Enable or disable rate limiting | At runtime |
 | `sender.api.url` | HTTP delivery endpoint | At startup |
 | `sender.api.timeout_ms` | HTTP timeout per delivery attempt (default 30,000 ms in schema 3) | At startup |
-| `sender.retry` | Configurable retry delays; jitter is fixed at 20% | At startup |
+| `sender.retry` | Positive, nondecreasing retry delays; jitter from 0% to 50% (example: 20%) | At startup |
 
 A capacity of `0` means an unbuffered Go channel. With the Throttler enabled, `0 TPS` holds batches; disabling the Throttler removes the rate limit. Rate limiting operates on whole batches: the delay is calculated from the batch size and requested TPS.
 

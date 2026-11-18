@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -112,6 +113,39 @@ func TestLoadConfigInitialContract(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsWeakNumericTypes(t *testing.T) {
+	for _, test := range []struct{ name, old, replacement string }{
+		{"worker string", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = \"1\""},
+		{"worker bool", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = true"},
+		{"reader fraction", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = 1.9"},
+		{"reader NaN", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = nan"},
+		{"reader infinity", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = inf"},
+		{"reader float overflow", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = 9223372036854775808.0"},
+		{"sender fraction", "[sender.workers]\ninitial = 32", "[sender.workers]\ninitial = 32.9"},
+		{"metrics bool", "[metrics.window_ms]\ninitial = 1000", "[metrics.window_ms]\ninitial = true"},
+		{"jitter string", "jitter_percent = 20", "jitter_percent = \"20\""},
+		{"jitter fraction", "jitter_percent = 20", "jitter_percent = 20.9"},
+		{"retry string elements", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [\"250\", \"500\"]"},
+		{"retry bool elements", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [true]"},
+		{"retry fraction element", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [250.9]"},
+		{"retry scalar string", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = \"250,500\""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			contents := strings.Replace(testConfigContents(), test.old, test.replacement, 1)
+			if contents == testConfigContents() {
+				t.Fatal("replacement did not apply")
+			}
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "decode config") {
+				t.Fatalf("expected a decoding error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 	contents := testConfigContents()
 	urlLine := "url = \"" + testSenderURL + "\"\n"
@@ -173,6 +207,7 @@ func TestLoadConfigValidatesSenderAPITimeout(t *testing.T) {
 		wantErr string
 	}{
 		{name: "minimum inclusive", line: "timeout_ms = 1\n", version: 3},
+		{name: "integral float", line: "timeout_ms = 1.0\n", version: 3},
 		{name: "maximum inclusive", line: fmt.Sprintf("timeout_ms = %d\n", maxMS), version: 3},
 		{name: "missing", version: 3, wantErr: "timeout_ms"},
 		{name: "zero", line: "timeout_ms = 0\n", version: 3, wantErr: "timeout_ms"},
@@ -563,45 +598,108 @@ func TestLoadConfigRejectsInvalidThrottlerConfig(t *testing.T) {
 	}
 }
 
-func TestSenderConfigUsesApprovedProfile(t *testing.T) {
+func TestLoadConfigPreservesRetryDelays(t *testing.T) {
 	sender := testConfig(t).Sender
-	if sender.Workers != (rangeConfig{Initial: 32, Min: 1, Max: 32, Step: 1, Unit: workersUnit, Mutability: immediate}) {
-		t.Fatalf("workers config = %+v", sender.Workers)
-	}
-	if got, want := sender.Retry.DelaysMS, []int{250, 500, 1_000, 2_000, 5_000}; !slices.Equal(got, want) {
-		t.Fatalf("retry delays = %v, want %v", got, want)
+	if got, want := sender.Retry.DelaysMS, []int{250, 500, 1000, 2000, 5000}; !slices.Equal(got, want) {
+		t.Fatalf("retry delays=%v,want %v", got, want)
 	}
 }
 
-func TestReaderWorkersConfigUsesApprovedProfile(t *testing.T) {
-	workers := testConfig(t).Reader.Workers
-	want := rangeConfig{Initial: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}
-	if workers != want || !workers.contains(1) || !workers.contains(7) || workers.contains(0) || workers.contains(8) {
-		t.Fatalf("Reader workers config = %+v, want %+v", workers, want)
-	}
-}
-
-func TestLoadConfigRejectsReaderWorkersProfileDrift(t *testing.T) {
-	tests := []struct{ name, old, replacement string }{
-		{"missing workers", "[reader.workers]\ninitial = 1", "[reader.workers]"},
-		{"initial zero", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = 0"},
-		{"minimum zero", "[reader.workers]\ninitial = 1\nmin = 1", "[reader.workers]\ninitial = 1\nmin = 0"},
-		{"maximum eight", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 8"},
-		{"step two", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7\nstep = 1", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7\nstep = 2"},
-		{"wrong mutability", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7\nstep = 1\nunit = \"workers\"\nmutability = \"immediate\"", "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7\nstep = 1\nunit = \"workers\"\nmutability = \"unsupported-mode\""},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			contents := strings.Replace(testConfigContents(), test.old, test.replacement, 1)
-			if contents == testConfigContents() {
-				t.Fatal("replacement did not apply")
+func TestLoadConfigValidatesWorkerRanges(t *testing.T) {
+	for _, section := range []string{"reader.workers", "sender.workers"} {
+		t.Run(section, func(t *testing.T) {
+			for _, test := range []struct {
+				name                    string
+				initial, min, max, step int
+				unit, mutability        string
+				wantErr                 bool
+			}{
+				{name: "minimum inclusive", initial: 2, min: 2, max: 8, step: 3},
+				{name: "maximum inclusive", initial: 8, min: 2, max: 8, step: 3},
+				{name: "single value", initial: 3, min: 3, max: 3, step: 100},
+				{name: "upper bound outside grid", initial: 5, min: 2, max: 10, step: 3},
+				{name: "initial below min", initial: 1, min: 2, max: 8, step: 3, wantErr: true},
+				{name: "initial above max", initial: 11, min: 2, max: 8, step: 3, wantErr: true},
+				{name: "initial off grid", initial: 3, min: 2, max: 8, step: 3, wantErr: true},
+				{name: "zero minimum", initial: 1, min: 0, max: 8, step: 1, wantErr: true},
+				{name: "negative minimum", initial: 1, min: -1, max: 8, step: 1, wantErr: true},
+				{name: "reversed bounds", initial: 2, min: 2, max: 1, step: 1, wantErr: true},
+				{name: "zero step", initial: 2, min: 2, max: 8, step: 0, wantErr: true},
+				{name: "negative step", initial: 2, min: 2, max: 8, step: -1, wantErr: true},
+				{name: "wrong unit", initial: 2, min: 2, max: 8, step: 1, unit: "transactions", wantErr: true},
+				{name: "wrong mutability", initial: 2, min: 2, max: 8, step: 1, mutability: startupOnly, wantErr: true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					unit, mutability := workersUnit, immediate
+					if test.unit != "" {
+						unit = test.unit
+					}
+					if test.mutability != "" {
+						mutability = test.mutability
+					}
+					initial, max := 1, 7
+					if section == "sender.workers" {
+						initial, max = 32, 32
+					}
+					old := fmt.Sprintf("[%s]\ninitial = %d\nmin = 1\nmax = %d\nstep = 1\nunit = \"workers\"\nmutability = \"immediate\"", section, initial, max)
+					replacement := fmt.Sprintf("[%s]\ninitial = %d\nmin = %d\nmax = %d\nstep = %d\nunit = %q\nmutability = %q", section, test.initial, test.min, test.max, test.step, unit, mutability)
+					contents := strings.Replace(testConfigContents(), old, replacement, 1)
+					if contents == testConfigContents() {
+						t.Fatal("replacement did not apply")
+					}
+					path := filepath.Join(t.TempDir(), "config.toml")
+					if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					_, err := loadConfig(path)
+					if (err != nil) != test.wantErr {
+						t.Fatalf("loadConfig error=%v,wantErr=%t", err, test.wantErr)
+					}
+				})
 			}
+		})
+	}
+}
+
+func TestLoadConfigPublishesCustomWorkerProfile(t *testing.T) {
+	contents := strings.Replace(testConfigContents(), "[reader.workers]\ninitial = 1\nmin = 1\nmax = 7\nstep = 1", "[reader.workers]\ninitial = 5\nmin = 2\nmax = 11\nstep = 3", 1)
+	contents = strings.Replace(contents, "[sender.workers]\ninitial = 32\nmin = 1\nmax = 32\nstep = 1", "[sender.workers]\ninitial = 7\nmin = 3\nmax = 10\nstep = 2", 1)
+	contents = strings.Replace(contents, "jitter_percent = 20", "jitter_percent = 50", 1)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := newControlState(loaded, zap.NewNop())
+	data, err := json.Marshal(state.snapshotAt(nil, time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot runtimeSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	reader := rangeConfig{Initial: 5, Min: 2, Max: 11, Step: 3, Unit: workersUnit, Mutability: immediate}
+	sender := rangeConfig{Initial: 7, Min: 3, Max: 10, Step: 2, Unit: workersUnit, Mutability: immediate}
+	if snapshot.Config.ReaderWorkers != reader || snapshot.Config.SenderWorkers != sender ||
+		snapshot.Reader.Workers != 5 || snapshot.Sender.Workers != 7 || loaded.Sender.Retry.JitterPercent != 50 {
+		t.Fatalf("custom profile lost: snapshot=%+v retry=%+v", snapshot, loaded.Sender.Retry)
+	}
+}
+
+func TestLoadConfigRejectsUnsupportedSchemas(t *testing.T) {
+	for _, version := range []int{0, 1, 2, 4} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			contents := strings.Replace(testConfigContents(), "schema_version = 3", fmt.Sprintf("schema_version = %d", version), 1)
 			path := filepath.Join(t.TempDir(), "config.toml")
 			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := loadConfig(path); err == nil {
-				t.Fatal("loadConfig accepted invalid Reader workers config")
+			if _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "schema_version") {
+				t.Fatalf("unsupported schema error=%v", err)
 			}
 		})
 	}
@@ -610,7 +708,7 @@ func TestLoadConfigRejectsReaderWorkersProfileDrift(t *testing.T) {
 func TestLoadConfigRejectsInvalidSenderConfig(t *testing.T) {
 	tests := []struct{ name, old, replacement string }{
 		{"missing workers", "[sender.workers]\ninitial = 32", "[sender.workers]"},
-		{"wrong workers max", "max = 32", "max = 33"},
+		{"initial above maximum", "max = 32", "max = 31"},
 		{"empty retry delays", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = []"},
 		{"decreasing retry delays", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [250, 100]"},
 		{"zero retry delay", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [0]"},
@@ -634,27 +732,32 @@ func TestLoadConfigRejectsInvalidSenderConfig(t *testing.T) {
 }
 
 func TestSenderRetryConfigDurationBounds(t *testing.T) {
-	maximumDelayMS := senderRetryMaxDelayMS(20)
-	tests := []struct {
-		name    string
-		delayMS int
-		wantErr bool
-	}{
-		{name: "maximum valid", delayMS: int(maximumDelayMS)},
-		{name: "duration overflow", delayMS: int(maximumDelayMS + 1), wantErr: true},
-		{name: "milliseconds conversion overflow", delayMS: int(math.MaxInt64/int64(time.Millisecond) + 1), wantErr: true},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			config := senderRetryConfig{
-				DelaysMS:      []int{test.delayMS},
-				JitterPercent: 20,
-				Mutability:    startupOnly,
-			}
-			if err := config.validate(); (err != nil) != test.wantErr {
-				t.Fatalf("validate() error = %v, want error=%t", err, test.wantErr)
+	for _, jitter := range []int{0, 20, 50} {
+		t.Run(fmt.Sprintf("jitter %d", jitter), func(t *testing.T) {
+			maximumDelayMS := senderRetryMaxDelayMS(jitter)
+			for _, test := range []struct {
+				name    string
+				delayMS int
+				wantErr bool
+			}{
+				{name: "minimum valid", delayMS: 1},
+				{name: "maximum valid", delayMS: int(maximumDelayMS)},
+				{name: "duration overflow", delayMS: int(maximumDelayMS + 1), wantErr: true},
+				{name: "milliseconds conversion overflow", delayMS: int(math.MaxInt64/int64(time.Millisecond) + 1), wantErr: true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					config := senderRetryConfig{DelaysMS: []int{test.delayMS}, JitterPercent: jitter, Mutability: startupOnly}
+					if err := config.validate(); (err != nil) != test.wantErr {
+						t.Fatalf("validate error=%v,wantErr=%t", err, test.wantErr)
+					}
+				})
 			}
 		})
+	}
+	for _, jitter := range []int{-1, 51} {
+		config := senderRetryConfig{DelaysMS: []int{1}, JitterPercent: jitter, Mutability: startupOnly}
+		if err := config.validate(); err == nil {
+			t.Errorf("accepted jitter %d", jitter)
+		}
 	}
 }
