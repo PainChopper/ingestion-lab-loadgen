@@ -1,6 +1,6 @@
 import { FlaskConical, MousePointer2, X } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import type { LoadgenSnapshot, ChannelFlowState, SelectableId } from '../model/loadgen'
 import { useLoadgenSnapshot } from '../hooks/useLoadgenSnapshot'
@@ -186,7 +186,7 @@ function InspectorControls({
             desiredControl={liveControls.requestedTps}
           />
           <label className="inspector-select-control">
-            <span>Valve mode</span>
+            <span>Throttler valve installed</span>
             <input
               type="checkbox"
               checked={liveControls.installed.desired}
@@ -222,11 +222,14 @@ function InspectorDock({
   onClearSelection,
   liveControls,
 }: InspectorDockProps) {
+  const inspectorId = useId()
+  const titleId = `${inspectorId}-title`
+  const controlsTitleId = `${inspectorId}-controls`
   const model = getInspectorViewModel(snapshot, selectedId)
   const controls =
     model?.id === 'sender' ? (
-      <section className="inspector-section" aria-labelledby="sender-controls-title">
-        <h3 id="sender-controls-title" className="inspector-section__title">
+      <section className="inspector-section" aria-labelledby={controlsTitleId}>
+        <h3 id={controlsTitleId} className="inspector-section__title">
           Controls
         </h3>
         <InspectorControls
@@ -240,10 +243,10 @@ function InspectorDock({
     )
 
   return (
-    <aside className="inspector" aria-labelledby="inspector-title">
+    <aside className="inspector" aria-labelledby={titleId}>
       <div className="inspector-head">
         <div>
-          <h2 id="inspector-title">{model?.title ?? 'INSPECTOR'}</h2>
+          <h2 id={titleId}>{model?.title ?? 'INSPECTOR'}</h2>
           <p>{model?.kind ?? 'No selection'}</p>
         </div>
         <div className="inspector-head-actions">
@@ -275,25 +278,28 @@ function InspectorDock({
               ))}
             </dl>
           ) : (
-            model.sections.map((section) => (
-              <section
-                className="inspector-section"
-                key={section.title}
-                aria-labelledby={`sender-${section.title}`}
-              >
-                <h3 id={`sender-${section.title}`} className="inspector-section__title">
-                  {section.title}
-                </h3>
-                <dl
-                  className="inspector-data inspector-data--sender"
-                  data-testid="sender-inspector-section-data"
+            model.sections.map((section, index) => {
+              const sectionTitleId = `${inspectorId}-section-${index}`
+              return (
+                <section
+                  className="inspector-section"
+                  key={section.title}
+                  aria-labelledby={sectionTitleId}
                 >
-                  {section.rows.map((row) => (
-                    <InspectorDataRow key={row.label} row={row} />
-                  ))}
-                </dl>
-              </section>
-            ))
+                  <h3 id={sectionTitleId} className="inspector-section__title">
+                    {section.title}
+                  </h3>
+                  <dl
+                    className="inspector-data inspector-data--sender"
+                    data-testid="sender-inspector-section-data"
+                  >
+                    {section.rows.map((row) => (
+                      <InspectorDataRow key={row.label} row={row} />
+                    ))}
+                  </dl>
+                </section>
+              )
+            })
           )}
         </div>
       )}
@@ -387,7 +393,7 @@ function ChannelStateLegend() {
       <div className="channel-legend-items">
         {CHANNEL_STATES.map(({ state, label }) => (
           <span key={state} className="legend-item">
-            <i className={`legend-swatch legend-swatch--${state}`} />
+            <i className={`legend-swatch legend-swatch--${state}`} aria-hidden="true" />
             {label}
           </span>
         ))}
@@ -447,11 +453,7 @@ export function LabShell({ adapter }: AdapterProps) {
   }
 
   return (
-    <section
-      className={`lab-shell lab-shell--${orientation}`}
-      aria-label="Load generator laboratory"
-      data-layout={orientation}
-    >
+    <div className={`lab-shell lab-shell--${orientation}`} data-layout={orientation}>
       <TopBar snapshot={snapshot} />
       <Workspace
         snapshot={snapshot}
@@ -462,6 +464,6 @@ export function LabShell({ adapter }: AdapterProps) {
         orientation={orientation}
       />
       <ChannelStateLegend />
-    </section>
+    </div>
   )
 }

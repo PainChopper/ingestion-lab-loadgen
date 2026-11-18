@@ -1,5 +1,5 @@
 import { clsx } from 'clsx'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import type { ChannelSnapshot, SelectableId, ThrottlerSnapshot } from '../../model/loadgen'
 import type { DesiredControl } from '../../hooks/useDesiredControl'
@@ -178,13 +178,7 @@ export function ThrottlerActor({
     if (requestDelta(delta)) void requestedTpsControl.commit()
   }
 
-  const handleWheelKeyDown = (event: KeyboardEvent<SVGRectElement>, delta: -1 | 1) => {
-    if (!['Enter', ' ', 'ArrowLeft', 'ArrowRight'].includes(event.key) || event.repeat) return
-    event.preventDefault()
-    event.stopPropagation()
-    if (requestDelta(delta)) void requestedTpsControl.commit()
-  }
-
+  const installationStatusId = useId()
   const appliedInstalled = snapshot.installed.applied
   const metricGeometry =
     appliedInstalled === false
@@ -512,11 +506,8 @@ export function ThrottlerActor({
               height="26.5"
               className="pipeline-valve-wheel-hit-area"
               data-wheel-direction="decrease"
-              role="button"
-              tabIndex={0}
-              aria-label="Decrease throttle opening"
+              aria-hidden="true"
               onPointerDown={(event) => handlePointerDown(event, -1)}
-              onKeyDown={(event) => handleWheelKeyDown(event, -1)}
               onLostPointerCapture={cancelOpening}
             />
             <rect
@@ -526,11 +517,8 @@ export function ThrottlerActor({
               height="26.5"
               className="pipeline-valve-wheel-hit-area"
               data-wheel-direction="increase"
-              role="button"
-              tabIndex={0}
-              aria-label="Increase throttle opening"
+              aria-hidden="true"
               onPointerDown={(event) => handlePointerDown(event, 1)}
-              onKeyDown={(event) => handleWheelKeyDown(event, 1)}
               onLostPointerCapture={cancelOpening}
             />
             <rect
@@ -609,7 +597,7 @@ export function ThrottlerActor({
               appliedInstalled === false ? 'Reinsert throttler valve' : 'Remove throttler valve'
             }
             aria-pressed={appliedInstalled === false}
-            aria-valuetext={installationStatus}
+            aria-describedby={installationStatusId}
             aria-disabled={!installationControlAvailable}
             data-applied-mode={
               appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'
@@ -628,6 +616,7 @@ export function ThrottlerActor({
             }}
             onBlur={cancelInstallationPreview}
           >
+            <desc id={installationStatusId}>{installationStatus}</desc>
             {appliedInstalled === true && (
               <rect
                 x={VALVE_INSTALLATION_CONTROL.installedTarget.x}

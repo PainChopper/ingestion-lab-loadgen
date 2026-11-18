@@ -275,8 +275,6 @@ describe('ThrottlerActor valve control', () => {
     const decrease = view.container.querySelector('[data-wheel-direction="decrease"]')!
     const increase = view.container.querySelector('[data-wheel-direction="increase"]')!
 
-    expect(decrease.getAttribute('aria-label')).toBe('Decrease throttle opening')
-    expect(increase.getAttribute('aria-label')).toBe('Increase throttle opening')
     expect(getComputedStyle(decrease).fill).toBe('rgba(0, 0, 0, 0)')
     expect(getComputedStyle(increase).fill).toBe('rgba(0, 0, 0, 0)')
     fireEvent.pointerDown(decrease)
@@ -284,10 +282,17 @@ describe('ThrottlerActor valve control', () => {
     await waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1))
     fireEvent.pointerDown(increase)
     fireEvent.pointerUp(window)
-    fireEvent.keyDown(increase, { key: 'Enter' })
+    const slider = screen.getByRole('slider', { name: 'Throttle opening' })
+    slider.focus()
+    fireEvent.keyDown(slider, { key: 'ArrowRight' })
 
     expect(onCommand.mock.calls.map(([value]) => value)).toEqual([90_000, 115_000, 135_000])
     expect(onModeCommand).not.toHaveBeenCalled()
+    for (const half of [decrease, increase]) {
+      expect(half.getAttribute('aria-hidden')).toBe('true')
+      expect(half.hasAttribute('role')).toBe(false)
+      expect(half.hasAttribute('tabindex')).toBe(false)
+    }
   })
 
   it('implements bounded keyboard steps and six cyclic wheel phases', async () => {
@@ -490,7 +495,13 @@ describe('ThrottlerActor valve control', () => {
     view.rerender({ installed: null, onModeCommand })
     expect(control.getAttribute('aria-disabled')).toBe('true')
     expect(control.getAttribute('data-applied-mode')).toBe('unavailable')
-    expect(control.getAttribute('aria-valuetext')).toBe('unavailable applied')
+    expect(control.hasAttribute('aria-valuetext')).toBe(false)
+    expect(
+      screen.getByRole('button', {
+        name: 'Remove throttler valve',
+        description: 'unavailable applied',
+      }),
+    ).toBe(control)
     expect(view.container.querySelector('.pipeline-valve-detached-assembly--applied')).toBeNull()
     await user.click(control)
     expect(onModeCommand).toHaveBeenCalledOnce()
@@ -503,7 +514,13 @@ describe('ThrottlerActor valve control', () => {
     })
 
     expect(control.getAttribute('aria-pressed')).toBe('false')
-    expect(control.getAttribute('aria-valuetext')).toContain('bypass pending')
+    expect(control.hasAttribute('aria-valuetext')).toBe(false)
+    expect(
+      screen.getByRole('button', {
+        name: 'Remove throttler valve',
+        description: 'bypass pending; installed applied',
+      }),
+    ).toBe(control)
     expect(
       view.container.querySelector('.pipeline-valve-installation-ghost--pending'),
     ).not.toBeNull()
@@ -575,7 +592,7 @@ describe('ThrottlerActor valve control', () => {
       vi.useFakeTimers()
       const onCommand = vi.fn()
       const view = renderHarness({ control: requestedControl({ applied: 205_000 }), onCommand })
-      const increase = screen.getByRole('button', { name: 'Increase throttle opening' })
+      const increase = view.container.querySelector('[data-wheel-direction="increase"]')!
       const slider = screen.getByRole('slider', { name: 'Throttle opening' })
 
       fireEvent.pointerDown(increase, { pointerId: 1 })
