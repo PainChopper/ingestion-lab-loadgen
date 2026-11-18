@@ -14,6 +14,8 @@ import type {
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
 const COMMAND_ENDPOINT = '/api/loadgen/commands'
 const POLL_INTERVAL_MS = 1_000
+const SNAPSHOT_TIMEOUT_MS = 2_000
+const COMMAND_TIMEOUT_MS = 5_000
 const UNAVAILABLE_COMMAND_MESSAGE = 'command is not available in the HTTP adapter'
 const DISPOSED_COMMAND_MESSAGE = 'http adapter is disposed'
 const WIRE_KEYS = Object.freeze([
@@ -829,11 +831,27 @@ function canDispatchConfigCommand(
   }
 }
 
-async function decodeResponse(response: Response): Promise<WireSnapshot> {
-  if (response.status < 200 || response.status > 299) {
-    throw new Error('snapshot response must be successful')
+function startRequest(timeoutMs: number) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const finish = () => clearTimeout(timer)
+  return {
+    signal: controller.signal,
+    finish,
+    abort: () => {
+      finish()
+      controller.abort()
+    },
   }
+}
 
+type ActiveRequest = ReturnType<typeof startRequest>
+
+function isSuccessfulStatus(status: number): boolean {
+  return status >= 200 && status <= 299
+}
+
+async function decodeResponse(response: Response): Promise<WireSnapshot> {
   const mediaType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase()
   if (mediaType !== 'application/json') {
     throw new Error('snapshot response must be JSON')
@@ -848,8 +866,10 @@ export class HttpAdapter implements LoadgenAdapter {
   private readonly listeners = new Set<LoadgenSnapshotListener>()
   private snapshot: LoadgenTelemetrySnapshot = createSnapshot(0, 'connecting', null)
   private timer: ReturnType<typeof setInterval> | null
-  private activeController: AbortController | null = null
-  private requestInFlight = false
+  private activePoll: ActiveRequest | null = null
+  private activeCommand: ActiveRequest | null = null
+  private lastWire: WireSnapshot | null = null
+  private lastDecodeError: string | null = null
   private commandSequence = 0
   private commandChannel: Promise<void> = Promise.resolve()
   private disposed = false
@@ -912,47 +932,56 @@ export class HttpAdapter implements LoadgenAdapter {
       clearInterval(this.timer)
       this.timer = null
     }
-    this.activeController?.abort()
+    this.activePoll?.abort()
+    this.activeCommand?.abort()
     this.listeners.clear()
   }
 
   private poll = async (): Promise<void> => {
-    if (this.disposed || this.requestInFlight) return
+    if (this.disposed || this.activePoll !== null) return
 
-    this.requestInFlight = true
-    const controller = new AbortController()
-    this.activeController = controller
+    const request = startRequest(SNAPSHOT_TIMEOUT_MS)
+    this.activePoll = request
     let wire: WireSnapshot | null = null
-    let failed = false
+    let decoding = false
 
     try {
       const response = await fetch(SNAPSHOT_ENDPOINT, {
         method: 'GET',
         headers: { Accept: 'application/json' },
-        signal: controller.signal,
+        signal: request.signal,
       })
-      if (this.disposed) return
-
-      wire = await decodeResponse(response)
-      if (this.disposed) return
-    } catch {
-      if (this.disposed) return
-      failed = true
-    } finally {
-      if (this.activeController === controller) {
-        this.activeController = null
+      if (!request.signal.aborted && isSuccessfulStatus(response.status)) {
+        decoding = true
+        wire = await decodeResponse(response)
       }
-      this.requestInFlight = false
+    } catch (error) {
+      if (decoding && !request.signal.aborted) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (message !== this.lastDecodeError) {
+          this.lastDecodeError = message
+          console.warn(`LoadGen snapshot decoding failed: ${message}`)
+        }
+      }
+    } finally {
+      if (wire === null) {
+        request.abort()
+      } else {
+        request.finish()
+      }
+      this.activePoll = null
     }
 
     if (this.disposed) return
 
     const revision = this.snapshot.revision + 1
-    if (failed || wire === null) {
-      this.publish(createSnapshot(revision, 'error', null))
+    if (wire === null || request.signal.aborted) {
+      this.publish(createSnapshot(revision, 'error', this.lastWire))
       return
     }
 
+    this.lastWire = wire
+    this.lastDecodeError = null
     this.publish(createSnapshot(revision, 'connected', wire))
   }
 
@@ -974,44 +1003,63 @@ export class HttpAdapter implements LoadgenAdapter {
       )
     }
 
+    const request = startRequest(COMMAND_TIMEOUT_MS)
+    this.activeCommand = request
+    let response: Response | null
+    let abortedBeforeCleanup: boolean
     try {
-      const response = await fetch(COMMAND_ENDPOINT, {
+      response = await fetch(COMMAND_ENDPOINT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: command.type,
           value: command.value,
         }),
+        signal: request.signal,
       })
-
-      if (response.status >= 200 && response.status <= 299) {
-        return deepFreeze({
-          commandId,
-          commandType: command.type,
-          accepted: true,
-          applyMode: 'immediate',
-          appliedAtMs: Date.now(),
-          snapshotRevision: this.snapshot.revision,
-          error: null,
-        })
-      }
-
-      return this.rejectCommand(
-        commandId,
-        command,
-        'unavailable',
-        `command request failed with HTTP status ${response.status}`,
-        response.status >= 500 && response.status <= 599,
-      )
     } catch {
+      response = null
+    } finally {
+      // Abort releases the unread response body even after the headers have arrived.
+      abortedBeforeCleanup = request.signal.aborted
+      request.abort()
+      this.activeCommand = null
+    }
+
+    if (this.disposed) {
+      return this.rejectCommand(commandId, command, 'disposed', DISPOSED_COMMAND_MESSAGE, false)
+    }
+    if (abortedBeforeCleanup || response === null) {
       return this.rejectCommand(
         commandId,
         command,
         'unavailable',
-        'command request failed due to a network error',
+        abortedBeforeCleanup
+          ? 'command request timed out'
+          : 'command request failed due to a network error',
         true,
       )
     }
+
+    if (isSuccessfulStatus(response.status)) {
+      return deepFreeze({
+        commandId,
+        commandType: command.type,
+        accepted: true,
+        applyMode: 'immediate',
+        appliedAtMs: Date.now(),
+        snapshotRevision: this.snapshot.revision,
+        error: null,
+      })
+    }
+
+    return this.rejectCommand(
+      commandId,
+      command,
+      'unavailable',
+      `command request failed with HTTP status ${response.status}`,
+      response.status >= 500 && response.status <= 599,
+    )
   }
 
   private rejectCommand(

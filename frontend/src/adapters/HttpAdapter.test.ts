@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChannelFlowStateDeriver } from '../model/channelFlowState'
 import type {
   ConnectionState,
   LoadgenCommand,
@@ -1110,6 +1111,7 @@ describe('HttpAdapter', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
     vi.useRealTimers()
   })
@@ -1147,7 +1149,10 @@ describe('HttpAdapter', () => {
           expect(adapter.getSnapshot().connectionState).toBe('connected')
           expect(adapter.getSnapshot().config).toEqual(valid.config)
         } else {
-          expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'error', config: null })
+          expect(adapter.getSnapshot()).toMatchObject({
+            connectionState: 'error',
+            config: valid.config,
+          })
           const receipt = await adapter.dispatch({ type: 'set-requested-tps', value: 200 })
           expect(receipt).toMatchObject({ accepted: false, error: { code: 'unavailable' } })
           expect(commandFetchCalls()).toHaveLength(0)
@@ -1230,7 +1235,7 @@ describe('HttpAdapter', () => {
       expect(adapter.getSnapshot().connectionState).toBe('connected')
       await vi.advanceTimersByTimeAsync(1_000)
       await flushPoll()
-      expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'error', config: null })
+      expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'error', config: settings })
       const receipt = await adapter.dispatch({ type: 'set-requested-tps', value: 200 })
       expect(receipt).toMatchObject({ accepted: false, error: { code: 'unavailable' } })
       expect(commandFetchCalls()).toHaveLength(0)
@@ -1450,7 +1455,24 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('clears telemetry on failure and recovers on success', async () => {
+  it.each([
+    { status: 503, contentType: 'application/json' },
+    { status: 200, contentType: 'text/plain' },
+  ])('releases an unread GET with status $status and $contentType', async (options) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const response = mockResponse(null, options)
+    fetchMock.mockResolvedValueOnce(response)
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    const init = snapshotFetchCalls()[0]?.[1] as RequestInit
+    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(1, 'error'))
+    expect(response.json).not.toHaveBeenCalled()
+    expect(init.signal?.aborted).toBe(true)
+    adapter.dispose()
+  })
+
+  it('retains decoded telemetry on failure, disables controls and recovers on success', async () => {
     const recoveredWire: TestWireSnapshot = {
       ...VALID_WIRE,
       run: { ...VALID_WIRE.run, state: 'running', elapsedMs: 67_890, totalTransactions: 84_000 },
@@ -1493,11 +1515,52 @@ describe('HttpAdapter', () => {
 
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPoll()
-    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(2, 'error'))
+    const stale = adapter.getSnapshot()
+    expect(stale).toEqual(expectedSnapshot(2, 'error', VALID_WIRE))
+    expectDeepFrozen(stale)
+    const derived = new ChannelFlowStateDeriver().derive(stale, Date.now())
+    expect(derived.readerChannel.flowState).toBe('connection-error')
+    expect(derived.senderChannel.flowState).toBe('connection-error')
+    await expect(adapter.dispatch({ type: 'set-requested-tps', value: 25 })).resolves.toMatchObject(
+      { accepted: false, error: { code: 'unavailable', retryable: false } },
+    )
+    expect(commandFetchCalls()).toHaveLength(0)
 
     await vi.advanceTimersByTimeAsync(1_000)
     await flushPoll()
     expect(adapter.getSnapshot()).toEqual(expectedSnapshot(3, 'connected', recoveredWire))
+    adapter.dispose()
+  })
+
+  it('warns on changed decoding messages and clears the deduplication after recovery', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const invalidRun = mockResponse({ ...VALID_WIRE, run: { ...VALID_WIRE.run, state: 'idle' } })
+    const invalidJson = mockResponse(null, { jsonError: new SyntaxError('bad snapshot JSON') })
+    fetchMock
+      .mockResolvedValueOnce(invalidRun)
+      .mockResolvedValueOnce(invalidRun)
+      .mockResolvedValueOnce(mockResponse(null, { status: 503 }))
+      .mockResolvedValueOnce(invalidJson)
+      .mockResolvedValueOnce(invalidJson)
+      .mockResolvedValueOnce(invalidRun)
+      .mockResolvedValueOnce(mockResponse(VALID_WIRE))
+      .mockResolvedValueOnce(invalidRun)
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('snapshot run'))
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(warn).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('bad snapshot JSON'))
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(warn).toHaveBeenCalledTimes(3)
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('snapshot run'))
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(warn).toHaveBeenCalledTimes(4)
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('snapshot run'))
     adapter.dispose()
   })
 
@@ -1529,7 +1592,7 @@ describe('HttpAdapter', () => {
     const adapter = new HttpAdapter()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(3_000)
+    await vi.advanceTimersByTimeAsync(1_000)
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
     first.resolve(mockResponse(VALID_WIRE))
@@ -1540,6 +1603,44 @@ describe('HttpAdapter', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1)
     expect(fetchMock).toHaveBeenCalledTimes(2)
+    adapter.dispose()
+  })
+
+  it.each(['headers', 'body'] as const)('times out a GET stalled at the %s', async (stage) => {
+    const stalled = deferred<never>()
+    const headers = deferred<Response>()
+    const recovery = deferred<Response>()
+    const json = vi.fn(() => stalled.promise)
+    fetchMock
+      .mockImplementationOnce((_input, init: RequestInit) => {
+        init.signal?.addEventListener('abort', () => stalled.reject(init.signal?.reason), {
+          once: true,
+        })
+        return stage === 'headers' ? stalled.promise : headers.promise
+      })
+      .mockReturnValueOnce(recovery.promise)
+    const adapter = new HttpAdapter()
+    const init = snapshotFetchCalls()[0]?.[1] as RequestInit
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    if (stage === 'body') headers.resolve({ ...mockResponse(null), json })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(adapter.getSnapshot().connectionState).toBe('connecting')
+    expect(init.signal?.aborted).toBe(false)
+    expect(snapshotFetchCalls()).toHaveLength(1)
+    expect(json).toHaveBeenCalledTimes(stage === 'body' ? 1 : 0)
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(init.signal?.aborted).toBe(true)
+    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(1, 'error'))
+    expect(warn).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(snapshotFetchCalls()).toHaveLength(2)
+    recovery.resolve(mockResponse(VALID_WIRE))
+    await flushPoll()
+    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(2, 'connected', VALID_WIRE))
     adapter.dispose()
   })
 
@@ -1583,7 +1684,6 @@ describe('HttpAdapter', () => {
       const initial = adapter.getSnapshot()
       const init = fetchMock.mock.calls[0]?.[1] as RequestInit
 
-      expect(vi.getTimerCount()).toBe(1)
       adapter.dispose()
       adapter.dispose()
       expect(vi.getTimerCount()).toBe(0)
@@ -1843,6 +1943,8 @@ describe('HttpAdapter', () => {
 
     expect(receipt.accepted).toBe(true)
     expect(receipt.appliedAtMs).toBe(NOW_MS)
+    const init = commandFetchCalls()[0]?.[1] as RequestInit
+    expect(init.signal?.aborted).toBe(true)
     Object.values(accessors).forEach((accessor) => {
       expect(accessor).not.toHaveBeenCalled()
     })
@@ -1913,6 +2015,8 @@ describe('HttpAdapter', () => {
       expectDeepFrozen(receipt)
       expect(adapter.getSnapshot()).toBe(initial)
       expect(commandFetchCalls()).toHaveLength(1)
+      const init = commandFetchCalls()[0]?.[1] as RequestInit
+      expect(init.signal?.aborted).toBe(true)
       Object.values(accessors).forEach((accessor) => {
         expect(accessor).not.toHaveBeenCalled()
       })
@@ -1977,11 +2081,15 @@ describe('HttpAdapter', () => {
     expect(commandFetchCalls()).toHaveLength(0)
   })
 
-  it('lets an in-flight POST settle but disposes buffered commands without POST', async () => {
+  it('aborts the active POST and disposes buffered commands without POST', async () => {
     const inFlight = deferred<Response>()
-    fetchMock.mockImplementation((input) =>
-      input === COMMAND_ENDPOINT ? inFlight.promise : Promise.resolve(mockResponse(VALID_WIRE)),
-    )
+    fetchMock.mockImplementation((input, init: RequestInit) => {
+      if (input !== COMMAND_ENDPOINT) return Promise.resolve(mockResponse(VALID_WIRE))
+      init.signal?.addEventListener('abort', () => inFlight.reject(init.signal?.reason), {
+        once: true,
+      })
+      return inFlight.promise
+    })
     const adapter = new HttpAdapter()
     await flushPoll()
     const first = adapter.dispatch({ type: 'set-requested-tps', value: 25 })
@@ -1992,14 +2100,14 @@ describe('HttpAdapter', () => {
 
     expect(commandFetchCalls()).toHaveLength(1)
     adapter.dispose()
-    expect(commandInit.signal).toBeUndefined()
-    inFlight.resolve(mockCommandResponse(204))
+    expect(commandInit.signal?.aborted).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
 
     const [firstReceipt, secondReceipt, thirdReceipt] = await Promise.all([first, second, third])
     expect(firstReceipt).toMatchObject({
       commandId: 'http-local-1',
-      accepted: true,
-      error: null,
+      accepted: false,
+      error: { code: 'disposed', retryable: false },
     })
     expect(secondReceipt).toMatchObject({
       commandId: 'http-local-2',
@@ -2012,6 +2120,39 @@ describe('HttpAdapter', () => {
       error: { code: 'disposed', retryable: false },
     })
     expect(commandFetchCalls()).toHaveLength(1)
+  })
+
+  it('times out a stalled POST and releases the queued command', async () => {
+    const stalled = deferred<Response>()
+    let posts = 0
+    fetchMock.mockImplementation((input, init: RequestInit) => {
+      if (input !== COMMAND_ENDPOINT) return Promise.resolve(mockResponse(VALID_WIRE))
+      if (++posts > 1) return Promise.resolve(mockCommandResponse())
+      init.signal?.addEventListener('abort', () => stalled.reject(init.signal?.reason), {
+        once: true,
+      })
+      return stalled.promise
+    })
+    const adapter = new HttpAdapter()
+    await flushPoll()
+    const first = adapter.dispatch({ type: 'set-requested-tps', value: 25 })
+    const queued = adapter.dispatch({ type: 'set-sender-workers', value: 7 })
+    await flushPoll()
+    const init = commandFetchCalls()[0]?.[1] as RequestInit
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(init.signal?.aborted).not.toBe(true)
+    expect(commandFetchCalls()).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(init.signal?.aborted).toBe(true)
+    await expect(first).resolves.toMatchObject({
+      accepted: false,
+      error: { code: 'unavailable', message: 'command request timed out', retryable: true },
+    })
+    await expect(queued).resolves.toMatchObject({ accepted: true })
+    expect(commandFetchCalls()).toHaveLength(2)
+    expect(adapter.getSnapshot().connectionState).toBe('connected')
+    adapter.dispose()
   })
 
   it('serializes live commands in FIFO order and continues after failure', async () => {
@@ -2081,8 +2222,6 @@ describe('HttpAdapter', () => {
 
     expect(snapshotFetchCalls()).toHaveLength(1)
     expect(commandFetchCalls()).toHaveLength(1)
-    expect((commandFetchCalls()[0]![1] as RequestInit).signal).toBeUndefined()
-
     await vi.advanceTimersByTimeAsync(1_000)
     expect(snapshotFetchCalls()).toHaveLength(2)
     nextPoll.resolve(mockResponse(withRunState('stopping')))
