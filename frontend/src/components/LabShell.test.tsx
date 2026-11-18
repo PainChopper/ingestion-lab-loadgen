@@ -281,6 +281,89 @@ describe('LabShell', () => {
     ).toBe('false')
   })
 
+  it('shows a named drawer only when selected and keeps keyboard focus in the diagram', async () => {
+    vi.stubGlobal('innerWidth', 1120)
+    const user = userEvent.setup()
+    adapter = new SimulationAdapter()
+    render(<LabShell adapter={adapter} />)
+    const reader = screen.getByRole('button', { name: 'Inspect reader' })
+
+    expect(screen.queryByRole('complementary')).toBeNull()
+    reader.focus()
+    await user.keyboard('{Enter}')
+    const inspector = screen.getByRole('complementary', { name: 'READER' })
+    expect(document.activeElement).toBe(reader)
+    await user.tab()
+    expect(inspector.contains(document.activeElement)).toBe(false)
+    await user.click(within(inspector).getByRole('button', { name: 'Clear selection' }))
+    expect(screen.queryByRole('complementary')).toBeNull()
+    expect(document.activeElement).toBe(reader)
+
+    await user.click(reader)
+    expect(screen.getByRole('complementary', { name: 'READER' })).not.toBeNull()
+    await user.click(reader)
+    expect(screen.queryByRole('complementary')).toBeNull()
+  })
+
+  it.each([1119, 1440])(
+    'keeps the inspector and selection on repeated activation at %i px',
+    async (width) => {
+      vi.stubGlobal('innerWidth', width)
+      const user = userEvent.setup()
+      adapter = new SimulationAdapter()
+      render(<LabShell adapter={adapter} />)
+      const sender = screen.getByRole('button', { name: /^Inspect sender,/ })
+
+      expect(screen.getByRole('complementary', { name: 'INSPECTOR' })).not.toBeNull()
+      await user.click(sender)
+      await user.click(sender)
+      expect(screen.getByRole('complementary', { name: 'SENDER' })).not.toBeNull()
+    },
+  )
+
+  it('lets a number draft and valve gestures consume the first Escape in the drawer', async () => {
+    vi.stubGlobal('innerWidth', 1439)
+    const user = userEvent.setup()
+    adapter = new SimulationAdapter()
+    const dispatch = vi.spyOn(adapter, 'dispatch')
+    const view = render(<LabShell adapter={adapter} />)
+    const throttler = screen.getByRole('button', { name: 'Inspect throttler' })
+    await user.click(throttler)
+    const inspector = screen.getByRole('complementary', { name: 'THROTTLER' })
+    const requested = within(inspector).getByRole('spinbutton', { name: /^Requested TPS/ })
+
+    await user.click(requested)
+    fireEvent.change(requested, { target: { value: '5000' } })
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('complementary', { name: 'THROTTLER' })).toBe(inspector)
+    expect((requested as HTMLInputElement).value).toBe('120000')
+    expect(dispatch).not.toHaveBeenCalled()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull())
+    expect(document.activeElement).toBe(throttler)
+
+    await user.click(throttler)
+    const opening = view.container.querySelector('[data-wheel-direction="increase"]')!
+    fireEvent.pointerDown(opening, { pointerId: 1 })
+    expect(screen.getByRole('slider').getAttribute('aria-valuetext')).toContain('preview')
+    await user.keyboard('{Escape}')
+    expect(screen.getByRole('complementary', { name: 'THROTTLER' })).not.toBeNull()
+    expect(screen.getByRole('slider').getAttribute('aria-valuetext')).toContain('applied')
+
+    const installation = screen.getByRole('button', { name: 'Remove throttler valve' })
+    fireEvent.pointerDown(installation, { clientX: 100, clientY: 100, pointerId: 2 })
+    fireEvent.pointerMove(installation, { clientX: 100, clientY: 75, pointerId: 2 })
+    expect(installation.getAttribute('data-candidate-kind')).toBe('preview')
+    await user.keyboard('{Escape}')
+    expect(installation.getAttribute('data-candidate-kind')).toBe('')
+    expect(screen.getByRole('complementary', { name: 'THROTTLER' })).not.toBeNull()
+    expect(dispatch).not.toHaveBeenCalled()
+    installation.focus()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('complementary')).toBeNull())
+    expect(document.activeElement).toBe(installation)
+  })
+
   it('offers the supported canvas and Inspector controls in simulation', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()
@@ -471,32 +554,8 @@ describe('LabShell', () => {
       disconnect() {}
     }
     vi.stubGlobal('ResizeObserver', MockResizeObserver)
-    let portrait = false
-    const orientationListeners = new Set<() => void>()
-    vi.mocked(window.matchMedia).mockImplementation((query: string) => {
-      const media = {
-        media: query,
-        onchange: null,
-        addEventListener: vi.fn((_name: string, listener: () => void) => {
-          if (query === '(orientation: portrait)') {
-            orientationListeners.add(listener)
-          }
-        }),
-        removeEventListener: vi.fn((_name: string, listener: () => void) => {
-          orientationListeners.delete(listener)
-        }),
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      }
-      return Object.defineProperty(media, 'matches', {
-        get: () => query === '(orientation: portrait)' && portrait,
-      }) as unknown as MediaQueryList
-    })
-    Object.defineProperties(window, {
-      innerWidth: { configurable: true, value: 1200 },
-      innerHeight: { configurable: true, value: 700 },
-    })
+    vi.stubGlobal('innerWidth', 1200)
+    vi.stubGlobal('innerHeight', 700)
     adapter = new SimulationAdapter()
     render(<LabShell adapter={adapter} />)
 
@@ -511,15 +570,12 @@ describe('LabShell', () => {
       callback([{ contentRect: { width: 1440 } } as ResizeObserverEntry], {} as ResizeObserver),
     )
     expect(screen.getByTestId('pipeline-viewport').dataset.contentWidth).toBe('1440')
-    expect(document.querySelector('.pipeline-svg')?.getAttribute('viewBox')).toBe('0 0 1440 650')
+    expect(document.querySelector('.pipeline-svg')?.getAttribute('viewBox')).toBe('0 22 1440 582')
     expect(document.activeElement).toBe(valve)
 
-    portrait = true
-    Object.defineProperties(window, {
-      innerWidth: { configurable: true, value: 600 },
-      innerHeight: { configurable: true, value: 900 },
-    })
-    act(() => orientationListeners.forEach((listener) => listener()))
+    vi.stubGlobal('innerWidth', 600)
+    vi.stubGlobal('innerHeight', 900)
+    act(() => window.dispatchEvent(new Event('resize')))
 
     expect(screen.getByTestId('pipeline-viewport').dataset.layout).toBe('portrait')
     expect(

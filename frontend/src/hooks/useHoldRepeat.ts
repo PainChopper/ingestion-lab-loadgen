@@ -56,7 +56,10 @@ export function useHoldRepeat({
     }
     const handleBlur = () => finish(false)
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') finish(false)
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault()
+        finish(false)
+      }
     }
     const finish = (commit: boolean) => {
       clearTimers()

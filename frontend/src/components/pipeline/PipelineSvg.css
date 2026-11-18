@@ -1,14 +1,12 @@
 .pipeline-svg {
   display: block;
   width: 100%;
-  min-width: 1120px;
-  height: 650px;
+  height: 100%;
   overflow: visible;
 }
 
 .pipeline-svg--portrait {
   width: 100%;
-  min-width: 0;
   height: auto;
   overflow: visible;
 }
