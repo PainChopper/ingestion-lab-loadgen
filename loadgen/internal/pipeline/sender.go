@@ -24,9 +24,8 @@ const (
 type senderAttempt func(context.Context, []Transaction, int) senderAttemptOutcome
 
 type senderWorker struct {
+	id       int
 	wake     chan struct{}
-	work     chan []Transaction
-	done     chan struct{}
 	draining bool
 	busy     bool
 	backoff  bool
@@ -45,43 +44,47 @@ type SenderSnapshot struct {
 
 type senderPool struct {
 	// mu guards worker state.
-	mu        sync.Mutex
-	available *sync.Cond
-	ctx       context.Context
-	cancel    context.CancelFunc
-	done      chan struct{}
-	wg        sync.WaitGroup
-	workers   []*senderWorker
-	stopping  bool
-	retry     *retryPolicy
-	queue     *batchQueue
-	completed *atomic.Int64
-	attempt   senderAttempt
-	client    *http.Client
-	logger    *zap.Logger
+	mu            sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
+	done          chan struct{}
+	wg            sync.WaitGroup
+	workers       []*senderWorker
+	stopping      bool
+	stopped       chan struct{}
+	nextWorkerID  int
+	beforeReceive func(*senderWorker)
+	retry         *retryPolicy
+	queue         *batchQueue
+	completed     atomic.Int64
+	attempt       senderAttempt
+	client        *http.Client
+	logger        *zap.Logger
 }
 
 func startSenderPool(
 	parent context.Context,
 	queue *batchQueue,
-	completed *atomic.Int64,
 	workers int,
 	cfg Options,
+	attempt senderAttempt,
 	logger *zap.Logger,
+	beforeReceive func(*senderWorker),
 ) *senderPool {
 	ctx, cancel := context.WithCancel(parent)
 	client := newSenderHTTPClient(cfg.SenderMaxConns, cfg.SenderTimeout)
 	pool := &senderPool{
-		ctx:       ctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		workers:   make([]*senderWorker, 0, workers),
-		retry:     newRetryPolicy(cfg),
-		queue:     queue,
-		completed: completed,
-		attempt:   newSenderClient(cfg.SenderURL, client).attempt,
-		client:    client,
-		logger:    logger,
+		ctx:           ctx,
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		stopped:       make(chan struct{}),
+		beforeReceive: beforeReceive,
+		workers:       make([]*senderWorker, 0, workers),
+		retry:         newRetryPolicy(cfg),
+		queue:         queue,
+		attempt:       newSenderClient(cfg.SenderURL, client).attempt,
+		client:        client,
+		logger:        logger,
 	}
 	if cfg.Deliver != nil {
 		pool.attempt = func(ctx context.Context, batch []Transaction, number int) senderAttemptOutcome {
@@ -94,79 +97,84 @@ func startSenderPool(
 			return senderAttemptFailure
 		}
 	}
-	pool.available = sync.NewCond(&pool.mu)
+	if attempt != nil {
+		pool.attempt = attempt
+	}
 	pool.reconcile(workers)
-	go pool.runIntake()
+	go pool.supervise()
 	return pool
 }
 
 func (p *senderPool) reconcile(desired int) {
 	p.mu.Lock()
-	if p.stopping {
-		p.mu.Unlock()
+	defer p.mu.Unlock()
+	if p.stopping || p.ctx.Err() != nil {
 		return
 	}
-	var idleDraining []<-chan struct{}
-	activeWorkers := 0
+	active := 0
 	for _, worker := range p.workers {
 		if !worker.draining {
-			activeWorkers++
+			active++
 		}
 	}
-	if activeWorkers > desired {
-		for index := len(p.workers) - 1; activeWorkers > desired && index >= 0; index-- {
-			worker := p.workers[index]
-			if worker.draining {
-				continue
+	if active > desired {
+		// Retire idle workers before disturbing work already in progress.
+		for _, busy := range []bool{false, true} {
+			for index := len(p.workers) - 1; active > desired && index >= 0; index-- {
+				worker := p.workers[index]
+				if !worker.draining && worker.busy == busy {
+					worker.draining = true
+					active--
+				}
 			}
-			worker.draining = true
-			activeWorkers--
 		}
-	} else if activeWorkers < desired {
+	} else if active < desired {
 		for _, backoff := range []bool{false, true} {
 			for _, worker := range p.workers {
-				if activeWorkers == desired {
+				if active == desired {
 					break
 				}
 				if worker.draining && worker.backoff == backoff {
 					worker.draining = false
-					activeWorkers++
+					active++
 				}
 			}
 		}
 	}
-	for _, worker := range p.workers {
-		if worker.draining {
-			if !worker.busy {
-				idleDraining = append(idleDraining, worker.done)
-			}
-		}
-		select {
-		case worker.wake <- struct{}{}:
-		default:
-		}
-	}
-	for activeWorkers < desired {
+	for active < desired {
 		p.startWorkerLocked()
-		activeWorkers++
+		active++
 	}
-	p.available.Broadcast()
-	p.mu.Unlock()
-	for _, done := range idleDraining {
-		<-done
+	for _, worker := range p.workers {
+		wakeSender(worker)
 	}
 }
 
-func (p *senderPool) finishIntake() {
-	p.mu.Lock()
-	p.stopping = true
-	p.available.Broadcast()
-	for _, worker := range p.workers {
-		select {
-		case worker.wake <- struct{}{}:
-		default:
-		}
+func wakeSender(worker *senderWorker) {
+	select {
+	case worker.wake <- struct{}{}:
+	default:
 	}
+}
+
+func (p *senderPool) beginStopLocked() {
+	if p.stopping {
+		return
+	}
+	p.stopping = true
+	close(p.stopped)
+	for _, worker := range p.workers {
+		wakeSender(worker)
+	}
+}
+
+func (p *senderPool) supervise() {
+	select {
+	case <-p.ctx.Done():
+	case <-p.stopped:
+	}
+	p.mu.Lock()
+	p.beginStopLocked()
 	p.mu.Unlock()
 	p.wg.Wait()
 	p.cancel()
@@ -176,97 +184,48 @@ func (p *senderPool) finishIntake() {
 
 func (p *senderPool) startWorkerLocked() {
 	worker := &senderWorker{
+		id:   p.nextWorkerID,
 		wake: make(chan struct{}, 1),
-		work: make(chan []Transaction, 1),
-		done: make(chan struct{}),
 	}
+	p.nextWorkerID++
 	p.workers = append(p.workers, worker)
 	p.wg.Add(1)
 	go p.runWorker(worker)
 }
 
-func (p *senderPool) runIntake() {
-	defer p.finishIntake()
-	stopWakeup := context.AfterFunc(p.ctx, func() {
-		p.mu.Lock()
-		p.available.Broadcast()
-		p.mu.Unlock()
-	})
-	defer stopWakeup()
-	for {
-		p.mu.Lock()
-		for p.availableWorkerLocked() == nil && p.ctx.Err() == nil {
-			p.available.Wait()
-		}
-		p.mu.Unlock()
-		if p.ctx.Err() != nil {
-			return
-		}
-
-		select {
-		case <-p.ctx.Done():
-			return
-		case batch, ok := <-p.queue.ch:
-			if !ok {
-				return
-			}
-			p.queue.recordReceive(len(batch))
-			p.mu.Lock()
-			worker := p.availableWorkerLocked()
-			for worker == nil && p.ctx.Err() == nil {
-				p.available.Wait()
-				worker = p.availableWorkerLocked()
-			}
-			if p.ctx.Err() != nil {
-				p.mu.Unlock()
-				return
-			}
-			worker.busy = true
-			worker.work <- batch
-			p.mu.Unlock()
-		}
-	}
-}
-
-func (p *senderPool) availableWorkerLocked() *senderWorker {
-	var selected *senderWorker
-	for _, worker := range p.workers {
-		if worker.draining || worker.busy {
-			continue
-		}
-		if selected == nil {
-			selected = worker
-		}
-	}
-	return selected
-}
-
 func (p *senderPool) runWorker(worker *senderWorker) {
 	defer p.wg.Done()
-	defer close(worker.done)
 	p.logger.Debug("sender worker started", zap.String("event", "sender_worker_started"))
 	defer p.logger.Debug("sender worker stopped", zap.String("event", "sender_worker_stopped"))
 	for {
 		p.mu.Lock()
-		select {
-		case batch := <-worker.work:
-			p.mu.Unlock()
-			p.finishAcceptedBatch(worker, batch)
-			continue
-		default:
-		}
-		if p.stopping || worker.draining {
-			// Remove the worker before reconcile or intake can offer it more work.
+		if p.stopping || worker.draining || p.ctx.Err() != nil {
 			p.removeWorkerLocked(worker)
 			p.mu.Unlock()
 			return
 		}
 		p.mu.Unlock()
+		if p.beforeReceive != nil {
+			p.beforeReceive(worker)
+		}
 
 		select {
+		case <-p.ctx.Done():
+			continue
 		case <-worker.wake:
 			continue
-		case batch := <-worker.work:
+		case batch, ok := <-p.queue.ch:
+			p.mu.Lock()
+			if !ok {
+				p.beginStopLocked()
+				p.removeWorkerLocked(worker)
+				p.mu.Unlock()
+				return
+			}
+			// A batch received during downscale belongs to this worker until completion.
+			worker.busy = true
+			p.queue.recordReceive(len(batch))
+			p.mu.Unlock()
 			p.finishAcceptedBatch(worker, batch)
 		}
 	}
@@ -279,15 +238,15 @@ func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transacti
 	p.mu.Lock()
 	worker.busy = false
 	worker.backoff = false
-	p.available.Broadcast()
 	p.mu.Unlock()
 }
+
+func (p *senderPool) takeCompleted() int64 { return p.completed.Swap(0) }
 
 func (p *senderPool) removeWorkerLocked(worker *senderWorker) {
 	for index, candidate := range p.workers {
 		if candidate == worker {
 			p.workers = slices.Delete(p.workers, index, index+1)
-			p.available.Broadcast()
 			return
 		}
 	}
@@ -314,7 +273,7 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		worker.backoff = true
 		p.mu.Unlock()
 		delay := p.retry.delay(attempt)
-		if !p.waitBackoff(worker, delay) {
+		if !p.waitBackoff(delay) {
 			return false
 		}
 	}
@@ -346,25 +305,14 @@ func (p *senderPool) snapshot() SenderSnapshot {
 	return snapshot
 }
 
-func (p *senderPool) waitBackoff(worker *senderWorker, duration time.Duration) bool {
-	deadline := time.Now().Add(duration)
-	for {
-		if p.ctx.Err() != nil {
-			return false
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return true
-		}
-		timer := time.NewTimer(remaining)
-		select {
-		case <-p.ctx.Done():
-			timer.Stop()
-			return false
-		case <-worker.wake:
-			timer.Stop()
-		case <-timer.C:
-		}
+func (p *senderPool) waitBackoff(duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-p.ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

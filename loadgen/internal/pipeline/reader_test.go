@@ -3,9 +3,10 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -50,7 +51,7 @@ func startTestReaderPool(
 	}
 	channel.ch = batches
 	channel.batchSize = batchSize
-	return startReaderPool(ctx, source, batchSize, workers, channel, telemetry, nil, zap.NewNop())
+	return startReaderPool(ctx, source, batchSize, workers, channel, telemetry, nil, nil, zap.NewNop())
 }
 
 func TestReaderPoolOwnsUniqueFilesAndEmitsPerFileResiduals(t *testing.T) {
@@ -147,36 +148,41 @@ func TestReaderPoolAppendRowsSplitsShortReadsAtBatchBoundary(t *testing.T) {
 }
 
 func TestReaderPoolStopReadingSendsPendingPartialBatch(t *testing.T) {
-	batches := make(chan []Transaction, 1)
-	var telemetry readerTelemetry
-	var channel batchQueue
-	channel.ch = batches
-	channel.batchSize = 2
-	worker := &readerWorker{busy: true}
-	pool := &readerPool{
-		ctx: t.Context(), readingDone: make(chan struct{}), batchSize: 2,
-		telemetry: &telemetry, channel: &channel,
-	}
-	pool.available = sync.NewCond(&pool.mu)
-	read := func(rows []Transaction) (int, error) {
-		if !pool.canRead() {
-			t.Fatal("Reader fetched new rows after admission stopped")
+	synctest.Test(t, func(t *testing.T) {
+		queue := newBatchQueue(1, 2)
+		allowRead := make(chan struct{})
+		var pool *readerPool
+		openFile := func(string) (ReaderFile, error) {
+			return &fixtureFile{rows: &fixtureRows{read: func(rows []Transaction) (int, error) {
+				<-allowRead
+				if !pool.canRead() {
+					t.Fatal("Reader fetched new rows after admission stopped")
+				}
+				rows[0] = Transaction{ClientID: "already read"}
+				pool.stopReading()
+				return 1, nil
+			}}}, nil
 		}
-		rows[0] = Transaction{ClientID: "already read"}
-		pool.stopReading()
-		return 1, nil
-	}
-	if err := pool.readBatches(worker, read); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case batch := <-batches:
-		if len(batch) != 1 || batch[0].ClientID != "already read" {
-			t.Fatalf("partial batch = %+v", batch)
+		pool = startReaderPool(t.Context(), Source{files: []string{"one"}}, 2, 3,
+			queue, &readerTelemetry{}, openFile, nil, zap.NewNop())
+		synctest.Wait()
+		if got := pool.snapshot(); got.ReadingWorkers != 1 || got.IdleWorkers != 2 {
+			t.Fatalf("before StopReading: %+v", got)
 		}
-	default:
-		t.Fatal("partial batch was not forwarded after admission stopped")
-	}
+		close(allowRead)
+		<-pool.done
+		if t.Context().Err() != nil || pool.snapshot().LiveWorkers != 0 {
+			t.Fatal("StopReading did not stop all workers with live parent context")
+		}
+		select {
+		case batch := <-queue.ch:
+			if len(batch) != 1 || batch[0].ClientID != "already read" {
+				t.Fatalf("partial batch = %+v", batch)
+			}
+		default:
+			t.Fatal("partial batch was not forwarded after admission stopped")
+		}
+	})
 }
 
 func TestReaderPoolImmediateSendKeepsWorkerReading(t *testing.T) {
@@ -219,7 +225,6 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 	worker := &readerWorker{draining: true, busy: true}
 	pool := &readerPool{
 		ctx:     context.Background(),
-		desired: 0,
 		workers: []*readerWorker{worker},
 
 		telemetry: &telemetry,
@@ -347,7 +352,6 @@ func TestReaderPoolConcurrentSendsUseLastFreeSlotOnce(t *testing.T) {
 func TestReaderPoolOwnsFilesAcrossConcurrentCycles(t *testing.T) {
 	pool := &readerPool{source: Source{files: []string{"a", "b"}}, active: map[string]bool{}}
 	pool.ctx = t.Context()
-	pool.available = sync.NewCond(&pool.mu)
 	first, second := &readerWorker{}, &readerWorker{}
 	for cycle := range 2 {
 		one, ok := pool.claimNextFile(first)
@@ -359,17 +363,15 @@ func TestReaderPoolOwnsFilesAcrossConcurrentCycles(t *testing.T) {
 			t.Fatalf("cycle %d: simultaneous jobs %q and %q", cycle, one, two)
 		}
 		pool.mu.Lock()
-		delete(pool.active, two)
-		pool.available.Broadcast()
+		pool.releaseFileLocked(second, two)
 		pool.mu.Unlock()
 		next, ok := pool.claimNextFile(second)
 		if !ok || next == one {
 			t.Fatalf("cycle %d: reissued active file %q while %q is owned", cycle, next, one)
 		}
 		pool.mu.Lock()
-		delete(pool.active, next)
-		delete(pool.active, one)
-		pool.available.Broadcast()
+		pool.releaseFileLocked(second, next)
+		pool.releaseFileLocked(first, one)
 		pool.mu.Unlock()
 	}
 }
@@ -381,7 +383,6 @@ func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 		telemetry: &readerTelemetry{}, done: make(chan struct{}),
 	}
 	pool.ctx = t.Context()
-	pool.available = sync.NewCond(&pool.mu)
 	if job, ok := pool.claimNextFile(pool.workers[1]); ok || job != "" {
 		t.Fatalf("draining idle worker acquired %q", job)
 	}
@@ -390,10 +391,84 @@ func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 		t.Fatal("draining worker acquired a file")
 	}
 	pool.mu.Unlock()
-	pool.reconcile(2)
-	if job, ok := pool.claimNextFile(pool.workers[1]); !ok || job != "a" {
-		t.Fatalf("reactivated worker job = %q, want a", job)
+	if got := pool.snapshot(); got.LiveWorkers != 1 || got.DrainingWorkers != 0 {
+		t.Fatalf("retired idle worker remains live: %+v", got)
 	}
+}
+
+func TestReaderPoolReleaseWakesAllIdleWorkersBeforeDownscale(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		firstRead := make(chan struct{})
+		releaseFirst := make(chan struct{})
+		secondRead := make(chan struct{})
+		releaseSecond := make(chan struct{})
+		var opened atomic.Int64
+		openFile := func(string) (ReaderFile, error) {
+			number := opened.Add(1)
+			return &fixtureFile{rows: &fixtureRows{read: func([]Transaction) (int, error) {
+				switch number {
+				case 1:
+					close(firstRead)
+					<-releaseFirst
+				case 2:
+					close(secondRead)
+					<-releaseSecond
+				default:
+					t.Errorf("unexpected file claim %d", number)
+				}
+				return 0, io.EOF
+			}}}, nil
+		}
+		var blockClaims atomic.Bool
+		claims := make(chan int, 3)
+		releaseClaims := make(chan struct{})
+		beforeClaim := func(worker *readerWorker) {
+			if blockClaims.Load() {
+				claims <- worker.id
+				<-releaseClaims
+			}
+		}
+		queue := newBatchQueue(1, 2)
+		pool := startReaderPool(ctx, Source{files: []string{"one"}}, 2, 1,
+			queue, &readerTelemetry{}, openFile, beforeClaim, zap.NewNop())
+		<-firstRead
+		pool.reconcile(3)
+		synctest.Wait()
+		if got := pool.snapshot(); got.ReadingWorkers != 1 || got.IdleWorkers != 2 {
+			t.Fatalf("before release: %+v", got)
+		}
+		blockClaims.Store(true)
+		close(releaseFirst)
+		seen := map[int]bool{}
+		for range 3 {
+			seen[<-claims] = true
+		}
+		if len(seen) != 3 {
+			t.Fatalf("release did not wake every idle worker: %v", seen)
+		}
+		// Both idle waiters must be awake before we retire W0 and W1.
+		pool.reconcile(1)
+		blockClaims.Store(false)
+		close(releaseClaims)
+		<-secondRead
+		synctest.Wait()
+		got := pool.snapshot()
+		pool.mu.Lock()
+		survivor := len(pool.workers) == 1 && pool.workers[0].id == 2
+		pool.mu.Unlock()
+		if !survivor || got.LiveWorkers != 1 || got.ReadingWorkers != 1 || got.DrainingWorkers != 0 {
+			t.Fatalf("W2 did not claim the released file without another command: %+v", got)
+		}
+		cancel()
+		close(releaseSecond)
+		<-pool.done
+		pool.reconcile(3)
+		if got := pool.snapshot(); got.LiveWorkers != 0 {
+			t.Fatalf("workers started after cancellation: %+v", got)
+		}
+	})
 }
 
 func TestReaderPoolDownscaleSelectsIdleBeforeBusy(t *testing.T) {
@@ -407,7 +482,6 @@ func TestReaderPoolDownscaleSelectsIdleBeforeBusy(t *testing.T) {
 		telemetry: &telemetry,
 	}
 	pool.ctx = t.Context()
-	pool.available = sync.NewCond(&pool.mu)
 
 	pool.reconcile(2)
 	if snapshot := pool.snapshot(); snapshot.DrainingWorkers != 1 || snapshot.DrainingIdleWorkers != 1 {
@@ -419,76 +493,66 @@ func TestReaderPoolDownscaleSelectsIdleBeforeBusy(t *testing.T) {
 }
 
 func TestReaderPoolBusyDownscaleFinishesCurrentFileWithoutClaimingNext(t *testing.T) {
-	dir := t.TempDir()
-	firstPath := filepath.Join(dir, "a-first.parquet")
-	secondPath := filepath.Join(dir, "b-second.parquet")
-	firstRows := make([]Transaction, 100_000)
-	for index := range firstRows {
-		firstRows[index] = Transaction{ClientID: "first"}
-	}
-	if err := parquet.WriteFile(firstPath, firstRows); err != nil {
-		t.Fatalf("write first file: %v", err)
-	}
-	if err := parquet.WriteFile(secondPath, []Transaction{{ClientID: "second"}}); err != nil {
-		t.Fatalf("write second file: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	batches := make(chan []Transaction, 2)
-	var telemetry readerTelemetry
-	var channel batchQueue
-	channel.ch = batches
-	channel.batchSize = len(firstRows)
-	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), len(firstRows), 1, batches, &telemetry, &channel)
-	defer func() {
-		cancel()
-		<-pool.done
-	}()
-
-	deadline := time.After(time.Second)
-	for {
-		pool.mu.Lock()
-		firstActive := pool.active[firstPath]
-		busy := len(pool.workers) == 1 && pool.workers[0].busy
-		blocked := len(pool.workers) == 1 && pool.workers[0].blocked
-		pool.mu.Unlock()
-		if firstActive && busy && !blocked {
-			break
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		queue := newBatchQueue(2, 2)
+		opened := make(chan string, 2)
+		releaseFirst, releaseSecond := make(chan struct{}), make(chan struct{})
+		var pool *readerPool
+		openFile := func(path string) (ReaderFile, error) {
+			opened <- path
+			return &fixtureFile{rows: &fixtureRows{read: func(rows []Transaction) (int, error) {
+				if path == "first" {
+					<-releaseFirst
+					rows[0], rows[1] = Transaction{ClientID: "first"}, Transaction{ClientID: "first"}
+					return 2, io.EOF
+				}
+				<-releaseSecond
+				pool.stopReading()
+				rows[0] = Transaction{ClientID: "second"}
+				return 1, io.EOF
+			}}}, nil
+		}
+		pool = startReaderPool(ctx, Source{files: []string{"first", "second"}}, 2, 1,
+			queue, &readerTelemetry{}, openFile, nil, zap.NewNop())
+		if path := <-opened; path != "first" {
+			t.Fatalf("first opened file = %q", path)
+		}
+		synctest.Wait()
+		if got := pool.snapshot(); got.ReadingWorkers != 1 || got.BlockedWorkers != 0 {
+			t.Fatalf("first file must be held in Read: %+v", got)
+		}
+		pool.reconcile(0)
+		if got := pool.snapshot(); got.DrainingReadingWorkers != 1 {
+			t.Fatalf("busy worker not marked: %+v", got)
+		}
+		close(releaseFirst)
+		synctest.Wait()
+		if got := pool.snapshot(); got.LiveWorkers != 0 {
+			t.Fatalf("worker did not retire after first file: %+v", got)
 		}
 		select {
-		case <-deadline:
-			t.Fatal("worker did not begin the first file as busy and non-blocked")
-		case <-time.After(time.Millisecond):
+		case path := <-opened:
+			t.Fatalf("draining worker opened another file %q", path)
+		default:
 		}
-	}
-
-	pool.reconcile(0)
-	waitForReaderLive(t, pool, 0)
-	pool.mu.Lock()
-	secondActive := pool.active[secondPath]
-	pool.mu.Unlock()
-	if secondActive {
-		t.Fatal("draining worker claimed the second file")
-	}
-	if measurements := channel.snapshot(time.Now()); measurements.BlockedSenders != 0 {
-		t.Fatalf("busy downscale entered blocked send: %+v", measurements)
-	}
-	if batch := <-batches; len(batch) != len(firstRows) {
-		t.Fatalf("completed first batch size = %d, want %d", len(batch), len(firstRows))
-	} else if batch[0].ClientID != "first" {
-		t.Fatalf("completed first batch source = %q, want first", batch[0].ClientID)
-	}
-
-	pool.reconcile(1)
-	select {
-	case batch := <-batches:
-		if len(batch) != 1 || batch[0].ClientID != "second" {
-			t.Fatalf("batch after scale-up = %+v, want second file", batch)
+		if batch := <-queue.ch; len(batch) != 2 || batch[0].ClientID != "first" || batch[1].ClientID != "first" {
+			t.Fatalf("first file was not completed: %+v", batch)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("second file did not become eligible after scale-up")
-	}
+		if got := queue.snapshot(time.Now()); got.BlockedSenders != 0 {
+			t.Fatalf("busy downscale entered blocked send: %+v", got)
+		}
+		pool.reconcile(1)
+		if path := <-opened; path != "second" {
+			t.Fatalf("file after scale-up = %q", path)
+		}
+		close(releaseSecond)
+		<-pool.done
+		if batch := <-queue.ch; len(batch) != 1 || batch[0].ClientID != "second" {
+			t.Fatalf("second file batch = %+v", batch)
+		}
+	})
 }
 
 func TestReaderPoolBlockedDownscaleFlushesEntireFile(t *testing.T) {

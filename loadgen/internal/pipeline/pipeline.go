@@ -3,7 +3,6 @@ package pipeline
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -43,7 +42,6 @@ type Pipeline struct {
 	readerQueue     *batchQueue
 	senderQueue     *batchQueue
 	readerTelemetry readerTelemetry
-	completed       atomic.Int64
 	done            chan struct{}
 	sampleMu        sync.Mutex
 	sampledAt       time.Time
@@ -59,9 +57,9 @@ func Start(ctx context.Context, options Options) *Pipeline {
 	}
 	p.readerTelemetry.startInterval(now)
 	p.reader = startReaderPool(ctx, options.Source, options.BatchSize, options.Readers,
-		p.readerQueue, &p.readerTelemetry, options.OpenFile, options.Logger)
+		p.readerQueue, &p.readerTelemetry, options.OpenFile, nil, options.Logger)
 	p.throttler = startThrottler(ctx, p.readerQueue, p.senderQueue, options.Rate)
-	p.sender = startSenderPool(ctx, p.senderQueue, &p.completed, options.Senders, options, options.Logger)
+	p.sender = startSenderPool(ctx, p.senderQueue, options.Senders, options, nil, options.Logger, nil)
 	go func() {
 		<-p.reader.done
 		close(p.readerQueue.ch)
@@ -79,7 +77,7 @@ func (p *Pipeline) SetRate(rate Rate)          { p.throttler.update(rate) }
 func (p *Pipeline) StopReading()               { p.reader.stopReading() }
 func (p *Pipeline) Done() <-chan struct{}      { return p.done }
 func (p *Pipeline) SourceErrors() <-chan error { return p.reader.sourceErrors }
-func (p *Pipeline) TakeCompleted() int64       { return p.completed.Swap(0) }
+func (p *Pipeline) TakeCompleted() int64       { return p.sender.takeCompleted() }
 
 // Sample uses the same elapsed interval for every stage and returns it to the caller.
 func (p *Pipeline) Sample(now time.Time) time.Duration {
