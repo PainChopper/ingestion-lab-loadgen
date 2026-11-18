@@ -19,17 +19,12 @@ const snapshotPath = "/api/loadgen/snapshot"
 const commandsPath = "/api/loadgen/commands"
 
 func newServeMux(requests runtimeRequests, metrics *PrometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
 	mux := http.NewServeMux()
 	mux.Handle(snapshotPath, snapshotHandler(requests, logger))
 	mux.Handle(commandsPath, commandsHandler(requests, config))
 	registerDeveloperRoutes(mux)
 
-	if metrics != nil {
-		mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))
-	}
+	mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))
 
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
@@ -41,9 +36,6 @@ func newServeMux(requests runtimeRequests, metrics *PrometheusMetrics, config co
 }
 
 func startHTTPServer(requests runtimeRequests, metrics *PrometheusMetrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
 	server := &http.Server{
 		Addr:              config.HTTP.Addr,
 		Handler:           newServeMux(requests, metrics, config, logger),

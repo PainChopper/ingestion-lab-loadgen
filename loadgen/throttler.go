@@ -134,9 +134,6 @@ func (t *throttler) forwardBatch(
 }
 
 func (t *throttler) update(settings throttlerSettings) {
-	if t == nil {
-		return
-	}
 	select {
 	case t.updates <- settings:
 	case <-t.done:

@@ -103,7 +103,7 @@ func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 			t.Fatalf("Throttler received %d batches, want 1", got)
 		}
 		blocked := senderChannel.snapshot(time.Now())
-		if blocked.capacity != 0 || blocked.depthBatches != 0 || blocked.bufferedTransactions != 0 ||
+		if blocked.depthBatches != 0 || blocked.bufferedTransactions != 0 ||
 			blocked.blockedSenders != 1 || blocked.sentBatchesTotal != 0 {
 			t.Fatalf("blocked Sender channel = %+v", blocked)
 		}
@@ -143,7 +143,7 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 		synctest.Wait()
 		time.Sleep(5 * time.Millisecond)
 		before := senderChannel.snapshot(time.Now())
-		if before.capacity != 0 || before.depthBatches != 0 || before.bufferedTransactions != 0 ||
+		if before.depthBatches != 0 || before.bufferedTransactions != 0 ||
 			before.blockedSenders != 1 || before.oldestBlockedSenderMs <= 0 || before.blockedMs <= 0 ||
 			before.sentBatchesTotal != 0 || before.sentTransactionsPerSecond != 0 {
 			t.Fatalf("Sender channel before handoff = %+v", before)

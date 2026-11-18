@@ -25,10 +25,6 @@ const (
 	cliExitRemote  = 4
 )
 
-type cliUsageError struct{ err error }
-
-func (err cliUsageError) Error() string { return err.err.Error() }
-
 type remoteHTTPError struct {
 	status   string
 	method   string
@@ -45,10 +41,6 @@ func (err remoteHTTPError) Error() string {
 }
 
 func cliExitCode(err error) int {
-	var usageErr cliUsageError
-	if errors.As(err, &usageErr) {
-		return cliExitUsage
-	}
 	var httpErr remoteHTTPError
 	if errors.As(err, &httpErr) {
 		return cliExitHTTP
@@ -92,7 +84,7 @@ func parseRemoteCLI(args []string) (cliCommand, error) {
 	}
 	baseURL, err := validateCLIBaseURL(args[2])
 	if err != nil {
-		return command, cliUsageError{err: err}
+		return command, err
 	}
 	command.remoteURL = baseURL
 	return command, nil
@@ -127,7 +119,7 @@ func parseSetCLI(args []string) (cliCommand, error) {
 		}
 		baseURL, err := validateCLIBaseURL(args[4])
 		if err != nil {
-			return command, cliUsageError{err: err}
+			return command, err
 		}
 		command.remoteURL = baseURL
 	}
@@ -212,7 +204,7 @@ func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) err
 		return err
 	}
 
-	return cliUsageError{err: fmt.Errorf("unknown remote action %q", command.remoteAction)}
+	return fmt.Errorf("unknown remote action %q", command.remoteAction)
 }
 
 type remoteCLIClient struct {

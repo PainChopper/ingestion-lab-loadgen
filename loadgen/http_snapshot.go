@@ -9,9 +9,6 @@ import (
 )
 
 func snapshotHandler(requests runtimeRequests, logger *zap.Logger) http.Handler {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)

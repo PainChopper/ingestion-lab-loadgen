@@ -4,6 +4,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 func TestNewControlStateInitializesControls(t *testing.T) {
@@ -20,7 +22,7 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 				loaded.SenderChannel.Capacity.Initial = 0
 				loaded.Throttler.RequestedTPS.Initial = 0
 			}
-			state := newControlState(loaded, nil)
+			state := newControlState(loaded, zap.NewNop())
 			if got := state.run.state; got != runStateStarting {
 				t.Fatalf("initial run state = %q, want %q", got, runStateStarting)
 			}

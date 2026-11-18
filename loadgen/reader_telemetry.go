@@ -59,12 +59,3 @@ func (r *readerTelemetry) snapshot() readerMeasurements {
 	}
 	return measurements
 }
-
-func (r *readerTelemetry) reset() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.rowsRead = 0
-	r.readTPS = 0
-	r.intervalAt = time.Time{}
-	r.intervalRows = 0
-}

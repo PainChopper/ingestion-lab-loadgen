@@ -64,11 +64,6 @@ func startPipeline(ctx context.Context, state *controlState, source readerSource
 	return p
 }
 
-func (p *pipelineRuntime) detachChannels(state *controlState) {
-	state.telemetry.readerChannel.detach()
-	state.telemetry.senderChannel.detach()
-}
-
 func (p *pipelineRuntime) snapshots() (readerPoolSnapshot, senderPoolSnapshot) {
 	if p == nil {
 		return readerPoolSnapshot{}, senderPoolSnapshot{}

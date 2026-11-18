@@ -22,20 +22,6 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-func TestRunEventLoopRequiresPrometheusMetrics(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	core, logs := observer.New(zap.InfoLevel)
-	state := newControlState(testConfig(t), zap.New(core))
-	deadline, err := state.runEventLoop(ctx, runtimeEvents{}, 0)
-	if err == nil || !strings.Contains(err.Error(), "Prometheus metrics") || !deadline.IsZero() {
-		t.Fatalf("deadline = %v, err = %v; want immediate missing metrics error", deadline, err)
-	}
-	if state.run.state != runStateStarting || logs.Len() != 0 {
-		t.Fatalf("missing metrics entered the loop: state = %v, logs = %v", state.run.state, logs.All())
-	}
-}
-
 func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.ReaderChannel.Capacity.Initial = 0
@@ -70,7 +56,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	core, events := observer.New(zap.InfoLevel)
 	state := newControlState(cfg, zap.New(core))
 	loop := startTestEventLoop(t, &state, gracefulShutdownTimeout)
-	mux := newServeMux(loop.requests, loop.metrics.prometheusMetrics, cfg, nil)
+	mux := newServeMux(loop.requests, loop.metrics.prometheusMetrics, cfg, zap.NewNop())
 
 	select {
 	case size := <-entered:
