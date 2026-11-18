@@ -249,12 +249,12 @@ describe('inspector view model', () => {
         { label: 'Rows read', value: '14,000' },
         expect.objectContaining({
           label: 'Worker states',
-          value: '5 idle · 0 reading · 0 blocked · — errors',
+          value: '5 idle · 0 reading · 0 blocked · 0 errors',
           segments: [
             { value: '5 idle', tone: 'idle' },
             { value: '0 reading', tone: 'in-flight' },
             { value: '0 blocked', tone: 'backoff' },
-            { value: '— errors', tone: 'error' },
+            { value: '0 errors', tone: 'error' },
           ],
         }),
       ]),
@@ -272,56 +272,88 @@ describe('inspector view model', () => {
     adapter.dispose()
   })
 
-  it('shows the current Reader source error and counts it in Worker states', () => {
-    const adapter = new SimulationAdapter()
-    const base = derivedSnapshot(adapter)
-    const sourceDirectory = 'C:/dataset'
-    const model = getInspectorViewModel(
-      {
-        ...base,
-        reader: {
-          ...base.reader,
-          sourceDirectory,
-          sourceError: {
-            category: 'source',
-            operation: 'read',
-            relativePath: 'broken/very-long-source.parquet',
-            message: 'corrupt parquet',
+  it.each([
+    { connectionState: 'connecting', rowsRead: null, expected: '— errors' },
+    { connectionState: 'error', rowsRead: null, expected: '— errors' },
+    { connectionState: 'connected', rowsRead: 0, expected: '0 errors' },
+    { connectionState: 'error', rowsRead: 0, expected: '0 errors' },
+  ] as const)(
+    'shows $expected in the HTTP Reader Inspector in $connectionState with rowsRead=$rowsRead',
+    ({ connectionState, rowsRead, expected }) => {
+      const adapter = new SimulationAdapter()
+      const base = derivedSnapshot(adapter)
+      adapter.dispose()
+      const model = getInspectorViewModel(
+        {
+          ...base,
+          adapterKind: 'http',
+          connectionState,
+          reader: { ...base.reader, rowsRead },
+        },
+        'reader',
+      )
+
+      const workerStates = model?.rows.find((row) => row.label === 'Worker states')
+      expect(workerStates?.value).toBe(`5 idle · 0 reading · 0 blocked · ${expected}`)
+      expect(workerStates?.segments?.at(-1)).toEqual({ value: expected, tone: 'error' })
+    },
+  )
+
+  it.each(['connected', 'error'] as const)(
+    'shows the Reader source error and counts it in Worker states while %s',
+    (connectionState) => {
+      const adapter = new SimulationAdapter()
+      const base = derivedSnapshot(adapter)
+      const sourceDirectory = 'C:/dataset'
+      const model = getInspectorViewModel(
+        {
+          ...base,
+          adapterKind: 'http',
+          connectionState,
+          reader: {
+            ...base.reader,
+            sourceDirectory,
+            sourceError: {
+              category: 'source',
+              operation: 'read',
+              relativePath: 'broken/very-long-source.parquet',
+              message: 'corrupt parquet',
+            },
           },
         },
-      },
-      'reader',
-    )
+        'reader',
+      )
 
-    expect(model?.rows).toContainEqual({
-      label: '',
-      key: 'source-error',
-      kind: 'source-error',
-      value: 'C:/dataset/broken/very-long-source.parquet: corrupt parquet',
-      layout: 'full-width',
-    })
-    const workerStates = model?.rows.find((row) => row.label === 'Worker states')
-    expect(workerStates?.value).toMatch(/ · 1 error$/)
-    expect(workerStates?.segments?.at(-1)).toEqual({ value: '1 error', tone: 'error' })
-    expect(model?.rows.map((row) => row.label)).not.toEqual(
-      expect.arrayContaining([
-        'Source directory',
-        'Source error',
-        'Source status',
-        'Source operation',
-        'Source message',
-        'Reader worker',
-        'Source path',
-      ]),
-    )
-    expect(
-      model?.rows.some(
-        (row) => row.disclosureLabel !== undefined || row.disclosureValue !== undefined,
-      ),
-    ).toBe(false)
-    expect(model?.rows.filter((row) => row.kind === 'source-error')).toHaveLength(1)
-    adapter.dispose()
-  })
+      expect(model?.rows).toContainEqual({
+        label: '',
+        key: 'source-error',
+        kind: 'source-error',
+        value: 'C:/dataset/broken/very-long-source.parquet: corrupt parquet',
+        layout: 'full-width',
+      })
+      const workerStates = model?.rows.find((row) => row.label === 'Worker states')
+      expect(workerStates?.value).toMatch(/ · 1 error$/)
+      expect(workerStates?.segments?.at(-1)).toEqual({ value: '1 error', tone: 'error' })
+      expect(model?.rows.map((row) => row.label)).not.toEqual(
+        expect.arrayContaining([
+          'Source directory',
+          'Source error',
+          'Source status',
+          'Source operation',
+          'Source message',
+          'Reader worker',
+          'Source path',
+        ]),
+      )
+      expect(
+        model?.rows.some(
+          (row) => row.disclosureLabel !== undefined || row.disclosureValue !== undefined,
+        ),
+      ).toBe(false)
+      expect(model?.rows.filter((row) => row.kind === 'source-error')).toHaveLength(1)
+      adapter.dispose()
+    },
+  )
 
   it('keeps every Channel Inspector to the fixed four rows', () => {
     const adapter = new SimulationAdapter()

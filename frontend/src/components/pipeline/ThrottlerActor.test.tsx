@@ -409,9 +409,10 @@ describe('ThrottlerActor valve control', () => {
     renderHarness({ installed: false, onModeCommand })
     const control = screen.getByRole('button', {
       name: 'Reinsert throttler valve',
+      description: 'bypass applied',
     })
 
-    expect(control.getAttribute('aria-pressed')).toBe('true')
+    expect(control.hasAttribute('aria-pressed')).toBe(false)
     fireEvent.pointerDown(control, {
       clientX: 140,
       clientY: 80,
@@ -513,7 +514,7 @@ describe('ThrottlerActor valve control', () => {
       name: 'Remove throttler valve',
     })
 
-    expect(control.getAttribute('aria-pressed')).toBe('false')
+    expect(control.hasAttribute('aria-pressed')).toBe(false)
     expect(control.hasAttribute('aria-valuetext')).toBe(false)
     expect(
       screen.getByRole('button', {

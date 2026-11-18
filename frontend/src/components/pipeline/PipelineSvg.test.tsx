@@ -869,9 +869,9 @@ describe('PipelineSvg rendering', () => {
       const reader = view.container.querySelector('#reader-actor')
 
       expect(reader?.textContent).toContain('Read 50,000 tx/s')
-      expect(reader?.textContent).toContain('— errors')
+      expect(reader?.textContent).toContain('0 errors')
       expect(reader?.querySelector('.pipeline-worker-status')?.textContent).toContain(
-        '1 idle · 1 reading · 1 blocked · — errors',
+        '1 idle · 1 reading · 1 blocked · 0 errors',
       )
       expect(reader?.querySelector('.pipeline-worker-status .worker-state--idle')).toHaveProperty(
         'textContent',
@@ -885,7 +885,29 @@ describe('PipelineSvg rendering', () => {
       ).toHaveProperty('textContent', ' · 1 blocked')
       expect(reader?.querySelector('.pipeline-worker-status .worker-state--error')).toHaveProperty(
         'textContent',
-        ' · — errors',
+        ' · 0 errors',
+      )
+    },
+  )
+
+  it.each([
+    { connectionState: 'connecting', rowsRead: null, expected: '— errors' },
+    { connectionState: 'error', rowsRead: null, expected: '— errors' },
+    { connectionState: 'connected', rowsRead: 0, expected: '0 errors' },
+    { connectionState: 'error', rowsRead: 0, expected: '0 errors' },
+  ] as const)(
+    'shows $expected for HTTP Reader in $connectionState with rowsRead=$rowsRead',
+    ({ connectionState, rowsRead, expected }) => {
+      const base = activeSnapshot()
+      const view = renderPipeline({
+        ...base,
+        adapterKind: 'http',
+        connectionState,
+        reader: { ...base.reader, rowsRead },
+      })
+
+      expect(view.container.querySelector('#reader-actor .worker-state--error')?.textContent).toBe(
+        ` · ${expected}`,
       )
     },
   )

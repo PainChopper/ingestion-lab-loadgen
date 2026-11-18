@@ -1,5 +1,5 @@
 import type { ReaderSnapshot, SelectableId } from '../../model/loadgen'
-import { formatInteger, formatRate } from './formatters'
+import { formatInteger, formatRate, formatReaderErrorCount } from './formatters'
 import type { PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { WorkerActor } from './WorkerActor'
@@ -40,7 +40,7 @@ export function ReaderActor({
       tone: 'backoff' as const,
     },
     {
-      value: hasSourceError ? '1 error' : '— errors',
+      value: formatReaderErrorCount(snapshot),
       tone: 'error' as const,
     },
   ]
