@@ -32,7 +32,12 @@ export const VALVE_BODY = Object.freeze({
   stemTopY: 373,
   stemBottomY: 398,
 })
-export const VALVE_READOUT_Y = Object.freeze({ opening: 454, detail: 468, installationError: 486 })
+export const VALVE_TARGET_LABEL_X = VALVE_APERTURE.centerX + 84
+export const VALVE_READOUT_Y = Object.freeze({
+  opening: 454,
+  detail: 474,
+  installationError: Object.freeze({ landscape: 532, portrait: 496 }),
+})
 export const VALVE_FOCUS_RING = Object.freeze({ rx: 49, ry: 29 })
 export const VALVE_WHEEL_HIT_AREAS = Object.freeze({
   decreaseX: 400.25,

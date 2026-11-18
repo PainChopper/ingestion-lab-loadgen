@@ -126,6 +126,23 @@ describe('responsive pipeline geometry', () => {
     expect(httpRows[2] - httpRows[1]).toBeGreaterThanOrEqual(20)
   })
 
+  it('reserves a landscape row for upstream waiting labels', () => {
+    const geometry = createPipelineGeometry({
+      orientation: 'landscape',
+      landscapeContentWidth: 1120,
+      readerWorkers: 7,
+      senderWorkers: 32,
+    })
+    const { reader, sender } = geometry.actors
+    const workerStatusY = Math.max(reader.metrics.status.y, sender.metrics.status.y)
+    const httpStatusY = geometry.http.metrics.statusY
+
+    for (const { metrics } of Object.values(geometry.channels)) {
+      expect(metrics.waitingY - workerStatusY).toBeGreaterThanOrEqual(16)
+      expect(httpStatusY - metrics.waitingY).toBeGreaterThanOrEqual(16)
+    }
+  })
+
   it.each([
     { reader: 1, sender: 1 },
     { reader: 7, sender: 1 },
