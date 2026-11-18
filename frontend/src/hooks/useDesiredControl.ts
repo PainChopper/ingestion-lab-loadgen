@@ -49,7 +49,7 @@ export function useDesiredControl<T>({
   unavailableMessage = 'Change unavailable',
 }: DesiredControlOptions<T>): DesiredControl<T> {
   const [state, setState] = useState(() => idleState(applied))
-  const stateRef = useRef<DesiredState<T> | null>(null)
+  const stateRef = useRef<DesiredState<T> | null>(state)
   const optionsRef = useRef({ applied, available, dispatch, revision })
 
   const acknowledged = state.phase === 'pending' &&
@@ -65,8 +65,12 @@ export function useDesiredControl<T>({
 
   useLayoutEffect(() => {
     stateRef.current = state
-    return () => { stateRef.current = null }
   }, [state])
+
+  // Keep the ref live while child layout effects run during updates.
+  useLayoutEffect(() => {
+    return () => { stateRef.current = null }
+  }, [])
 
   const updateState = useCallback((next: DesiredState<T>) => {
     // A preview and its commit can run in the same event, before React renders.

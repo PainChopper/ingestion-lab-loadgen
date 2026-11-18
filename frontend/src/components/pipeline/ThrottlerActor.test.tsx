@@ -4,7 +4,6 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useState } from 'react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
@@ -46,76 +45,68 @@ function requestedControl(
   }
 }
 
-function Harness({
-  control = requestedControl(),
-  accepted = true,
-  onCommand = vi.fn(),
-  onSelect = vi.fn(),
-  channelOverrides = {},
-  installed = true,
-  pendingInstalled = null,
-  modeAccepted = true,
-  onModeCommand = vi.fn(),
-  orientation = 'landscape',
-}: {
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value)) deepFreeze(child)
+    Object.freeze(value)
+  }
+  return value
+}
+
+function createBaseSnapshot() {
+  const adapter = new SimulationAdapter()
+  try {
+    return deepFreeze(new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0))
+  } finally {
+    adapter.dispose()
+  }
+}
+
+const snapshot = createBaseSnapshot()
+
+interface HarnessSnapshotProps {
   control?: NumericControlSnapshot
-  accepted?: boolean
-  onCommand?: (value: number) => void
   onSelect?: (id: SelectableId) => void
   channelOverrides?: Partial<ChannelSnapshot>
   installed?: boolean | null
   pendingInstalled?: boolean | null
+  orientation?: PipelineOrientation
+}
+
+interface HarnessOptions extends HarnessSnapshotProps {
+  accepted?: boolean
+  onCommand?: (value: number) => void
   modeAccepted?: boolean
   onModeCommand?: (value: boolean) => void
-  orientation?: PipelineOrientation
+}
+
+function Harness({
+  control = requestedControl(),
+  onSelect = () => undefined,
+  channelOverrides = {},
+  installed = true,
+  pendingInstalled = null,
+  orientation = 'landscape',
+  revision,
+  dispatchRequested,
+  dispatchInstalled,
+}: HarnessSnapshotProps & {
+  revision: number
+  dispatchRequested: (value: number) => Promise<{ accepted: boolean }>
+  dispatchInstalled: (value: boolean) => Promise<{ accepted: boolean }>
 }) {
-  const adapter = new SimulationAdapter()
-  const snapshot = new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0)
-  adapter.dispose()
-  const [revision, setRevision] = useState(snapshot.revision)
-  const [requestedOverride, setRequestedOverride] = useState<{
-    applied: number | null
-    min: number
-    value: number
-  } | null>(null)
-  const [modeOverride, setModeOverride] = useState<{
-    applied: boolean | null
-    value: boolean
-  } | null>(null)
-  const currentRequestedOverride = requestedOverride?.applied === control.applied &&
-    requestedOverride.min === control.min
-  const currentModeOverride = modeOverride?.applied === installed
-  if (requestedOverride !== null && !currentRequestedOverride) setRequestedOverride(null)
-  if (modeOverride !== null && !currentModeOverride) setModeOverride(null)
-  const requestedApplied = currentRequestedOverride
-    ? requestedOverride.value
-    : control.applied ?? control.min
-  const modeApplied = currentModeOverride ? modeOverride.value : installed
+  const requestedApplied = control.applied ?? control.min
   const requestedController = useDesiredControl({
     applied: requestedApplied,
     revision,
     available: control.applied !== null && control.applyMode !== 'unavailable',
-    dispatch: (value) => {
-      onCommand(value)
-      if (accepted) {
-        setRequestedOverride({ applied: control.applied, min: control.min, value })
-        setRevision((current) => current + 1)
-      }
-      return Promise.resolve({ accepted })
-    },
+    dispatch: dispatchRequested,
   })
   const modeController = useDesiredControl({
-    applied: modeApplied ?? true,
+    applied: installed ?? true,
     revision,
-    available: modeApplied !== null,
-    dispatch: async (value) => {
-      onModeCommand(value)
-      if (modeAccepted) {
-        setModeOverride({ applied: installed, value })
-        setRevision((current) => current + 1)
-      }
-      return { accepted: modeAccepted }
-    },
+    available: installed !== null,
+    dispatch: dispatchInstalled,
     rejectionMessage: 'Valve mode change rejected',
     unavailableMessage: 'Valve mode change unavailable',
   })
@@ -141,7 +132,7 @@ function Harness({
           requestedTps: { ...control, applied: requestedApplied },
           installed: {
             ...snapshot.throttler.installed,
-            applied: modeApplied,
+            applied: installed,
             pending: pendingInstalled,
           },
         }}
@@ -157,6 +148,47 @@ function Harness({
   )
 }
 
+function renderHarness(initialProps: HarnessOptions = {}) {
+  let props = initialProps
+  let revision = snapshot.revision
+
+  function dispatchRequested(value: number) {
+    const { onCommand, accepted = true } = props
+    onCommand?.(value)
+    if (accepted) {
+      rerender({ ...props, control: { ...(props.control ?? requestedControl()), applied: value } })
+    }
+    return Promise.resolve({ accepted })
+  }
+
+  async function dispatchInstalled(value: boolean) {
+    const { onModeCommand, modeAccepted = true } = props
+    onModeCommand?.(value)
+    if (modeAccepted) rerender({ ...props, installed: value })
+    return { accepted: modeAccepted }
+  }
+
+  function element() {
+    return (
+      <Harness
+        {...props}
+        revision={revision}
+        dispatchRequested={dispatchRequested}
+        dispatchInstalled={dispatchInstalled}
+      />
+    )
+  }
+
+  const view = render(element())
+  function rerender(nextProps: HarnessOptions) {
+    props = nextProps
+    revision += 1
+    view.rerender(element())
+  }
+
+  return { ...view, rerender }
+}
+
 afterEach(() => {
   vi.useRealTimers()
 })
@@ -165,7 +197,7 @@ describe('ThrottlerActor valve control', () => {
   it('steps from either pointer half without activating inspection', async () => {
     const onCommand = vi.fn()
     const onSelect = vi.fn()
-    const view = render(<Harness onCommand={onCommand} onSelect={onSelect} />)
+    const view = renderHarness({ onCommand, onSelect })
     const slider = screen.getByRole('slider', { name: 'Throttle opening' })
 
     expect(slider.getAttribute('aria-valuenow')).toBe('5')
@@ -200,17 +232,15 @@ describe('ThrottlerActor valve control', () => {
   it('uses visible sides for the current config without issuing bypass commands', async () => {
     const onCommand = vi.fn()
     const onModeCommand = vi.fn()
-    const view = render(
-      <Harness
-        control={requestedControl({
-          applied: 1_800_000,
-          max: 4_000_000,
-          step: 200_000,
-        })}
-        onCommand={onCommand}
-        onModeCommand={onModeCommand}
-      />,
-    )
+    const view = renderHarness({
+      control: requestedControl({
+        applied: 1_800_000,
+        max: 4_000_000,
+        step: 200_000,
+      }),
+      onCommand,
+      onModeCommand,
+    })
     const decrease = view.container.querySelector('[data-direction="decrease"]')!
     const increase = view.container.querySelector('[data-direction="increase"]')!
 
@@ -241,9 +271,7 @@ describe('ThrottlerActor valve control', () => {
   it('routes wheel halves through TPS controls without issuing bypass commands', async () => {
     const onCommand = vi.fn()
     const onModeCommand = vi.fn()
-    const view = render(
-      <Harness onCommand={onCommand} onModeCommand={onModeCommand} />,
-    )
+    const view = renderHarness({ onCommand, onModeCommand })
     const decrease = view.container.querySelector(
       '[data-wheel-direction="decrease"]',
     )!
@@ -271,12 +299,7 @@ describe('ThrottlerActor valve control', () => {
   it('implements bounded keyboard steps and six cyclic wheel phases', async () => {
     const user = userEvent.setup()
     const onCommand = vi.fn()
-    render(
-      <Harness
-        control={requestedControl({ applied: 0 })}
-        onCommand={onCommand}
-      />,
-    )
+    renderHarness({ control: requestedControl({ applied: 0 }), onCommand })
     const slider = screen.getByRole('slider', { name: 'Throttle opening' })
     await user.click(slider)
 
@@ -302,7 +325,7 @@ describe('ThrottlerActor valve control', () => {
     const onCommand = vi.fn().mockImplementationOnce(() => {
       throw new Error('Dispatch unavailable')
     })
-    render(<Harness control={requestedControl({ applied: 0 })} onCommand={onCommand} />)
+    renderHarness({ control: requestedControl({ applied: 0 }), onCommand })
     const slider = screen.getByRole('slider', { name: 'Throttle opening' })
     await user.click(slider)
 
@@ -318,9 +341,49 @@ describe('ThrottlerActor valve control', () => {
     expect(slider.getAttribute('data-wheel-phase')).toBe('1')
   })
 
+  it('applies both commands on the mounted actor without React warnings', async () => {
+    const consoleError = vi.spyOn(console, 'error')
+    const consoleWarn = vi.spyOn(console, 'warn')
+    const onCommand = vi.fn()
+    const onModeCommand = vi.fn()
+
+    try {
+      const view = renderHarness({
+        control: requestedControl({ applied: 0 }),
+        onCommand,
+        onModeCommand,
+      })
+      const actor = view.container.querySelector('#throttler-actor')
+      const slider = screen.getByRole('slider', { name: 'Throttle opening' })
+      const mode = screen.getByRole('button', { name: 'Remove throttler valve' })
+      await userEvent.setup().click(slider)
+
+      fireEvent.keyDown(slider, { key: 'ArrowRight' })
+      expect(onCommand.mock.calls).toEqual([[25_000]])
+      expect(screen.getByText('9% OPEN')).not.toBeNull()
+      expect(view.container.querySelector('.pipeline-valve-ghost')).toBeNull()
+
+      view.rerender({ control: requestedControl({ applied: 25_000 }), onCommand, onModeCommand })
+      expect(view.container.querySelector('#throttler-actor')).toBe(actor)
+      expect(screen.getByRole('slider', { name: 'Throttle opening' })).toBe(slider)
+      expect(document.activeElement).toBe(slider)
+
+      fireEvent.keyDown(mode, { key: 'Enter' })
+      expect(onModeCommand.mock.calls).toEqual([[false]])
+      expect(screen.getByRole('button', { name: 'Reinsert throttler valve' })).toBe(mode)
+      expect(mode.getAttribute('data-applied-mode')).toBe('bypass')
+      expect(document.activeElement).toBe(mode)
+      expect(consoleError).not.toHaveBeenCalled()
+      expect(consoleWarn).not.toHaveBeenCalled()
+    } finally {
+      consoleError.mockRestore()
+      consoleWarn.mockRestore()
+    }
+  })
+
   it('pulls the wheel center upward past a threshold and cancels short pulls', () => {
     const onModeCommand = vi.fn()
-    const view = render(<Harness onModeCommand={onModeCommand} />)
+    const view = renderHarness({ onModeCommand })
     const control = screen.getByRole('button', {
       name: 'Remove throttler valve',
     })
@@ -348,12 +411,7 @@ describe('ThrottlerActor valve control', () => {
 
   it('reinserts the detached assembly with the opposite down-left pull', () => {
     const onModeCommand = vi.fn()
-    render(
-      <Harness
-        installed={false}
-        onModeCommand={onModeCommand}
-      />,
-    )
+    renderHarness({ installed: false, onModeCommand })
     const control = screen.getByRole('button', {
       name: 'Reinsert throttler valve',
     })
@@ -380,31 +438,22 @@ describe('ThrottlerActor valve control', () => {
   })
 
   it('hides saved requested TPS only while bypass is applied', () => {
-    const view = render(
-      <Harness
-        control={requestedControl({ applied: 135_000 })}
-        installed={false}
-      />,
-    )
+    const control = requestedControl({ applied: 135_000 })
+    const view = renderHarness({ control, installed: false })
     const actor = view.container.querySelector('#throttler-actor')
 
     expect(actor?.textContent).not.toContain('Requested TPS')
     expect(actor?.textContent).not.toContain('135,000 tx/s')
     expect(actor?.textContent).toContain('Admitted TPS')
 
-    view.rerender(
-      <Harness
-        control={requestedControl({ applied: 135_000 })}
-        installed={true}
-      />,
-    )
+    view.rerender({ control, installed: true })
     expect(actor?.textContent).toContain('Requested TPS')
     expect(actor?.textContent).toContain('135,000 tx/s')
   })
 
   it('cancels removal preview on Escape pointercancel and window blur', () => {
     const onModeCommand = vi.fn()
-    const view = render(<Harness onModeCommand={onModeCommand} />)
+    const view = renderHarness({ onModeCommand })
     const control = screen.getByRole('button', {
       name: 'Remove throttler valve',
     })
@@ -443,12 +492,7 @@ describe('ThrottlerActor valve control', () => {
   it('supports click and keyboard fallback once and keeps focus after rejection', async () => {
     const user = userEvent.setup()
     const onModeCommand = vi.fn()
-    const view = render(
-      <Harness
-        modeAccepted={false}
-        onModeCommand={onModeCommand}
-      />,
-    )
+    const view = renderHarness({ modeAccepted: false, onModeCommand })
     const control = screen.getByRole('button', {
       name: 'Remove throttler valve',
     })
@@ -461,7 +505,7 @@ describe('ThrottlerActor valve control', () => {
       expect(document.activeElement).toBe(control)
       expect(screen.getByText('Valve mode change rejected')).not.toBeNull()
     })
-    view.rerender(<Harness installed={null} onModeCommand={onModeCommand} />)
+    view.rerender({ installed: null, onModeCommand })
     expect(control.getAttribute('aria-disabled')).toBe('true')
     expect(control.getAttribute('data-applied-mode')).toBe('unavailable')
     expect(control.getAttribute('aria-valuetext')).toBe('unavailable applied')
@@ -471,9 +515,7 @@ describe('ThrottlerActor valve control', () => {
   })
 
   it('renders backend pending mode as a yellow ghost without changing applied state', () => {
-    const view = render(
-      <Harness pendingInstalled={false} />,
-    )
+    const view = renderHarness({ pendingInstalled: false })
     const control = screen.getByRole('button', {
       name: 'Remove throttler valve',
     })
@@ -489,9 +531,7 @@ describe('ThrottlerActor valve control', () => {
   })
 
   it('keeps applied opening solid while preview takes precedence over pending', () => {
-    const view = render(
-      <Harness control={requestedControl({ pending: 135_000 })} />,
-    )
+    const view = renderHarness({ control: requestedControl({ pending: 135_000 }) })
     const slider = screen.getByRole('slider', { name: 'Throttle opening' })
 
     expect(slider.getAttribute('aria-valuenow')).toBe('6')
@@ -499,11 +539,9 @@ describe('ThrottlerActor valve control', () => {
     expect(view.container.querySelector('.pipeline-valve-ghost--pending'))
       .not.toBeNull()
 
-    view.rerender(
-      <Harness
-        control={requestedControl({ preview: 160_000, pending: 135_000 })}
-      />,
-    )
+    view.rerender({
+      control: requestedControl({ preview: 160_000, pending: 135_000 }),
+    })
     expect(slider.getAttribute('aria-valuenow')).toBe('7')
     expect(screen.getByText('45% OPEN')).not.toBeNull()
     expect(view.container.querySelector('.pipeline-valve-ghost--preview'))
@@ -513,13 +551,11 @@ describe('ThrottlerActor valve control', () => {
   it('clears a rejected ghost and keeps invalid capabilities readonly', async () => {
     const user = userEvent.setup()
     const rejected = vi.fn()
-    const view = render(
-      <Harness
-        control={requestedControl({ applied: 0 })}
-        accepted={false}
-        onCommand={rejected}
-      />,
-    )
+    const view = renderHarness({
+      control: requestedControl({ applied: 0 }),
+      accepted: false,
+      onCommand: rejected,
+    })
     const slider = screen.getByRole('slider', { name: 'Throttle opening' })
     await user.click(slider)
     await user.keyboard('{ArrowRight}')
@@ -528,12 +564,10 @@ describe('ThrottlerActor valve control', () => {
       expect(view.container.querySelector('.pipeline-valve-ghost')).toBeNull()
     })
 
-    view.rerender(
-      <Harness
-        control={requestedControl({ applied: 0, max: 10, step: 2 })}
-        onCommand={rejected}
-      />,
-    )
+    view.rerender({
+      control: requestedControl({ applied: 0, max: 10, step: 2 }),
+      onCommand: rejected,
+    })
     const readonly = screen.getByRole('slider', { name: 'Throttle opening' })
     expect(readonly.getAttribute('aria-disabled')).toBe('true')
     await user.click(readonly)
@@ -544,12 +578,7 @@ describe('ThrottlerActor valve control', () => {
   it('repeats a held pointer step and stops after release', () => {
     vi.useFakeTimers()
     const onCommand = vi.fn()
-    const view = render(
-      <Harness
-        control={requestedControl({ applied: 0 })}
-        onCommand={onCommand}
-      />,
-    )
+    const view = renderHarness({ control: requestedControl({ applied: 0 }), onCommand })
     const increase = view.container.querySelector('[data-direction="increase"]')!
 
     fireEvent.pointerDown(increase)
@@ -567,9 +596,7 @@ describe('ThrottlerActor valve control', () => {
     (end) => {
       vi.useFakeTimers()
       const onCommand = vi.fn()
-      const view = render(
-        <Harness control={requestedControl({ applied: 205_000 })} onCommand={onCommand} />,
-      )
+      const view = renderHarness({ control: requestedControl({ applied: 205_000 }), onCommand })
       const increase = screen.getByRole('button', { name: 'Increase throttle opening' })
       const slider = screen.getByRole('slider', { name: 'Throttle opening' })
 
@@ -609,9 +636,7 @@ describe('ThrottlerActor valve control', () => {
 
   it('keeps outer geometry invariant through six distinct internal phases', async () => {
     const user = userEvent.setup()
-    const view = render(
-      <Harness control={requestedControl({ applied: 0 })} />,
-    )
+    const view = renderHarness({ control: requestedControl({ applied: 0 }) })
     const slider = screen.getByRole('slider', { name: 'Throttle opening' })
     await user.click(slider)
     const rimGeometry: string[] = []
@@ -672,9 +697,7 @@ describe('ThrottlerActor valve control', () => {
   })
 
   it('shares perspective and clips closed partial open and ghost pistons', () => {
-    const view = render(
-      <Harness control={requestedControl({ applied: 0 })} />,
-    )
+    const view = renderHarness({ control: requestedControl({ applied: 0 }) })
     const readPose = () => Number(view.container.querySelector(
       '[data-gate-kind="applied"]',
     )!.getAttribute('data-gate-y'))
@@ -703,14 +726,14 @@ describe('ThrottlerActor valve control', () => {
       ['440', '398', '26', '34'],
     ])
 
-    view.rerender(<Harness control={requestedControl({ applied: 115_000 })} />)
+    view.rerender({ control: requestedControl({ applied: 115_000 }) })
     const partialY = readPose()
     expect(partialY).toBeGreaterThan(393)
     expect(partialY).toBeLessThan(415)
     expect(partialY + Number(gateEllipse.getAttribute('ry')))
       .toBeLessThan(415 + 12.3)
 
-    view.rerender(<Harness control={requestedControl({ applied: 250_000 })} />)
+    view.rerender({ control: requestedControl({ applied: 250_000 }) })
     expect(readPose()).toBe(393)
     const openEdge = readPose() + Number(gateEllipse.getAttribute('ry')) -
       (415 - 12.3)
@@ -721,7 +744,7 @@ describe('ThrottlerActor valve control', () => {
         'url(#throttler-valve-aperture-clip)',
     )).toBe(true)
 
-    view.rerender(<Harness control={requestedControl({ pending: 135_000 })} />)
+    view.rerender({ control: requestedControl({ pending: 135_000 }) })
     const ghost = view.container.querySelector('[data-gate-kind="pending"]')!
     expect(ghost.getAttribute('data-piston-axis-ratio')).toBe('0.82')
     expect(Number(ghost.querySelector('ellipse')!.getAttribute('ry')) /
@@ -730,12 +753,11 @@ describe('ThrottlerActor valve control', () => {
   })
 
   it('leaves an exact flange connector gap and colors it from applied flow only', () => {
-    const view = render(
-      <Harness
-        control={requestedControl({ applied: 0, preview: 250_000, pending: 225_000 })}
-        channelOverrides={{ flowState: 'normal', displayedPressure: 0 }}
-      />,
-    )
+    const control = requestedControl({ applied: 0, preview: 250_000, pending: 225_000 })
+    const view = renderHarness({
+      control,
+      channelOverrides: { flowState: 'normal', displayedPressure: 0 },
+    })
     const connectors = [...view.container.querySelectorAll(
       '.pipeline-valve-flow-line',
     )]
@@ -755,12 +777,10 @@ describe('ThrottlerActor valve control', () => {
     expect(actor.style.getPropertyValue('--pipeline-valve-flow-color'))
       .toBe('#79d957')
 
-    view.rerender(
-      <Harness
-        control={requestedControl({ applied: 0, preview: 250_000, pending: 225_000 })}
-        channelOverrides={{ flowState: 'backpressure', displayedPressure: 1 }}
-      />,
-    )
+    view.rerender({
+      control,
+      channelOverrides: { flowState: 'backpressure', displayedPressure: 1 },
+    })
     expect(actor.style.getPropertyValue('--pipeline-valve-flow-color'))
       .toBe('#ff6748')
   })
