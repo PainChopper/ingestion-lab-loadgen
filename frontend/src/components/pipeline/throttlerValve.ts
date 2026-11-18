@@ -1,13 +1,15 @@
 import type { NumericControlSnapshot } from '../../model/loadgen'
+import { FLOW_BASELINE } from './geometry'
 
 export const OPENING_POSITION_COUNT = 12
+export const MAX_OPENING_INDEX = OPENING_POSITION_COUNT - 1
 export const WHEEL_PHASE_COUNT = 6
 export const OPENING_PERCENT_LABELS = Object.freeze([0, 9, 18, 27, 36, 45, 55, 64, 73, 82, 91, 100])
 export const VALVE_WHEEL_CENTER = Object.freeze({ x: 430, y: 350 })
 export const VALVE_WHEEL_ORBIT = Object.freeze({ rx: 27, ry: 10.5 })
 export const VALVE_APERTURE = Object.freeze({
-  centerX: 430,
-  centerY: 415,
+  centerX: VALVE_WHEEL_CENTER.x,
+  centerY: FLOW_BASELINE,
   radiusX: 15,
   radiusY: 12.3,
   perspectiveRatio: 0.82,
@@ -15,11 +17,33 @@ export const VALVE_APERTURE = Object.freeze({
 export const VALVE_PISTON = Object.freeze({
   radiusX: 12,
   radiusY: 9.84,
-  closedCenterY: 415,
+  closedCenterY: FLOW_BASELINE,
   firstPartialCenterY: 407,
   openCenterY: 393,
 })
-export const VALVE_FLANGES = Object.freeze({ left: 401, right: 459 })
+export const VALVE_FLANGES = Object.freeze({ left: 401, right: 459, y: 406, width: 7, height: 18 })
+const apertureLeftX = VALVE_APERTURE.centerX - VALVE_APERTURE.radiusX
+const apertureRightX = VALVE_APERTURE.centerX + VALVE_APERTURE.radiusX
+export const VALVE_BODY = Object.freeze({
+  d: `M401 398 H411 A19 19 0 0 1 449 398 H459 V432 H449 A19 19 0 0 1 411 432 H401 Z M${apertureLeftX} ${FLOW_BASELINE} A15 12.3 0 1 0 ${apertureRightX} ${FLOW_BASELINE} A15 12.3 0 1 0 ${apertureLeftX} ${FLOW_BASELINE}`,
+  visibleBounds: '400.25 336.75 59.5 95.25',
+  neckX: 424,
+  neckY: 361,
+  stemTopY: 373,
+  stemBottomY: 398,
+})
+export const VALVE_READOUT_Y = Object.freeze({ opening: 454, detail: 468, installationError: 486 })
+export const VALVE_FOCUS_RING = Object.freeze({ rx: 49, ry: 29 })
+export const VALVE_WHEEL_HIT_AREAS = Object.freeze({
+  decreaseX: 400.25,
+  y: 336.75,
+  width: 29.75,
+  height: 26.5,
+})
+export const VALVE_INSTALLATION_TRAJECTORY = Object.freeze({
+  removal: 'M438 383 C470 370 510 354 536 348',
+  reinsertion: 'M542 407 C516 416 474 410 438 383',
+})
 export const VALVE_OPENING_CONTROLS = Object.freeze({
   decrease: Object.freeze({ x: 394, y: 398, width: 26, height: 34 }),
   increase: Object.freeze({ x: 440, y: 398, width: 26, height: 34 }),
@@ -59,12 +83,12 @@ function stabilize(value: number): number {
 }
 
 export function valvePistonCenterY(openingIndex: number): number {
-  const boundedIndex = clamp(Math.round(openingIndex), 0, 11)
+  const boundedIndex = clamp(Math.round(openingIndex), 0, MAX_OPENING_INDEX)
   if (boundedIndex === 0) return VALVE_PISTON.closedCenterY
-  if (boundedIndex === 11) return VALVE_PISTON.openCenterY
+  if (boundedIndex === MAX_OPENING_INDEX) return VALVE_PISTON.openCenterY
   return stabilize(
     VALVE_PISTON.firstPartialCenterY -
-      ((boundedIndex - 1) * (VALVE_PISTON.firstPartialCenterY - 395)) / 9,
+      ((boundedIndex - 1) * (VALVE_PISTON.firstPartialCenterY - 395)) / (MAX_OPENING_INDEX - 2),
   )
 }
 
@@ -88,7 +112,7 @@ export function getValveTargets(capability: ValveCapability): readonly number[] 
 
   const span = capability.max - capability.min
   const targets = Array.from({ length: OPENING_POSITION_COUNT }, (_, index) => {
-    const raw = capability.min + (span * index) / (OPENING_POSITION_COUNT - 1)
+    const raw = capability.min + (span * index) / MAX_OPENING_INDEX
     const stepsFromMin = Math.round((raw - capability.min) / capability.step)
     return stabilize(
       clamp(capability.min + stepsFromMin * capability.step, capability.min, capability.max),
@@ -126,20 +150,18 @@ export function valueToOpeningIndex(
     return 0
   }
   const normalized = clamp((value - capability.min) / (capability.max - capability.min), 0, 1)
-  return Math.round(normalized * (OPENING_POSITION_COUNT - 1))
+  return Math.round(normalized * MAX_OPENING_INDEX)
 }
 
 export function effectiveValveOpeningIndex(
   installed: boolean | null,
   control: NumericControlSnapshot,
 ): number {
-  return installed === false
-    ? OPENING_POSITION_COUNT - 1
-    : valueToOpeningIndex(control.applied, control)
+  return installed === false ? MAX_OPENING_INDEX : valueToOpeningIndex(control.applied, control)
 }
 
 export function openingPercent(index: number): number {
-  return OPENING_PERCENT_LABELS[clamp(Math.round(index), 0, OPENING_POSITION_COUNT - 1)]
+  return OPENING_PERCENT_LABELS[clamp(Math.round(index), 0, MAX_OPENING_INDEX)]
 }
 
 export function nextWheelPhase(phase: number, delta: number): number {
