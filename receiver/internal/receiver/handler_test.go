@@ -3,15 +3,116 @@ package receiver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
-func TestServer_Ingest(t *testing.T) {
+func TestHandlerExactConfiguredPaths(t *testing.T) {
+	for _, test := range []struct{ path, other string }{
+		{path: "/v1/batches", other: "/v1/batches/extra"},
+		{path: "/v1/a%2Fb", other: "/v1/a/b"},
+		{path: "/v1/%252F", other: "/v1/%2F"},
+		{path: "/v1/percent%25", other: "/v1/percentx"},
+		{path: "/v1/данные", other: "/v1/данные/extra"},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, fmt.Sprintf("path = %q", test.path), 1)
+			content = strings.Replace(content, "response_delay_ms = 25", "response_delay_ms = 0", 1)
+			cfg, err := LoadConfig(writeConfig(t, content))
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler, err := NewHandler(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rec := performRequest(handler, httpRequest(http.MethodPost, test.path, "application/json", `[{}]`)); rec.Code != http.StatusNoContent {
+				t.Fatalf("configured exact path status=%d", rec.Code)
+			}
+			if rec := performRequest(handler, httpRequest(http.MethodPost, test.other, "application/json", `[{}]`)); rec.Code != http.StatusNotFound {
+				t.Fatalf("different path status=%d", rec.Code)
+			}
+			assertStatus(t, handler, 1, 1, true, 0, http.StatusNoContent)
+		})
+	}
+}
+
+func TestHandlerHEADAndMethodResponses(t *testing.T) {
+	handler := newTestHandler(t, 1024, LabConfig{})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	for _, test := range []struct {
+		method, path, allow string
+		status              int
+	}{
+		{method: http.MethodHead, path: "/status", status: http.StatusOK},
+		{method: http.MethodPost, path: "/status", status: http.StatusMethodNotAllowed, allow: "GET, HEAD"},
+		{method: http.MethodGet, path: "/internal/ingest", status: http.StatusMethodNotAllowed, allow: "POST"},
+		{method: http.MethodHead, path: "/internal/ingest", status: http.StatusMethodNotAllowed, allow: "POST"},
+		{method: http.MethodGet, path: "/status/extra", status: http.StatusNotFound},
+	} {
+		t.Run(test.method+test.path, func(t *testing.T) {
+			request, err := http.NewRequest(test.method, server.URL+test.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := server.Client().Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(response.Body)
+			closeErr := response.Body.Close()
+			if err != nil || closeErr != nil || response.StatusCode != test.status || response.Header.Get("Allow") != test.allow {
+				t.Fatalf("status=%d allow=%q read=%v close=%v", response.StatusCode, response.Header.Get("Allow"), err, closeErr)
+			}
+			if test.method == http.MethodHead && len(body) != 0 {
+				t.Fatalf("HEAD body=%q", body)
+			}
+			if test.method != http.MethodHead && test.status == http.StatusMethodNotAllowed && string(body) != "Method Not Allowed\n" {
+				t.Fatalf("405 body=%q", body)
+			}
+		})
+	}
+	assertStatus(t, handler, 0, 0, false, 0, http.StatusNoContent)
+}
+
+func TestHandlerStatusWireShape(t *testing.T) {
+	handler := newTestHandler(t, 1024, LabConfig{})
+	recorder := performRequest(handler, httpRequest(http.MethodGet, "/status", "", ""))
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"startedAt", "acceptedBatchesTotal", "acceptedTransactionsTotal", "lastAcceptedAt", "lab"}
+	if len(root) != len(keys) {
+		t.Fatalf("status keys=%v", root)
+	}
+	for _, key := range keys {
+		if _, ok := root[key]; !ok {
+			t.Fatalf("missing status field %s", key)
+		}
+	}
+	var lab map[string]json.RawMessage
+	if err := json.Unmarshal(root["lab"], &lab); err != nil {
+		t.Fatal(err)
+	}
+	if len(lab) != 2 || string(lab["responseDelayMs"]) != "0" || string(lab["responseStatus"]) != "204" || string(root["lastAcceptedAt"]) != "null" {
+		t.Fatalf("status shape changed: %s", recorder.Body.Bytes())
+	}
+	var started time.Time
+	if err := json.Unmarshal(root["startedAt"], &started); err != nil || started.IsZero() {
+		t.Fatalf("startedAt=%s error=%v", root["startedAt"], err)
+	}
+}
+
+func TestHandlerIngest(t *testing.T) {
 	tests := []struct {
 		name        string
 		method      string
@@ -21,6 +122,12 @@ func TestServer_Ingest(t *testing.T) {
 		wantStatus  int
 		wantAllow   string
 	}{
+		{name: "accepts empty transaction object", method: http.MethodPost, contentType: "application/json", body: `[{}]`, maxBody: 1024, wantStatus: http.StatusNoContent},
+		{name: "accepts unknown fields", method: http.MethodPost, contentType: "application/json", body: `[{"extra":true}]`, maxBody: 1024, wantStatus: http.StatusNoContent},
+		{name: "rejects null element", method: http.MethodPost, contentType: "application/json", body: `[null]`, maxBody: 1024, wantStatus: http.StatusBadRequest},
+		{name: "rejects mixed null element", method: http.MethodPost, contentType: "application/json", body: `[{},null]`, maxBody: 1024, wantStatus: http.StatusBadRequest},
+		{name: "oversized malformed JSON", method: http.MethodPost, contentType: "application/json", body: "!" + strings.Repeat("x", 1024), maxBody: 1024, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: "MIME checked before oversized body", method: http.MethodPost, contentType: "text/plain", body: strings.Repeat("x", 1025), maxBody: 1024, wantStatus: http.StatusBadRequest},
 		{
 			name:        "accepts non empty transaction array",
 			method:      http.MethodPost,
@@ -120,7 +227,7 @@ func TestServer_Ingest(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := newTestServer(t, test.maxBody, LabConfig{})
+			server := newTestHandler(t, test.maxBody, LabConfig{})
 			recorder := performRequest(
 				server,
 				httpRequest(test.method, "/internal/ingest", test.contentType, test.body),
@@ -135,11 +242,16 @@ func TestServer_Ingest(t *testing.T) {
 			if test.wantStatus == http.StatusNoContent && recorder.Body.Len() != 0 {
 				t.Fatalf("204 response body length = %d, want 0", recorder.Body.Len())
 			}
+			var accepted int64
+			if test.wantStatus == http.StatusNoContent {
+				accepted = 1
+			}
+			assertStatus(t, server, accepted, accepted, accepted != 0, 0, http.StatusNoContent)
 		})
 	}
 }
 
-func TestServer_LabModes(t *testing.T) {
+func TestHandlerLabModes(t *testing.T) {
 	tests := []struct {
 		name        string
 		method      string
@@ -201,49 +313,59 @@ func TestServer_LabModes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := newTestServer(t, test.maxBody, LabConfig{
-				ResponseDelay:  250 * time.Millisecond,
-				ResponseStatus: new(http.StatusInternalServerError),
-			})
+			synctest.Test(t, func(t *testing.T) {
+				server := newTestHandler(t, test.maxBody, LabConfig{
+					ResponseDelay:  250 * time.Millisecond,
+					ResponseStatus: new(http.StatusInternalServerError),
+				})
 
-			startedAt := time.Now()
-			recorder := performRequest(
-				server,
-				httpRequest(test.method, "/internal/ingest", test.contentType, test.body),
-			)
-			if elapsed := time.Since(startedAt); elapsed >= 100*time.Millisecond {
-				t.Fatalf("invalid request took %s, want less than 100ms", elapsed)
-			}
-			if recorder.Code != test.wantStatus {
-				t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
-			}
-			if allow := recorder.Header().Get("Allow"); allow != test.wantAllow {
-				t.Fatalf("Allow = %q, want %q", allow, test.wantAllow)
-			}
-			assertStatus(t, server, 0, 0, false, 250, http.StatusInternalServerError)
+				startedAt := time.Now()
+				recorder := performRequest(
+					server,
+					httpRequest(test.method, "/internal/ingest", test.contentType, test.body),
+				)
+				if elapsed := time.Since(startedAt); elapsed != 0 {
+					t.Fatalf("invalid request took %s, want zero virtual delay", elapsed)
+				}
+				if recorder.Code != test.wantStatus {
+					t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
+				}
+				if allow := recorder.Header().Get("Allow"); allow != test.wantAllow {
+					t.Fatalf("Allow = %q, want %q", allow, test.wantAllow)
+				}
+				assertStatus(t, server, 0, 0, false, 250, http.StatusInternalServerError)
+			})
 		})
 	}
 
 	t.Run("delays validated success before acknowledgement", func(t *testing.T) {
-		server := newTestServer(t, 1024, LabConfig{
-			ResponseDelay:  25 * time.Millisecond,
-			ResponseStatus: new(http.StatusNoContent),
+		synctest.Test(t, func(t *testing.T) {
+			handler := newTestHandler(t, 1024, LabConfig{ResponseDelay: 25 * time.Millisecond, ResponseStatus: new(http.StatusNoContent)})
+			returned := make(chan *httptest.ResponseRecorder, 1)
+			started := time.Now()
+			go func() {
+				returned <- performRequest(handler, httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()))
+			}()
+			synctest.Wait()
+			time.Sleep(25*time.Millisecond - time.Nanosecond)
+			synctest.Wait()
+			select {
+			case <-returned:
+				t.Fatal("acknowledged before delay elapsed")
+			default:
+			}
+			assertStatus(t, handler, 0, 0, false, 25, http.StatusNoContent)
+			time.Sleep(time.Nanosecond)
+			recorder := <-returned
+			if recorder.Code != http.StatusNoContent || time.Since(started) != 25*time.Millisecond {
+				t.Fatalf("status=%d elapsed=%s", recorder.Code, time.Since(started))
+			}
+			assertStatus(t, handler, 1, 1, true, 25, http.StatusNoContent)
 		})
-
-		startedAt := time.Now()
-		recorder := performRequest(server, httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()))
-		elapsed := time.Since(startedAt)
-		if recorder.Code != http.StatusNoContent {
-			t.Fatalf("status = %d, want 204", recorder.Code)
-		}
-		if elapsed < 20*time.Millisecond {
-			t.Fatalf("response delay = %s, want at least 20ms", elapsed)
-		}
-		assertStatus(t, server, 1, 1, true, 25, http.StatusNoContent)
 	})
 
 	t.Run("forced status does not acknowledge batch", func(t *testing.T) {
-		server := newTestServer(t, 1024, LabConfig{ResponseStatus: new(http.StatusInternalServerError)})
+		server := newTestHandler(t, 1024, LabConfig{ResponseStatus: new(http.StatusInternalServerError)})
 
 		recorder := performRequest(server, httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()))
 		if recorder.Code != http.StatusInternalServerError {
@@ -252,22 +374,40 @@ func TestServer_LabModes(t *testing.T) {
 		assertStatus(t, server, 0, 0, false, 0, http.StatusInternalServerError)
 	})
 
-	t.Run("canceled request stops waiting for lab delay", func(t *testing.T) {
-		server := newTestServer(t, 1024, LabConfig{ResponseDelay: time.Second, ResponseStatus: new(http.StatusNoContent)})
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		startedAt := time.Now()
-		performRequest(server, httpRequestWithContext(ctx, http.MethodPost, "/internal/ingest", "application/json", validBatch()))
-		if elapsed := time.Since(startedAt); elapsed >= 100*time.Millisecond {
-			t.Fatalf("canceled delay took %s, want less than 100ms", elapsed)
-		}
-		assertStatus(t, server, 0, 0, false, 1000, http.StatusNoContent)
-	})
+	for _, when := range []string{"already canceled", "during delay"} {
+		t.Run(when, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				handler := newTestHandler(t, 1024, LabConfig{ResponseDelay: time.Second})
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				if when == "already canceled" {
+					cancel()
+				}
+				returned := make(chan struct{})
+				started := time.Now()
+				go func() {
+					performRequest(handler, httpRequestWithContext(ctx, http.MethodPost, "/internal/ingest", "application/json", validBatch()))
+					close(returned)
+				}()
+				synctest.Wait()
+				wantElapsed := time.Duration(0)
+				if when == "during delay" {
+					time.Sleep(100 * time.Millisecond)
+					wantElapsed = 100 * time.Millisecond
+					cancel()
+				}
+				<-returned
+				if time.Since(started) != wantElapsed {
+					t.Fatalf("cancel delay=%s,want %s", time.Since(started), wantElapsed)
+				}
+				assertStatus(t, handler, 0, 0, false, 1000, http.StatusNoContent)
+			})
+		})
+	}
 }
 
-func TestServer_IngestMultiTransactionBatch(t *testing.T) {
-	server := newTestServer(t, 2048, LabConfig{})
+func TestHandlerIngestMultiTransactionBatch(t *testing.T) {
+	server := newTestHandler(t, 2048, LabConfig{})
 
 	recorder := performRequest(server, httpRequest(
 		http.MethodPost,
@@ -281,10 +421,10 @@ func TestServer_IngestMultiTransactionBatch(t *testing.T) {
 	assertStatus(t, server, 1, 2, true, 0, http.StatusNoContent)
 }
 
-func TestServer_IngestConcurrent(t *testing.T) {
+func TestHandlerIngestConcurrent(t *testing.T) {
 	const requestCount = 16
 
-	server := newTestServer(t, 1024, LabConfig{})
+	server := newTestHandler(t, 1024, LabConfig{})
 	statuses := make(chan int, requestCount)
 
 	var requests sync.WaitGroup
@@ -311,11 +451,11 @@ func TestServer_IngestConcurrent(t *testing.T) {
 	assertStatus(t, server, requestCount, requestCount, true, 0, http.StatusNoContent)
 }
 
-func newTestServer(t *testing.T, maxBodyBytes int64, lab LabConfig) *Server {
+func newTestHandler(t *testing.T, maxBodyBytes int64, lab LabConfig) *Handler {
 	t.Helper()
 
-	server, err := NewServer(Config{
-		SchemaVersion: 1,
+	server, err := NewHandler(Config{
+		SchemaVersion: 2,
 		Server: ServerConfig{
 			Address:         "127.0.0.1:0",
 			ShutdownTimeout: time.Second,
@@ -328,7 +468,7 @@ func newTestServer(t *testing.T, maxBodyBytes int64, lab LabConfig) *Server {
 		Lab:     lab,
 	})
 	if err != nil {
-		t.Fatalf("NewServer() error = %v", err)
+		t.Fatalf("NewHandler() error = %v", err)
 	}
 
 	return server
@@ -347,9 +487,9 @@ func httpRequestWithContext(ctx context.Context, method, path, contentType, body
 	return request
 }
 
-func performRequest(server *Server, request *http.Request) *httptest.ResponseRecorder {
+func performRequest(server *Handler, request *http.Request) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(recorder, request)
+	server.ServeHTTP(recorder, request)
 
 	return recorder
 }
@@ -365,7 +505,7 @@ func validMultiTransactionBatch() string {
 	return "[" + transaction + "," + secondTransaction + "]"
 }
 
-func assertStatus(t *testing.T, server *Server, wantBatches, wantTransactions int64, wantLastAccepted bool, wantDelayMS, wantStatus int) {
+func assertStatus(t *testing.T, server *Handler, wantBatches, wantTransactions int64, wantLastAccepted bool, wantDelayMS, wantStatus int) {
 	t.Helper()
 
 	recorder := performRequest(server, httpRequest(http.MethodGet, "/status", "", ""))
