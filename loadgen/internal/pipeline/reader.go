@@ -1,7 +1,8 @@
-package main
+package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,39 +25,72 @@ type readerWorker struct {
 	blocked bool
 }
 
-type readerPoolSnapshot struct {
-	liveWorkers            int
-	idleWorkers            int
-	readingWorkers         int
-	blockedWorkers         int
-	drainingWorkers        int
-	drainingIdleWorkers    int
-	drainingReadingWorkers int
-	drainingBlockedWorkers int
+type ReaderSnapshot struct {
+	RowsRead               int64
+	ReadTPS                float64
+	LiveWorkers            int
+	IdleWorkers            int
+	ReadingWorkers         int
+	BlockedWorkers         int
+	DrainingWorkers        int
+	DrainingIdleWorkers    int
+	DrainingReadingWorkers int
+	DrainingBlockedWorkers int
 }
 
-type readerSource struct {
+type Source struct {
 	directory string
 	files     []string
-	readFile  func(*readerPool, *readerWorker, string) *readerSourceError
 }
 
-func discoverReaderSource(dataPath string) (readerSource, error) {
-	directory := readerSourceDirectory(dataPath)
+type SourceError struct {
+	Op   string
+	Path string
+	Err  error
+}
+
+func (e *SourceError) Error() string { return e.Err.Error() }
+func (e *SourceError) Unwrap() error { return e.Err }
+
+// ReaderFile separates opening the file from interpreting its rows.
+type ReaderFile interface {
+	io.Closer
+	OpenRows() (RowReader, error)
+}
+
+type RowReader interface {
+	Read([]Transaction) (int, error)
+	Close() error
+}
+
+type parquetFile struct{ *os.File }
+
+func (f parquetFile) OpenRows() (RowReader, error) { return openParquetReader(f.File) }
+
+func openReaderFile(path string) (ReaderFile, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	return parquetFile{file}, nil
+}
+
+func DiscoverSource(dataPath string) (Source, error) {
+	directory := SourceDirectory(dataPath)
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
-		return readerSource{}, readerSourceError{
-			Category: "source", Operation: "glob", RelativePath: relativeSourcePath(directory, dataPath), Message: err.Error(),
+		return Source{}, &SourceError{
+			Op: "glob", Path: relativeSourcePath(directory, dataPath), Err: err,
 		}
 	}
 	if len(files) == 0 {
-		return readerSource{}, readerSourceError{
-			Category: "source", Operation: "glob", RelativePath: relativeSourcePath(directory, dataPath),
-			Message: "no files found matching pattern",
+		return Source{}, &SourceError{
+			Op: "glob", Path: relativeSourcePath(directory, dataPath),
+			Err: errors.New("no files found matching pattern"),
 		}
 	}
 	sort.Strings(files)
-	return readerSource{directory: directory, files: files, readFile: (*readerPool).readFile}, nil
+	return Source{directory: directory, files: files}, nil
 }
 
 // readerPool owns file admission. A file is assigned once to exactly one worker;
@@ -72,20 +106,18 @@ type readerPool struct {
 	wg sync.WaitGroup
 	// Closes after pool cancellation and all workers have exited.
 	done chan struct{}
-	// Contains the sorted, immutable source paths and how to read them.
-	source readerSource
+	// Contains the sorted, immutable source paths.
+	source Source
 	// Records source paths currently claimed by a worker.
 	active map[string]bool
 	// Is the round-robin cursor into the source paths.
 	nextFile int
 	// Is the maximum number of transactions in an emitted batch.
 	batchSize int
-	// Receives completed batches from Reader workers.
-	batches chan<- []Transaction
 	// Records Reader-stage observations.
 	telemetry *readerTelemetry
 	// Records observations for batches.
-	channel *channelTelemetry
+	channel *batchQueue
 	// Contains live Reader workers in their start order.
 	workers []*readerWorker
 	// Is the requested number of active Reader workers.
@@ -95,27 +127,32 @@ type readerPool struct {
 	// Closes at the end of admission; in-progress sends still use ctx.
 	readingDone chan struct{}
 	// Delivers exactly the first fatal source error to the event loop.
-	sourceErrors    chan readerSourceError
+	sourceErrors    chan error
 	sourceErrorOnce sync.Once
 	logger          *zap.Logger
+	openFile        func(string) (ReaderFile, error)
 }
 
 func startReaderPool(
 	ctx context.Context,
-	source readerSource,
+	source Source,
 	batchSize, workers int,
-	batches chan<- []Transaction,
+	queue *batchQueue,
 	telemetry *readerTelemetry,
-	channel *channelTelemetry,
+	openFile func(string) (ReaderFile, error),
 	logger *zap.Logger,
 ) *readerPool {
+	if openFile == nil {
+		openFile = openReaderFile
+	}
 	pool := &readerPool{
 		ctx: ctx, source: source, active: make(map[string]bool),
-		batchSize: batchSize, batches: batches, telemetry: telemetry, channel: channel,
+		batchSize: batchSize, telemetry: telemetry, channel: queue,
 		workers: make([]*readerWorker, 0, workers), done: make(chan struct{}),
 		readingDone:  make(chan struct{}),
-		sourceErrors: make(chan readerSourceError, 1),
+		sourceErrors: make(chan error, 1),
 		logger:       logger,
+		openFile:     openFile,
 	}
 	pool.available = sync.NewCond(&pool.mu)
 	pool.reconcile(workers)
@@ -192,8 +229,8 @@ func (p *readerPool) runWorker(worker *readerWorker) {
 			return
 		}
 		if p.canRead() {
-			if err := p.source.readFile(p, worker, filePath); err != nil {
-				p.reportSourceError(*err)
+			if err := p.readFile(worker, filePath); err != nil {
+				p.reportSourceError(err)
 			}
 		}
 		p.mu.Lock()
@@ -205,7 +242,7 @@ func (p *readerPool) runWorker(worker *readerWorker) {
 	}
 }
 
-func (p *readerPool) reportSourceError(sourceError readerSourceError) {
+func (p *readerPool) reportSourceError(sourceError *SourceError) {
 	p.sourceErrorOnce.Do(func() {
 		p.sourceErrors <- sourceError
 		p.stopReading()
@@ -256,25 +293,25 @@ func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
 	return "", false
 }
 
-func (p *readerPool) readFile(worker *readerWorker, filePath string) *readerSourceError {
-	file, err := os.Open(filePath)
+func (p *readerPool) readFile(worker *readerWorker, filePath string) *SourceError {
+	file, err := p.openFile(filePath)
 	if err != nil {
-		return p.newReaderSourceError("open", filePath, err)
+		return p.sourceError("open", filePath, err)
 	}
 	if !p.canRead() {
 		return p.closeResources(filePath, nil, file, nil)
 	}
 	p.logger.Debug("reader source opened", zap.String("event", "reader_source_opened"))
-	reader, err := openParquetReader(file)
+	reader, err := file.OpenRows()
 	if err != nil {
 		if closeErr := file.Close(); closeErr != nil && p.ctx.Err() == nil {
-			return p.newReaderSourceError("close", filePath, closeErr)
+			return p.sourceError("close", filePath, closeErr)
 		}
-		return p.newReaderSourceError("open", filePath, err)
+		return p.sourceError("open", filePath, err)
 	}
-	var sourceError *readerSourceError
+	var sourceError *SourceError
 	if err := p.readBatches(worker, reader.Read); err != nil {
-		sourceError = p.newReaderSourceError("read", filePath, err)
+		sourceError = p.sourceError("read", filePath, err)
 	} else if p.canRead() {
 		p.logger.Debug("reader source exhausted", zap.String("event", "reader_source_exhausted"))
 	}
@@ -295,7 +332,7 @@ func (p *readerPool) readBatches(worker *readerWorker, read func([]Transaction) 
 			}
 		}
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return err
@@ -310,7 +347,11 @@ func (p *readerPool) readBatches(worker *readerWorker, read func([]Transaction) 
 func openParquetReader(file *os.File) (reader *parquet.GenericReader[Transaction], err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("open parquet reader: %v", recovered)
+			if cause, ok := recovered.(error); ok {
+				err = fmt.Errorf("open parquet reader: %w", cause)
+			} else {
+				err = fmt.Errorf("open parquet reader: %v", recovered)
+			}
 		}
 	}()
 	return parquet.NewGenericReader[Transaction](file), nil
@@ -320,30 +361,29 @@ func (p *readerPool) closeResources(
 	filePath string,
 	reader io.Closer,
 	file io.Closer,
-	sourceError *readerSourceError,
-) *readerSourceError {
+	sourceError *SourceError,
+) *SourceError {
 	cancelled := p.ctx.Err() != nil
 	if reader != nil {
 		if err := reader.Close(); sourceError == nil && !cancelled && err != nil {
-			sourceError = p.newReaderSourceError("reader-close", filePath, err)
+			sourceError = p.sourceError("reader-close", filePath, err)
 		}
 	}
 	if err := file.Close(); sourceError == nil && !cancelled && err != nil {
-		sourceError = p.newReaderSourceError("close", filePath, err)
+		sourceError = p.sourceError("close", filePath, err)
 	}
 	return sourceError
 }
 
-func (p *readerPool) newReaderSourceError(operation, sourcePath string, err error) *readerSourceError {
-	return &readerSourceError{
-		Category:     "source",
-		Operation:    operation,
-		RelativePath: relativeSourcePath(p.source.directory, sourcePath),
-		Message:      err.Error(),
+func (p *readerPool) sourceError(operation, sourcePath string, err error) *SourceError {
+	return &SourceError{
+		Op:   operation,
+		Path: relativeSourcePath(p.source.directory, sourcePath),
+		Err:  err,
 	}
 }
 
-func readerSourceDirectory(sourcePath string) string {
+func SourceDirectory(sourcePath string) string {
 	directory := filepath.Dir(sourcePath)
 	for current := directory; current != filepath.Dir(current); current = filepath.Dir(current) {
 		if strings.ContainsAny(filepath.Base(current), "*?[") {
@@ -387,11 +427,11 @@ func (p *readerPool) sendBatch(worker *readerWorker, batch []Transaction) bool {
 	if p.ctx.Err() != nil {
 		return false
 	}
-	if p.channel.trySend(p.batches, batch) {
+	if p.channel.trySend(batch) {
 		return true
 	}
 
-	pending := p.channel.beginBlockedSend(p.batches, batch)
+	pending := p.channel.beginBlockedSend(batch)
 	p.mu.Lock()
 	worker.blocked = true
 	p.mu.Unlock()
@@ -403,26 +443,26 @@ func (p *readerPool) sendBatch(worker *readerWorker, batch []Transaction) bool {
 	return sent
 }
 
-func (p *readerPool) aggregateSnapshot() readerPoolSnapshot {
+func (p *readerPool) snapshot() ReaderSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	snapshot := readerPoolSnapshot{liveWorkers: len(p.workers)}
+	snapshot := ReaderSnapshot{LiveWorkers: len(p.workers)}
 	for _, worker := range p.workers {
 		var draining *int
 		switch {
 		case worker.blocked:
-			snapshot.blockedWorkers++
-			draining = &snapshot.drainingBlockedWorkers
+			snapshot.BlockedWorkers++
+			draining = &snapshot.DrainingBlockedWorkers
 		case worker.busy:
-			snapshot.readingWorkers++
-			draining = &snapshot.drainingReadingWorkers
+			snapshot.ReadingWorkers++
+			draining = &snapshot.DrainingReadingWorkers
 		default:
-			snapshot.idleWorkers++
-			draining = &snapshot.drainingIdleWorkers
+			snapshot.IdleWorkers++
+			draining = &snapshot.DrainingIdleWorkers
 		}
 		if worker.draining {
-			snapshot.drainingWorkers++
+			snapshot.DrainingWorkers++
 			*draining++
 		}
 	}

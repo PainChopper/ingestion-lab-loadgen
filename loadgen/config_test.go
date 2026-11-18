@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"loadgen/internal/pipeline"
+
 	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
 )
@@ -39,7 +41,7 @@ func newTestControlState(t *testing.T) controlState {
 	}))
 	t.Cleanup(server.Close)
 	loaded.Source.Path = filepath.Join(t.TempDir(), "source.parquet")
-	if err := parquet.WriteFile(loaded.Source.Path, []Transaction{}); err != nil {
+	if err := parquet.WriteFile(loaded.Source.Path, []pipeline.Transaction{}); err != nil {
 		t.Fatal(err)
 	}
 	loaded.Sender.API.URL = server.URL
@@ -654,13 +656,5 @@ func TestSenderRetryConfigDurationBounds(t *testing.T) {
 				t.Fatalf("validate() error = %v, want error=%t", err, test.wantErr)
 			}
 		})
-	}
-
-	maximumDuration := senderRetryDuration(int(maximumDelayMS), 20)
-	if maximumDuration <= 0 || maximumDuration == time.Duration(math.MaxInt64) {
-		t.Fatalf("maximum safe retry duration = %s", maximumDuration)
-	}
-	if got := senderRetryDuration(int(maximumDelayMS+1), 20); got != time.Duration(math.MaxInt64) {
-		t.Fatalf("overflow retry duration = %s, want saturated maximum", got)
 	}
 }

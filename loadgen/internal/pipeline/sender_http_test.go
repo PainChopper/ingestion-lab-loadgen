@@ -1,4 +1,4 @@
-package main
+package pipeline
 
 import (
 	"context"
@@ -38,8 +38,8 @@ func TestSenderHTTPAttemptPostsJSONBatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	attempt := newSenderHTTPAttempt(server.URL+"/internal/ingest", server.Client())
-	if got := attempt.deliver(context.Background(), batch, 1); got != senderAttemptSuccess {
+	attempt := newSenderClient(server.URL+"/internal/ingest", server.Client())
+	if got := attempt.attempt(context.Background(), batch, 1); got != senderAttemptSuccess {
 		t.Fatalf("deliver outcome = %d, want success", got)
 	}
 }
@@ -52,8 +52,8 @@ func TestSenderHTTPAttemptPreservesTargetQuery(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	attempt := newSenderHTTPAttempt(server.URL+target, server.Client())
-	if got := attempt.deliver(t.Context(), []Transaction{{ClientID: "client-1"}}, 1); got != senderAttemptSuccess {
+	attempt := newSenderClient(server.URL+target, server.Client())
+	if got := attempt.attempt(t.Context(), []Transaction{{ClientID: "client-1"}}, 1); got != senderAttemptSuccess {
 		t.Fatalf("deliver outcome = %d, want success", got)
 	}
 	select {
@@ -85,8 +85,8 @@ func TestSenderHTTPAttemptClassifiesResponseStatuses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			attempt := newSenderHTTPAttempt(server.URL, server.Client())
-			if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != test.want {
+			attempt := newSenderClient(server.URL, server.Client())
+			if got := attempt.attempt(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != test.want {
 				t.Fatalf("deliver outcome = %d, want %d", got, test.want)
 			}
 		})
@@ -107,12 +107,14 @@ func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 			defer server.Close()
 
 			batches := make(chan []Transaction)
-			var channel channelTelemetry
+			var channel batchQueue
+			channel.ch = batches
+			channel.batchSize = 0
 			var consumed atomic.Int64
-			config := testConfig(t).Sender
-			config.Retry.DelaysMS = []int{1}
-			config.API.URL = server.URL
-			pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config, zap.NewNop())
+			config := testSenderOptions()
+			config.RetryDelays = []time.Duration{1 * time.Millisecond}
+			config.SenderURL = server.URL
+			pool := startSenderPool(context.Background(), &channel, &consumed, 1, config, zap.NewNop())
 			batches <- []Transaction{{ClientID: "invalid"}}
 			waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
 			close(batches)
@@ -152,11 +154,13 @@ func TestSenderPoolReusesConnectionsAcrossConcurrentWaves(t *testing.T) {
 	defer close(release)
 
 	batches := make(chan []Transaction)
-	var telemetry channelTelemetry
+	var telemetry batchQueue
+	telemetry.ch = batches
+	telemetry.batchSize = 0
 	var completed atomic.Int64
-	config := testConfig(t).Sender
-	config.API.URL = server.URL
-	pool := startSenderPool(ctx, batches, &telemetry, &completed, requestsPerWave, config, zap.NewNop())
+	config := testSenderOptions()
+	config.SenderURL = server.URL
+	pool := startSenderPool(ctx, &telemetry, &completed, requestsPerWave, config, zap.NewNop())
 	defer func() {
 		cancel()
 		<-pool.done
@@ -213,13 +217,15 @@ func TestSenderPoolEntersBackoffWhenReceiverTimesOut(t *testing.T) {
 	defer cancel()
 
 	batches := make(chan []Transaction)
-	var telemetry channelTelemetry
+	var telemetry batchQueue
+	telemetry.ch = batches
+	telemetry.batchSize = 0
 	var completed atomic.Int64
-	config := testConfig(t).Sender
-	config.API.URL = server.URL
-	config.API.TimeoutMS = 50
-	config.Retry.DelaysMS = []int{3_600_000}
-	pool := startSenderPool(ctx, batches, &telemetry, &completed, 1, config, zap.NewNop())
+	config := testSenderOptions()
+	config.SenderURL = server.URL
+	config.SenderTimeout = 50 * time.Millisecond
+	config.RetryDelays = []time.Duration{3_600_000 * time.Millisecond}
+	pool := startSenderPool(ctx, &telemetry, &completed, 1, config, zap.NewNop())
 	defer func() {
 		cancel()
 		<-pool.done
@@ -230,7 +236,7 @@ func TestSenderPoolEntersBackoffWhenReceiverTimesOut(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("receiver did not get the request")
 	}
-	waitForSenderCondition(t, func() bool { return pool.aggregateSnapshot().backoffWorkers == 1 })
+	waitForSenderCondition(t, func() bool { return pool.snapshot().BackoffWorkers == 1 })
 }
 
 func TestSenderHTTPAttemptRetriesNetworkFailureAndClosesResponse(t *testing.T) {
@@ -243,8 +249,8 @@ func TestSenderHTTPAttemptRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 			Header:     make(http.Header),
 		}, nil
 	})}
-	attempt := newSenderHTTPAttempt("http://example.test/ingest", client)
-	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptFailure {
+	attempt := newSenderClient("http://example.test/ingest", client)
+	if got := attempt.attempt(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptFailure {
 		t.Fatalf("response outcome = %d, want failure", got)
 	}
 	if !closed.Load() {
@@ -257,7 +263,7 @@ func TestSenderHTTPAttemptRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 	client.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("network failure")
 	})
-	if got := attempt.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptFailure {
+	if got := attempt.attempt(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptFailure {
 		t.Fatalf("network outcome = %d, want failure", got)
 	}
 }
@@ -268,8 +274,8 @@ func TestSenderHTTPAttemptStopsOnCanceledContext(t *testing.T) {
 	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("request should be canceled")
 	})}
-	attempt := newSenderHTTPAttempt("http://example.test/ingest", client)
-	if got := attempt.deliver(ctx, []Transaction{{ClientID: "client"}}, 1); got != senderAttemptCanceled {
+	attempt := newSenderClient("http://example.test/ingest", client)
+	if got := attempt.attempt(ctx, []Transaction{{ClientID: "client"}}, 1); got != senderAttemptCanceled {
 		t.Fatalf("canceled outcome = %d, want canceled", got)
 	}
 }

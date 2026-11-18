@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"loadgen/internal/pipeline"
+
 	"github.com/parquet-go/parquet-go"
 )
 
@@ -205,7 +207,7 @@ func writeBlackBoxConfig(t *testing.T, senderURL string) string {
 	t.Helper()
 	directory := t.TempDir()
 	parquetPath := filepath.Join(directory, "input.parquet")
-	if err := parquet.WriteFile(parquetPath, []Transaction{{ClientID: "black-box"}}); err != nil {
+	if err := parquet.WriteFile(parquetPath, []pipeline.Transaction{{ClientID: "black-box"}}); err != nil {
 		t.Fatalf("write parquet fixture: %v", err)
 	}
 	config := strings.Replace(

@@ -8,6 +8,8 @@ import (
 	"os"
 	"time"
 
+	"loadgen/internal/pipeline"
+
 	zaplogfmt "github.com/jsternberg/zap-logfmt"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -67,17 +69,38 @@ func runServe(appCtx context.Context, configPath string) error {
 }
 
 type sourceDiscovery struct {
-	source readerSource
+	source pipeline.Source
 	err    error
 }
 
 func prepareSourceAsync(path string) <-chan sourceDiscovery {
 	ready := make(chan sourceDiscovery, 1)
 	go func() {
-		source, err := discoverReaderSource(path)
+		source, err := pipeline.DiscoverSource(path)
 		ready <- sourceDiscovery{source: source, err: err}
 	}()
 	return ready
+}
+
+func pipelineOptions(cfg config, logger *zap.Logger) pipeline.Options {
+	delays := make([]time.Duration, len(cfg.Sender.Retry.DelaysMS))
+	for i, delay := range cfg.Sender.Retry.DelaysMS {
+		delays[i] = time.Duration(delay) * time.Millisecond
+	}
+	return pipeline.Options{
+		BatchSize:          cfg.Reader.ReadBatchSize.Initial,
+		ReaderCapacity:     cfg.ReaderChannel.Capacity.Initial,
+		SenderCapacity:     cfg.SenderChannel.Capacity.Initial,
+		Readers:            cfg.Reader.Workers.Initial,
+		Senders:            cfg.Sender.Workers.Initial,
+		Rate:               pipeline.Rate{TPS: cfg.Throttler.RequestedTPS.Initial, Installed: cfg.Throttler.Installed.Initial},
+		SenderURL:          cfg.Sender.API.URL,
+		SenderTimeout:      time.Duration(cfg.Sender.API.TimeoutMS) * time.Millisecond,
+		SenderMaxConns:     cfg.Sender.Workers.Max,
+		RetryDelays:        delays,
+		RetryJitterPercent: cfg.Sender.Retry.JitterPercent,
+		Logger:             logger,
+	}
 }
 
 type prometheusMetrics struct {

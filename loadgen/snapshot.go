@@ -46,10 +46,6 @@ type readerSourceError struct {
 	Message      string `json:"message"`
 }
 
-func (sourceError readerSourceError) Error() string {
-	return sourceError.Message
-}
-
 type throttlerSnapshot struct {
 	RequestedTps int     `json:"requestedTps"`
 	AdmittedTps  float64 `json:"admittedTps"`
