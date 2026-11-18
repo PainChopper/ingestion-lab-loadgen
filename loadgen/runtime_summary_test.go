@@ -15,20 +15,20 @@ import (
 )
 
 func TestFormatRuntimeStatusCard(t *testing.T) {
-	status := runtimeStatus{
-		Run: runtimeRunStatus{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
-		Reader: runtimeReaderStatus{
+	status := runtimeSnapshot{
+		Run: runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
+		Reader: readerSnapshot{
 			Workers: 3, LiveWorkers: 2, ReadingWorkers: 1, IdleWorkers: 1, BlockedWorkers: 0,
 			DrainingWorkers: 1, ReadTps: 12.34, RowsRead: 99,
 			SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt"},
 		},
-		Throttler:     runtimeThrottlerStatus{RequestedTps: 100, AdmittedTps: 9.87, Installed: true},
-		ReaderChannel: runtimeChannelStatus{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, SentTransactionsPerSecond: 1.25, ReceivedTransactionsPerSecond: 2.5},
-		SenderChannel: runtimeChannelStatus{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, SentTransactionsPerSecond: 3.75, ReceivedTransactionsPerSecond: 4.5},
-		Sender:        runtimeSenderStatus{Workers: 5, LiveWorkers: 4, InFlightWorkers: 2, IdleWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
+		Throttler:     throttlerSnapshot{RequestedTps: 100, AdmittedTps: 9.87, Installed: true},
+		ReaderChannel: channelSnapshot{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, SentTransactionsPerSecond: 1.25, ReceivedTransactionsPerSecond: 2.5},
+		SenderChannel: channelSnapshot{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, SentTransactionsPerSecond: 3.75, ReceivedTransactionsPerSecond: 4.5},
+		Sender:        senderSnapshot{Workers: 5, LiveWorkers: 4, InFlightWorkers: 2, IdleWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
 	}
 
-	got := formatRuntimeStatusCard(status)
+	got := formatSnapshot(status)
 	want := "INGESTION LAB LOADGEN STATUS\n" +
 		"State:                    faulted\n" +
 		"Elapsed:                  1.25s\n" +
@@ -62,9 +62,9 @@ func TestFormatRuntimeStatusCard(t *testing.T) {
 }
 
 func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
-	status := runtimeStatus{
-		Run: runtimeRunStatus{State: runState("running\n\x1b[2J")},
-		Reader: runtimeReaderStatus{
+	status := runtimeSnapshot{
+		Run: runSnapshot{State: runState("running\n\x1b[2J")},
+		Reader: readerSnapshot{
 			SourceDirectory: "source\r\n\x1b[31m",
 			SourceError: &readerSourceError{
 				Category:     "category\x00",
@@ -75,15 +75,15 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 		},
 	}
 
-	got := formatRuntimeStatusCard(status)
+	got := formatSnapshot(status)
 	if strings.IndexFunc(got, func(character rune) bool {
 		return character != '\n' && unicode.IsControl(character)
 	}) >= 0 {
 		t.Fatalf("card contains unsafe control byte: %q", got)
 	}
-	if strings.Count(got, "\n") != strings.Count(formatRuntimeStatusCard(runtimeStatus{
-		Run:       runtimeRunStatus{State: runStateRunning},
-		Throttler: runtimeThrottlerStatus{Installed: true},
+	if strings.Count(got, "\n") != strings.Count(formatSnapshot(runtimeSnapshot{
+		Run:       runSnapshot{State: runStateRunning},
+		Throttler: throttlerSnapshot{Installed: true},
 	}), "\n") || !strings.HasSuffix(got, "\n") {
 		t.Fatalf("card layout changed or has no final newline: %q", got)
 	}
@@ -99,8 +99,8 @@ func TestFormatRuntimeStatusCardSanitizesSnapshotStrings(t *testing.T) {
 }
 
 func TestFormatRuntimeStatusCardStartingSourceGolden(t *testing.T) {
-	card := formatRuntimeStatusCard(runtimeStatus{
-		Run: runtimeRunStatus{State: runStateStarting},
+	card := formatSnapshot(runtimeSnapshot{
+		Run: runSnapshot{State: runStateStarting},
 	})
 	if !strings.Contains(card, "Source:                   none\nSource error:             none\n\nReader channel\n") {
 		t.Fatalf("idle source fields are not adjacent golden values: %q", card)
@@ -198,16 +198,17 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 	}
 	state := newTestControlState(t)
 	state.logger = logger
-	requests := make(chan runtimeCommand)
-	metrics := make(chan time.Time)
+	queue := make(chan runtimeRequest)
+	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		events := runtimeEvents{
-			requests: requests,
+			requests: queue,
 			source:   prepareSourceAsync(state.config.Source.Path),
-			metrics:  serviceMetrics{ticks: metrics, prometheusMetrics: NewPrometheusMetrics()},
+			ticks:    ticks,
+			metrics:  newPrometheusMetrics(),
 		}
 		state.runEventLoop(ctx, events, gracefulShutdownTimeout)
 	}()
@@ -219,17 +220,17 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 			t.Error("event loop did not stop")
 		}
 	})
-	harness := testEventLoop{requests: runtimeRequests{commands: requests, done: done}}
-	harness.awaitSnapshot(t, func(s runtimeStatus) bool { return s.Run.State == runStateRunning })
+	harness := testEventLoop{requests: runtimeRequests{queue: queue, done: done}}
+	harness.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateRunning })
 	output.Reset()
-	metrics <- time.Now()
-	awaitRuntimeSummaryMetric(t, requests)
+	ticks <- time.Now()
+	awaitSnapshotLogTick(t, harness.requests)
 	if output.Len() != 0 {
 		t.Fatalf("summary emitted before one-minute deadline: %q", output.String())
 	}
-	afterDeadline := time.Now().Add(2 * runtimeSummaryInterval)
-	metrics <- afterDeadline
-	awaitRuntimeSummaryMetric(t, requests)
+	afterDeadline := time.Now().Add(2 * snapshotLogInterval)
+	ticks <- afterDeadline
+	awaitSnapshotLogTick(t, harness.requests)
 	line := output.String()
 	if strings.Count(line, "\n") != 1 || strings.Contains(line, "runtime_snapshot") || strings.Contains(line, "INGESTION LAB") {
 		t.Fatalf("summary line = %q", line)
@@ -239,18 +240,18 @@ func TestRuntimeSummaryLogfmtFieldsAndCadence(t *testing.T) {
 			t.Fatalf("summary missing %q: %q", field, line)
 		}
 	}
-	metrics <- afterDeadline.Add(time.Millisecond)
-	awaitRuntimeSummaryMetric(t, requests)
+	ticks <- afterDeadline.Add(time.Millisecond)
+	awaitSnapshotLogTick(t, harness.requests)
 	if strings.Count(output.String(), "\n") != 1 {
 		t.Fatalf("duplicate summary before next deadline: %q", output.String())
 	}
 }
 
-func awaitRuntimeSummaryMetric(t *testing.T, requests chan<- runtimeCommand) {
+func awaitSnapshotLogTick(t *testing.T, requests runtimeRequests) {
 	t.Helper()
-	reply := make(chan runtimeStatus, 1)
-	requests <- runtimeCommand{kind: getRuntimeStatus, statusReply: reply}
-	<-reply
+	if _, err := requestSnapshot(t.Context(), requests); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestInfoLoggerExcludesWorkerAndSourceDebugEvents(t *testing.T) {

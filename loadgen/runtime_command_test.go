@@ -8,47 +8,45 @@ import (
 )
 
 func TestExecuteRuntimeCommandForwardsCommandAndReceipt(t *testing.T) {
-	control := make(chan runtimeCommand, 10)
-	want := runtimeCommandReceipt{rejected: true}
+	control := make(chan runtimeRequest, 10)
+	const want = false
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
-		command := <-control
-		if command.kind != cmdSetThrottlerInstalled || command.value != 42 || command.installed != false {
+		request := (<-control).(controlRequest)
+		command := request.command
+		if command.kind != setThrottlerInstalled || command.value != 42 || command.installed != false {
 			t.Errorf("command = %+v", command)
 		}
-		if cap(command.receiptReply) != 1 {
-			t.Errorf("receipt reply capacity = %d, want 1", cap(command.receiptReply))
+		if cap(request.reply) != 1 {
+			t.Errorf("receipt reply capacity = %d, want 1", cap(request.reply))
 		}
-		command.receiptReply <- want
+		request.reply <- want
 	}()
 
-	command := runtimeCommand{kind: cmdSetThrottlerInstalled, value: 42, installed: false}
-	if got, err := executeRuntimeCommand(t.Context(), runtimeRequests{commands: control}, command); err != nil || got != want {
+	command := runtimeCommand{kind: setThrottlerInstalled, value: 42, installed: false}
+	if got, err := executeRuntimeCommand(t.Context(), runtimeRequests{queue: control}, command); err != nil || got != want {
 		t.Errorf("receipt = %+v, err=%v, want %+v", got, err, want)
 	}
 	<-done
 }
 
 func TestRequestRuntimeStatusForwardsReply(t *testing.T) {
-	control := make(chan runtimeCommand, 10)
-	want := runtimeStatus{Run: runtimeRunStatus{State: runStateStopping}}
+	control := make(chan runtimeRequest, 10)
+	want := runtimeSnapshot{Run: runSnapshot{State: runStateStopping}}
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
-		command := <-control
-		if command.kind != getRuntimeStatus {
-			t.Errorf("command kind = %d, want %d", command.kind, getRuntimeStatus)
+		request := (<-control).(snapshotRequest)
+		if cap(request.reply) != 1 {
+			t.Errorf("snapshot reply capacity = %d, want 1", cap(request.reply))
 		}
-		if cap(command.statusReply) != 1 {
-			t.Errorf("status reply capacity = %d, want 1", cap(command.statusReply))
-		}
-		command.statusReply <- want
+		request.reply <- want
 	}()
 
-	if got, err := requestRuntimeStatus(t.Context(), runtimeRequests{commands: control}); err != nil || got.Run != want.Run {
+	if got, err := requestSnapshot(t.Context(), runtimeRequests{queue: control}); err != nil || got.Run != want.Run {
 		t.Errorf("run status = %+v, err=%v, want %+v", got.Run, err, want.Run)
 	}
 	<-done
@@ -61,21 +59,21 @@ func TestRuntimeRequestsUnblockAtBothWaits(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					ctx, cancel := context.WithCancel(t.Context())
 					defer cancel()
-					control := make(chan runtimeCommand)
+					control := make(chan runtimeRequest)
 					done := make(chan struct{})
-					requests := runtimeRequests{commands: control, done: done}
+					requests := runtimeRequests{queue: control, done: done}
 					results := make(chan error, 2)
 					go func() {
-						_, err := requestRuntimeStatus(ctx, requests)
+						_, err := requestSnapshot(ctx, requests)
 						results <- err
 					}()
 					go func() {
-						_, err := executeRuntimeCommand(ctx, requests, runtimeCommand{kind: cmdSetReaderWorkers, value: 2})
+						_, err := executeRuntimeCommand(ctx, requests, runtimeCommand{kind: setReaderWorkers, value: 2})
 						results <- err
 					}()
-					var pending []runtimeCommand
+					var pending []runtimeRequest
 					if stage == "reply" {
-						pending = []runtimeCommand{<-control, <-control}
+						pending = []runtimeRequest{<-control, <-control}
 					}
 					synctest.Wait()
 					want := errRuntimeUnavailable
@@ -90,11 +88,12 @@ func TestRuntimeRequestsUnblockAtBothWaits(t *testing.T) {
 							t.Fatalf("request returned %v, want %v", err, want)
 						}
 					}
-					for _, command := range pending {
-						if command.kind == getRuntimeStatus {
-							command.respondStatus(runtimeStatus{})
-						} else {
-							command.respond(runtimeCommandReceipt{})
+					for _, request := range pending {
+						switch request := request.(type) {
+						case snapshotRequest:
+							request.reply <- runtimeSnapshot{}
+						case controlRequest:
+							request.reply <- true
 						}
 					}
 				})
@@ -106,15 +105,15 @@ func TestRuntimeRequestsUnblockAtBothWaits(t *testing.T) {
 func TestRuntimeRequestPreservesReadyReceiptWhenEventLoopCloses(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		want runtimeCommandReceipt
+		want bool
 	}{
-		{name: "applied"},
-		{name: "conflict", want: runtimeCommandReceipt{rejected: true}},
+		{name: "applied", want: true},
+		{name: "conflict"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for range 64 {
 				done := make(chan struct{})
-				reply := make(chan runtimeCommandReceipt, 1)
+				reply := make(chan bool, 1)
 				// Both select cases are ready before the handler waits for the reply.
 				reply <- tc.want
 				close(done)

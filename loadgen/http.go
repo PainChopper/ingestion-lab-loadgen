@@ -24,7 +24,7 @@ const snapshotPath = "/api/loadgen/snapshot"
 
 const commandsPath = "/api/loadgen/commands"
 
-func newServeMux(requests runtimeRequests, metrics *PrometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
+func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle(snapshotPath, snapshotHandler(requests, logger))
 	mux.Handle(commandsPath, commandsHandler(requests, config))
@@ -41,7 +41,7 @@ func newServeMux(requests runtimeRequests, metrics *PrometheusMetrics, config co
 	return mux
 }
 
-func startHTTPServer(requests runtimeRequests, metrics *PrometheusMetrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
+func startHTTPServer(requests runtimeRequests, metrics *prometheusMetrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
 	server := &http.Server{
 		Addr:              config.HTTP.Addr,
 		Handler:           newServeMux(requests, metrics, config, logger),
@@ -119,14 +119,14 @@ func commandsHandler(requests runtimeRequests, cfg config) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		result, err := executeRuntimeCommand(r.Context(), requests, command)
+		applied, err := executeRuntimeCommand(r.Context(), requests, command)
 		if err != nil {
 			if errors.Is(err, errRuntimeUnavailable) {
 				http.Error(w, "Runtime unavailable", http.StatusServiceUnavailable)
 			}
 			return
 		}
-		if result.rejected {
+		if !applied {
 			w.WriteHeader(http.StatusConflict)
 		}
 	})
@@ -138,17 +138,17 @@ func (r commandRequest) runtimeCommand(cfg config) (runtimeCommand, error) {
 	var invalid string
 	switch r.Action {
 	case "set-reader-workers":
-		command.kind, limits, invalid = cmdSetReaderWorkers, cfg.Reader.Workers, "Invalid Reader workers"
+		command.kind, limits, invalid = setReaderWorkers, cfg.Reader.Workers, "Invalid Reader workers"
 	case "set-sender-workers":
-		command.kind, limits, invalid = cmdSetSenderWorkers, cfg.Sender.Workers, "Invalid Sender setting"
+		command.kind, limits, invalid = setSenderWorkers, cfg.Sender.Workers, "Invalid Sender setting"
 	case "set-requested-tps":
-		command.kind, limits, invalid = cmdSetRequestedTPS, cfg.Throttler.RequestedTPS, "Invalid requested TPS"
+		command.kind, limits, invalid = setRequestedTPS, cfg.Throttler.RequestedTPS, "Invalid requested TPS"
 	case "set-throttler-installed":
 		var value *bool
 		if err := json.Unmarshal(r.Value, &value); err != nil || value == nil || !cfg.Throttler.Installed.contains(*value) {
 			return runtimeCommand{}, errors.New("Invalid throttler installed value")
 		}
-		return runtimeCommand{kind: cmdSetThrottlerInstalled, installed: *value}, nil
+		return runtimeCommand{kind: setThrottlerInstalled, installed: *value}, nil
 	default:
 		return runtimeCommand{}, errors.New("Unknown command")
 	}
@@ -167,7 +167,7 @@ func snapshotHandler(requests runtimeRequests, logger *zap.Logger) http.Handler 
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		status, err := requestRuntimeStatus(r.Context(), requests)
+		snapshot, err := requestSnapshot(r.Context(), requests)
 		if err != nil {
 			if errors.Is(err, errRuntimeUnavailable) {
 				http.Error(w, "Runtime unavailable", http.StatusServiceUnavailable)
@@ -175,7 +175,7 @@ func snapshotHandler(requests runtimeRequests, logger *zap.Logger) http.Handler 
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(status); err != nil {
+		if err := json.NewEncoder(w).Encode(snapshot); err != nil {
 			logger.Error("snapshot response encoding failed", zap.String("event", "run_failed"))
 			return
 		}

@@ -39,10 +39,11 @@ type controlTelemetry struct {
 }
 
 type runtimeEvents struct {
-	requests   <-chan runtimeCommand
+	requests   <-chan runtimeRequest
 	source     <-chan sourceDiscovery
 	serverDone <-chan error
-	metrics    serviceMetrics
+	ticks      <-chan time.Time
+	metrics    *prometheusMetrics
 }
 
 func newControlState(cfg config, logger *zap.Logger) controlState {
@@ -60,7 +61,7 @@ func newControlState(cfg config, logger *zap.Logger) controlState {
 	}
 }
 
-func (state *controlState) runEventLoop(
+func (s *controlState) runEventLoop(
 	appCtx context.Context,
 	events runtimeEvents,
 	grace time.Duration,
@@ -89,9 +90,9 @@ func (state *controlState) runEventLoop(
 		}
 	}
 	stopOnSignal := func() {
-		state.run.state = runStateStopping
+		s.run.state = runStateStopping
 		beginDrain()
-		state.logger.Info("service stopping", zap.String("event", "service_stopping"))
+		s.logger.Info("service stopping", zap.String("event", "service_stopping"))
 	}
 	defer func() {
 		if timer != nil {
@@ -100,14 +101,14 @@ func (state *controlState) runEventLoop(
 		// A Reader can report a fault just before the pipeline closes or the deadline fires.
 		select {
 		case sourceError := <-sourceErrors:
-			state.recordSourceFault(sourceError)
+			s.recordSourceFault(sourceError)
 			runErr = errors.Join(runErr, sourceError)
 		default:
 		}
-		state.finishRun(pipeline, metrics.prometheusMetrics, partial)
+		s.finishRun(pipeline, metrics, partial)
 	}()
 
-	nextSummary := time.Now().Add(runtimeSummaryInterval)
+	nextSnapshotLog := time.Now().Add(snapshotLogInterval)
 	for {
 		select {
 		case <-appDone:
@@ -118,34 +119,34 @@ func (state *controlState) runEventLoop(
 				err = errors.New("http server stopped unexpectedly")
 			}
 			runErr = errors.Join(runErr, err)
-			state.run.state = runStateFaulted
-			state.logger.Error("HTTP server failed", zap.String("event", "run_failed"), zap.Error(err))
+			s.run.state = runStateFaulted
+			s.logger.Error("HTTP server failed", zap.String("event", "run_failed"), zap.Error(err))
 			beginDrain()
 		case found := <-events.source:
 			events.source = nil
 			if found.err != nil {
 				var sourceError readerSourceError
 				if errors.As(found.err, &sourceError) {
-					state.recordSourceFault(sourceError)
+					s.recordSourceFault(sourceError)
 				}
 				return shutdownDeadline, errors.Join(runErr, fmt.Errorf("start run: %w", found.err))
 			}
-			if state.run.state != runStateStarting {
+			if s.run.state != runStateStarting {
 				return shutdownDeadline, runErr
 			}
 			if appCtx.Err() != nil {
 				stopOnSignal()
 				return shutdownDeadline, runErr
 			}
-			pipeline = startPipeline(runCtx, state, found.source)
+			pipeline = startPipeline(runCtx, s, found.source)
 			pipelineDone = pipeline.done
 			sourceErrors = pipeline.readerPool.sourceErrors
-			state.run.runStartedAt = time.Now()
-			state.run.state = runStateRunning
-			state.logger.Info("run started", zap.String("event", "run_started"))
+			s.run.runStartedAt = time.Now()
+			s.run.state = runStateRunning
+			s.logger.Info("run started", zap.String("event", "run_started"))
 		case sourceError := <-sourceErrors:
 			sourceErrors = nil
-			state.recordSourceFault(sourceError)
+			s.recordSourceFault(sourceError)
 			runErr = errors.Join(runErr, sourceError)
 			beginDrain()
 		case <-deadline:
@@ -155,68 +156,68 @@ func (state *controlState) runEventLoop(
 			case <-pipelineDone:
 			default:
 				partial = true
-				state.logger.Warn("pipeline drain timed out", zap.String("event", "service_stopping"))
+				s.logger.Warn("pipeline drain timed out", zap.String("event", "service_stopping"))
 			}
 			return shutdownDeadline, runErr
 		case <-pipelineDone:
 			return shutdownDeadline, runErr
-		case command, ok := <-events.requests:
+		case request, ok := <-events.requests:
 			if !ok {
 				events.requests = nil
 				continue
 			}
-			if command.kind == getRuntimeStatus {
-				command.respondStatus(state.runtimeStatusAt(pipeline, time.Now()))
-				continue
+			switch request := request.(type) {
+			case snapshotRequest:
+				request.reply <- s.snapshotAt(pipeline, time.Now())
+			case controlRequest:
+				request.reply <- s.run.state == runStateRunning &&
+					s.applyCommand(pipeline, request.command, metrics)
 			}
-			applied := state.run.state == runStateRunning &&
-				state.applyCommand(pipeline, command, metrics.prometheusMetrics)
-			command.respond(runtimeCommandReceipt{rejected: !applied})
-		case now := <-metrics.ticks:
+		case now := <-events.ticks:
 			if pipeline != nil {
-				state.sample(pipeline, metrics.prometheusMetrics, now)
+				s.sample(pipeline, metrics, now)
 			}
-			if !now.Before(nextSummary) {
-				nextSummary = now.Add(runtimeSummaryInterval)
-				state.logger.Info("runtime summary", runtimeSummaryFields(state.runtimeStatusAt(pipeline, now))...)
+			if !now.Before(nextSnapshotLog) {
+				nextSnapshotLog = now.Add(snapshotLogInterval)
+				s.logger.Info("runtime summary", snapshotLogFields(s.snapshotAt(pipeline, now))...)
 			}
 		}
 	}
 }
 
-func (state *controlState) applyCommand(pipeline *pipelineRuntime, command runtimeCommand, metrics *PrometheusMetrics) bool {
+func (s *controlState) applyCommand(pipeline *pipelineRuntime, command runtimeCommand, metrics *prometheusMetrics) bool {
 	switch command.kind {
-	case cmdSetReaderWorkers:
-		if !state.config.Reader.Workers.contains(command.value) {
+	case setReaderWorkers:
+		if !s.config.Reader.Workers.contains(command.value) {
 			return false
 		}
-		state.controls.readerWorkers = command.value
+		s.controls.readerWorkers = command.value
 		pipeline.readerPool.reconcile(command.value)
-	case cmdSetSenderWorkers:
-		if !state.config.Sender.Workers.contains(command.value) {
+	case setSenderWorkers:
+		if !s.config.Sender.Workers.contains(command.value) {
 			return false
 		}
-		state.controls.senderWorkers = command.value
+		s.controls.senderWorkers = command.value
 		pipeline.senderPool.reconcile(command.value)
-	case cmdSetRequestedTPS:
-		if !state.config.Throttler.RequestedTPS.contains(command.value) {
+	case setRequestedTPS:
+		if !s.config.Throttler.RequestedTPS.contains(command.value) {
 			return false
 		}
-		if state.controls.requestedTPS != command.value {
-			state.controls.requestedTPS = command.value
+		if s.controls.requestedTPS != command.value {
+			s.controls.requestedTPS = command.value
 			metrics.targetTPS.Set(float64(command.value))
-			pipeline.throttler.update(state.throttlerSettings())
-			state.logger.Info("throttler rate changed",
+			pipeline.throttler.update(s.throttlerSettings())
+			s.logger.Info("throttler rate changed",
 				zap.String("event", "throttler_rate_changed"), zap.Int("requested_tps", command.value))
 		}
-	case cmdSetThrottlerInstalled:
-		if !state.config.Throttler.Installed.contains(command.installed) {
+	case setThrottlerInstalled:
+		if !s.config.Throttler.Installed.contains(command.installed) {
 			return false
 		}
-		if state.controls.installed != command.installed {
-			state.controls.installed = command.installed
-			pipeline.throttler.update(state.throttlerSettings())
-			state.logger.Info("throttler mode changed",
+		if s.controls.installed != command.installed {
+			s.controls.installed = command.installed
+			pipeline.throttler.update(s.throttlerSettings())
+			s.logger.Info("throttler mode changed",
 				zap.String("event", "throttler_mode_changed"), zap.Bool("installed", command.installed))
 		}
 	default:
@@ -225,75 +226,75 @@ func (state *controlState) applyCommand(pipeline *pipelineRuntime, command runti
 	return true
 }
 
-func (state *controlState) recordSourceFault(sourceError readerSourceError) {
-	state.run.state = runStateFaulted
-	state.run.sourceError = &sourceError
-	state.logger.Error("reader source failed", zap.String("event", "reader_source_failed"),
+func (s *controlState) recordSourceFault(sourceError readerSourceError) {
+	s.run.state = runStateFaulted
+	s.run.sourceError = &sourceError
+	s.logger.Error("reader source failed", zap.String("event", "reader_source_failed"),
 		zap.String("operation", sourceError.Operation), zap.String("relative_path", sourceError.RelativePath), zap.Error(sourceError))
 }
 
-func (state *controlState) sample(pipeline *pipelineRuntime, metrics *PrometheusMetrics, now time.Time) {
-	delta := state.collectCompleted(pipeline, metrics)
-	state.telemetry.reader.sample(now)
-	state.telemetry.readerChannel.sample(state.metricsWindow)
-	state.telemetry.senderChannel.sample(state.metricsWindow)
-	metrics.actualTPS.Set(float64(delta) / state.metricsWindow.Seconds())
+func (s *controlState) sample(pipeline *pipelineRuntime, metrics *prometheusMetrics, now time.Time) {
+	delta := s.collectCompleted(pipeline, metrics)
+	s.telemetry.reader.sample(now)
+	s.telemetry.readerChannel.sample(s.metricsWindow)
+	s.telemetry.senderChannel.sample(s.metricsWindow)
+	metrics.actualTPS.Set(float64(delta) / s.metricsWindow.Seconds())
 }
 
-func (state *controlState) finishRun(pipeline *pipelineRuntime, metrics *PrometheusMetrics, partial bool) {
+func (s *controlState) finishRun(pipeline *pipelineRuntime, metrics *prometheusMetrics, partial bool) {
 	if pipeline != nil {
-		state.collectCompleted(pipeline, metrics)
+		s.collectCompleted(pipeline, metrics)
 	}
 	metrics.actualTPS.Set(0)
 	// Sample confirmations first: all confirmed rows were already counted at the Reader.
-	rowsRead := state.telemetry.reader.snapshot().rowsRead
-	state.logger.Info("run stopped", zap.String("event", "run_stopped"),
-		zap.String("state", string(state.run.state)),
+	rowsRead := s.telemetry.reader.snapshot().rowsRead
+	s.logger.Info("run stopped", zap.String("event", "run_stopped"),
+		zap.String("state", string(s.run.state)),
 		zap.Bool("partial", partial),
-		zap.Int64("confirmed_transactions", state.run.totalTransactions),
-		zap.Int64("unconfirmed_transactions", rowsRead-state.run.totalTransactions),
+		zap.Int64("confirmed_transactions", s.run.totalTransactions),
+		zap.Int64("unconfirmed_transactions", rowsRead-s.run.totalTransactions),
 	)
 }
 
-func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Time) runtimeStatus {
-	reader := state.telemetry.reader.snapshot()
+func (s *controlState) snapshotAt(runtime *pipelineRuntime, now time.Time) runtimeSnapshot {
+	reader := s.telemetry.reader.snapshot()
 	readerPool, senderPool := runtime.snapshots()
-	readerChannel := state.telemetry.readerChannel.snapshot(now)
-	senderChannel := state.telemetry.senderChannel.snapshot(now)
+	readerChannel := s.telemetry.readerChannel.snapshot(now)
+	senderChannel := s.telemetry.senderChannel.snapshot(now)
 
-	return runtimeStatus{
-		Run: runtimeRunStatus{
-			State:             state.run.state,
-			TotalTransactions: state.run.totalTransactions,
-			ElapsedMs:         state.elapsedMs(now),
+	return runtimeSnapshot{
+		Run: runSnapshot{
+			State:             s.run.state,
+			TotalTransactions: s.run.totalTransactions,
+			ElapsedMs:         s.elapsedMs(now),
 		},
-		Reader: runtimeReaderStatus{
-			Workers: state.controls.readerWorkers, LiveWorkers: readerPool.liveWorkers,
+		Reader: readerSnapshot{
+			Workers: s.controls.readerWorkers, LiveWorkers: readerPool.liveWorkers,
 			IdleWorkers: readerPool.idleWorkers, ReadingWorkers: readerPool.readingWorkers,
 			BlockedWorkers: readerPool.blockedWorkers, DrainingWorkers: readerPool.drainingWorkers,
 			DrainingIdleWorkers:    readerPool.drainingIdleWorkers,
 			DrainingReadingWorkers: readerPool.drainingReadingWorkers,
 			DrainingBlockedWorkers: readerPool.drainingBlockedWorkers,
-			ReadBatchSize:          state.config.Reader.ReadBatchSize.Initial, ReadTps: reader.readTPS,
+			ReadBatchSize:          s.config.Reader.ReadBatchSize.Initial, ReadTps: reader.readTPS,
 			RowsRead:        reader.rowsRead,
-			SourceDirectory: readerSourceDirectory(state.config.Source.Path),
-			SourceError:     state.run.sourceError,
+			SourceDirectory: readerSourceDirectory(s.config.Source.Path),
+			SourceError:     s.run.sourceError,
 		},
-		Throttler: runtimeThrottlerStatus{
-			RequestedTps: state.controls.requestedTPS,
+		Throttler: throttlerSnapshot{
+			RequestedTps: s.controls.requestedTPS,
 			AdmittedTps:  senderChannel.sentTransactionsPerSecond,
-			Installed:    state.controls.installed,
+			Installed:    s.controls.installed,
 		},
-		Sender: runtimeSenderStatus{
-			Workers: state.controls.senderWorkers, LiveWorkers: senderPool.liveWorkers,
+		Sender: senderSnapshot{
+			Workers: s.controls.senderWorkers, LiveWorkers: senderPool.liveWorkers,
 			IdleWorkers: senderPool.idleWorkers, InFlightWorkers: senderPool.inFlightWorkers,
 			BackoffWorkers: senderPool.backoffWorkers, DrainingWorkers: senderPool.drainingWorkers,
 			DrainingIdleWorkers:     senderPool.drainingIdleWorkers,
 			DrainingInFlightWorkers: senderPool.drainingInFlightWorkers,
 			DrainingBackoffWorkers:  senderPool.drainingBackoffWorkers,
 		},
-		ReaderChannel: runtimeChannelStatus{
-			Capacity:                      state.config.ReaderChannel.Capacity.Initial,
+		ReaderChannel: channelSnapshot{
+			Capacity:                      s.config.ReaderChannel.Capacity.Initial,
 			DepthBatches:                  readerChannel.depthBatches,
 			BufferedTransactions:          readerChannel.bufferedTransactions,
 			BlockedSenders:                readerChannel.blockedSenders,
@@ -308,8 +309,8 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 			ReceivedBatchesPerSecond:      readerChannel.receivedBatchesPerSecond,
 			ReceivedTransactionsPerSecond: readerChannel.receivedTransactionsPerSecond,
 		},
-		SenderChannel: runtimeChannelStatus{
-			Capacity:                      state.config.SenderChannel.Capacity.Initial,
+		SenderChannel: channelSnapshot{
+			Capacity:                      s.config.SenderChannel.Capacity.Initial,
 			DepthBatches:                  senderChannel.depthBatches,
 			BufferedTransactions:          senderChannel.bufferedTransactions,
 			BlockedSenders:                senderChannel.blockedSenders,
@@ -324,32 +325,32 @@ func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Ti
 			ReceivedBatchesPerSecond:      senderChannel.receivedBatchesPerSecond,
 			ReceivedTransactionsPerSecond: senderChannel.receivedTransactionsPerSecond,
 		},
-		Config: runtimeConfigStatusFromConfig(state.config),
+		Config: snapshotConfig(s.config),
 	}
 }
 
-func (state *controlState) throttlerSettings() throttlerSettings {
+func (s *controlState) throttlerSettings() throttlerSettings {
 	return throttlerSettings{
-		requestedTPS: state.controls.requestedTPS,
-		installed:    state.controls.installed,
+		requestedTPS: s.controls.requestedTPS,
+		installed:    s.controls.installed,
 	}
 }
 
-func (state *controlState) collectCompleted(
+func (s *controlState) collectCompleted(
 	pipeline *pipelineRuntime,
-	promMetrics *PrometheusMetrics,
+	promMetrics *prometheusMetrics,
 ) int64 {
 	delta := pipeline.terminallyCompletedTransactionsSinceTick.Swap(0)
-	state.run.totalTransactions += delta
+	s.run.totalTransactions += delta
 	promMetrics.transactionsTotal.Add(float64(delta))
 	return delta
 }
 
-func (state *controlState) elapsedMs(now time.Time) int64 {
-	if state.run.runStartedAt.IsZero() {
+func (s *controlState) elapsedMs(now time.Time) int64 {
+	if s.run.runStartedAt.IsZero() {
 		return 0
 	}
-	return max(0, now.Sub(state.run.runStartedAt).Milliseconds())
+	return max(0, now.Sub(s.run.runStartedAt).Milliseconds())
 }
 
 type runState string
@@ -364,61 +365,59 @@ const (
 type runtimeCommandKind int
 
 const (
-	getRuntimeStatus runtimeCommandKind = iota
-	cmdSetReaderWorkers
-	cmdSetRequestedTPS
-	cmdSetThrottlerInstalled
-	cmdSetSenderWorkers
+	setReaderWorkers runtimeCommandKind = iota + 1
+	setRequestedTPS
+	setThrottlerInstalled
+	setSenderWorkers
 )
-
-type runtimeCommandReceipt struct {
-	rejected bool
-}
 
 var errRuntimeUnavailable = errors.New("runtime unavailable")
 
 type runtimeRequests struct {
-	commands chan<- runtimeCommand
-	done     <-chan struct{}
+	queue chan<- runtimeRequest
+	done  <-chan struct{}
 }
 
 type runtimeCommand struct {
-	kind         runtimeCommandKind
-	statusReply  chan runtimeStatus
-	receiptReply chan runtimeCommandReceipt
-	value        int
-	installed    bool
+	kind      runtimeCommandKind
+	value     int
+	installed bool
 }
 
-func (command runtimeCommand) respond(receipt runtimeCommandReceipt) {
-	if command.receiptReply != nil {
-		command.receiptReply <- receipt
-	}
+type runtimeRequest interface {
+	isRuntimeRequest()
 }
 
-func (command runtimeCommand) respondStatus(status runtimeStatus) {
-	command.statusReply <- status
+type snapshotRequest struct {
+	reply chan<- runtimeSnapshot
 }
 
-func requestRuntimeStatus(ctx context.Context, requests runtimeRequests) (runtimeStatus, error) {
-	reply := make(chan runtimeStatus, 1)
-	return awaitRuntimeReply(ctx, requests, runtimeCommand{kind: getRuntimeStatus, statusReply: reply}, reply)
+type controlRequest struct {
+	command runtimeCommand
+	reply   chan<- bool
 }
 
-func executeRuntimeCommand(ctx context.Context, requests runtimeRequests, command runtimeCommand) (runtimeCommandReceipt, error) {
-	reply := make(chan runtimeCommandReceipt, 1)
-	command.receiptReply = reply
-	return awaitRuntimeReply(ctx, requests, command, reply)
+func (snapshotRequest) isRuntimeRequest() {}
+func (controlRequest) isRuntimeRequest()  {}
+
+func requestSnapshot(ctx context.Context, requests runtimeRequests) (runtimeSnapshot, error) {
+	reply := make(chan runtimeSnapshot, 1)
+	return awaitRuntimeReply(ctx, requests, snapshotRequest{reply: reply}, reply)
 }
 
-func awaitRuntimeReply[T any](ctx context.Context, requests runtimeRequests, command runtimeCommand, reply <-chan T) (T, error) {
+func executeRuntimeCommand(ctx context.Context, requests runtimeRequests, command runtimeCommand) (bool, error) {
+	reply := make(chan bool, 1)
+	return awaitRuntimeReply(ctx, requests, controlRequest{command: command, reply: reply}, reply)
+}
+
+func awaitRuntimeReply[T any](ctx context.Context, requests runtimeRequests, request runtimeRequest, reply <-chan T) (T, error) {
 	var zero T
 	select {
 	case <-ctx.Done():
 		return zero, ctx.Err()
 	case <-requests.done:
 		return zero, errRuntimeUnavailable
-	case requests.commands <- command:
+	case requests.queue <- request:
 	}
 	return receiveRuntimeReply(ctx, requests.done, reply)
 }

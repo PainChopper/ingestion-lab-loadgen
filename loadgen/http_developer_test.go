@@ -16,8 +16,8 @@ import (
 )
 
 func TestDeveloperRoutes(t *testing.T) {
-	requests := make(chan runtimeCommand, 1)
-	mux := newServeMux(runtimeRequests{commands: requests}, NewPrometheusMetrics(), testConfig(t), zap.NewNop())
+	requests := make(chan runtimeRequest, 1)
+	mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 	tests := []struct {
 		name        string
 		path        string
@@ -145,10 +145,10 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 	}
 	seen := map[string]bool{}
 	expected := map[string]runtimeCommand{
-		"set-reader-workers":      {kind: cmdSetReaderWorkers, value: 2},
-		"set-requested-tps":       {kind: cmdSetRequestedTPS, value: 2000000},
-		"set-throttler-installed": {kind: cmdSetThrottlerInstalled, installed: true},
-		"set-sender-workers":      {kind: cmdSetSenderWorkers, value: 32},
+		"set-reader-workers":      {kind: setReaderWorkers, value: 2},
+		"set-requested-tps":       {kind: setRequestedTPS, value: 2000000},
+		"set-throttler-installed": {kind: setThrottlerInstalled, installed: true},
+		"set-sender-workers":      {kind: setSenderWorkers, value: 32},
 	}
 	if got := stringSet(mapKeys(mapping)); !reflect.DeepEqual(got, stringSet(mapKeysFromRuntimeCommands(expected))) {
 		t.Errorf("discriminator actions = %v, want actions accepted by commandsHandler %v", mapKeys(mapping), mapKeysFromRuntimeCommands(expected))
@@ -247,27 +247,27 @@ func assertExampleDispatches(t *testing.T, body map[string]any, want runtimeComm
 	if err != nil {
 		t.Fatal(err)
 	}
-	requests := make(chan runtimeCommand, 1)
+	requests := make(chan runtimeRequest, 1)
 	commandConfig := testConfig(t)
 	request := httptest.NewRequest(http.MethodPost, commandsPath, bytes.NewReader(encoded))
 	recorder := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		commandsHandler(runtimeRequests{commands: requests}, commandConfig).ServeHTTP(recorder, request)
+		commandsHandler(runtimeRequests{queue: requests}, commandConfig).ServeHTTP(recorder, request)
 	}()
-	var got runtimeCommand
+	var dispatched controlRequest
 	select {
-	case got = <-requests:
+	case queued := <-requests:
+		dispatched = queued.(controlRequest)
 	case <-time.After(time.Second):
 		t.Fatalf("example %q was not dispatched by commandsHandler", body["action"])
 	}
+	got := dispatched.command
 	if got.kind != want.kind || got.value != want.value || got.installed != want.installed {
 		t.Errorf("example %q dispatched %+v, want kind %v value %d installed %t", body["action"], got, want.kind, want.value, want.installed)
 	}
-	if got.receiptReply != nil {
-		got.receiptReply <- runtimeCommandReceipt{}
-	}
+	dispatched.reply <- true
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -424,18 +424,18 @@ func anyStringsOrEmpty(value any) []string {
 func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 	t.Helper()
 	models := map[string]reflect.Type{
-		"Snapshot":          reflect.TypeOf(runtimeStatus{}),
-		"RunStatus":         reflect.TypeOf(runtimeRunStatus{}),
-		"ReaderStatus":      reflect.TypeOf(runtimeReaderStatus{}),
+		"Snapshot":          reflect.TypeOf(runtimeSnapshot{}),
+		"RunStatus":         reflect.TypeOf(runSnapshot{}),
+		"ReaderStatus":      reflect.TypeOf(readerSnapshot{}),
 		"ReaderSourceError": reflect.TypeOf(readerSourceError{}),
-		"ThrottlerStatus":   reflect.TypeOf(runtimeThrottlerStatus{}),
-		"SenderStatus":      reflect.TypeOf(runtimeSenderStatus{}),
-		"ChannelStatus":     reflect.TypeOf(runtimeChannelStatus{}),
-		"ConfigStatus":      reflect.TypeOf(runtimeConfigStatus{}),
-		"RangeConfig":       reflect.TypeOf(runtimeRangeConfig{}),
-		"AllowedConfig":     reflect.TypeOf(runtimeAllowedConfig{}),
-		"InstalledConfig":   reflect.TypeOf(runtimeInstalledConfig{}),
-		"LoggingConfig":     reflect.TypeOf(runtimeLoggingConfig{}),
+		"ThrottlerStatus":   reflect.TypeOf(throttlerSnapshot{}),
+		"SenderStatus":      reflect.TypeOf(senderSnapshot{}),
+		"ChannelStatus":     reflect.TypeOf(channelSnapshot{}),
+		"ConfigStatus":      reflect.TypeOf(configSnapshot{}),
+		"RangeConfig":       reflect.TypeOf(rangeConfigSnapshot{}),
+		"AllowedConfig":     reflect.TypeOf(allowedConfigSnapshot{}),
+		"InstalledConfig":   reflect.TypeOf(installedConfigSnapshot{}),
+		"LoggingConfig":     reflect.TypeOf(loggingConfigSnapshot{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
@@ -523,18 +523,18 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 	if !ok || snapshotContent["schema"].(map[string]any)["$ref"] != "#/components/schemas/Snapshot" {
 		t.Error("snapshot 200 must reference the handler's Snapshot DTO")
 	} else {
-		fixtures := map[string]runtimeStatus{
-			"zero": {Run: runtimeRunStatus{State: runStateStarting}},
+		fixtures := map[string]runtimeSnapshot{
+			"zero": {Run: runSnapshot{State: runStateStarting}},
 			"populated": {
-				Run:       runtimeRunStatus{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
-				Reader:    runtimeReaderStatus{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
-				Throttler: runtimeThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, Installed: true},
-				Sender:    runtimeSenderStatus{Workers: 32},
-				Config:    runtimeConfigStatusFromConfig(testConfig(t)),
+				Run:       runSnapshot{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
+				Reader:    readerSnapshot{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
+				Throttler: throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, Installed: true},
+				Sender:    senderSnapshot{Workers: 32},
+				Config:    snapshotConfig(testConfig(t)),
 			},
 			"source error": {
-				Run:    runtimeRunStatus{State: runStateFaulted},
-				Reader: runtimeReaderStatus{SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
+				Run:    runSnapshot{State: runStateFaulted},
+				Reader: readerSnapshot{SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}
 		for name, fixture := range fixtures {

@@ -9,11 +9,11 @@ import (
 )
 
 func TestCommandsHandlerRejectsGet(t *testing.T) {
-	commands := make(chan runtimeCommand, 1)
+	commands := make(chan runtimeRequest, 1)
 	req := httptest.NewRequest(http.MethodGet, commandsPath, nil)
 	rec := httptest.NewRecorder()
 
-	commandsHandler(runtimeRequests{commands: commands}, testConfig(t)).ServeHTTP(rec, req)
+	commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(rec, req)
 	response := rec.Result()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %v, want %v", rec.Code, http.StatusMethodNotAllowed)
@@ -35,11 +35,11 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan runtimeCommand, 1)
+			commands := make(chan runtimeRequest, 1)
 			body := strings.NewReader(test.body)
 			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
 			rec := httptest.NewRecorder()
-			commandsHandler(runtimeRequests{commands: commands}, testConfig(t)).ServeHTTP(rec, req)
+			commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(rec, req)
 			response := rec.Result()
 			if response.StatusCode != http.StatusBadRequest {
 				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusBadRequest)
@@ -100,33 +100,35 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "quoted bool", body: `{"action":"set-throttler-installed","value":"false"}`, want: http.StatusBadRequest},
 		{name: "installed trailing JSON", body: `{"action":"set-throttler-installed","value":false}{}`, want: http.StatusBadRequest},
 		{name: "mode extra field", body: `{"action":"set-throttler-installed","value":"bypass","other":1}`, want: http.StatusBadRequest},
-		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
-		{name: "TPS initial", body: `{"action":"set-requested-tps","value":2000000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
-		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: cmdSetRequestedTPS},
-		{name: "mode installed", body: `{"action":"set-throttler-installed","value":true}`, want: http.StatusOK, kind: cmdSetThrottlerInstalled, installed: true},
-		{name: "mode bypass", body: `{"action":"set-throttler-installed","value":false}`, want: http.StatusOK, kind: cmdSetThrottlerInstalled},
+		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: setRequestedTPS},
+		{name: "TPS initial", body: `{"action":"set-requested-tps","value":2000000}`, want: http.StatusOK, kind: setRequestedTPS},
+		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: setRequestedTPS},
+		{name: "mode installed", body: `{"action":"set-throttler-installed","value":true}`, want: http.StatusOK, kind: setThrottlerInstalled, installed: true},
+		{name: "mode bypass", body: `{"action":"set-throttler-installed","value":false}`, want: http.StatusOK, kind: setThrottlerInstalled},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan runtimeCommand, 1)
+			commands := make(chan runtimeRequest, 1)
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
 			config := testConfig(t)
 			go func() {
 				defer close(done)
-				commandsHandler(runtimeRequests{commands: commands}, config).ServeHTTP(recorder, req)
+				commandsHandler(runtimeRequests{queue: commands}, config).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
-				case command := <-commands:
+				case request := <-commands:
+					dispatch := request.(controlRequest)
+					command := dispatch.command
 					if command.kind != test.kind {
 						t.Errorf("command kind = %v, want %v", command.kind, test.kind)
 					}
-					if command.kind == cmdSetThrottlerInstalled && command.installed != test.installed {
+					if command.kind == setThrottlerInstalled && command.installed != test.installed {
 						t.Errorf("installed = %t, want %t", command.installed, test.installed)
 					}
-					command.receiptReply <- runtimeCommandReceipt{}
+					dispatch.reply <- true
 				case <-time.After(time.Second):
 					t.Fatal("valid command was not dispatched")
 				}
@@ -153,8 +155,8 @@ func TestSenderCommandValidation(t *testing.T) {
 		kind       runtimeCommandKind
 		value      int
 	}{
-		{"workers minimum", `{"action":"set-sender-workers","value":1}`, http.StatusOK, cmdSetSenderWorkers, 1},
-		{"workers initial", `{"action":"set-sender-workers","value":32}`, http.StatusOK, cmdSetSenderWorkers, 32},
+		{"workers minimum", `{"action":"set-sender-workers","value":1}`, http.StatusOK, setSenderWorkers, 1},
+		{"workers initial", `{"action":"set-sender-workers","value":32}`, http.StatusOK, setSenderWorkers, 32},
 		{"missing", `{"action":"set-sender-workers"}`, http.StatusBadRequest, 0, 0},
 		{"null", `{"action":"set-sender-workers","value":null}`, http.StatusBadRequest, 0, 0},
 		{"fractional", `{"action":"set-sender-workers","value":1.5}`, http.StatusBadRequest, 0, 0},
@@ -166,21 +168,23 @@ func TestSenderCommandValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan runtimeCommand, 1)
+			commands := make(chan runtimeRequest, 1)
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(runtimeRequests{commands: commands}, testConfig(t)).ServeHTTP(recorder, req)
+				commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
-				case command := <-commands:
+				case request := <-commands:
+					dispatch := request.(controlRequest)
+					command := dispatch.command
 					if command.kind != test.kind || command.value != test.value {
 						t.Errorf("command = %+v, want kind %v value %d", command, test.kind, test.value)
 					}
-					command.receiptReply <- runtimeCommandReceipt{}
+					dispatch.reply <- true
 				case <-time.After(time.Second):
 					t.Fatal("valid command was not dispatched")
 				}
@@ -218,21 +222,23 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan runtimeCommand, 1)
+			commands := make(chan runtimeRequest, 1)
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(runtimeRequests{commands: commands}, testConfig(t)).ServeHTTP(recorder, req)
+				commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
-				case command := <-commands:
-					if command.kind != cmdSetReaderWorkers || command.value != test.value {
+				case request := <-commands:
+					dispatch := request.(controlRequest)
+					command := dispatch.command
+					if command.kind != setReaderWorkers || command.value != test.value {
 						t.Errorf("command = %+v, want Reader workers %d", command, test.value)
 					}
-					command.receiptReply <- runtimeCommandReceipt{}
+					dispatch.reply <- true
 				case <-time.After(time.Second):
 					t.Fatal("valid Reader command was not dispatched")
 				}

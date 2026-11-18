@@ -34,7 +34,7 @@ func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) err
 		if err != nil {
 			return err
 		}
-		_, err = io.WriteString(stdout, formatRuntimeStatusCard(snapshot))
+		_, err = io.WriteString(stdout, formatSnapshot(snapshot))
 		return err
 	}
 	if command.remoteAction == "set" {
@@ -60,19 +60,19 @@ type remoteCLIClient struct {
 	httpClient *http.Client
 }
 
-func (client remoteCLIClient) snapshot(ctx context.Context) (runtimeStatus, error) {
-	response, err := client.do(ctx, http.MethodGet, snapshotPath, nil)
+func (c remoteCLIClient) snapshot(ctx context.Context) (runtimeSnapshot, error) {
+	response, err := c.do(ctx, http.MethodGet, snapshotPath, nil)
 	if err != nil {
-		return runtimeStatus{}, err
+		return runtimeSnapshot{}, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return runtimeStatus{}, newRemoteHTTPError(response, http.MethodGet, snapshotPath)
+		return runtimeSnapshot{}, newRemoteHTTPError(response, http.MethodGet, snapshotPath)
 	}
 	return decodeStrictSnapshot(response.Body)
 }
 
-func (client remoteCLIClient) commandWithValue(ctx context.Context, action string, value any) error {
+func (c remoteCLIClient) commandWithValue(ctx context.Context, action string, value any) error {
 	body, err := json.Marshal(struct {
 		Action string `json:"action"`
 		Value  any    `json:"value,omitempty"`
@@ -80,7 +80,7 @@ func (client remoteCLIClient) commandWithValue(ctx context.Context, action strin
 	if err != nil {
 		return fmt.Errorf("encode command: %w", err)
 	}
-	response, err := client.do(ctx, http.MethodPost, commandsPath, body)
+	response, err := c.do(ctx, http.MethodPost, commandsPath, body)
 	if err != nil {
 		return err
 	}
@@ -91,10 +91,10 @@ func (client remoteCLIClient) commandWithValue(ctx context.Context, action strin
 	return nil
 }
 
-func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
-	switch command.target {
+func (c remoteSetCommand) confirm(snapshot runtimeSnapshot) error {
+	switch c.target {
 	case "readers":
-		expected, err := command.numericValue()
+		expected, err := c.numericValue()
 		if err != nil {
 			return err
 		}
@@ -102,7 +102,7 @@ func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 			return fmt.Errorf("verification snapshot reader.workers = %v, want %v", snapshot.Reader.Workers, expected)
 		}
 	case "senders":
-		expected, err := command.numericValue()
+		expected, err := c.numericValue()
 		if err != nil {
 			return err
 		}
@@ -110,7 +110,7 @@ func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 			return fmt.Errorf("verification snapshot sender.workers = %v, want %v", snapshot.Sender.Workers, expected)
 		}
 	case "tps":
-		expected, err := command.numericValue()
+		expected, err := c.numericValue()
 		if err != nil {
 			return err
 		}
@@ -118,7 +118,7 @@ func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 			return fmt.Errorf("verification snapshot throttler.requestedTps = %v, want %v", snapshot.Throttler.RequestedTps, expected)
 		}
 	case "throttle":
-		expected, ok := command.value.(bool)
+		expected, ok := c.value.(bool)
 		if !ok {
 			return fmt.Errorf("verification snapshot throttle value has invalid type")
 		}
@@ -126,28 +126,28 @@ func (command remoteSetCommand) confirm(snapshot runtimeStatus) error {
 			return fmt.Errorf("verification snapshot throttler.installed = %v, want %v", snapshot.Throttler.Installed, expected)
 		}
 	default:
-		return fmt.Errorf("verification snapshot unknown set target %q", command.target)
+		return fmt.Errorf("verification snapshot unknown set target %q", c.target)
 	}
 	return nil
 }
 
-func (command remoteSetCommand) numericValue() (int, error) {
-	value, ok := command.value.(int)
+func (c remoteSetCommand) numericValue() (int, error) {
+	value, ok := c.value.(int)
 	if !ok {
-		return 0, fmt.Errorf("verification snapshot %s value has invalid type", command.target)
+		return 0, fmt.Errorf("verification snapshot %s value has invalid type", c.target)
 	}
 	return value, nil
 }
 
-func (client remoteCLIClient) do(ctx context.Context, method, endpoint string, body []byte) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(ctx, method, client.baseURL+endpoint, bytes.NewReader(body))
+func (c remoteCLIClient) do(ctx context.Context, method, endpoint string, body []byte) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build %s request: %w", method, err)
 	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := client.httpClient.Do(request)
+	response, err := c.httpClient.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", method, endpoint, err)
 	}
@@ -160,31 +160,31 @@ func newRemoteHTTPError(response *http.Response, method, endpoint string) remote
 	return remoteHTTPError{status: response.Status, method: method, endpoint: endpoint, detail: detail}
 }
 
-func decodeStrictSnapshot(body io.Reader) (runtimeStatus, error) {
+func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
 	data, err := io.ReadAll(body)
 	if err != nil {
-		return runtimeStatus{}, fmt.Errorf("read snapshot: %w", err)
+		return runtimeSnapshot{}, fmt.Errorf("read snapshot: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	var snapshot runtimeStatus
+	var snapshot runtimeSnapshot
 	if err := decoder.Decode(&snapshot); err != nil {
-		return runtimeStatus{}, fmt.Errorf("decode snapshot: %w", err)
+		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: %w", err)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return runtimeStatus{}, fmt.Errorf("decode snapshot: trailing JSON")
+		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: trailing JSON")
 	}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
-		return runtimeStatus{}, fmt.Errorf("decode snapshot shape: %w", err)
+		return runtimeSnapshot{}, fmt.Errorf("decode snapshot shape: %w", err)
 	}
 	if err := validateSnapshotKeys(root); err != nil {
-		return runtimeStatus{}, err
+		return runtimeSnapshot{}, err
 	}
 	switch snapshot.Run.State {
 	case runStateStarting, runStateRunning, runStateStopping, runStateFaulted:
 	default:
-		return runtimeStatus{}, fmt.Errorf("decode snapshot: invalid run state %q", snapshot.Run.State)
+		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: invalid run state %q", snapshot.Run.State)
 	}
 	return snapshot, nil
 }
@@ -295,64 +295,64 @@ func validateExactKeys(name string, object map[string]json.RawMessage, expected 
 	return nil
 }
 
-func formatRuntimeStatusCard(status runtimeStatus) string {
-	sourceDirectory := sanitizeRuntimeStatusValue(status.Reader.SourceDirectory)
+func formatSnapshot(snapshot runtimeSnapshot) string {
+	sourceDirectory := sanitizeSnapshotValue(snapshot.Reader.SourceDirectory)
 	if sourceDirectory == "" {
 		sourceDirectory = "none"
 	}
 
 	sourceError := "none"
-	if status.Reader.SourceError != nil {
+	if snapshot.Reader.SourceError != nil {
 		sourceError = fmt.Sprintf(
 			"%s/%s %s: %s",
-			sanitizeRuntimeStatusValue(status.Reader.SourceError.Category),
-			sanitizeRuntimeStatusValue(status.Reader.SourceError.Operation),
-			sanitizeRuntimeStatusValue(status.Reader.SourceError.RelativePath),
-			sanitizeRuntimeStatusValue(status.Reader.SourceError.Message),
+			sanitizeSnapshotValue(snapshot.Reader.SourceError.Category),
+			sanitizeSnapshotValue(snapshot.Reader.SourceError.Operation),
+			sanitizeSnapshotValue(snapshot.Reader.SourceError.RelativePath),
+			sanitizeSnapshotValue(snapshot.Reader.SourceError.Message),
 		)
 	}
 
-	var card strings.Builder
-	fmt.Fprintf(&card, "INGESTION LAB LOADGEN STATUS\n")
-	fmt.Fprintf(&card, "State:                    %s\n", sanitizeRuntimeStatusValue(string(status.Run.State)))
-	fmt.Fprintf(&card, "Elapsed:                  %s\n", time.Duration(status.Run.ElapsedMs)*time.Millisecond)
-	fmt.Fprintf(&card, "Transactions:             %d\n\n", status.Run.TotalTransactions)
-	fmt.Fprintf(&card, "Throttler\n")
-	fmt.Fprintf(&card, "Requested TPS:            %d\n", status.Throttler.RequestedTps)
-	fmt.Fprintf(&card, "Admitted TPS:             %.1f\n", status.Throttler.AdmittedTps)
-	fmt.Fprintf(&card, "Installed:                %t\n\n", status.Throttler.Installed)
-	fmt.Fprintf(&card, "Reader\n")
+	var output strings.Builder
+	fmt.Fprintf(&output, "INGESTION LAB LOADGEN STATUS\n")
+	fmt.Fprintf(&output, "State:                    %s\n", sanitizeSnapshotValue(string(snapshot.Run.State)))
+	fmt.Fprintf(&output, "Elapsed:                  %s\n", time.Duration(snapshot.Run.ElapsedMs)*time.Millisecond)
+	fmt.Fprintf(&output, "Transactions:             %d\n\n", snapshot.Run.TotalTransactions)
+	fmt.Fprintf(&output, "Throttler\n")
+	fmt.Fprintf(&output, "Requested TPS:            %d\n", snapshot.Throttler.RequestedTps)
+	fmt.Fprintf(&output, "Admitted TPS:             %.1f\n", snapshot.Throttler.AdmittedTps)
+	fmt.Fprintf(&output, "Installed:                %t\n\n", snapshot.Throttler.Installed)
+	fmt.Fprintf(&output, "Reader\n")
 	fmt.Fprintf(
-		&card,
+		&output,
 		"Workers:                  configured=%d live=%d reading=%d idle=%d blocked=%d draining=%d\n",
-		status.Reader.Workers,
-		status.Reader.LiveWorkers,
-		status.Reader.ReadingWorkers,
-		status.Reader.IdleWorkers,
-		status.Reader.BlockedWorkers,
-		status.Reader.DrainingWorkers,
+		snapshot.Reader.Workers,
+		snapshot.Reader.LiveWorkers,
+		snapshot.Reader.ReadingWorkers,
+		snapshot.Reader.IdleWorkers,
+		snapshot.Reader.BlockedWorkers,
+		snapshot.Reader.DrainingWorkers,
 	)
-	fmt.Fprintf(&card, "Read TPS:                 %.1f\n", status.Reader.ReadTps)
-	fmt.Fprintf(&card, "Rows read:                %d\n", status.Reader.RowsRead)
-	fmt.Fprintf(&card, "Source:                   %s\n", sourceDirectory)
-	fmt.Fprintf(&card, "Source error:             %s\n\n", sourceError)
-	writeRuntimeStatusChannel(&card, "Reader channel", status.ReaderChannel)
-	writeRuntimeStatusChannel(&card, "Sender channel", status.SenderChannel)
-	fmt.Fprintf(&card, "Sender\n")
+	fmt.Fprintf(&output, "Read TPS:                 %.1f\n", snapshot.Reader.ReadTps)
+	fmt.Fprintf(&output, "Rows read:                %d\n", snapshot.Reader.RowsRead)
+	fmt.Fprintf(&output, "Source:                   %s\n", sourceDirectory)
+	fmt.Fprintf(&output, "Source error:             %s\n\n", sourceError)
+	writeSnapshotChannel(&output, "Reader channel", snapshot.ReaderChannel)
+	writeSnapshotChannel(&output, "Sender channel", snapshot.SenderChannel)
+	fmt.Fprintf(&output, "Sender\n")
 	fmt.Fprintf(
-		&card,
+		&output,
 		"Workers:                  configured=%d live=%d in-flight=%d idle=%d backoff=%d draining=%d\n",
-		status.Sender.Workers,
-		status.Sender.LiveWorkers,
-		status.Sender.InFlightWorkers,
-		status.Sender.IdleWorkers,
-		status.Sender.BackoffWorkers,
-		status.Sender.DrainingWorkers,
+		snapshot.Sender.Workers,
+		snapshot.Sender.LiveWorkers,
+		snapshot.Sender.InFlightWorkers,
+		snapshot.Sender.IdleWorkers,
+		snapshot.Sender.BackoffWorkers,
+		snapshot.Sender.DrainingWorkers,
 	)
-	return card.String()
+	return output.String()
 }
 
-func sanitizeRuntimeStatusValue(value string) string {
+func sanitizeSnapshotValue(value string) string {
 	var sanitized strings.Builder
 	for _, character := range value {
 		if !unicode.IsControl(character) {
@@ -368,23 +368,23 @@ func sanitizeRuntimeStatusValue(value string) string {
 	return sanitized.String()
 }
 
-func writeRuntimeStatusChannel(card *strings.Builder, title string, channel runtimeChannelStatus) {
-	fmt.Fprintf(card, "%s\n", title)
+func writeSnapshotChannel(output *strings.Builder, title string, channel channelSnapshot) {
+	fmt.Fprintf(output, "%s\n", title)
 	fmt.Fprintf(
-		card,
+		output,
 		"Queue:                    %d/%d batches; %d transactions\n",
 		channel.DepthBatches,
 		channel.Capacity,
 		channel.BufferedTransactions,
 	)
 	fmt.Fprintf(
-		card,
+		output,
 		"Input / output TPS:       %.1f / %.1f\n",
 		channel.SentTransactionsPerSecond,
 		channel.ReceivedTransactionsPerSecond,
 	)
 	fmt.Fprintf(
-		card,
+		output,
 		"Blocked:                  senders=%d oldest=%dms total=%dms\n\n",
 		channel.BlockedSenders,
 		channel.OldestBlockedSenderMs,

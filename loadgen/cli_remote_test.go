@@ -99,13 +99,13 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		target        string
 		requestAction string
 		value         any
-		update        func(*runtimeStatus)
+		update        func(*runtimeSnapshot)
 	}{
-		{target: "readers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *runtimeStatus) { snapshot.Reader.Workers = 3 }},
-		{target: "senders", requestAction: "set-sender-workers", value: 4, update: func(snapshot *runtimeStatus) { snapshot.Sender.Workers = 4 }},
-		{target: "tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *runtimeStatus) { snapshot.Throttler.RequestedTps = 0 }},
-		{target: "throttle", requestAction: "set-throttler-installed", value: false, update: func(snapshot *runtimeStatus) { snapshot.Throttler.Installed = false }},
-		{target: "throttle", requestAction: "set-throttler-installed", value: true, update: func(snapshot *runtimeStatus) { snapshot.Throttler.Installed = true }},
+		{target: "readers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *runtimeSnapshot) { snapshot.Reader.Workers = 3 }},
+		{target: "senders", requestAction: "set-sender-workers", value: 4, update: func(snapshot *runtimeSnapshot) { snapshot.Sender.Workers = 4 }},
+		{target: "tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.RequestedTps = 0 }},
+		{target: "throttle", requestAction: "set-throttler-installed", value: false, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.Installed = false }},
+		{target: "throttle", requestAction: "set-throttler-installed", value: true, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.Installed = true }},
 	} {
 		t.Run(test.target, func(t *testing.T) {
 			snapshot := testRemoteSnapshot(t)
@@ -426,10 +426,10 @@ func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
 	}
 }
 
-func testRemoteSnapshot(t *testing.T) runtimeStatus {
+func testRemoteSnapshot(t *testing.T) runtimeSnapshot {
 	t.Helper()
-	return runtimeStatus{
-		Run:    runtimeRunStatus{State: runStateRunning},
-		Config: runtimeConfigStatusFromConfig(testConfig(t)),
+	return runtimeSnapshot{
+		Run:    runSnapshot{State: runStateRunning},
+		Config: snapshotConfig(testConfig(t)),
 	}
 }

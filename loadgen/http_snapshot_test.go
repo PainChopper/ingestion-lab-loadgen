@@ -11,28 +11,28 @@ import (
 )
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
-	requests := make(chan runtimeCommand, 1)
-	expected := runtimeStatus{
-		Run: runtimeRunStatus{State: runStateRunning, TotalTransactions: 46, ElapsedMs: 1234},
-		Reader: runtimeReaderStatus{
+	requests := make(chan runtimeRequest, 1)
+	expected := runtimeSnapshot{
+		Run: runSnapshot{State: runStateRunning, TotalTransactions: 46, ElapsedMs: 1234},
+		Reader: readerSnapshot{
 			Workers: 1, LiveWorkers: 2, ReadingWorkers: 2, DrainingWorkers: 1,
 			DrainingReadingWorkers: 1,
 			ReadBatchSize:          50000, ReadTps: 123.5, RowsRead: 47,
 			SourceDirectory: "data/part", SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"},
 		},
-		Throttler:     runtimeThrottlerStatus{RequestedTps: 200, AdmittedTps: 3, Installed: true},
-		Sender:        runtimeSenderStatus{Workers: 32},
-		ReaderChannel: runtimeChannelStatus{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, SentBatchesTotal: 2, SentTransactionsTotal: 4, ReceivedBatchesTotal: 1, ReceivedTransactionsTotal: 2, SentBatchesPerSecond: 1.5, SentTransactionsPerSecond: 3, ReceivedBatchesPerSecond: 0.5, ReceivedTransactionsPerSecond: 1},
-		SenderChannel: runtimeChannelStatus{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, SentBatchesTotal: 3, SentTransactionsTotal: 6, ReceivedBatchesTotal: 2, ReceivedTransactionsTotal: 3, SentBatchesPerSecond: 2, SentTransactionsPerSecond: 4, ReceivedBatchesPerSecond: 1.5, ReceivedTransactionsPerSecond: 2.5},
-		Config:        runtimeConfigStatusFromConfig(testConfig(t)),
+		Throttler:     throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, Installed: true},
+		Sender:        senderSnapshot{Workers: 32},
+		ReaderChannel: channelSnapshot{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, SentBatchesTotal: 2, SentTransactionsTotal: 4, ReceivedBatchesTotal: 1, ReceivedTransactionsTotal: 2, SentBatchesPerSecond: 1.5, SentTransactionsPerSecond: 3, ReceivedBatchesPerSecond: 0.5, ReceivedTransactionsPerSecond: 1},
+		SenderChannel: channelSnapshot{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, SentBatchesTotal: 3, SentTransactionsTotal: 6, ReceivedBatchesTotal: 2, ReceivedTransactionsTotal: 3, SentBatchesPerSecond: 2, SentTransactionsPerSecond: 4, ReceivedBatchesPerSecond: 1.5, ReceivedTransactionsPerSecond: 2.5},
+		Config:        snapshotConfig(testConfig(t)),
 	}
 	rec := httptest.NewRecorder()
-	go func() { (<-requests).statusReply <- expected }()
-	snapshotHandler(runtimeRequests{commands: requests}, zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	go func() { (<-requests).(snapshotRequest).reply <- expected }()
+	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reply code = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var actual runtimeStatus
+	var actual runtimeSnapshot
 	if err := json.Unmarshal(rec.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}
@@ -118,32 +118,32 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 }
 
 func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
-	want := runtimeStatus{
-		Run: runtimeRunStatus{State: runStateStopping, TotalTransactions: 101, ElapsedMs: 102},
-		Reader: runtimeReaderStatus{
+	want := runtimeSnapshot{
+		Run: runSnapshot{State: runStateStopping, TotalTransactions: 101, ElapsedMs: 102},
+		Reader: readerSnapshot{
 			Workers: 11, LiveWorkers: 12, IdleWorkers: 13, ReadingWorkers: 14, BlockedWorkers: 15,
 			DrainingWorkers: 16, DrainingIdleWorkers: 17, DrainingReadingWorkers: 18, DrainingBlockedWorkers: 19,
 			ReadBatchSize: 20, ReadTps: 21.5, RowsRead: 22, SourceDirectory: "reader-source",
 			SourceError: &readerSourceError{Category: "reader-category", Operation: "reader-operation", RelativePath: "reader-path", Message: "reader-message"},
 		},
-		Throttler: runtimeThrottlerStatus{RequestedTps: 31, AdmittedTps: 32.5, Installed: false},
-		Sender: runtimeSenderStatus{
+		Throttler: throttlerSnapshot{RequestedTps: 31, AdmittedTps: 32.5, Installed: false},
+		Sender: senderSnapshot{
 			Workers: 41, LiveWorkers: 42, IdleWorkers: 43, InFlightWorkers: 44, BackoffWorkers: 45,
 			DrainingWorkers: 46, DrainingIdleWorkers: 47, DrainingInFlightWorkers: 48, DrainingBackoffWorkers: 49,
 		},
-		ReaderChannel: runtimeChannelStatus{
+		ReaderChannel: channelSnapshot{
 			Capacity: 51, DepthBatches: 52, BufferedTransactions: 53, BlockedSenders: 54, OldestBlockedSenderMs: 55,
 			BlockedMs: 56, SentBatchesTotal: 57, SentTransactionsTotal: 58, ReceivedBatchesTotal: 59,
 			ReceivedTransactionsTotal: 60, SentBatchesPerSecond: 61.5, SentTransactionsPerSecond: 62.5,
 			ReceivedBatchesPerSecond: 63.5, ReceivedTransactionsPerSecond: 64.5,
 		},
-		SenderChannel: runtimeChannelStatus{
+		SenderChannel: channelSnapshot{
 			Capacity: 71, DepthBatches: 72, BufferedTransactions: 73, BlockedSenders: 74, OldestBlockedSenderMs: 75,
 			BlockedMs: 76, SentBatchesTotal: 77, SentTransactionsTotal: 78, ReceivedBatchesTotal: 79,
 			ReceivedTransactionsTotal: 80, SentBatchesPerSecond: 81.5, SentTransactionsPerSecond: 82.5,
 			ReceivedBatchesPerSecond: 83.5, ReceivedTransactionsPerSecond: 84.5,
 		},
-		Config: runtimeConfigStatusFromConfig(testConfig(t)),
+		Config: snapshotConfig(testConfig(t)),
 	}
 
 	encoded, err := json.Marshal(want)
@@ -203,21 +203,21 @@ func stringSet(values []string) map[string]struct{} {
 }
 
 func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
-	requests := make(chan runtimeCommand, 1)
+	requests := make(chan runtimeRequest, 1)
 	go func() {
-		(<-requests).statusReply <- runtimeStatus{Run: runtimeRunStatus{State: runStateStarting}}
+		(<-requests).(snapshotRequest).reply <- runtimeSnapshot{Run: runSnapshot{State: runStateStarting}}
 	}()
 	recorder := httptest.NewRecorder()
-	snapshotHandler(runtimeRequests{commands: requests}, zap.NewNop()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
 	}
-	var actual runtimeStatus
+	var actual runtimeSnapshot
 	if err := json.Unmarshal(recorder.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}
-	if want := (runtimeStatus{Run: runtimeRunStatus{State: runStateStarting}}); !reflect.DeepEqual(actual, want) {
+	if want := (runtimeSnapshot{Run: runSnapshot{State: runStateStarting}}); !reflect.DeepEqual(actual, want) {
 		t.Errorf("zero snapshot = %+v, want %+v", actual, want)
 	}
 	var run, reader map[string]json.RawMessage
@@ -240,9 +240,9 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 }
 
 func TestSnapshotHandlerRejectsPost(t *testing.T) {
-	requests := make(chan runtimeCommand, 1)
+	requests := make(chan runtimeRequest, 1)
 	rec := httptest.NewRecorder()
-	snapshotHandler(runtimeRequests{commands: requests}, zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
+	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
