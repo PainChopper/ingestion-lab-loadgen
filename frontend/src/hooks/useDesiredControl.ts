@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 export type DesiredControlPhase = 'idle' | 'preview' | 'pending'
 
@@ -36,6 +36,10 @@ interface DesiredState<T> {
   readonly error: string | null
 }
 
+function idleState<T>(applied: T, error: string | null = null): DesiredState<T> {
+  return { desired: applied, phase: 'idle', submittedRevision: null, error }
+}
+
 export function useDesiredControl<T>({
   applied,
   revision,
@@ -44,137 +48,81 @@ export function useDesiredControl<T>({
   rejectionMessage = 'Change rejected',
   unavailableMessage = 'Change unavailable',
 }: DesiredControlOptions<T>): DesiredControl<T> {
-  const [state, setState] = useState<DesiredState<T>>(() => ({
-    desired: applied,
-    phase: 'idle',
-    submittedRevision: null,
-    error: null,
-  }))
-  const stateRef = useRef(state)
-  const appliedRef = useRef(applied)
-  const revisionRef = useRef(revision)
-  const availableRef = useRef(available)
-  const dispatchRef = useRef(dispatch)
-  const tokenRef = useRef(0)
+  const [state, setState] = useState(() => idleState(applied))
+  const stateRef = useRef<DesiredState<T> | null>(null)
+  const optionsRef = useRef({ applied, available, dispatch, revision })
 
-  stateRef.current = state
-  appliedRef.current = applied
-  revisionRef.current = revision
-  availableRef.current = available
-  dispatchRef.current = dispatch
+  const acknowledged = state.phase === 'pending' &&
+    state.submittedRevision !== null && revision > state.submittedRevision &&
+    Object.is(applied, state.desired)
+  if (acknowledged || (!available && (state.phase !== 'idle' || state.error !== null))) {
+    setState(idleState(applied))
+  }
 
-  useEffect(() => {
-    setState((current) => {
-      if (!available) {
-        if (current.phase !== 'idle') tokenRef.current += 1
-        return Object.is(current.desired, applied) &&
-          current.phase === 'idle' && current.error === null
-          ? current
-          : {
-              desired: applied,
-              phase: 'idle',
-              submittedRevision: null,
-              error: null,
-            }
-      }
+  useLayoutEffect(() => {
+    optionsRef.current = { applied, available, dispatch, revision }
+  }, [applied, available, dispatch, revision])
 
-      if (current.phase === 'idle') {
-        return Object.is(current.desired, applied)
-          ? current
-          : { ...current, desired: applied }
-      }
-      if (
-        current.phase === 'pending' &&
-        current.submittedRevision !== null &&
-        revision > current.submittedRevision &&
-        Object.is(applied, current.desired)
-      ) {
-        tokenRef.current += 1
-        return {
-          desired: applied,
-          phase: 'idle',
-          submittedRevision: null,
-          error: null,
-        }
-      }
-      return current
-    })
-  }, [applied, available, revision])
+  useLayoutEffect(() => {
+    stateRef.current = state
+    return () => { stateRef.current = null }
+  }, [state])
+
+  const updateState = useCallback((next: DesiredState<T>) => {
+    // A preview and its commit can run in the same event, before React renders.
+    stateRef.current = next
+    setState(next)
+  }, [])
 
   const preview = useCallback((value: T) => {
-    if (!availableRef.current || stateRef.current.phase === 'pending') return
-    const next: DesiredState<T> = {
+    const current = stateRef.current
+    if (current === null || !optionsRef.current.available || current.phase === 'pending') return
+    updateState({
       desired: value,
       phase: 'preview',
       submittedRevision: null,
       error: null,
-    }
-    stateRef.current = next
-    setState(next)
-  }, [])
+    })
+  }, [updateState])
 
   const cancel = useCallback(() => {
-    if (stateRef.current.phase !== 'preview') return
-    tokenRef.current += 1
-    const next: DesiredState<T> = {
-      desired: appliedRef.current,
-      phase: 'idle',
-      submittedRevision: null,
-      error: null,
-    }
-    stateRef.current = next
-    setState(next)
-  }, [])
+    if (stateRef.current?.phase !== 'preview') return
+    updateState(idleState(optionsRef.current.applied))
+  }, [updateState])
 
   const commit = useCallback(async (value?: T): Promise<boolean> => {
     const current = stateRef.current
-    if (!availableRef.current || current.phase === 'pending') return false
-    const desired = value === undefined ? current.desired : value
-    if (Object.is(desired, appliedRef.current)) {
-      setState({
-        desired: appliedRef.current,
-        phase: 'idle',
-        submittedRevision: null,
-        error: null,
-      })
+    const options = optionsRef.current
+    if (current === null || !options.available || current.phase === 'pending') return false
+    const desired = value === undefined
+      ? current.phase === 'idle' ? options.applied : current.desired
+      : value
+    if (Object.is(desired, options.applied)) {
+      updateState(idleState(options.applied))
       return true
     }
 
-    const token = tokenRef.current + 1
-    tokenRef.current = token
-    const submittedRevision = revisionRef.current
     const pending: DesiredState<T> = {
-      desired, phase: 'pending', submittedRevision, error: null,
+      desired, phase: 'pending', submittedRevision: options.revision, error: null,
     }
-    stateRef.current = pending
-    setState(pending)
+    updateState(pending)
     try {
-      const receipt = await dispatchRef.current(desired)
-      if (tokenRef.current !== token) return receipt.accepted
-      if (receipt.accepted) return true
-      setState({
-        desired: appliedRef.current,
-        phase: 'idle',
-        submittedRevision: null,
-        error: rejectionMessage,
-      })
-      return false
+      const receipt = await options.dispatch(desired)
+      if (!receipt.accepted && stateRef.current === pending) {
+        updateState(idleState(optionsRef.current.applied, rejectionMessage))
+      }
+      return receipt.accepted
     } catch {
-      if (tokenRef.current === token) {
-        setState({
-          desired: appliedRef.current,
-          phase: 'idle',
-          submittedRevision: null,
-          error: unavailableMessage,
-        })
+      if (stateRef.current === pending) {
+        updateState(idleState(optionsRef.current.applied, unavailableMessage))
       }
       return false
     }
-  }, [rejectionMessage, unavailableMessage])
+  }, [rejectionMessage, unavailableMessage, updateState])
 
   return {
     applied,
-    desired: state.desired,
+    desired: state.phase === 'idle' ? applied : state.desired,
     phase: state.phase,
     error: state.error,
     available,

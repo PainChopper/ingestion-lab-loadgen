@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type {
@@ -73,23 +73,35 @@ function Harness({
   const snapshot = new ChannelFlowStateDeriver().derive(adapter.getSnapshot(), 0)
   adapter.dispose()
   const [revision, setRevision] = useState(snapshot.revision)
-  const [requestedApplied, setRequestedApplied] = useState(
-    control.applied ?? control.min,
-  )
-  const [modeApplied, setModeApplied] = useState(installed)
-  useEffect(() => setRequestedApplied(control.applied ?? control.min), [control.applied, control.min])
-  useEffect(() => setModeApplied(installed), [installed])
+  const [requestedOverride, setRequestedOverride] = useState<{
+    applied: number | null
+    min: number
+    value: number
+  } | null>(null)
+  const [modeOverride, setModeOverride] = useState<{
+    applied: boolean | null
+    value: boolean
+  } | null>(null)
+  const currentRequestedOverride = requestedOverride?.applied === control.applied &&
+    requestedOverride.min === control.min
+  const currentModeOverride = modeOverride?.applied === installed
+  if (requestedOverride !== null && !currentRequestedOverride) setRequestedOverride(null)
+  if (modeOverride !== null && !currentModeOverride) setModeOverride(null)
+  const requestedApplied = currentRequestedOverride
+    ? requestedOverride.value
+    : control.applied ?? control.min
+  const modeApplied = currentModeOverride ? modeOverride.value : installed
   const requestedController = useDesiredControl({
     applied: requestedApplied,
     revision,
     available: control.applied !== null && control.applyMode !== 'unavailable',
-    dispatch: async (value) => {
+    dispatch: (value) => {
       onCommand(value)
       if (accepted) {
-        setRequestedApplied(value)
+        setRequestedOverride({ applied: control.applied, min: control.min, value })
         setRevision((current) => current + 1)
       }
-      return { accepted }
+      return Promise.resolve({ accepted })
     },
   })
   const modeController = useDesiredControl({
@@ -99,7 +111,7 @@ function Harness({
     dispatch: async (value) => {
       onModeCommand(value)
       if (modeAccepted) {
-        setModeApplied(value)
+        setModeOverride({ applied: installed, value })
         setRevision((current) => current + 1)
       }
       return { accepted: modeAccepted }
@@ -283,6 +295,27 @@ describe('ThrottlerActor valve control', () => {
     expect(onCommand).toHaveBeenLastCalledWith(0)
     expect(slider.getAttribute('aria-valuenow')).toBe('0')
     expect(slider.getAttribute('data-wheel-phase')).toBe('0')
+  })
+
+  it('retries the same opening step after a synchronous dispatch failure', async () => {
+    const user = userEvent.setup()
+    const onCommand = vi.fn().mockImplementationOnce(() => {
+      throw new Error('Dispatch unavailable')
+    })
+    render(<Harness control={requestedControl({ applied: 0 })} onCommand={onCommand} />)
+    const slider = screen.getByRole('slider', { name: 'Throttle opening' })
+    await user.click(slider)
+
+    const firstOpening = 25_000
+    await user.keyboard('{ArrowRight}')
+    expect(onCommand.mock.calls).toEqual([[firstOpening]])
+    expect(slider.getAttribute('aria-valuenow')).toBe('0')
+    expect(slider.getAttribute('data-wheel-phase')).toBe('0')
+
+    await user.keyboard('{ArrowRight}')
+    expect(onCommand.mock.calls).toEqual([[firstOpening], [firstOpening]])
+    expect(slider.getAttribute('aria-valuenow')).toBe('1')
+    expect(slider.getAttribute('data-wheel-phase')).toBe('1')
   })
 
   it('pulls the wheel center upward past a threshold and cancels short pulls', () => {

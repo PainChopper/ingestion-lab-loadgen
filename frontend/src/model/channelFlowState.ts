@@ -144,17 +144,28 @@ interface ChannelDerivationState {
   pressureActive: boolean
 }
 
+export interface LoadgenSnapshotPresentation {
+  readonly snapshot: LoadgenSnapshot
+  readonly liveSnapshot: LoadgenTelemetrySnapshot
+}
+
 export class ChannelFlowStateDeriver {
   private readonly channelStates = new Map<string, ChannelDerivationState>()
-  private sourceSnapshot: LoadgenTelemetrySnapshot | null = null
-  private derivedSnapshot: LoadgenSnapshot | null = null
+  private presentation: LoadgenSnapshotPresentation | null = null
 
   derive(
     snapshot: LoadgenTelemetrySnapshot,
     observedAtMs: number,
   ): LoadgenSnapshot {
-    if (snapshot === this.sourceSnapshot && this.derivedSnapshot !== null) {
-      return this.derivedSnapshot
+    return this.derivePresentation(snapshot, observedAtMs).snapshot
+  }
+
+  derivePresentation(
+    snapshot: LoadgenTelemetrySnapshot,
+    observedAtMs: number,
+  ): LoadgenSnapshotPresentation {
+    if (this.presentation?.liveSnapshot === snapshot) {
+      return this.presentation
     }
 
     const readerChannel = this.deriveChannel(
@@ -169,11 +180,11 @@ export class ChannelFlowStateDeriver {
       snapshot.connectionState,
       observedAtMs,
     )
-    const derived = Object.freeze({ ...snapshot, readerChannel, senderChannel })
-
-    this.sourceSnapshot = snapshot
-    this.derivedSnapshot = derived
-    return derived
+    this.presentation = Object.freeze({
+      snapshot: Object.freeze({ ...snapshot, readerChannel, senderChannel }),
+      liveSnapshot: snapshot,
+    })
+    return this.presentation
   }
 
   private deriveChannel(
