@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -106,7 +108,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 
 func TestCLIBinaryServeStartsDeliveryAutomatically(t *testing.T) {
 	binary := buildCLIBinary(t)
-	ensureServePortAvailable(t)
+	occupyDefaultServePort(t)
 
 	received := make(chan struct{}, 1)
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -177,30 +179,147 @@ func assertCLIBinaryFailure(t *testing.T, result blackBoxResult, wantExit int, w
 
 func startCLIServe(t *testing.T, binary, configPath string) string {
 	t.Helper()
-	args := []string{"serve", "--config", configPath}
-	command := exec.Command(binary, args...)
-	command.Dir = filepath.Dir(configPath)
-	var stdout, stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Start(); err != nil {
-		t.Fatalf("start serve: %v", err)
-	}
-	t.Cleanup(func() {
-		if command.ProcessState != nil && command.ProcessState.Exited() {
-			return
+	for attempt := range 3 {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
 		}
-		if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			t.Errorf("stop serve: %v", err)
+		addr := listener.Addr().String()
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
 		}
-		if err := command.Wait(); err != nil {
+		loaded, err := loadConfig(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		updated := strings.Replace(string(contents), fmt.Sprintf("addr = %q", loaded.HTTP.Addr), fmt.Sprintf("addr = %q", addr), 1)
+		if updated == string(contents) {
+			t.Fatal("HTTP address replacement did not apply")
+		}
+		if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(binary, "serve", "--config", configPath)
+		command.Dir = filepath.Dir(configPath)
+		var stdout, stderr bytes.Buffer
+		command.Stdout, command.Stderr = &stdout, &stderr
+		if err := command.Start(); err != nil {
+			t.Fatalf("start serve: %v", err)
+		}
+		finished := make(chan struct{})
+		var result blackBoxResult
+		var waitError error
+		go func() {
+			waitError = command.Wait()
+			result = blackBoxResult{stdout: stdout.String(), stderr: stderr.String()}
 			var exitError *exec.ExitError
-			if !errors.As(err, &exitError) {
-				t.Errorf("wait for stopped serve: %v", err)
+			if errors.As(waitError, &exitError) {
+				result.exitCode = exitError.ExitCode()
 			}
+			close(finished)
+		}()
+		ready := false
+		stop := func() {
+			select {
+			case <-finished:
+				return
+			default:
+			}
+			if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				t.Errorf("stop own serve: %v", err)
+			}
+			<-finished
 		}
-	})
-	return defaultCLIBaseURL
+		t.Cleanup(func() {
+			stop()
+			if ready && (strings.Count(result.stdout, "event=service_started") != 1 || !strings.Contains(result.stdout, "http_addr="+addr)) {
+				t.Errorf("service start log must appear once with actual listener %s: %s", addr, result.stdout)
+			}
+		})
+		baseURL := "http://" + addr
+		client := &http.Client{Timeout: 100 * time.Millisecond}
+		deadline := time.Now().Add(blackBoxTimeout)
+		retry := false
+		for time.Now().Before(deadline) {
+			select {
+			case <-finished:
+				if isBindConflict(result, addr) {
+					retry = true
+					break
+				}
+				t.Fatalf("serve exited before readiness: wait=%v result=%+v", waitError, result)
+			default:
+			}
+			if retry {
+				break
+			}
+			response, err := client.Get(baseURL + snapshotPath)
+			if err == nil {
+				var snapshot runtimeSnapshot
+				decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
+				closeErr := response.Body.Close()
+				if response.StatusCode == http.StatusOK && decodeErr == nil && closeErr == nil && snapshot.Run.State == runStateRunning {
+					ready = true
+					t.Logf("serve attempt %d ready at %s", attempt+1, baseURL)
+					return baseURL
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !retry {
+			stop()
+			t.Fatalf("serve readiness timeout: %+v", result)
+		}
+		t.Logf("retry %d after own subprocess bind conflict at %s", attempt+1, addr)
+	}
+	t.Fatal("serve exhausted three bind-conflict attempts")
+	return ""
+}
+
+func isBindConflict(result blackBoxResult, addr string) bool {
+	message := syscall.EADDRINUSE.Error()
+	if runtime.GOOS == "windows" {
+		message = syscall.Errno(10048).Error()
+	}
+	return result.exitCode == cliExitLocal && strings.Contains(result.stderr, "listen HTTP server") &&
+		strings.Contains(result.stderr, addr) && strings.Contains(strings.ToLower(result.stderr), strings.ToLower(message))
+}
+
+func TestCLIBinaryServeReportsRealBindConflict(t *testing.T) {
+	binary := buildCLIBinary(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	addr := listener.Addr().String()
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(receiver.Close)
+	configPath := writeBlackBoxConfig(t, receiver.URL+"/internal/ingest")
+	contents, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(contents), "addr = \"127.0.0.1:8080\"", fmt.Sprintf("addr = %q", addr), 1)
+	if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := runCLIBinary(t, binary, "serve", "--config", configPath)
+	if !isBindConflict(result, addr) || isBindConflict(result, "127.0.0.1:0") {
+		t.Fatalf("real bind conflict misclassified: %+v", result)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	baseURL := startCLIServe(t, binary, configPath)
+	waitForHTTPSnapshotState(t, baseURL, runStateRunning)
+	t.Logf("real bind conflict at %s detected; ordinary helper restarted at %s", addr, baseURL)
 }
 
 func writeBlackBoxConfig(t *testing.T, senderURL string) string {
@@ -247,13 +366,24 @@ func waitForHTTPSnapshotState(t *testing.T, baseURL string, want runState) {
 	t.Fatalf("wait for service state %q: %v", want, lastError)
 }
 
-func ensureServePortAvailable(t *testing.T) {
+func occupyDefaultServePort(t *testing.T) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:8080")
 	if err != nil {
-		t.Skipf("serve test requires 127.0.0.1:8080: %v", err)
+		message := syscall.EADDRINUSE.Error()
+		if runtime.GOOS == "windows" {
+			message = syscall.Errno(10048).Error()
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(message)) {
+			t.Fatalf("reserve default port: %v", err)
+		}
+		t.Logf("default 8080 already occupied; existing listener left untouched: %v", err)
+		return
 	}
-	if err := listener.Close(); err != nil {
-		t.Fatalf("release serve port: %v", err)
-	}
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Log("own test listener holds 8080 throughout serve startup and delivery")
 }

@@ -78,9 +78,9 @@ func TestOpenAPIContract(t *testing.T) {
 	if !reflect.DeepEqual(stringSet(mapKeys(paths)), stringSet([]string{snapshotPath, commandsPath})) {
 		t.Errorf("paths = %v", mapKeys(paths))
 	}
-	if !reflect.DeepEqual(mapKeys(paths[snapshotPath].(map[string]any)), []string{"get"}) ||
+	if !reflect.DeepEqual(mapKeys(paths[snapshotPath].(map[string]any)), []string{"get", "head"}) ||
 		!reflect.DeepEqual(mapKeys(paths[commandsPath].(map[string]any)), []string{"post"}) {
-		t.Errorf("methods do not match GET snapshot and POST commands")
+		t.Errorf("methods do not match GET/HEAD snapshot and POST commands")
 	}
 	components := document["components"].(map[string]any)
 	schemas := components["schemas"].(map[string]any)
@@ -254,7 +254,7 @@ func assertExampleDispatches(t *testing.T, body map[string]any, want runtimeComm
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		commandsHandler(runtimeRequests{queue: requests}, commandConfig).ServeHTTP(recorder, request)
+		newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), commandConfig, zap.NewNop()).ServeHTTP(recorder, request)
 	}()
 	var dispatched controlRequest
 	select {
@@ -513,6 +513,15 @@ func checkFieldSchema(t *testing.T, name string, field reflect.Type, property ma
 
 func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[string]any, schemas map[string]any) {
 	t.Helper()
+	head := paths[snapshotPath].(map[string]any)["head"].(map[string]any)["responses"].(map[string]any)
+	if !reflect.DeepEqual(stringSet(mapKeys(head)), stringSet([]string{"200", "405", "503"})) {
+		t.Errorf("HEAD response codes=%v", mapKeys(head))
+	}
+	for code, response := range head {
+		if _, ok := response.(map[string]any)["content"]; ok {
+			t.Errorf("HEAD %s must have no body", code)
+		}
+	}
 	snapshot := paths[snapshotPath].(map[string]any)["get"].(map[string]any)["responses"].(map[string]any)
 	commands := paths[commandsPath].(map[string]any)["post"].(map[string]any)["responses"].(map[string]any)
 	if !reflect.DeepEqual(stringSet(mapKeys(snapshot)), stringSet([]string{"200", "405", "503"})) ||

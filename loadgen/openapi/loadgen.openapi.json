@@ -8,6 +8,15 @@
   "servers": [{ "url": "/" }],
   "paths": {
     "/api/loadgen/snapshot": {
+      "head": {
+        "operationId": "headSnapshot",
+        "summary": "Read snapshot headers without a response body",
+        "responses": {
+          "200": { "description": "Same headers as GET; empty body." },
+          "405": { "description": "Method not allowed. HEAD responses have no body.", "headers": { "Allow": { "schema": { "type": "string", "enum": ["GET, HEAD"] } } } },
+          "503": { "description": "Runtime unavailable or reply interrupted; same headers as GET, no body." }
+        }
+      },
       "get": {
         "operationId": "getSnapshot",
         "summary": "Read the current runtime snapshot",
@@ -65,12 +74,13 @@
         "content": { "text/plain": { "schema": { "type": "string" } } }
       },
       "RuntimeUnavailable": {
-        "description": "The event loop has exited; the HTTP server is shutting down.",
+        "description": "The event loop is unavailable or waiting for its reply was interrupted by cancellation or a deadline. A command may already have been applied before its reply was interrupted.",
         "content": { "text/plain": { "schema": { "type": "string" } } }
       },
       "MethodNotAllowed": {
-        "description": "Method is not supported for this path",
-        "headers": { "Allow": { "schema": { "type": "string" } } }
+        "description": "Method is not supported for this path. Allow is GET, HEAD for snapshot and POST for commands. Non-HEAD replies have a text/plain body with a trailing line feed.",
+        "headers": { "Allow": { "schema": { "type": "string", "enum": ["GET, HEAD", "POST"] } } },
+        "content": { "text/plain": { "schema": { "type": "string" } } }
       }
     },
     "schemas": {

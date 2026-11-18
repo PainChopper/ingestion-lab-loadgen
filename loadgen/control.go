@@ -117,7 +117,7 @@ func (s *controlState) runEventLoop(
 			}
 			runErr = errors.Join(runErr, err)
 			s.run.state = runStateFaulted
-			s.logger.Error("HTTP server failed", zap.String("event", "run_failed"), zap.Error(err))
+			s.logger.Error("HTTP server failed", zap.String("event", "http_server_failed"), zap.Error(err))
 			beginDrain()
 		case found := <-events.source:
 			events.source = nil
@@ -155,7 +155,7 @@ func (s *controlState) runEventLoop(
 			case <-pipelineDone:
 			default:
 				partial = true
-				s.logger.Warn("pipeline drain timed out", zap.String("event", "service_stopping"))
+				s.logger.Warn("pipeline drain timed out", zap.String("event", "pipeline_drain_timed_out"))
 			}
 			return shutdownDeadline, runErr
 		case <-pipelineDone:

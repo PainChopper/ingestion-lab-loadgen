@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 func TestCommandsHandlerRejectsGet(t *testing.T) {
@@ -13,7 +15,7 @@ func TestCommandsHandlerRejectsGet(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, commandsPath, nil)
 	rec := httptest.NewRecorder()
 
-	commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(rec, req)
+	newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
 	response := rec.Result()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %v, want %v", rec.Code, http.StatusMethodNotAllowed)
@@ -21,6 +23,9 @@ func TestCommandsHandlerRejectsGet(t *testing.T) {
 	allow := response.Header.Get("Allow")
 	if allow != http.MethodPost {
 		t.Errorf("allow header = %q, want %q", allow, http.MethodPost)
+	}
+	if rec.Body.String() != "Method Not Allowed\n" {
+		t.Errorf("405 body=%q", rec.Body.String())
 	}
 }
 
@@ -39,7 +44,7 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 			body := strings.NewReader(test.body)
 			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
 			rec := httptest.NewRecorder()
-			commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(rec, req)
+			newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
 			response := rec.Result()
 			if response.StatusCode != http.StatusBadRequest {
 				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusBadRequest)
@@ -55,12 +60,13 @@ func TestCommandsHandlerRejectsOversizedBody(t *testing.T) {
 		name string
 		body string
 	}{
+		{"malformed JSON exceeds limit", "!" + strings.Repeat("x", limit)},
 		{"JSON exceeds limit", `{"action":"` + strings.Repeat("x", limit) + `","value":2}`},
 		{"trailing whitespace exceeds limit", command + strings.Repeat(" ", limit+1-len(command))},
 	}
 	done := make(chan struct{})
 	close(done)
-	handler := commandsHandler(runtimeRequests{done: done}, testConfig(t))
+	handler := newServeMux(runtimeRequests{done: done}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
@@ -115,7 +121,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 			config := testConfig(t)
 			go func() {
 				defer close(done)
-				commandsHandler(runtimeRequests{queue: commands}, config).ServeHTTP(recorder, req)
+				newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), config, zap.NewNop()).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -174,7 +180,7 @@ func TestSenderCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(recorder, req)
+				newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {
@@ -228,7 +234,7 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(recorder, req)
+				newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
 			}()
 			if test.want == http.StatusOK {
 				select {

@@ -70,6 +70,9 @@ func TestParseSetCLI(t *testing.T) {
 		{name: "set help", args: []string{"set", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
 		{name: "target help", args: []string{"set", "readers", "--help"}, wantHelp: true, wantURL: defaultCLIBaseURL},
 		{name: "unknown target", args: []string{"set", "other", "1"}, wantErr: true},
+		{name: "unknown target help", args: []string{"set", "other", "--help"}, wantErr: true},
+		{name: "empty numeric value", args: []string{"set", "readers", ""}, wantErr: true},
+		{name: "empty bool value", args: []string{"set", "throttle", ""}, wantErr: true},
 		{name: "missing value", args: []string{"set", "readers"}, wantErr: true},
 		{name: "non integer", args: []string{"set", "tps", "not-an-integer"}, wantErr: true},
 		{name: "invalid URL", args: []string{"set", "readers", "2", "--url", "ftp://example.test"}, wantErr: true},
@@ -130,7 +133,10 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 			}))
 			defer server.Close()
 
-			command := cliCommand{remoteAction: "set", remoteURL: server.URL, remoteSet: remoteSetCommand{target: test.target, requestAction: test.requestAction, value: test.value}}
+			command, err := parseCLI([]string{"set", test.target, mustFormatValue(test.value), "--url", server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
 			var output bytes.Buffer
 			if err := runRemoteCLI(context.Background(), command, &output); err != nil {
 				t.Fatalf("runRemoteCLI: %v", err)
@@ -156,7 +162,11 @@ func TestRunRemoteCLISetRejectsMismatchedVerificationSnapshot(t *testing.T) {
 	defer server.Close()
 
 	var output bytes.Buffer
-	err := runRemoteCLI(context.Background(), cliCommand{remoteAction: "set", remoteURL: server.URL, remoteSet: remoteSetCommand{target: "readers", requestAction: "set-reader-workers", value: 3}}, &output)
+	command, err := parseCLI([]string{"set", "readers", "3", "--url", server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runRemoteCLI(context.Background(), command, &output)
 	if err == nil || !strings.Contains(err.Error(), "verification snapshot reader.workers") {
 		t.Fatalf("runRemoteCLI error = %v", err)
 	}

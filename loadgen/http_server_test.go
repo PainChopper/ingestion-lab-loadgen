@@ -3,25 +3,155 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestServeMuxHEADUsesSnapshotAndReturnsNoBody(t *testing.T) {
+	requests := make(chan runtimeRequest)
+	mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	go func() {
+		(<-requests).(snapshotRequest).reply <- runtimeSnapshot{Run: runSnapshot{State: runStateRunning}}
+	}()
+	for _, test := range []struct {
+		path, allow string
+		status      int
+	}{
+		{path: snapshotPath, status: http.StatusOK},
+		{path: commandsPath, status: http.StatusMethodNotAllowed, allow: http.MethodPost},
+	} {
+		response, err := server.Client().Head(server.URL + test.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if err != nil || closeErr != nil || len(body) != 0 || response.StatusCode != test.status || response.Header.Get("Allow") != test.allow {
+			t.Fatalf("HEAD %s: status=%d body=%q allow=%q read=%v close=%v", test.path, response.StatusCode, body, response.Header.Get("Allow"), err, closeErr)
+		}
+		if test.status == http.StatusOK && response.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("HEAD snapshot Content-Type=%q", response.Header.Get("Content-Type"))
+		}
+	}
+}
+
+func TestHTTPWaitFailuresReturnServiceUnavailable(t *testing.T) {
+	cfg := testConfig(t)
+	for _, path := range []string{snapshotPath, commandsPath} {
+		for _, stage := range []string{"send", "reply"} {
+			for _, cause := range []string{"cancel", "deadline", "event loop exit"} {
+				t.Run(path+"/"+stage+"/"+cause, func(t *testing.T) {
+					synctest.Test(t, func(t *testing.T) {
+						ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+						defer cancel()
+						queue := make(chan runtimeRequest)
+						loopDone := make(chan struct{})
+						mux := newServeMux(runtimeRequests{queue: queue, done: loopDone}, newPrometheusMetrics(), cfg, zap.NewNop())
+						method, body := http.MethodGet, ""
+						if path == commandsPath {
+							method, body = http.MethodPost, `{"action":"set-reader-workers","value":1}`
+						}
+						request := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
+						recorder := httptest.NewRecorder()
+						returned := make(chan struct{})
+						go func() { mux.ServeHTTP(recorder, request); close(returned) }()
+						if stage == "reply" {
+							<-queue
+						}
+						synctest.Wait()
+						switch cause {
+						case "cancel":
+							cancel()
+						case "deadline":
+							time.Sleep(time.Millisecond)
+						case "event loop exit":
+							close(loopDone)
+						}
+						<-returned
+						if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != "runtime unavailable\n" {
+							t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+						}
+					})
+				})
+			}
+		}
+	}
+}
+
+func TestHTTPCommandReceiptsHaveEmptyBody(t *testing.T) {
+	for _, applied := range []bool{true, false} {
+		requests := make(chan runtimeRequest)
+		mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+		go func() { (<-requests).(controlRequest).reply <- applied }()
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"set-reader-workers","value":1}`)))
+		want := http.StatusOK
+		if !applied {
+			want = http.StatusConflict
+		}
+		if recorder.Code != want || recorder.Body.Len() != 0 {
+			t.Fatalf("applied=%t status=%d body=%q", applied, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestStartHTTPServerLogsActualListenerAddress(t *testing.T) {
+	cfg := testConfig(t)
+	// The loader still rejects port zero; directly start the listener to distinguish actual from configured address.
+	cfg.HTTP.Addr = "127.0.0.1:0"
+	core, logs := observer.New(zap.InfoLevel)
+	server, done, err := startHTTPServer(runtimeRequests{}, newPrometheusMetrics(), cfg, zap.New(core))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		if err := shutdownHTTPServer(ctx, server); err != nil {
+			t.Error(err)
+		}
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	entries := logs.FilterMessage("service started").All()
+	if len(entries) != 1 {
+		t.Fatalf("service start logs=%d", len(entries))
+	}
+	fields := entries[0].ContextMap()
+	addr, ok := fields["http_addr"].(string)
+	if !ok || addr == cfg.HTTP.Addr || fields["event"] != "service_started" {
+		t.Fatalf("start fields=%v", fields)
+	}
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestServeMuxRoutes(t *testing.T) {
 	loaded := testConfig(t)
 	loaded.Sender.API.URL = "https://example.test" + snapshotPath
 	mux := newServeMux(runtimeRequests{queue: make(chan runtimeRequest, 1)}, newPrometheusMetrics(), loaded, zap.NewNop())
 
-	for _, route := range []string{snapshotPath, commandsPath} {
-		req := httptest.NewRequest(http.MethodGet, route, nil)
-		_, pattern := mux.Handler(req)
-		if pattern != route {
-			t.Errorf("pattern = %q, want %q", pattern, route)
+	for _, route := range []struct{ method, path, pattern string }{
+		{http.MethodGet, snapshotPath, "GET " + snapshotPath},
+		{http.MethodHead, snapshotPath, "GET " + snapshotPath},
+		{http.MethodPost, commandsPath, "POST " + commandsPath},
+	} {
+		_, pattern := mux.Handler(httptest.NewRequest(route.method, route.path, nil))
+		if pattern != route.pattern {
+			t.Errorf("pattern=%q,want %q", pattern, route.pattern)
 		}
 	}
 }

@@ -98,81 +98,33 @@ func (c remoteCLIClient) commandWithValue(ctx context.Context, action string, va
 	return nil
 }
 
+type remoteSetSnapshot struct {
+	Reader struct {
+		Workers *int `json:"workers"`
+	} `json:"reader"`
+	Sender struct {
+		Workers *int `json:"workers"`
+	} `json:"sender"`
+	Throttler struct {
+		RequestedTps *int  `json:"requestedTps"`
+		Installed    *bool `json:"installed"`
+	} `json:"throttler"`
+}
+
 func (c remoteSetCommand) confirm(data []byte) error {
-	// The shared DTO has validated the response; pointers distinguish an explicit zero from absence/null.
-	var snapshot struct {
-		Reader struct {
-			Workers *int `json:"workers"`
-		} `json:"reader"`
-		Sender struct {
-			Workers *int `json:"workers"`
-		} `json:"sender"`
-		Throttler struct {
-			RequestedTps *int  `json:"requestedTps"`
-			Installed    *bool `json:"installed"`
-		} `json:"throttler"`
-	}
+	// The shared DTO validates the response; pointers distinguish explicit zero from absence/null.
+	var snapshot remoteSetSnapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		return fmt.Errorf("decode verification snapshot: %w", err)
 	}
-
-	switch c.target {
-	case "readers":
-		expected, err := c.numericValue()
-		if err != nil {
-			return err
-		}
-		if snapshot.Reader.Workers == nil {
-			return errors.New("verification snapshot reader.workers is missing or null")
-		}
-		if *snapshot.Reader.Workers != expected {
-			return fmt.Errorf("verification snapshot reader.workers = %v, want %v", *snapshot.Reader.Workers, expected)
-		}
-	case "senders":
-		expected, err := c.numericValue()
-		if err != nil {
-			return err
-		}
-		if snapshot.Sender.Workers == nil {
-			return errors.New("verification snapshot sender.workers is missing or null")
-		}
-		if *snapshot.Sender.Workers != expected {
-			return fmt.Errorf("verification snapshot sender.workers = %v, want %v", *snapshot.Sender.Workers, expected)
-		}
-	case "tps":
-		expected, err := c.numericValue()
-		if err != nil {
-			return err
-		}
-		if snapshot.Throttler.RequestedTps == nil {
-			return errors.New("verification snapshot throttler.requestedTps is missing or null")
-		}
-		if *snapshot.Throttler.RequestedTps != expected {
-			return fmt.Errorf("verification snapshot throttler.requestedTps = %v, want %v", *snapshot.Throttler.RequestedTps, expected)
-		}
-	case "throttle":
-		expected, ok := c.value.(bool)
-		if !ok {
-			return fmt.Errorf("verification snapshot throttle value has invalid type")
-		}
-		if snapshot.Throttler.Installed == nil {
-			return errors.New("verification snapshot throttler.installed is missing or null")
-		}
-		if *snapshot.Throttler.Installed != expected {
-			return fmt.Errorf("verification snapshot throttler.installed = %v, want %v", *snapshot.Throttler.Installed, expected)
-		}
-	default:
-		return fmt.Errorf("verification snapshot unknown set target %q", c.target)
+	actual := c.actual(snapshot)
+	if actual == nil {
+		return fmt.Errorf("verification snapshot %s is missing or null", c.field)
+	}
+	if actual != c.value {
+		return fmt.Errorf("verification snapshot %s = %v, want %v", c.field, actual, c.value)
 	}
 	return nil
-}
-
-func (c remoteSetCommand) numericValue() (int, error) {
-	value, ok := c.value.(int)
-	if !ok {
-		return 0, fmt.Errorf("verification snapshot %s value has invalid type", c.target)
-	}
-	return value, nil
 }
 
 func (c remoteCLIClient) do(ctx context.Context, method, endpoint string, body []byte) (*http.Response, error) {
@@ -203,7 +155,7 @@ func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
 	if err := decoder.Decode(&snapshot); err != nil {
 		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: %w", err)
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: trailing JSON")
 	}
 	switch snapshot.Run.State {

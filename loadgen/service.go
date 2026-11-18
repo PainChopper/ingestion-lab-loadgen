@@ -40,7 +40,6 @@ func runServe(appCtx context.Context, configPath string) error {
 	if err != nil {
 		return err
 	}
-	logger.Info("service started", zap.String("event", "service_started"))
 	events := runtimeEvents{
 		requests:   queue,
 		source:     prepareSourceAsync(cfg.Source.Path),
@@ -56,7 +55,7 @@ func runServe(appCtx context.Context, configPath string) error {
 	shutdownCtx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	if err := shutdownHTTPServer(shutdownCtx, server); err != nil {
-		logger.Error("graceful HTTP shutdown failed", zap.String("event", "run_failed"), zap.Error(err))
+		logger.Error("graceful HTTP shutdown failed", zap.String("event", "http_shutdown_failed"), zap.Error(err))
 		runErr = errors.Join(runErr, fmt.Errorf("shutdown http server: %w", err))
 	}
 	select {

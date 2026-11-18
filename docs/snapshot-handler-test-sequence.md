@@ -1,28 +1,28 @@
 # `TestSnapshotHandlerReturnsOwnerSnapshot` sequence
 
-This test verifies the complete snapshot request path: an HTTP request reaches `snapshotHandler`, the handler asks the state owner for a snapshot through the command channel, and the returned snapshot becomes the HTTP response.
+Тест проверяет обработку snapshot: синтетический GET непосредственно вызывает `snapshotHandler`, обработчик отправляет типизированный `snapshotRequest` владельцу состояния через общую очередь, а полученный `runtimeSnapshot` становится JSON-ответом.
 
 ```mermaid
 sequenceDiagram
     participant Test as Test
     participant Handler as snapshotHandler
-    participant Owner as fakeStateOwner
+    participant Owner as Owner goroutine
     participant Recorder as ResponseRecorder
 
     Test->>Test: Create expected snapshot
     Test->>Owner: Start goroutine
-    Note over Owner: Wait for a command
+    Note over Owner: Wait for snapshotRequest
 
     Test->>Handler: ServeHTTP(rec, req)
-    Handler->>Owner: Send getSnapshot through commands
-    Note over Handler,Owner: Unbuffered channel rendezvous
+    Handler->>Owner: Send snapshotRequest through requests
+    Note over Handler,Owner: Queue capacity is 1
 
-    Owner->>Owner: Verify cmd.kind
-    Owner-->>Handler: Send expected through snapshotReply
+    Owner->>Owner: Assert request type is snapshotRequest
+    Owner-->>Handler: Send expected through request.reply
+    Note over Handler,Owner: Reply channel capacity is 1
 
-    Handler->>Recorder: Write HTTP 200
     Handler->>Recorder: Write application/json header
-    Handler->>Recorder: Encode snapshot as JSON
+    Handler->>Recorder: Encode snapshot as JSON with implicit HTTP 200
     Handler-->>Test: Return from ServeHTTP
 
     Test->>Recorder: Read status, header, and body
@@ -30,13 +30,13 @@ sequenceDiagram
     Test->>Test: Compare actual with expected
 ```
 
-## Participants
+## Участники
 
-- `req` is the synthetic `GET /api/loadgen/snapshot` request.
-- `rec` records the HTTP response produced by the handler.
-- `fakeStateOwner` replaces the real state-owning `main` select loop for this test.
-- `expected` is the snapshot returned by the fake state owner; it is not prebuilt JSON.
-- `actual` is decoded from the handler's HTTP response body.
+- `req` — синтетический `GET /api/loadgen/snapshot`.
+- `rec` записывает HTTP-ответ обработчика.
+- Горутина владельца состояния заменяет реальный event loop и отвечает на `snapshotRequest`.
+- `expected` — готовая структура snapshot, а не предварительно собранный JSON.
+- `actual` декодируется из фактического тела HTTP-ответа и сравнивается с `expected`.
 
-The goroutine is required because `snapshotHandler` sends a command and waits for `snapshotReply`. In production, the `main` select loop receives and answers that command. In this test, `fakeStateOwner` performs the same role.
+Обработчик ждёт ответ через буферный канал `request.reply`. В рабочем приложении отвечает event loop; здесь эту роль выполняет отдельная горутина. Проверки маршрутизации выполняются через ServeMux отдельно: неподдерживаемый метод даёт 405 с `Allow: GET, HEAD`, а реальный HTTP-сервер проверяет HEAD без тела в `TestServeMuxHEADUsesSnapshotAndReturnsNoBody`.
 
