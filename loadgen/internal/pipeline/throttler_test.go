@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestStartThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
+func TestThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 	readerBatches := make(chan []Transaction, 2)
 	want := [][]Transaction{
 		{{ClientID: "first"}, {ClientID: "second"}},
@@ -53,7 +53,7 @@ func TestStartThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 	}
 }
 
-func TestStartThrottlerCancelWhileWaitingForInput(t *testing.T) {
+func TestThrottlerCancelWhileWaitingForInput(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	readerBatches := make(chan []Transaction)
 	var readerChannel, outputTelemetry batchQueue
@@ -75,7 +75,7 @@ func TestStartThrottlerCancelWhileWaitingForInput(t *testing.T) {
 	}
 }
 
-func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
+func TestThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -114,7 +114,7 @@ func TestStartThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 	})
 }
 
-func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
+func TestThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -156,7 +156,7 @@ func TestStartThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 	})
 }
 
-func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T) {
+func TestThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -197,7 +197,7 @@ func TestStartThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T
 	})
 }
 
-func TestStartThrottlerPacesByTransactions(t *testing.T) {
+func TestThrottlerPacesByTransactions(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		batchSize int
@@ -239,7 +239,7 @@ func TestStartThrottlerPacesByTransactions(t *testing.T) {
 	}
 }
 
-func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
+func TestThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		settings Rate
@@ -293,7 +293,7 @@ func TestStartThrottlerZeroWakesOnControlUpdate(t *testing.T) {
 	}
 }
 
-func TestStartThrottlerStartsFreshAfterZeroTPSWithIdleInput(t *testing.T) {
+func TestThrottlerStartsFreshAfterZeroTPSWithIdleInput(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		readerBatches := make(chan []Transaction)
 		senderBatches := make(chan []Transaction, 1)
@@ -322,7 +322,7 @@ func TestStartThrottlerStartsFreshAfterZeroTPSWithIdleInput(t *testing.T) {
 	})
 }
 
-func TestStartThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
+func TestThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
@@ -369,7 +369,7 @@ func TestStartThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
 	})
 }
 
-func TestStartThrottlerLimitsCreditAfterInputIdle(t *testing.T) {
+func TestThrottlerLimitsCreditAfterInputIdle(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		readerBatches := make(chan []Transaction, 2)
 		senderBatches := make(chan []Transaction, 2)
@@ -400,7 +400,7 @@ func TestStartThrottlerLimitsCreditAfterInputIdle(t *testing.T) {
 	})
 }
 
-func TestStartThrottlerRateUpdateKeepsElapsedSlot(t *testing.T) {
+func TestThrottlerRateUpdateKeepsElapsedSlot(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		readerBatches := make(chan []Transaction, 2)
 		senderBatches := make(chan []Transaction, 1)
@@ -440,7 +440,7 @@ func TestStartThrottlerRateUpdateKeepsElapsedSlot(t *testing.T) {
 	})
 }
 
-func TestStartThrottlerClosesItsOwnBlockedSend(t *testing.T) {
+func TestThrottlerClosesItsOwnBlockedSend(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +25,67 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+func newTestControlState(t *testing.T) controlState {
+	t.Helper()
+	loaded := testConfig(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	loaded.Source.Path = filepath.Join(t.TempDir(), "source.parquet")
+	if err := parquet.WriteFile(loaded.Source.Path, []pipeline.Transaction{}); err != nil {
+		t.Fatal(err)
+	}
+	loaded.Sender.API.URL = server.URL
+	return newControlState(loaded, zap.NewNop())
+}
+
+func TestNewControlStateInitializesControls(t *testing.T) {
+	for _, name := range []string{"nonzero initial values", "zero initial values"} {
+		t.Run(name, func(t *testing.T) {
+			loaded := testConfig(t)
+			loaded.Reader.ReadBatchSize.Initial = 2000
+			loaded.Reader.Workers.Initial = 3
+			loaded.Sender.Workers.Initial = 7
+			loaded.SenderChannel.Capacity.Initial = 4
+			loaded.Throttler.Installed.Initial = false
+			loaded.Metrics.WindowMS.Initial = 300
+			if name == "zero initial values" {
+				loaded.ReaderChannel.Capacity.Initial = 0
+				loaded.SenderChannel.Capacity.Initial = 0
+				loaded.Throttler.RequestedTPS.Initial = 0
+			}
+			state := newControlState(loaded, zap.NewNop())
+			if got := state.run.state; got != runStateStarting {
+				t.Fatalf("initial run state = %q, want %q", got, runStateStarting)
+			}
+			if state.config.Source.Path != loaded.Source.Path {
+				t.Fatal("control state did not retain loaded source config")
+			}
+			if want := time.Duration(loaded.Metrics.WindowMS.Initial) * time.Millisecond; state.metricsWindow != want {
+				t.Fatalf("metrics window = %s, want %s", state.metricsWindow, want)
+			}
+			snapshot := state.snapshotAt(nil, time.Now())
+			got := []int{
+				snapshot.Reader.ReadBatchSize, snapshot.Reader.Workers,
+				snapshot.ReaderChannel.Capacity, snapshot.SenderChannel.Capacity,
+				snapshot.Throttler.RequestedTps, snapshot.Sender.Workers,
+			}
+			want := []int{
+				loaded.Reader.ReadBatchSize.Initial, loaded.Reader.Workers.Initial,
+				loaded.ReaderChannel.Capacity.Initial, loaded.SenderChannel.Capacity.Initial,
+				loaded.Throttler.RequestedTPS.Initial, loaded.Sender.Workers.Initial,
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("initial controls = %v, want %v", got, want)
+			}
+			if got := state.controls.installed; got != loaded.Throttler.Installed.Initial {
+				t.Fatalf("initial installed = %t, want %t", got, loaded.Throttler.Installed.Initial)
+			}
+		})
+	}
+}
 
 func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	cfg := testConfig(t)
@@ -627,14 +690,16 @@ func assertFinalTransactions(t *testing.T, events *observer.ObservedLogs, confir
 type testReaderFile struct{ rows pipeline.RowReader }
 
 func (f testReaderFile) OpenRows() (pipeline.RowReader, error) { return f.rows, nil }
-func (f testReaderFile) Close() error                          { return nil }
+
+func (f testReaderFile) Close() error { return nil }
 
 type testRowReader struct {
 	read func([]pipeline.Transaction) (int, error)
 }
 
 func (r *testRowReader) Read(rows []pipeline.Transaction) (int, error) { return r.read(rows) }
-func (r *testRowReader) Close() error                                  { return nil }
+
+func (r *testRowReader) Close() error { return nil }
 
 func testDiscoveredSource(t *testing.T) pipeline.Source {
 	t.Helper()
@@ -647,4 +712,189 @@ func testDiscoveredSource(t *testing.T) pipeline.Source {
 		t.Fatal(err)
 	}
 	return source
+}
+
+func TestExecuteRuntimeCommandForwardsCommandAndReceipt(t *testing.T) {
+	control := make(chan runtimeRequest, 10)
+	const want = false
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		request := (<-control).(controlRequest)
+		command := request.command
+		if command.kind != setThrottlerInstalled || command.value != 42 || command.installed != false {
+			t.Errorf("command = %+v", command)
+		}
+		if cap(request.reply) != 1 {
+			t.Errorf("receipt reply capacity = %d, want 1", cap(request.reply))
+		}
+		request.reply <- want
+	}()
+
+	command := runtimeCommand{kind: setThrottlerInstalled, value: 42, installed: false}
+	if got, err := executeRuntimeCommand(t.Context(), runtimeRequests{queue: control}, command); err != nil || got != want {
+		t.Errorf("receipt = %+v, err=%v, want %+v", got, err, want)
+	}
+	<-done
+}
+
+func TestRequestSnapshotForwardsReply(t *testing.T) {
+	control := make(chan runtimeRequest, 10)
+	want := runtimeSnapshot{Run: runSnapshot{State: runStateStopping}}
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		request := (<-control).(snapshotRequest)
+		if cap(request.reply) != 1 {
+			t.Errorf("snapshot reply capacity = %d, want 1", cap(request.reply))
+		}
+		request.reply <- want
+	}()
+
+	if got, err := requestSnapshot(t.Context(), runtimeRequests{queue: control}); err != nil || got.Run != want.Run {
+		t.Errorf("run status = %+v, err=%v, want %+v", got.Run, err, want.Run)
+	}
+	<-done
+}
+
+func TestRuntimeRequestsUnblockAtBothWaits(t *testing.T) {
+	for _, stage := range []string{"send", "reply"} {
+		for _, cause := range []string{"request canceled", "event loop exited"} {
+			t.Run(stage+"/"+cause, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					ctx, cancel := context.WithCancel(t.Context())
+					defer cancel()
+					control := make(chan runtimeRequest)
+					done := make(chan struct{})
+					requests := runtimeRequests{queue: control, done: done}
+					results := make(chan error, 2)
+					go func() {
+						_, err := requestSnapshot(ctx, requests)
+						results <- err
+					}()
+					go func() {
+						_, err := executeRuntimeCommand(ctx, requests, runtimeCommand{kind: setReaderWorkers, value: 2})
+						results <- err
+					}()
+					var pending []runtimeRequest
+					if stage == "reply" {
+						pending = []runtimeRequest{<-control, <-control}
+					}
+					synctest.Wait()
+					want := errRuntimeUnavailable
+					if cause == "request canceled" {
+						want = context.Canceled
+						cancel()
+					} else {
+						close(done)
+					}
+					for range 2 {
+						if err := <-results; !errors.Is(err, want) {
+							t.Fatalf("request returned %v, want %v", err, want)
+						}
+					}
+					for _, request := range pending {
+						switch request := request.(type) {
+						case snapshotRequest:
+							request.reply <- runtimeSnapshot{}
+						case controlRequest:
+							request.reply <- true
+						}
+					}
+				})
+			})
+		}
+	}
+}
+
+func TestRuntimeRequestPreservesReadyReceiptWhenEventLoopCloses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{name: "applied", want: true},
+		{name: "conflict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for range 64 {
+				done := make(chan struct{})
+				reply := make(chan bool, 1)
+				// Both select cases are ready before the handler waits for the reply.
+				reply <- tc.want
+				close(done)
+				if got, err := receiveRuntimeReply(t.Context(), done, reply); err != nil || got != tc.want {
+					t.Fatalf("already published receipt = %+v, error = %v; want %+v", got, err, tc.want)
+				}
+				if _, err := receiveRuntimeReply(t.Context(), done, reply); !errors.Is(err, errRuntimeUnavailable) {
+					t.Fatalf("closed loop without a receipt = %v, want runtime unavailable", err)
+				}
+			}
+		})
+	}
+}
+
+func TestSnapshotLogFieldsAndCadence(t *testing.T) {
+	var output bytes.Buffer
+	logger, err := newApplicationLogger("info", &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := newTestControlState(t)
+	state.logger = logger
+	queue := make(chan runtimeRequest)
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		events := runtimeEvents{
+			requests: queue,
+			source:   prepareSourceAsync(state.config.Source.Path),
+			ticks:    ticks,
+			metrics:  newPrometheusMetrics(),
+		}
+		state.runEventLoop(ctx, events, gracefulShutdownTimeout)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("event loop did not stop")
+		}
+	})
+	harness := testEventLoop{requests: runtimeRequests{queue: queue, done: done}}
+	harness.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateRunning })
+	output.Reset()
+	ticks <- time.Now()
+	awaitSnapshotLogTick(t, harness.requests)
+	if output.Len() != 0 {
+		t.Fatalf("summary emitted before one-minute deadline: %q", output.String())
+	}
+	afterDeadline := time.Now().Add(2 * snapshotLogInterval)
+	ticks <- afterDeadline
+	awaitSnapshotLogTick(t, harness.requests)
+	line := output.String()
+	if strings.Count(line, "\n") != 1 || strings.Contains(line, "runtime_snapshot") || strings.Contains(line, "INGESTION LAB") {
+		t.Fatalf("summary line = %q", line)
+	}
+	for _, field := range []string{"event=runtime_summary", "state=running", "elapsed_ms=", "total_transactions=", "reader_channel_capacity=", "sender_channel_capacity=", "source_error_category="} {
+		if !strings.Contains(line, field) {
+			t.Fatalf("summary missing %q: %q", field, line)
+		}
+	}
+	ticks <- afterDeadline.Add(time.Millisecond)
+	awaitSnapshotLogTick(t, harness.requests)
+	if strings.Count(output.String(), "\n") != 1 {
+		t.Fatalf("duplicate summary before next deadline: %q", output.String())
+	}
+}
+
+func awaitSnapshotLogTick(t *testing.T, requests runtimeRequests) {
+	t.Helper()
+	if _, err := requestSnapshot(t.Context(), requests); err != nil {
+		t.Fatal(err)
+	}
 }

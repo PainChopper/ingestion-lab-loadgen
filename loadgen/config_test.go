@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,9 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"loadgen/internal/pipeline"
-
-	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
 )
 
@@ -32,21 +27,6 @@ func testConfig(t *testing.T) config {
 		t.Fatalf("load test config: %v", err)
 	}
 	return loaded
-}
-
-func newTestControlState(t *testing.T) controlState {
-	t.Helper()
-	loaded := testConfig(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	t.Cleanup(server.Close)
-	loaded.Source.Path = filepath.Join(t.TempDir(), "source.parquet")
-	if err := parquet.WriteFile(loaded.Source.Path, []pipeline.Transaction{}); err != nil {
-		t.Fatal(err)
-	}
-	loaded.Sender.API.URL = server.URL
-	return newControlState(loaded, zap.NewNop())
 }
 
 func testConfigContents() string {
@@ -296,6 +276,7 @@ func TestLoadConfigValidatesHTTPAddress(t *testing.T) {
 		})
 	}
 }
+
 func TestLoadConfigRejectsInvalidConfiguration(t *testing.T) {
 	tests := []struct{ name, contents string }{
 		{name: "unknown top-level key", contents: testConfigContents() + "\nunknown = true\n"},
