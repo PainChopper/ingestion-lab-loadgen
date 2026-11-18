@@ -18,7 +18,7 @@ import (
 // Configuration location and supported schema version.
 const (
 	defaultConfigPath   = "config.toml"
-	configSchemaVersion = 2
+	configSchemaVersion = 3
 )
 
 const (
@@ -90,6 +90,7 @@ type senderConfig struct {
 
 type senderAPIConfig struct {
 	URL        string `mapstructure:"url"`
+	TimeoutMS  int64  `mapstructure:"timeout_ms"`
 	Mutability string `mapstructure:"mutability"`
 }
 
@@ -139,6 +140,9 @@ func loadConfig(configPath string) (config, error) {
 	}
 	if !viperConfig.IsSet("http.addr") {
 		return config{}, fmt.Errorf("http.addr is required")
+	}
+	if _, ok := viperConfig.Get("sender.api.timeout_ms").(int64); !ok {
+		return config{}, fmt.Errorf("sender.api.timeout_ms must be an integer")
 	}
 	if _, ok := viperConfig.Get("throttler.installed.initial").(bool); !ok {
 		return config{}, fmt.Errorf("throttler.installed.initial must be boolean")
@@ -306,6 +310,10 @@ func (p senderAPIConfig) validate() error {
 	}
 	if p.Mutability != startupOnly {
 		return fmt.Errorf("mutability must be %q", startupOnly)
+	}
+	const maxTimeoutMS = math.MaxInt64 / int64(time.Millisecond)
+	if p.TimeoutMS < 1 || p.TimeoutMS > maxTimeoutMS {
+		return fmt.Errorf("timeout_ms must be between 1 and %d", maxTimeoutMS)
 	}
 
 	parsed, err := url.Parse(p.URL)

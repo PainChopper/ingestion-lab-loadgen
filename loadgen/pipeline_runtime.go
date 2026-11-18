@@ -49,8 +49,7 @@ func startPipeline(ctx context.Context, state *controlState, source readerSource
 		&state.telemetry.senderChannel,
 		&p.terminallyCompletedTransactionsSinceTick,
 		state.controls.senderWorkers,
-		cfg.Sender.API,
-		cfg.Sender.Retry,
+		cfg.Sender,
 		state.logger,
 	)
 	go func() {

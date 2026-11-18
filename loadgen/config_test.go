@@ -47,7 +47,7 @@ func newTestControlState(t *testing.T) controlState {
 
 func testConfigContents() string {
 	return strings.Join([]string{
-		"schema_version = 2", "", "[source]", "path = 'C:\\dataset\\*.parquet'", "unit = \"glob-pattern\"", "mutability = \"startup-only\"", "",
+		"schema_version = 3", "", "[source]", "path = 'C:\\dataset\\*.parquet'", "unit = \"glob-pattern\"", "mutability = \"startup-only\"", "",
 		"[http]", "addr = \"127.0.0.1:8080\"", "",
 		"[reader.read_batch_size]", "initial = 1000", "min = 1000", "max = 100000", "step = 1000", "unit = \"transactions\"", "mutability = \"startup-only\"", "",
 		"[reader.workers]", "initial = 1", "min = 1", "max = 7", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"", "",
@@ -56,7 +56,7 @@ func testConfigContents() string {
 		"", "[throttler.requested_tps]", "initial = 2000000", "min = 0", "max = 4000000", "step = 200000", "unit = \"transactions/s\"", "mutability = \"immediate\"",
 		"", "[throttler.installed]", "initial = true", "allowed = [true, false]", "mutability = \"immediate\"",
 		"", "[sender.workers]", "initial = 32", "min = 1", "max = 32", "step = 1", "unit = \"workers\"", "mutability = \"immediate\"",
-		"", "[sender.api]", "url = \"" + testSenderURL + "\"", "mutability = \"startup-only\"",
+		"", "[sender.api]", "timeout_ms = 30000", "url = \"" + testSenderURL + "\"", "mutability = \"startup-only\"",
 		"", "[sender.retry]", "delays_ms = [250, 500, 1000, 2000, 5000]", "jitter_percent = 20", "mutability = \"startup-only\"",
 		"", "[metrics.window_ms]", "initial = 1000", "min = 100", "max = 10000", "step = 100", "unit = \"milliseconds\"", "mutability = \"startup-only\"",
 		"", "[logging]", "level = \"info\"", "mutability = \"startup-only\"",
@@ -160,6 +160,45 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 	}
 }
 
+func TestLoadConfigValidatesSenderAPITimeout(t *testing.T) {
+	const maxMS = math.MaxInt64 / int64(time.Millisecond)
+	contents := strings.Replace(testConfigContents(), "timeout_ms = 30000\n", "", 1)
+	tests := []struct {
+		name    string
+		line    string
+		version int
+		wantErr string
+	}{
+		{name: "minimum inclusive", line: "timeout_ms = 1\n", version: 3},
+		{name: "maximum inclusive", line: fmt.Sprintf("timeout_ms = %d\n", maxMS), version: 3},
+		{name: "missing", version: 3, wantErr: "timeout_ms"},
+		{name: "zero", line: "timeout_ms = 0\n", version: 3, wantErr: "timeout_ms"},
+		{name: "negative", line: "timeout_ms = -1\n", version: 3, wantErr: "timeout_ms"},
+		{name: "overflow", line: fmt.Sprintf("timeout_ms = %d\n", maxMS+1), version: 3, wantErr: "timeout_ms"},
+		{name: "fraction", line: "timeout_ms = 1.9\n", version: 3, wantErr: "timeout_ms"},
+		{name: "string", line: "timeout_ms = \"1\"\n", version: 3, wantErr: "timeout_ms"},
+		{name: "legacy schema", line: "timeout_ms = 1\n", version: 2, wantErr: "schema_version"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := strings.Replace(contents, "schema_version = 3", fmt.Sprintf("schema_version = %d", test.version), 1)
+			input = strings.Replace(input, "[sender.api]\n", "[sender.api]\n"+test.line, 1)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := loadConfig(path)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("loadConfig: %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("loadConfig error = %v, want error about %s", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoadConfigValidatesHTTPAddress(t *testing.T) {
 	section := "[http]\naddr = \"127.0.0.1:8080\"\n"
 	tests := []struct {
@@ -246,7 +285,7 @@ func TestLoadConfigRequiresExplicitConfigFields(t *testing.T) {
 		old  string
 		new  string
 	}{
-		{name: "schema version", old: "schema_version = 2\n", new: ""},
+		{name: "schema version", old: "schema_version = 3\n", new: ""},
 		{name: "source path", old: "[source]\npath = 'C:\\dataset\\*.parquet'\n", new: "[source]\n"},
 		{name: "source unit", old: "path = 'C:\\dataset\\*.parquet'\nunit = \"glob-pattern\"\n", new: "path = 'C:\\dataset\\*.parquet'\n"},
 		{name: "source mutability", old: "unit = \"glob-pattern\"\nmutability = \"startup-only\"\n", new: "unit = \"glob-pattern\"\n"},
