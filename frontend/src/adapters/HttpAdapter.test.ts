@@ -147,7 +147,7 @@ const VALID_WIRE: TestWireSnapshot = {
       mutability: 'immediate',
     },
     senderWorkers: { initial: 32, min: 1, max: 32, step: 1, unit: 'workers', mutability: 'immediate' },
-		logging: { level: 'info', mutability: 'startup-only' },
+    logging: { level: 'info', mutability: 'startup-only' },
   },
 }
 
@@ -650,6 +650,16 @@ const malformedCases: ReadonlyArray<{
     },
   ]),
   {
+    name: 'Sender config with an initial value outside the step grid',
+    result: async () => mockResponse({
+      ...VALID_WIRE,
+      config: {
+        ...VALID_WIRE.config,
+        senderWorkers: { ...VALID_WIRE.config.senderWorkers, initial: 6, min: 2, step: 3 },
+      },
+    }),
+  },
+  {
     name: 'unexpected sender retry policy',
     result: async () => mockResponse({
       ...VALID_WIRE,
@@ -953,6 +963,24 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
+  it('uses the Sender worker range from the snapshot', async () => {
+    const senderWorkers = { initial: 5, min: 2, max: 35, step: 3, unit: 'workers', mutability: 'immediate' }
+    fetchMock.mockResolvedValueOnce(mockResponse({
+      ...VALID_WIRE,
+      config: { ...VALID_WIRE.config, senderWorkers },
+      sender: { ...VALID_WIRE.sender, workers: 35 },
+    }))
+    const adapter = new HttpAdapter()
+    await flushPoll()
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      connectionState: 'connected',
+      config: { senderWorkers },
+      sender: { workers: { applied: 35, min: 2, max: 35, step: 3, applyMode: 'immediate' } },
+    })
+    adapter.dispose()
+  })
+
   it.each(['readerReadBatchSize', 'readerChannelCapacity', 'senderChannelCapacity'] as const)(
     'rejects invalid mutability in %s',
     async (field) => {
@@ -1218,7 +1246,7 @@ describe('HttpAdapter', () => {
       expect(snapshot.sender.workers.applyMode).toBe('unavailable')
       expect(snapshot.throttler.requestedTps.applyMode).toBe('unavailable')
       expect(snapshot.throttler.installed.writable).toBe(false)
-      await expect(adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 2 }))
+      await expect(adapter.dispatch({ type: 'set-reader-workers', value: 2 }))
         .resolves.toMatchObject({ accepted: false })
       expect(commandFetchCalls()).toHaveLength(0)
       adapter.dispose()
@@ -1391,8 +1419,7 @@ describe('HttpAdapter', () => {
 
       for (const value of [1, 7]) {
         await expect(adapter.dispatch({
-          type: 'set-worker-count',
-          actor: 'reader',
+          type: 'set-reader-workers',
           value,
         })).resolves.toMatchObject({
           accepted: true,
@@ -1798,7 +1825,7 @@ describe('HttpAdapter', () => {
     const adapter = new HttpAdapter()
     const unavailable = await adapter.dispatch({ type: 'set-requested-tps', value: 25 })
     await flushPoll()
-    const first = adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 2 })
+    const first = adapter.dispatch({ type: 'set-reader-workers', value: 2 })
     const second = adapter.dispatch({ type: 'set-sender-workers', value: 7 })
     const receipts = [unavailable, ...await Promise.all([first, second])]
     expect(receipts.map(({ commandId }) => commandId))

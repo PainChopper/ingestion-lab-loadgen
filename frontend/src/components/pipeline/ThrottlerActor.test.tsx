@@ -529,6 +529,51 @@ describe('ThrottlerActor valve control', () => {
     expect(onCommand).toHaveBeenCalledTimes(callsAtRelease)
   })
 
+  it.each(['release', 'pointercancel', 'blur', 'Escape', 'unmount'] as const)(
+    'ends a hold at the opening limit on %s',
+    (end) => {
+      vi.useFakeTimers()
+      const onCommand = vi.fn()
+      const view = render(
+        <Harness control={requestedControl({ applied: 205_000 })} onCommand={onCommand} />,
+      )
+      const increase = screen.getByRole('button', { name: 'Increase throttle opening' })
+      const slider = screen.getByRole('slider', { name: 'Throttle opening' })
+
+      fireEvent.pointerDown(increase, { pointerId: 1 })
+      expect(slider.getAttribute('aria-valuenow')).toBe('10')
+      act(() => vi.advanceTimersByTime(780))
+      expect(slider.getAttribute('aria-valuenow')).toBe('11')
+      expect(onCommand).not.toHaveBeenCalled()
+
+      switch (end) {
+        case 'release':
+          fireEvent.pointerUp(window, { pointerId: 1 })
+          break
+        case 'pointercancel':
+          fireEvent.pointerCancel(window, { pointerId: 1 })
+          break
+        case 'blur':
+          fireEvent.blur(window)
+          break
+        case 'Escape':
+          fireEvent.keyDown(window, { key: 'Escape' })
+          break
+        case 'unmount':
+          view.unmount()
+          break
+      }
+
+      act(() => vi.advanceTimersByTime(1_000))
+      fireEvent.pointerUp(window, { pointerId: 1 })
+      expect(onCommand.mock.calls).toEqual(end === 'release' ? [[250_000]] : [])
+      if (end !== 'unmount') {
+        expect(slider.getAttribute('aria-valuenow')).toBe(end === 'release' ? '11' : '9')
+        expect(view.container.querySelector('[data-gate-kind="preview"]')).toBeNull()
+      }
+    },
+  )
+
   it('keeps outer geometry invariant through six distinct internal phases', async () => {
     const user = userEvent.setup()
     const view = render(

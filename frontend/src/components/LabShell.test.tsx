@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -39,12 +39,12 @@ describe('LabShell', () => {
     const simulation = new SimulationAdapter()
     let snapshot: LoadgenTelemetrySnapshot = {
       ...simulation.getSnapshot(),
-		runState: 'faulted',
-		reader: {
-			...simulation.getSnapshot().reader,
-			state: 'faulted',
-			sourceDirectory: 'C:/dataset', sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt parquet' },
-		},
+    runState: 'faulted',
+    reader: {
+      ...simulation.getSnapshot().reader,
+      state: 'faulted',
+      sourceDirectory: 'C:/dataset', sourceError: { category: 'source', operation: 'read', relativePath: 'broken.parquet', message: 'corrupt parquet' },
+    },
     }
     const listeners = new Set<(next: LoadgenTelemetrySnapshot) => void>()
     const errorAdapter: LoadgenAdapter = {
@@ -60,16 +60,16 @@ describe('LabShell', () => {
     }
     render(<LabShell adapter={errorAdapter} />)
 
-		expect(screen.getByRole('alert').textContent).toBe('SOURCE ERROR')
-		await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect reader' }))
-		const label = screen.getByTestId('reader-source-error-label')
-		expect(label.textContent).toBe('SOURCE ERROR')
-		expect(label.parentElement?.className).toContain('inspector-data__row--source-error')
-		expect(label.nextElementSibling?.tagName).toBe('DD')
-		expect(label.parentElement?.querySelectorAll('dd')).toHaveLength(1)
+    expect(screen.getByRole('alert').textContent).toBe('SOURCE ERROR')
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect reader' }))
+    const label = screen.getByTestId('reader-source-error-label')
+    expect(label.textContent).toBe('SOURCE ERROR')
+    expect(label.parentElement?.className).toContain('inspector-data__row--source-error')
+    expect(label.nextElementSibling?.tagName).toBe('DD')
+    expect(label.parentElement?.querySelectorAll('dd')).toHaveLength(1)
 
     act(() => {
-			snapshot = { ...snapshot, runState: 'idle', reader: { ...snapshot.reader, state: 'idle', sourceError: null } }
+      snapshot = { ...snapshot, runState: 'idle', reader: { ...snapshot.reader, state: 'idle', sourceError: null } }
       listeners.forEach((listener) => listener(snapshot))
     })
     expect(screen.queryByRole('alert')).toBeNull()
@@ -112,6 +112,54 @@ describe('LabShell', () => {
     await user.click(addSender)
     expect(dispatch).not.toHaveBeenCalled()
     unavailableAdapter.dispose()
+  })
+
+  it('commits a canvas worker hold once when repeat reaches the worker limit', () => {
+    vi.useFakeTimers()
+    adapter = new SimulationAdapter()
+    const dispatch = vi.spyOn(adapter, 'dispatch')
+    const view = render(<LabShell adapter={adapter} />)
+    dispatch.mockClear()
+    const increase = screen.getByRole('button', { name: 'Add reader worker' })
+    const count = view.container.querySelector('#reader-count')!
+
+    fireEvent.pointerDown(increase, { pointerId: 1 })
+    expect(count.textContent).toBe('6')
+    act(() => vi.advanceTimersByTime(539))
+    expect(count.textContent).toBe('6')
+    expect(dispatch).not.toHaveBeenCalled()
+    act(() => vi.advanceTimersByTime(1))
+    expect(count.textContent).toBe('7')
+    expect(dispatch).not.toHaveBeenCalled()
+    act(() => vi.advanceTimersByTime(120))
+    expect(dispatch.mock.calls).toEqual([[{ type: 'set-reader-workers', value: 7 }]])
+
+    fireEvent.pointerUp(window, { pointerId: 1 })
+    fireEvent.click(increase, { detail: 1 })
+    act(() => vi.advanceTimersByTime(1000))
+    expect(dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts keyboard activation after cancelling a canvas worker hold', async () => {
+    vi.useFakeTimers()
+    adapter = new SimulationAdapter()
+    const dispatch = vi.spyOn(adapter, 'dispatch')
+    const view = render(<LabShell adapter={adapter} />)
+    dispatch.mockClear()
+    const increase = screen.getByRole('button', { name: 'Add reader worker' })
+    const count = view.container.querySelector('#reader-count')!
+
+    fireEvent.pointerDown(increase, { pointerId: 1 })
+    expect(count.textContent).toBe('6')
+    fireEvent.pointerCancel(window, { pointerId: 1 })
+    act(() => vi.advanceTimersByTime(1000))
+    expect(count.textContent).toBe('5')
+    expect(dispatch).not.toHaveBeenCalled()
+
+    vi.useRealTimers()
+    increase.focus()
+    await userEvent.setup().keyboard('{Enter}')
+    expect(dispatch.mock.calls).toEqual([[{ type: 'set-reader-workers', value: 6 }]])
   })
 
   it('shows backend batch sizes and queue depths without run or startup controls', async () => {
@@ -172,7 +220,9 @@ describe('LabShell', () => {
     expect(dispatch).not.toHaveBeenCalled()
 
     await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
-    expect(screen.getByRole('heading', { name: 'Controls' })).not.toBeNull()
+    const inspector = within(screen.getByRole('complementary'))
+    expect(inspector.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent))
+      .toEqual(['Controls', 'Pool'])
     expect(screen.getAllByRole('spinbutton')).toEqual([screen.getByRole('spinbutton', { name: /^Workers/ })])
     await user.click(screen.getByRole('button', { name: 'Inspect throttler' }))
     expect(screen.getAllByRole('spinbutton')).toEqual([screen.getByRole('spinbutton', { name: /^Requested TPS/ })])
@@ -199,7 +249,7 @@ describe('LabShell', () => {
       .getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('offers exactly the three canvas settings and keeps the inspector read-only in simulation', async () => {
+  it('offers the supported canvas and Inspector controls in simulation', async () => {
     const user = userEvent.setup()
     adapter = new SimulationAdapter()
     const dispatch = vi.spyOn(adapter, 'dispatch')
@@ -213,6 +263,7 @@ describe('LabShell', () => {
     expect(settingsButtons.sort()).toEqual([
       'Add reader worker', 'Add sender worker', 'Decrease throttle opening',
       'Increase throttle opening', 'Remove reader worker', 'Remove sender worker',
+      'Remove throttler valve',
     ])
     expect(diagram.getAllByRole('slider')).toEqual([
       diagram.getByRole('slider', { name: 'Throttle opening' }),
@@ -222,14 +273,27 @@ describe('LabShell', () => {
     expect(diagram.getByText(/^Depth \d+ \/ 100 batches$/)).not.toBeNull()
 
     const inspector = within(screen.getByRole('complementary'))
-    for (const name of [/Inspect reader$/, /Inspect throttler$/, /Inspect sender,/, /Inspect ingestion service/]) {
-      await user.click(diagram.getByRole('button', { name }))
-      expect(inspector.queryAllByRole('spinbutton')).toHaveLength(0)
-      expect(inspector.queryAllByRole('checkbox')).toHaveLength(0)
-      expect(inspector.queryAllByRole('slider')).toHaveLength(0)
-    }
     await user.click(diagram.getByRole('button', { name: 'Inspect reader' }))
+    expect(inspector.getAllByRole('spinbutton')).toEqual([
+      inspector.getByRole('spinbutton', { name: /^Workers/ }),
+    ])
     expect(inspector.getByText('Read batch size: 1,000 tx')).not.toBeNull()
+    await user.click(diagram.getByRole('button', { name: /Inspect sender,/ }))
+    expect(inspector.getAllByRole('spinbutton')).toEqual([
+      inspector.getByRole('spinbutton', { name: /^Workers/ }),
+    ])
+    await user.click(diagram.getByRole('button', { name: 'Inspect throttler' }))
+    expect(inspector.getAllByRole('spinbutton')).toEqual([
+      inspector.getByRole('spinbutton', { name: /^Requested TPS/ }),
+    ])
+    expect(inspector.getAllByRole('checkbox')).toEqual([
+      inspector.getByRole('checkbox', { name: 'Valve mode' }),
+    ])
+    expect(inspector.getAllByText('Requested TPS')).toHaveLength(1)
+    await user.click(diagram.getByRole('button', { name: /Inspect ingestion service/ }))
+    expect(inspector.queryAllByRole('spinbutton')).toHaveLength(0)
+    expect(inspector.queryAllByRole('checkbox')).toHaveLength(0)
+    expect(inspector.queryAllByRole('slider')).toHaveLength(0)
     await user.click(diagram.getByRole('button', { name: 'Inspect reader to throttler channel' }))
     expect(inspector.getByText(/^\d+ \/ 4 batches$/)).not.toBeNull()
     await user.click(diagram.getByRole('button', { name: 'Inspect throttler to sender channel' }))
@@ -241,11 +305,62 @@ describe('LabShell', () => {
     await user.keyboard('{End}')
     await waitFor(() => {
       expect(dispatch.mock.calls.map(([command]) => command)).toEqual([
-        { type: 'set-worker-count', actor: 'reader', value: 6 },
+        { type: 'set-reader-workers', value: 6 },
         { type: 'set-sender-workers', value: 4 },
         { type: 'set-requested-tps', value: 250_000 },
       ])
     })
+  })
+
+  it('removes the simulation valve from the Inspector and reinstalls it on the canvas', async () => {
+    vi.useFakeTimers()
+    const simulation = new SimulationAdapter()
+    adapter = simulation
+    const dispatch = vi.spyOn(simulation, 'dispatch')
+    render(<LabShell adapter={simulation} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect throttler' }))
+    const requestedTps = screen.getByRole('spinbutton', { name: /^Requested TPS/ })
+    const valveMode = screen.getByRole<HTMLInputElement>('checkbox', { name: 'Valve mode' })
+    await act(async () => {
+      fireEvent.change(requestedTps, { target: { value: '0' } })
+      fireEvent.keyDown(requestedTps, { key: 'Enter' })
+      vi.advanceTimersByTime(500)
+    })
+    expect(valveMode.checked).toBe(true)
+    const installed = simulation.getSnapshot()
+    expect(installed.throttler.installed).toMatchObject({
+      applied: true,
+      writable: true,
+      applyMode: 'immediate',
+    })
+    expect(installed.throttler.requestedTps.applied).toBe(0)
+    expect(installed.senderChannel.sentBatchesTotal).toBe(0)
+
+    await act(async () => {
+      fireEvent.click(valveMode)
+      vi.advanceTimersByTime(500)
+    })
+    const bypassed = simulation.getSnapshot()
+    expect(valveMode.checked).toBe(false)
+    expect(bypassed.throttler.installed.applied).toBe(false)
+    expect(bypassed.throttler.requestedTps.applied).toBe(0)
+    expect(bypassed.senderChannel.sentBatchesTotal).toBeGreaterThan(0)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reinsert throttler valve' }))
+      vi.advanceTimersByTime(500)
+    })
+    const reinstalled = simulation.getSnapshot()
+    expect(valveMode.checked).toBe(true)
+    expect(reinstalled.throttler.installed.applied).toBe(true)
+    expect(reinstalled.throttler.requestedTps.applied).toBe(0)
+    expect(reinstalled.senderChannel.sentBatchesTotal).toBe(bypassed.senderChannel.sentBatchesTotal)
+    expect(dispatch.mock.calls.map(([command]) => command)).toEqual([
+      { type: 'set-requested-tps', value: 0 },
+      { type: 'set-throttler-installed', value: false },
+      { type: 'set-throttler-installed', value: true },
+    ])
   })
 
   it('renders only supported channel states in the legend', () => {
@@ -268,6 +383,7 @@ describe('LabShell', () => {
     const sectionTitles = screen.getAllByRole('heading', { level: 3 })
       .map((heading) => heading.textContent)
     expect(sectionTitles).toEqual([
+      'Controls',
       'Pool',
       'Delivery',
       'Diagnostics',

@@ -18,6 +18,7 @@ import {
 } from '../model/simulation'
 import type {
   ChannelTelemetry,
+  SimulationConfig,
   SimulationTelemetry,
 } from '../model/simulation'
 
@@ -175,10 +176,10 @@ function freezeSnapshot(
         'tx/s',
       ),
       installed: Object.freeze({
-        applied: true,
+        applied: config.throttlerInstalled,
         pending: null,
-        applyMode: 'unavailable',
-        writable: false,
+        applyMode: 'immediate',
+        writable: true,
         unavailableReason: null,
       }),
       admittedTps: Math.round(telemetry.admittedTransactionsPerSecond),
@@ -339,7 +340,7 @@ export class SimulationAdapter implements LoadgenAdapter {
           normalizeNumericValue(command.value, RANGES.requestedTps),
         )
         break
-      case 'set-worker-count':
+      case 'set-reader-workers':
         if (!Number.isFinite(command.value)) {
           return this.rejectInvalidNumber(commandId, command, 'worker count')
         }
@@ -353,6 +354,9 @@ export class SimulationAdapter implements LoadgenAdapter {
           return this.rejectInvalidNumber(commandId, command, 'sender workers')
         }
         changed = this.updateConfig('senderWorkers', normalizeNumericValue(command.value, RANGES.senderWorkers))
+        break
+      case 'set-throttler-installed':
+        changed = this.updateConfig('throttlerInstalled', command.value)
         break
       default:
         return this.reject(commandId, command, {
@@ -406,10 +410,9 @@ export class SimulationAdapter implements LoadgenAdapter {
     return steps > 0
   }
 
-  private updateConfig(
-    key: 'readerWorkers' | 'senderWorkers' | 'requestedTps',
-    value: number,
-  ): boolean {
+  private updateConfig<
+    Key extends 'readerWorkers' | 'senderWorkers' | 'requestedTps' | 'throttlerInstalled',
+  >(key: Key, value: SimulationConfig[Key]): boolean {
     const advanced = this.advanceToNow()
     if (this.simulation.config[key] === value) return advanced
     this.simulation.updateConfig({ [key]: value })

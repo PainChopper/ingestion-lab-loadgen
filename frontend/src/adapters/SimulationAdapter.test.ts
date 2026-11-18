@@ -73,7 +73,7 @@ describe('SimulationAdapter', () => {
 
     await vi.advanceTimersByTimeAsync(200)
     const initial = adapter.getSnapshot()
-    await expect(adapter.dispatch({ type: 'set-worker-count', actor: 'reader', value: 7 }))
+    await expect(adapter.dispatch({ type: 'set-reader-workers', value: 7 }))
       .resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })
     await expect(adapter.dispatch({ type: 'set-sender-workers', value: 4 }))
       .resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })

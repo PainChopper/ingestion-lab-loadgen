@@ -78,12 +78,12 @@ export interface LoadgenConfigSnapshot {
   readonly throttlerRequestedTps: RangeControlConfigSnapshot
   readonly throttlerInstalled: InstalledConfigSnapshot
   readonly senderWorkers: RangeControlConfigSnapshot
-	readonly logging?: LoggingConfigSnapshot
+  readonly logging?: LoggingConfigSnapshot
 }
 
 export interface LoggingConfigSnapshot {
-	readonly level: 'debug' | 'info' | 'warn' | 'error'
-	readonly mutability: 'startup-only'
+  readonly level: 'debug' | 'info' | 'warn' | 'error'
+  readonly mutability: 'startup-only'
 }
 
 export interface InstalledConfigSnapshot {
@@ -259,7 +259,7 @@ export type LoadgenCommand =
       type: 'set-throttler-installed'
       value: boolean
     }
-  | { type: 'set-worker-count'; actor: 'reader'; value: number }
+  | { type: 'set-reader-workers'; value: number }
   | { type: 'set-sender-workers'; value: number }
 
 export interface AdapterError {

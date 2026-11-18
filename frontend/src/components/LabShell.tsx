@@ -182,18 +182,15 @@ function InspectorControls({
     case 'reader':
       return (
         <div className="inspector-controls" aria-label="Reader configuration">
-          {snapshot.adapterKind === 'http' && (
-            <NumericControl
-              label="Workers"
-              control={snapshot.reader.workers}
-              desiredControl={liveControls.readerWorkers}
-            />
-          )}
+          <NumericControl
+            label="Workers"
+            control={snapshot.reader.workers}
+            desiredControl={liveControls.readerWorkers}
+          />
           <p>Read batch size: {formatInteger(snapshot.reader.readBatchSize.applied)} tx</p>
         </div>
       )
-    case 'throttler': {
-      if (snapshot.adapterKind !== 'http') return null
+    case 'throttler':
       return (
         <div className="inspector-controls" aria-label="Throttler configuration">
           <NumericControl
@@ -215,9 +212,7 @@ function InspectorControls({
           </label>
         </div>
       )
-    }
     case 'sender':
-      if (snapshot.adapterKind !== 'http') return null
       return (
         <div className="inspector-controls" aria-label="Sender configuration">
           <NumericControl
@@ -241,7 +236,7 @@ function InspectorDock({
   liveControls,
 }: InspectorDockProps) {
   const model = getInspectorViewModel(snapshot, selectedId)
-  const controls = model?.id === 'sender' && snapshot.adapterKind === 'http'
+  const controls = model?.id === 'sender'
     ? (
       <section className="inspector-section" aria-labelledby="sender-controls-title">
         <h3 id="sender-controls-title" className="inspector-section__title">Controls</h3>
@@ -314,7 +309,7 @@ function InspectorDataRow({ row }: { row: InspectorRow }) {
   const className = [
     row.layout === 'full-width' ? 'inspector-data__row--full-width' : null,
     row.segments === undefined ? null : 'inspector-data__row--worker-states',
-	row.kind === 'source-error' ? 'inspector-data__row--source-error' : null,
+  row.kind === 'source-error' ? 'inspector-data__row--source-error' : null,
   ].filter(Boolean).join(' ')
 
   return (
@@ -404,7 +399,7 @@ export function LabShell({ adapter }: AdapterProps) {
     revision: liveSnapshot.revision,
     available: immediate(liveSnapshot.reader.workers),
     dispatch: (value) => adapter.dispatch({
-      type: 'set-worker-count', actor: 'reader', value,
+      type: 'set-reader-workers', value,
     }),
   })
   const requestedTps = useDesiredControl({

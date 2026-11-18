@@ -21,7 +21,7 @@ Parquet → Reader workers → Reader queue → Throttler → Sender queue → S
 - A standalone HTTP receiver for local experiments.
 - Backend snapshots with rates, counters, queue occupancy, and applied settings.
 - Prometheus metrics and standard Go `pprof` endpoints.
-- A React/TypeScript frontend built with Vite, plus Storybook for UI component development.
+- A React/TypeScript frontend built with Vite.
 - Automated Go tests and frontend tests using Vitest and Testing Library.
 
 The project is developed with AI assistance. The author remains responsible for engineering decisions, code review, and acceptance of the final work.
@@ -145,7 +145,7 @@ Supported actions: `set-reader-workers`, `set-sender-workers`, `set-requested-tp
 
 Invalid actions or values receive `400 Bad Request`. During shutdown, snapshots remain available while batches drain and commands receive `409 Conflict`. The backend UI shows batch size and queue capacity as read-only values.
 
-## Tests and component development
+## Tests
 
 Backend checks, from the `loadgen/` directory:
 
@@ -162,7 +162,6 @@ Frontend checks, from the `frontend/` directory:
 npm test
 npm run lint
 npm run build
-npm run storybook
 ```
 
 The repository also contains a separate [receiver module](receiver/). Historical plans and research in `docs/` may describe earlier stages; this README and the source code describe the current working implementation.

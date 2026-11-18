@@ -15,21 +15,25 @@ import type {
   ThrottlerSnapshot,
 } from '../../model/loadgen'
 import type { DesiredControl } from '../../hooks/useDesiredControl'
+import { useHoldRepeat } from '../../hooks/useHoldRepeat'
 import { channelPressureColor } from '../../model/channelFlowState'
 import { formatRate } from './formatters'
 import { ACTOR_GEOMETRY, type PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import {
-  getValveWheelKnobs,
+  ThrottlerValveApertureClip,
+  ThrottlerValveDetachedAssembly,
+  ThrottlerValveGate,
+  ThrottlerValveWheel,
+} from './ThrottlerValveSvg'
+import {
   getValveTargets,
   nextWheelPhase,
   openingPercent,
   VALVE_APERTURE,
-  VALVE_DETACHED_ASSEMBLY,
   VALVE_FLANGES,
   VALVE_INSTALLATION_CONTROL,
   VALVE_OPENING_CONTROLS,
-  VALVE_PISTON,
   valvePistonCenterY,
   valueToOpeningIndex,
   valveIsAdjustable,
@@ -46,8 +50,6 @@ interface ThrottlerActorProps {
   orientation: PipelineOrientation
 }
 
-const HOLD_DELAY_MS = 420
-const HOLD_REPEAT_MS = 120
 function flowColor(channel: ChannelSnapshot): string {
   if (channel.flowState === 'connection-error') return 'var(--red)'
   if (channel.flowState === 'stopped') return 'var(--muted)'
@@ -96,9 +98,6 @@ export function ThrottlerActor({
   const [installationDragProgress, setInstallationDragProgress] = useState(0)
   const previousAppliedIndex = useRef(appliedIndex)
   const previousAppliedMode = useRef(snapshot.installed.applied)
-  const holdTimer = useRef<number | null>(null)
-  const repeatTimer = useRef<number | null>(null)
-  const releaseListeners = useRef<(() => void) | null>(null)
   const candidateIndexRef = useRef(candidateIndex ?? appliedIndex)
   const wheelPhaseRef = useRef(confirmedWheelPhase)
   const targetsRef = useRef(targets)
@@ -124,9 +123,6 @@ export function ThrottlerActor({
       candidateIndex - appliedIndex,
     )
   const wheelPhase = candidateWheelPhase ?? derivedCandidatePhase
-  const wheelKnobs = getValveWheelKnobs(wheelPhase)
-  const backKnobs = wheelKnobs.filter((knob) => knob.layer === 'back')
-  const frontKnobs = wheelKnobs.filter((knob) => knob.layer === 'front')
   candidateIndexRef.current = candidateIndex ?? appliedIndex
   wheelPhaseRef.current = wheelPhase
   targetsRef.current = targets
@@ -171,17 +167,6 @@ export function ThrottlerActor({
     }
   }, [cancelInstallationPreview, snapshot.installed.applied])
 
-  const stopHold = useCallback(() => {
-    if (holdTimer.current !== null) window.clearTimeout(holdTimer.current)
-    if (repeatTimer.current !== null) window.clearInterval(repeatTimer.current)
-    holdTimer.current = null
-    repeatTimer.current = null
-    releaseListeners.current?.()
-    releaseListeners.current = null
-  }, [])
-
-  useEffect(() => stopHold, [stopHold])
-
   const requestDelta = useCallback((delta: number) => {
     const availableTargets = targetsRef.current
     if (!adjustableRef.current || availableTargets === null) return false
@@ -189,10 +174,7 @@ export function ThrottlerActor({
     const sourceIndex = candidateIndexRef.current
     const targetIndex = Math.min(11, Math.max(0, sourceIndex + delta))
     const actualDelta = targetIndex - sourceIndex
-    if (actualDelta === 0) {
-      stopHold()
-      return false
-    }
+    if (actualDelta === 0) return false
 
     const targetTps = availableTargets[targetIndex]
     const targetPhase = nextWheelPhase(wheelPhaseRef.current, actualDelta)
@@ -201,7 +183,19 @@ export function ThrottlerActor({
     setCandidateWheelPhase(targetPhase)
     previewRequestedTps(targetTps)
     return true
-  }, [previewRequestedTps, stopHold])
+  }, [previewRequestedTps])
+
+  const openingHold = useHoldRepeat({
+    onCommit: requestedTpsControl.commit,
+    onCancel: () => {
+      requestedTpsControl.cancel()
+      setCandidateWheelPhase(null)
+    },
+  })
+
+  const cancelOpening = () => {
+    if (!openingHold.cancel()) requestedTpsControl.cancel()
+  }
 
   const handlePointerDown = (
     event: ReactPointerEvent<SVGRectElement>,
@@ -209,36 +203,7 @@ export function ThrottlerActor({
   ) => {
     event.preventDefault()
     event.stopPropagation()
-    stopHold()
-    if (!requestDelta(delta)) return
-
-    const release = () => {
-      stopHold()
-      void requestedTpsControl.commit()
-    }
-    const cancel = () => {
-      stopHold()
-      requestedTpsControl.cancel()
-      setCandidateWheelPhase(null)
-    }
-    const cancelKey = (keyboardEvent: globalThis.KeyboardEvent) => {
-      if (keyboardEvent.key === 'Escape') cancel()
-    }
-    releaseListeners.current = () => {
-      window.removeEventListener('pointerup', release)
-      window.removeEventListener('pointercancel', cancel)
-      window.removeEventListener('blur', cancel)
-      window.removeEventListener('keydown', cancelKey)
-    }
-    window.addEventListener('pointerup', release)
-    window.addEventListener('pointercancel', cancel)
-    window.addEventListener('blur', cancel)
-    window.addEventListener('keydown', cancelKey)
-    holdTimer.current = window.setTimeout(() => {
-      repeatTimer.current = window.setInterval(() => {
-        requestDelta(delta)
-      }, HOLD_REPEAT_MS)
-    }, HOLD_DELAY_MS)
+    openingHold.start(event.pointerId, () => requestDelta(delta))
   }
 
   const handleSelectKeyDown = (event: KeyboardEvent<SVGGElement>) => {
@@ -397,107 +362,6 @@ export function ThrottlerActor({
   const valveStyle = {
     '--pipeline-valve-flow-color': flowColor(upstreamChannel),
   } as CSSProperties
-  const apertureClipId = 'throttler-valve-aperture-clip'
-
-  const renderGate = (
-    gateY: number,
-    className: string,
-    kind: 'applied' | 'preview' | 'pending',
-  ) => (
-    <g
-      className={className}
-      clipPath={`url(#${apertureClipId})`}
-      data-gate-kind={kind}
-      data-gate-y={gateY.toFixed(3)}
-      data-piston-axis-ratio={(
-        VALVE_PISTON.radiusY / VALVE_PISTON.radiusX
-      ).toFixed(2)}
-    >
-      <line x1="430" y1="395" x2="430" y2={gateY} />
-      <ellipse
-        cx="430"
-        cy={gateY}
-        rx={VALVE_PISTON.radiusX}
-        ry={VALVE_PISTON.radiusY}
-      />
-    </g>
-  )
-
-  const renderKnob = (knob: (typeof wheelKnobs)[number], index: number) => (
-    <circle
-      key={`${knob.angle}-${index}`}
-      cx={knob.x}
-      cy={knob.y}
-      r="2.5"
-      className={`pipeline-valve-wheel-knob pipeline-valve-wheel-knob--${knob.layer}`}
-      data-orbit-angle={knob.angle}
-      data-orbit-depth={knob.depth}
-      data-orbit-layer={knob.layer}
-    />
-  )
-
-  const renderWheel = (className: string, transform?: string) => (
-    <g className={className} transform={transform} data-wheel-phase={wheelPhase}>
-      <g className="pipeline-valve-wheel-knobs pipeline-valve-wheel-knobs--back">
-        {backKnobs.map(renderKnob)}
-      </g>
-      <ellipse cx="430" cy="350" rx="27" ry="10.5" className="pipeline-valve-wheel-rim" />
-      <ellipse cx="430" cy="350" rx="20.5" ry="7" className="pipeline-valve-wheel-inner-rim" />
-      <g transform="translate(430 350) scale(1 0.42)">
-        <g
-          className="pipeline-valve-wheel-inner-motion"
-          style={{ transform: `rotate(${wheelPhase * 60}deg)` }}
-          data-internal-phase={wheelPhase}
-        >
-          {Array.from({ length: 5 }, (_, index) => {
-            const angle = index * 72 * Math.PI / 180
-            return (
-              <line
-                key={index}
-                x1="0"
-                y1="0"
-                x2={Math.cos(angle) * 19}
-                y2={Math.sin(angle) * 19}
-                className="pipeline-valve-wheel-spoke"
-              />
-            )
-          })}
-          <circle cx="17" cy="0" r="2.2" className="pipeline-valve-wheel-index" />
-        </g>
-        <circle r="5.2" className="pipeline-valve-wheel-hub" />
-      </g>
-      <g className="pipeline-valve-wheel-knobs pipeline-valve-wheel-knobs--front">
-        {frontKnobs.map(renderKnob)}
-      </g>
-    </g>
-  )
-
-  const detachedTransform = [
-    `translate(${VALVE_DETACHED_ASSEMBLY.translateX} ${VALVE_DETACHED_ASSEMBLY.translateY})`,
-    `rotate(${VALVE_DETACHED_ASSEMBLY.rotationDegrees} 430 350)`,
-  ].join(' ')
-  const renderDetachedAssembly = (className: string) => (
-    <g
-      className={className}
-      transform={detachedTransform}
-      data-detached-anchor={`${VALVE_DETACHED_ASSEMBLY.wheelCenterX} ${VALVE_DETACHED_ASSEMBLY.wheelCenterY}`}
-    >
-      <g className={className.includes('--applied')
-        ? 'pipeline-valve-detached-sway'
-        : undefined}>
-        {renderWheel('pipeline-valve-wheel')}
-        <rect x="424" y="363" width="12" height="12" rx="1" className="pipeline-valve-neck" />
-        <line x1="430" y1="375" x2="430" y2="405" className="pipeline-valve-stem" />
-        <ellipse
-          cx="430"
-          cy="409"
-          rx={VALVE_PISTON.radiusX}
-          ry={VALVE_PISTON.radiusY}
-          className="pipeline-valve-detached-piston"
-        />
-      </g>
-    </g>
-  )
 
   const installationStatus = installationCandidate === null
     ? `${appliedInstalled === null ? 'unavailable' : appliedInstalled ? 'installed' : 'bypass'} applied`
@@ -514,16 +378,7 @@ export function ThrottlerActor({
         THROTTLER
       </text>
       <g id="throttler-actor" className="pipeline-actor" style={valveStyle}>
-        <defs>
-          <clipPath id={apertureClipId}>
-            <ellipse
-              cx="430"
-              cy={VALVE_APERTURE.centerY}
-              rx={VALVE_APERTURE.radiusX}
-              ry={VALVE_APERTURE.radiusY}
-            />
-          </clipPath>
-        </defs>
+        <ThrottlerValveApertureClip />
         <g
           className={`pipeline-selectable${selected ? ' pipeline-selectable--selected' : ''}`}
           role="button"
@@ -639,7 +494,7 @@ export function ThrottlerActor({
           <>
             <rect x="424" y="361" width="12" height="12" rx="1" className="pipeline-valve-neck" />
             <line x1="430" y1="373" x2="430" y2="398" className="pipeline-valve-stem" />
-            {renderGate(appliedGateY, 'pipeline-valve-gate', 'applied')}
+            <ThrottlerValveGate gateY={appliedGateY} className="pipeline-valve-gate" kind="applied" />
           </>
         )}
         {appliedInstalled === true &&
@@ -647,11 +502,11 @@ export function ThrottlerActor({
           candidateIndex !== null &&
           candidateIndex !== appliedIndex && (
           <>
-            {renderGate(
-              candidateGateY,
-              `pipeline-valve-ghost pipeline-valve-ghost--${candidateKind ?? 'pending'}`,
-              candidateKind ?? 'pending',
-            )}
+            <ThrottlerValveGate
+              gateY={candidateGateY}
+              className={`pipeline-valve-ghost pipeline-valve-ghost--${candidateKind ?? 'pending'}`}
+              kind={candidateKind ?? 'pending'}
+            />
             <text
               x="430"
               y="468"
@@ -694,16 +549,11 @@ export function ThrottlerActor({
             data-wheel-phase={wheelPhase}
             data-opening-index={rangeIndex}
             onKeyDown={handleValveKeyDown}
-            onBlur={() => {
-              stopHold()
-              requestedTpsControl.cancel()
-            }}
+            onBlur={cancelOpening}
             onClick={(event) => event.stopPropagation()}
           >
             <ellipse cx="430" cy="350" rx="49" ry="29" className="pipeline-valve-focus-ring" />
-            {renderWheel(
-              'pipeline-valve-wheel',
-            )}
+            <ThrottlerValveWheel wheelPhase={wheelPhase} className="pipeline-valve-wheel" />
             <rect
               x="400.25"
               y="336.75"
@@ -716,10 +566,7 @@ export function ThrottlerActor({
               aria-label="Decrease throttle opening"
               onPointerDown={(event) => handlePointerDown(event, -1)}
               onKeyDown={(event) => handleWheelKeyDown(event, -1)}
-              onLostPointerCapture={() => {
-                stopHold()
-                requestedTpsControl.cancel()
-              }}
+              onLostPointerCapture={cancelOpening}
             />
             <rect
               x="430"
@@ -733,10 +580,7 @@ export function ThrottlerActor({
               aria-label="Increase throttle opening"
               onPointerDown={(event) => handlePointerDown(event, 1)}
               onKeyDown={(event) => handleWheelKeyDown(event, 1)}
-              onLostPointerCapture={() => {
-                stopHold()
-                requestedTpsControl.cancel()
-              }}
+              onLostPointerCapture={cancelOpening}
             />
             <rect
               x={VALVE_OPENING_CONTROLS.decrease.x}
@@ -746,10 +590,7 @@ export function ThrottlerActor({
               className="pipeline-valve-hit-area"
               data-direction="decrease"
               onPointerDown={(event) => handlePointerDown(event, -1)}
-              onLostPointerCapture={() => {
-                stopHold()
-                requestedTpsControl.cancel()
-              }}
+              onLostPointerCapture={cancelOpening}
             />
             <rect
               x={VALVE_OPENING_CONTROLS.increase.x}
@@ -759,24 +600,25 @@ export function ThrottlerActor({
               className="pipeline-valve-hit-area"
               data-direction="increase"
               onPointerDown={(event) => handlePointerDown(event, 1)}
-              onLostPointerCapture={() => {
-                stopHold()
-                requestedTpsControl.cancel()
-              }}
+              onLostPointerCapture={cancelOpening}
             />
           </g>
         )}
 
-        {appliedInstalled === false && renderDetachedAssembly(
-          'pipeline-valve-detached-assembly pipeline-valve-detached-assembly--applied',
+        {appliedInstalled === false && (
+          <ThrottlerValveDetachedAssembly
+            wheelPhase={wheelPhase}
+            className="pipeline-valve-detached-assembly pipeline-valve-detached-assembly--applied"
+          />
         )}
 
         {installationCandidate === false &&
           appliedInstalled === true && (
           <>
-            {renderDetachedAssembly(
-              `pipeline-valve-installation-ghost pipeline-valve-installation-ghost--${installationCandidateKind}`,
-            )}
+            <ThrottlerValveDetachedAssembly
+              wheelPhase={wheelPhase}
+              className={`pipeline-valve-installation-ghost pipeline-valve-installation-ghost--${installationCandidateKind}`}
+            />
             <path
               d="M438 383 C470 370 510 354 536 348"
               className={`pipeline-valve-installation-trajectory pipeline-valve-installation-trajectory--${installationCandidateKind}`}
@@ -787,10 +629,10 @@ export function ThrottlerActor({
           appliedInstalled === false && (
           <>
             <g className={`pipeline-valve-installation-ghost pipeline-valve-installation-ghost--${installationCandidateKind}`}>
-              {renderGate(appliedGateY, 'pipeline-valve-gate', 'applied')}
+              <ThrottlerValveGate gateY={appliedGateY} className="pipeline-valve-gate" kind="applied" />
               <rect x="424" y="361" width="12" height="12" rx="1" className="pipeline-valve-neck" />
               <line x1="430" y1="373" x2="430" y2="398" className="pipeline-valve-stem" />
-              {renderWheel('pipeline-valve-wheel')}
+              <ThrottlerValveWheel wheelPhase={wheelPhase} className="pipeline-valve-wheel" />
             </g>
             <path
               d="M542 407 C516 416 474 410 438 383"
