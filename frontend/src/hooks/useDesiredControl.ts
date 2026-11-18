@@ -1,4 +1,7 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+
+// Allow an in-flight GET, a poll interval, and a confirming GET (2s + 1s + 2s).
+const CONFIRMATION_TIMEOUT_MS = 6_000
 
 export type DesiredControlPhase = 'idle' | 'preview' | 'pending'
 
@@ -33,11 +36,18 @@ interface DesiredState<T> {
   readonly desired: T
   readonly phase: DesiredControlPhase
   readonly submittedRevision: number | null
+  readonly confirmationDeadline: number | null
   readonly error: string | null
 }
 
 function idleState<T>(applied: T, error: string | null = null): DesiredState<T> {
-  return { desired: applied, phase: 'idle', submittedRevision: null, error }
+  return {
+    desired: applied,
+    phase: 'idle',
+    submittedRevision: null,
+    confirmationDeadline: null,
+    error,
+  }
 }
 
 export function useDesiredControl<T>({
@@ -82,6 +92,18 @@ export function useDesiredControl<T>({
     setState(next)
   }, [])
 
+  useEffect(() => {
+    if (state.confirmationDeadline === null) return
+
+    const remaining = Math.max(0, Math.ceil(state.confirmationDeadline - performance.now()))
+    const timer = setTimeout(() => {
+      if (stateRef.current === state) {
+        updateState(idleState(optionsRef.current.applied))
+      }
+    }, remaining)
+    return () => clearTimeout(timer)
+  }, [state, updateState])
+
   const preview = useCallback(
     (value: T) => {
       const current = stateRef.current
@@ -90,6 +112,7 @@ export function useDesiredControl<T>({
         desired: value,
         phase: 'preview',
         submittedRevision: null,
+        confirmationDeadline: null,
         error: null,
       })
     },
@@ -117,13 +140,21 @@ export function useDesiredControl<T>({
         desired,
         phase: 'pending',
         submittedRevision: options.revision,
+        confirmationDeadline: null,
         error: null,
       }
       updateState(pending)
       try {
         const receipt = await options.dispatch(desired)
-        if (!receipt.accepted && stateRef.current === pending) {
-          updateState(idleState(optionsRef.current.applied, rejectionMessage))
+        if (stateRef.current === pending) {
+          if (receipt.accepted) {
+            updateState({
+              ...pending,
+              confirmationDeadline: performance.now() + CONFIRMATION_TIMEOUT_MS,
+            })
+          } else {
+            updateState(idleState(optionsRef.current.applied, rejectionMessage))
+          }
         }
         return receipt.accepted
       } catch {
