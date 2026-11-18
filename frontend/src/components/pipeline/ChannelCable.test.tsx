@@ -8,9 +8,15 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type { ChannelSnapshot, SelectableId } from '../../model/loadgen'
 import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
-import { CHANNEL_CABLE_ENDPOINTS } from './geometry'
+import { createPipelineGeometry } from './geometry'
 import { getChannelCapacityGeometryPresentation } from './channelCableGeometry'
 import { ChannelCable } from './ChannelCable'
+
+const channels = createPipelineGeometry({
+  orientation: 'landscape',
+  readerWorkers: 1,
+  senderWorkers: 1,
+}).channels
 
 const styleElement = document.createElement('style')
 const pipelineStyles = readFileSync(
@@ -50,13 +56,11 @@ function renderCable(
     batchSize?: ChannelSnapshot['capacity']
   } = {},
 ) {
-  const endpoints = CHANNEL_CABLE_ENDPOINTS[snapshot.id]
   return render(
     <svg viewBox="0 0 1100 640">
       <ChannelCable
         snapshot={snapshot}
-        start={endpoints.start}
-        end={endpoints.end}
+        geometry={channels[snapshot.id]}
         selected={false}
         onSelect={options.onSelect ?? (() => undefined)}
         capacityValues={options.capacityValues}
@@ -231,7 +235,6 @@ describe('ChannelCable mounted behavior', () => {
   it('applies stopped and connection-error cable overrides immediately', () => {
     const adapter = new SimulationAdapter()
     const base = derivedSnapshot(adapter).readerChannel
-    const endpoints = CHANNEL_CABLE_ENDPOINTS[base.id]
     const view = renderCable({
       ...base,
       displayedPressure: 1,
@@ -251,8 +254,7 @@ describe('ChannelCable mounted behavior', () => {
             displayedPressure: 0,
             flowState: 'connection-error',
           }}
-          start={endpoints.start}
-          end={endpoints.end}
+          geometry={channels[base.id]}
           selected={false}
           onSelect={() => undefined}
           batchSize={{ ...base.capacity, applied: base.capacity.min }}

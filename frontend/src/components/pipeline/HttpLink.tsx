@@ -1,3 +1,4 @@
+import { clsx } from 'clsx'
 import type { KeyboardEvent } from 'react'
 import type { HttpSnapshot, SelectableId } from '../../model/loadgen'
 import { formatInteger, formatMilliseconds, formatRate } from './formatters'
@@ -67,7 +68,11 @@ export function HttpLink({
   return (
     <g
       id="http-link"
-      className={`pipeline-http pipeline-selectable ${linkStateClass(snapshot, presentedStatusCode, presentedOutcome)}${selected ? ' pipeline-selectable--selected' : ''}`}
+      className={clsx(
+        'pipeline-http pipeline-selectable',
+        linkStateClass(snapshot, presentedStatusCode, presentedOutcome),
+        selected && 'pipeline-selectable--selected',
+      )}
       role="button"
       tabIndex={0}
       aria-label={`Inspect HTTP connection, ${snapshot.connectionState}`}

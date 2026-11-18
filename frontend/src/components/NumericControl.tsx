@@ -1,3 +1,4 @@
+import { clsx } from 'clsx'
 import { useId, useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import type { NumericControlSnapshot } from '../model/loadgen'
@@ -79,7 +80,7 @@ export function NumericControl({ label, control, desiredControl, className }: Nu
   }
 
   return (
-    <label className={`numeric-control${className ? ` ${className}` : ''}`} htmlFor={inputId}>
+    <label className={clsx('numeric-control', className)} htmlFor={inputId}>
       <span className="numeric-control__label">{label}</span>
       <input
         id={inputId}

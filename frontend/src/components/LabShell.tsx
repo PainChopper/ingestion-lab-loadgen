@@ -1,4 +1,5 @@
 import { FlaskConical, MousePointer2, X } from 'lucide-react'
+import { clsx } from 'clsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import type { LoadgenSnapshot, ChannelFlowState, SelectableId } from '../model/loadgen'
@@ -9,6 +10,7 @@ import { NumericControl } from './NumericControl'
 import { formatInteger } from './pipeline/formatters'
 import { PipelineSvg } from './pipeline/PipelineSvg'
 import { createPipelineGeometry } from './pipeline/geometry'
+import { getWorkerGeometryCount } from './pipeline/workerActorLayout'
 import { usePipelineOrientation, type PipelineOrientation } from './pipeline/pipelineLayout'
 
 interface AdapterProps {
@@ -31,10 +33,6 @@ function formatDuration(elapsedMs: number): string {
   const minutes = Math.floor((totalSeconds % 3_600) / 60)
   const seconds = totalSeconds % 60
   return [hours, minutes, seconds].map((part) => String(part).padStart(2, '0')).join(':')
-}
-
-function formatCount(value: number): string {
-  return new Intl.NumberFormat('en-US').format(value)
 }
 
 function TopBar({ snapshot }: { snapshot: LoadgenSnapshot }) {
@@ -61,7 +59,7 @@ function TopBar({ snapshot }: { snapshot: LoadgenSnapshot }) {
         </div>
         <div>
           <dt>Total</dt>
-          <dd>{formatCount(snapshot.totalTransactions)}</dd>
+          <dd>{formatInteger(snapshot.totalTransactions)}</dd>
         </div>
       </dl>
     </header>
@@ -110,13 +108,13 @@ function PipelineViewport({
       createPipelineGeometry({
         orientation,
         landscapeContentWidth,
-        readerWorkers: Math.max(
+        readerWorkers: getWorkerGeometryCount(
           liveControls.readerWorkers.desired,
-          Math.min(32, snapshot.reader.liveWorkers),
+          snapshot.reader.liveWorkers,
         ),
-        senderWorkers: Math.max(
+        senderWorkers: getWorkerGeometryCount(
           liveControls.senderWorkers.desired,
-          Math.min(32, snapshot.sender.liveWorkers),
+          snapshot.sender.liveWorkers,
         ),
       }),
     [
@@ -148,7 +146,6 @@ function PipelineViewport({
           selectedId={selectedId}
           onSelect={onSelect}
           liveControls={liveControls}
-          orientation={orientation}
           geometry={geometry}
         />
       </div>
@@ -214,8 +211,6 @@ function InspectorControls({
           />
         </div>
       )
-    case 'target':
-      return null
     default:
       return null
   }
@@ -307,13 +302,11 @@ function InspectorDock({
 }
 
 function InspectorDataRow({ row }: { row: InspectorRow }) {
-  const className = [
-    row.layout === 'full-width' ? 'inspector-data__row--full-width' : null,
-    row.segments === undefined ? null : 'inspector-data__row--worker-states',
-    row.kind === 'source-error' ? 'inspector-data__row--source-error' : null,
-  ]
-    .filter(Boolean)
-    .join(' ')
+  const className = clsx(
+    row.layout === 'full-width' && 'inspector-data__row--full-width',
+    row.segments !== undefined && 'inspector-data__row--worker-states',
+    row.kind === 'source-error' && 'inspector-data__row--source-error',
+  )
 
   return (
     <div className={className || undefined}>

@@ -1,3 +1,4 @@
+import { clsx } from 'clsx'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import type { ChannelSnapshot, SelectableId, ThrottlerSnapshot } from '../../model/loadgen'
@@ -198,6 +199,7 @@ export function ThrottlerActor({
       ? null
       : installedControl.phase
   const targetInstalled = !appliedInstalled
+  const installationError = installedControl?.error
   const installationControlAvailable =
     appliedInstalled !== null &&
     installedControl !== undefined &&
@@ -316,7 +318,7 @@ export function ThrottlerActor({
       <g id="throttler-actor" className="pipeline-actor" style={valveStyle}>
         <ThrottlerValveApertureClip />
         <g
-          className={`pipeline-selectable${selected ? ' pipeline-selectable--selected' : ''}`}
+          className={clsx('pipeline-selectable', selected && 'pipeline-selectable--selected')}
           role="button"
           tabIndex={0}
           aria-label="Inspect throttler"
@@ -444,14 +446,20 @@ export function ThrottlerActor({
             <>
               <ThrottlerValveGate
                 gateY={candidateGateY}
-                className={`pipeline-valve-ghost pipeline-valve-ghost--${candidateKind ?? 'pending'}`}
+                className={clsx(
+                  'pipeline-valve-ghost',
+                  `pipeline-valve-ghost--${candidateKind ?? 'pending'}`,
+                )}
                 kind={candidateKind ?? 'pending'}
               />
               <text
                 x="430"
                 y="468"
                 textAnchor="middle"
-                className={`pipeline-valve-ghost-label pipeline-valve-ghost-label--${candidateKind ?? 'pending'}`}
+                className={clsx(
+                  'pipeline-valve-ghost-label',
+                  `pipeline-valve-ghost-label--${candidateKind ?? 'pending'}`,
+                )}
               >
                 {openingPercent(candidateIndex)}% target
               </text>
@@ -476,7 +484,10 @@ export function ThrottlerActor({
 
         {appliedInstalled === true && (
           <g
-            className={`pipeline-valve-control${adjustable ? '' : ' pipeline-valve-control--disabled'}`}
+            className={clsx(
+              'pipeline-valve-control',
+              !adjustable && 'pipeline-valve-control--disabled',
+            )}
             role="slider"
             tabIndex={0}
             aria-label="Throttle opening"
@@ -588,7 +599,10 @@ export function ThrottlerActor({
         {installedControl !== undefined && (
           <g
             ref={installationControlRef}
-            className={`pipeline-valve-installation-control${installationControlAvailable ? '' : ' pipeline-valve-installation-control--disabled'}`}
+            className={clsx(
+              'pipeline-valve-installation-control',
+              !installationControlAvailable && 'pipeline-valve-installation-control--disabled',
+            )}
             role="button"
             tabIndex={0}
             aria-label={
@@ -687,7 +701,7 @@ export function ThrottlerActor({
                 ? `${targetInstalled ? 'INSTALLED' : 'BYPASS'} PENDING`
                 : ''}
         </text>
-        {installedControl?.error != null && (
+        {installationError !== undefined && installationError !== null && (
           <text
             x="430"
             y="486"
@@ -695,7 +709,7 @@ export function ThrottlerActor({
             className="pipeline-valve-installation-error"
             role="status"
           >
-            {installedControl.error}
+            {installationError}
           </text>
         )}
       </g>

@@ -74,7 +74,9 @@ describe('LabShell', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect reader' }))
     const label = screen.getByTestId('reader-source-error-label')
     expect(label.textContent).toBe('SOURCE ERROR')
-    expect(label.parentElement?.className).toContain('inspector-data__row--source-error')
+    expect(label.parentElement?.className).toBe(
+      'inspector-data__row--full-width inspector-data__row--source-error',
+    )
     expect(label.nextElementSibling?.tagName).toBe('DD')
     expect(label.parentElement?.querySelectorAll('dd')).toHaveLength(1)
 
@@ -445,7 +447,9 @@ describe('LabShell', () => {
       'inspector-data__row--full-width',
     )
     const workerSummary = screen.getByText('Worker states').parentElement
-    expect(workerSummary?.className).toContain('inspector-data__row--full-width')
+    expect(workerSummary?.className).toBe(
+      'inspector-data__row--full-width inspector-data__row--worker-states',
+    )
     expect(workerSummary?.querySelectorAll('.worker-state')).toHaveLength(3)
     expect(screen.getAllByTestId('sender-inspector-section-data')).toHaveLength(3)
   })

@@ -439,7 +439,6 @@ function renderPipeline(
       selectedId={null}
       onSelect={vi.fn()}
       liveControls={liveControls(snapshot)}
-      orientation={orientation}
       geometry={geometry}
     />,
   )
@@ -486,6 +485,11 @@ function pipelineElement(snapshot: LoadgenSnapshot) {
       selectedId={null}
       onSelect={vi.fn()}
       liveControls={liveControls(snapshot)}
+      geometry={createPipelineGeometry({
+        orientation: 'landscape',
+        readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+        senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
+      })}
     />
   )
 }
@@ -1217,7 +1221,6 @@ describe('PipelineSvg rendering', () => {
             onInstalledChange,
           ),
         })}
-        orientation="landscape"
         geometry={geometry}
       />,
     )
@@ -1280,7 +1283,11 @@ describe('PipelineSvg rendering', () => {
         selectedId={null}
         onSelect={vi.fn()}
         liveControls={liveControls(snapshot)}
-        orientation="portrait"
+        geometry={createPipelineGeometry({
+          orientation: 'portrait',
+          readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
+          senderWorkers: 32,
+        })}
       />,
     )
     const card = view.container.querySelector('#sender-actor .pipeline-actor-box')!

@@ -1,3 +1,4 @@
+import { clsx } from 'clsx'
 import { Minus, Plus } from 'lucide-react'
 import {
   useLayoutEffect,
@@ -12,11 +13,13 @@ import type { InspectorRowSegment } from '../inspectorViewModel'
 import type { NumericControlSnapshot, RunState, SelectableId } from '../../model/loadgen'
 import type { Point, TextPlacement, WorkerActorBounds } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
-import { getWorkerActorLayout, type WorkerChipLayout } from './workerActorLayout'
+import {
+  getWorkerActorLayout,
+  MAX_VISIBLE_WORKER_MARKERS,
+  type WorkerChipLayout,
+} from './workerActorLayout'
 
 export type WorkerActorId = 'reader' | 'sender'
-
-const MAX_VISIBLE_WORKER_MARKERS = 32
 
 interface WorkerActorProps {
   actor: WorkerActorId
@@ -74,7 +77,7 @@ function WorkerChip({
 
   return (
     <g
-      className={`pipeline-worker--${state}${draining ? ' pipeline-worker--draining' : ''}`}
+      className={clsx(`pipeline-worker--${state}`, draining && 'pipeline-worker--draining')}
       transform={`translate(${x} ${y}) scale(${scale})`}
     >
       <rect x={chipX} y={chipY} width="31" height="31" rx="3" className="pipeline-worker-chip" />
@@ -268,7 +271,10 @@ export function WorkerActor({
       </foreignObject>
       <g
         id={`${actor}-actor`}
-        className={`pipeline-actor pipeline-selectable${selected ? ' pipeline-selectable--selected' : ''}`}
+        className={clsx(
+          'pipeline-actor pipeline-selectable',
+          selected && 'pipeline-selectable--selected',
+        )}
         role="button"
         tabIndex={0}
         aria-label={actorAriaLabel}
