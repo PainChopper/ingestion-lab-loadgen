@@ -193,6 +193,8 @@ export interface PipelineGeometryInput {
   readonly senderWorkers: number
 }
 
+const LANDSCAPE_CHANNEL_WAITING_Y = 568
+
 function landscapeGeometry(contentWidth: number) {
   const width = Math.max(PIPELINE_VIEW_BOX.width, Math.round(contentWidth))
   const extraWidth = width - PIPELINE_VIEW_BOX.width
@@ -351,7 +353,7 @@ function landscapeGeometry(contentWidth: number) {
         x: (reader.ports.output.x + throttler.ports.input.x) / 2,
         throughputY: 507,
         depthY: 528,
-        waitingY: 548,
+        waitingY: LANDSCAPE_CHANNEL_WAITING_Y,
       },
     },
     'throttler-to-sender': {
@@ -361,7 +363,7 @@ function landscapeGeometry(contentWidth: number) {
         x: (throttler.ports.output.x + sender.ports.input.x) / 2,
         throughputY: 507,
         depthY: 528,
-        waitingY: 548,
+        waitingY: LANDSCAPE_CHANNEL_WAITING_Y,
       },
     },
   }

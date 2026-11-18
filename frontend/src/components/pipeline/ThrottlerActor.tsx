@@ -24,6 +24,7 @@ import {
   openingPercent,
   VALVE_APERTURE,
   VALVE_READOUT_Y,
+  VALVE_TARGET_LABEL_X,
   valvePistonCenterY,
   valueToOpeningIndex,
   valveIsAdjustable,
@@ -266,7 +267,7 @@ export function ThrottlerActor({
                 kind={candidateKind ?? 'pending'}
               />
               <text
-                x={VALVE_APERTURE.centerX}
+                x={VALVE_TARGET_LABEL_X}
                 y={VALVE_READOUT_Y.detail}
                 textAnchor="middle"
                 className={clsx(
@@ -344,7 +345,7 @@ export function ThrottlerActor({
         {installationError !== undefined && installationError !== null && (
           <text
             x={VALVE_APERTURE.centerX}
-            y={VALVE_READOUT_Y.installationError}
+            y={VALVE_READOUT_Y.installationError[orientation]}
             textAnchor="middle"
             className="pipeline-valve-installation-error"
             role="status"
