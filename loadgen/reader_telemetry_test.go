@@ -39,10 +39,4 @@ func TestReaderTelemetryMeasuresElapsedIntervals(t *testing.T) {
 	if got := telemetry.snapshot(); got.rowsRead != 16 || got.readTPS != 2 {
 		t.Fatalf("new interval included paused rows or lost totals: %+v", got)
 	}
-
-	telemetry.reset()
-	got = telemetry.snapshot()
-	if got.readTPS != 0 || got.rowsRead != 0 {
-		t.Fatalf("after Reset = %+v, want zero measurements", got)
-	}
 }

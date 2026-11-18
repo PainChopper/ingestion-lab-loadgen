@@ -46,9 +46,6 @@ type runtimeEvents struct {
 }
 
 func newControlState(cfg config, logger *zap.Logger) controlState {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
 	return controlState{
 		metricsWindow: time.Duration(cfg.Metrics.WindowMS.Initial) * time.Millisecond,
 		run:           controlRunState{state: runStateStarting},
@@ -69,9 +66,6 @@ func (state *controlState) runEventLoop(
 	grace time.Duration,
 ) (shutdownDeadline time.Time, runErr error) {
 	metrics := events.metrics
-	if metrics.prometheusMetrics == nil {
-		return time.Time{}, errors.New("run event loop: Prometheus metrics are required")
-	}
 
 	// App cancellation stops admission first; the deadline cancels the pipeline.
 	runCtx, cancelRun := context.WithCancel(context.Background())
@@ -259,9 +253,6 @@ func (state *controlState) finishRun(pipeline *pipelineRuntime, metrics *Prometh
 		zap.Int64("confirmed_transactions", state.run.totalTransactions),
 		zap.Int64("unconfirmed_transactions", rowsRead-state.run.totalTransactions),
 	)
-	if pipeline != nil && !partial {
-		pipeline.detachChannels(state)
-	}
 }
 
 func (state *controlState) runtimeStatusAt(runtime *pipelineRuntime, now time.Time) runtimeStatus {

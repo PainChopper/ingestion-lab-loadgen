@@ -31,14 +31,13 @@ func startTestReaderPool(
 	batches chan<- []Transaction,
 	telemetry *readerTelemetry,
 	channel *channelTelemetry,
-	logger *zap.Logger,
 ) *readerPool {
 	t.Helper()
 	source, err := discoverReaderSource(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return startReaderPool(ctx, source, batchSize, workers, batches, telemetry, channel, logger)
+	return startReaderPool(ctx, source, batchSize, workers, batches, telemetry, channel, zap.NewNop())
 }
 
 func TestReaderPoolOwnsUniqueFilesAndEmitsPerFileResiduals(t *testing.T) {
@@ -55,7 +54,7 @@ func TestReaderPoolOwnsUniqueFilesAndEmitsPerFileResiduals(t *testing.T) {
 	var telemetry readerTelemetry
 	var channel channelTelemetry
 	channel.start(batches, 2)
-	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 2, batches, &telemetry, &channel, nil)
+	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 2, batches, &telemetry, &channel)
 	waitForBlockedSenders(t, &channel, 2)
 	pool.mu.Lock()
 	owned := len(pool.active)
@@ -294,11 +293,34 @@ func TestReaderPoolCanceledBlockedSendDoesNotRestoreReading(t *testing.T) {
 	}
 }
 
+func TestReaderPoolConcurrentSendsUseLastFreeSlotOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	batches := make(chan []Transaction, 1)
+	var telemetry channelTelemetry
+	telemetry.start(batches, 1)
+	pool := &readerPool{ctx: ctx, batches: batches, channel: &telemetry}
+	sent := make(chan bool, 2)
+	for range 2 {
+		go func() { sent <- pool.sendBatch(&readerWorker{}, []Transaction{{}}) }()
+	}
+	waitForBlockedSender(t, &telemetry)
+	if len(batches) != 1 || !<-sent {
+		t.Fatal("first writer did not fill the last free slot")
+	}
+	cancel()
+	if <-sent {
+		t.Fatal("second writer unexpectedly sent after cancellation")
+	}
+	if snapshot := telemetry.snapshot(time.Now()); snapshot.blockedSenders != 0 || snapshot.sentBatchesTotal != 1 {
+		t.Fatalf("after race = %+v", snapshot)
+	}
+}
+
 func TestReaderPoolOwnsFilesAcrossConcurrentCycles(t *testing.T) {
 	pool := &readerPool{source: readerSource{files: []string{"a", "b"}}, active: map[string]bool{}}
-	pool.ctx, pool.cancel = context.WithCancel(context.Background())
+	pool.ctx = t.Context()
 	pool.available = sync.NewCond(&pool.mu)
-	defer pool.cancel()
 	first, second := &readerWorker{}, &readerWorker{}
 	for cycle := range 2 {
 		one, ok := pool.claimNextFile(first)
@@ -331,9 +353,8 @@ func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 		workers:   []*readerWorker{{}, {draining: true}},
 		telemetry: &readerTelemetry{}, done: make(chan struct{}),
 	}
-	pool.ctx, pool.cancel = context.WithCancel(context.Background())
+	pool.ctx = t.Context()
 	pool.available = sync.NewCond(&pool.mu)
-	defer pool.cancel()
 	if job, ok := pool.claimNextFile(pool.workers[1]); ok || job != "" {
 		t.Fatalf("draining idle worker acquired %q", job)
 	}
@@ -358,9 +379,8 @@ func TestReaderPoolDownscaleSelectsIdleBeforeBusy(t *testing.T) {
 		},
 		telemetry: &telemetry,
 	}
-	pool.ctx, pool.cancel = context.WithCancel(context.Background())
+	pool.ctx = t.Context()
 	pool.available = sync.NewCond(&pool.mu)
-	defer pool.cancel()
 
 	pool.reconcile(2)
 	if snapshot := pool.aggregateSnapshot(); snapshot.drainingWorkers != 1 || snapshot.drainingIdleWorkers != 1 {
@@ -392,8 +412,11 @@ func TestReaderPoolBusyDownscaleFinishesCurrentFileWithoutClaimingNext(t *testin
 	var telemetry readerTelemetry
 	var channel channelTelemetry
 	channel.start(batches, len(firstRows))
-	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), len(firstRows), 1, batches, &telemetry, &channel, nil)
-	defer func() { <-pool.stop() }()
+	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), len(firstRows), 1, batches, &telemetry, &channel)
+	defer func() {
+		cancel()
+		<-pool.done
+	}()
 
 	deadline := time.After(time.Second)
 	for {
@@ -454,7 +477,7 @@ func TestReaderPoolBlockedDownscaleFlushesEntireFile(t *testing.T) {
 	var telemetry readerTelemetry
 	var channel channelTelemetry
 	channel.start(batches, 2)
-	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 2, batches, &telemetry, &channel, nil)
+	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 2, batches, &telemetry, &channel)
 	waitForBlockedSender(t, &channel)
 	if snapshot := pool.aggregateSnapshot(); snapshot.liveWorkers != 2 || snapshot.blockedWorkers != 1 || snapshot.idleWorkers != 1 {
 		t.Fatalf("before downscale snapshot = %+v", snapshot)
@@ -519,8 +542,11 @@ func TestReaderPoolBlockedDownscaleWaitsPastFormerGraceUntilRecovery(t *testing.
 	var telemetry readerTelemetry
 	var channel channelTelemetry
 	channel.start(batches, 2)
-	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 1, batches, &telemetry, &channel, nil)
-	defer func() { <-pool.stop() }()
+	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 1, batches, &telemetry, &channel)
+	defer func() {
+		cancel()
+		<-pool.done
+	}()
 	waitForBlockedSender(t, &channel)
 	pool.reconcile(0)
 	select {
@@ -593,7 +619,7 @@ func TestReaderPoolReactivatesBlockedWorkerWithoutDuplicateSlot(t *testing.T) {
 	var telemetry readerTelemetry
 	var channel channelTelemetry
 	channel.start(batches, 1)
-	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 1, 1, batches, &telemetry, &channel, nil)
+	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 1, 1, batches, &telemetry, &channel)
 	waitForBlockedSender(t, &channel)
 	pool.reconcile(0)
 	if snapshot := pool.aggregateSnapshot(); snapshot.blockedWorkers != 1 || snapshot.drainingBlockedWorkers != 1 {
@@ -629,7 +655,7 @@ func TestReaderPoolCancellationUnblocksDrainingWorkers(t *testing.T) {
 	batches := make(chan []Transaction)
 	var telemetry readerTelemetry
 	var channel channelTelemetry
-	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 1, 2, batches, &telemetry, &channel, nil)
+	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 1, 2, batches, &telemetry, &channel)
 	pool.reconcile(1)
 	cancel()
 	select {
@@ -655,7 +681,7 @@ func TestReaderPoolClosesFileAfterCanceledResidualBatch(t *testing.T) {
 	var telemetry readerTelemetry
 	var channel channelTelemetry
 	channel.start(batches, 2)
-	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 1, batches, &telemetry, &channel, nil)
+	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 1, batches, &telemetry, &channel)
 	waitForBlockedSender(t, &channel)
 	cancel()
 	select {

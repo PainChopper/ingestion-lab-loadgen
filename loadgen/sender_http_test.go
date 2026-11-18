@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 func TestSenderHTTPAttemptPostsJSONBatch(t *testing.T) {
@@ -110,10 +112,11 @@ func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 			config := testConfig(t).Sender
 			config.Retry.DelaysMS = []int{1}
 			config.API.URL = server.URL
-			pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config, nil)
+			pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config, zap.NewNop())
 			batches <- []Transaction{{ClientID: "invalid"}}
 			waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
-			<-pool.stop()
+			close(batches)
+			<-pool.done
 			if requests.Load() != 4 {
 				t.Fatalf("HTTP requests = %d, want 4", requests.Load())
 			}
@@ -153,8 +156,11 @@ func TestSenderPoolReusesConnectionsAcrossConcurrentWaves(t *testing.T) {
 	var completed atomic.Int64
 	config := testConfig(t).Sender
 	config.API.URL = server.URL
-	pool := startSenderPool(ctx, batches, &telemetry, &completed, requestsPerWave, config, nil)
-	defer func() { <-pool.stop() }()
+	pool := startSenderPool(ctx, batches, &telemetry, &completed, requestsPerWave, config, zap.NewNop())
+	defer func() {
+		cancel()
+		<-pool.done
+	}()
 
 	for wave := 1; wave <= 2; wave++ {
 		results := make(chan senderAttemptOutcome, requestsPerWave)
@@ -213,8 +219,11 @@ func TestSenderPoolEntersBackoffWhenReceiverTimesOut(t *testing.T) {
 	config.API.URL = server.URL
 	config.API.TimeoutMS = 50
 	config.Retry.DelaysMS = []int{3_600_000}
-	pool := startSenderPool(ctx, batches, &telemetry, &completed, 1, config, nil)
-	defer func() { <-pool.stop() }()
+	pool := startSenderPool(ctx, batches, &telemetry, &completed, 1, config, zap.NewNop())
+	defer func() {
+		cancel()
+		<-pool.done
+	}()
 	batches <- []Transaction{{ClientID: "client"}}
 	select {
 	case <-entered:

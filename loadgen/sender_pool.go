@@ -71,9 +71,6 @@ func startSenderPool(
 	cfg senderConfig,
 	logger *zap.Logger,
 ) *senderPool {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
 	ctx, cancel := context.WithCancel(parent)
 	client := newSenderHTTPClient(cfg.Workers.Max, time.Duration(cfg.API.TimeoutMS)*time.Millisecond)
 	pool := &senderPool{
@@ -150,11 +147,6 @@ func (p *senderPool) reconcile(desired int) {
 	for _, done := range idleDraining {
 		<-done
 	}
-}
-
-func (p *senderPool) stop() <-chan struct{} {
-	p.cancel()
-	return p.done
 }
 
 func (p *senderPool) finishIntake() {

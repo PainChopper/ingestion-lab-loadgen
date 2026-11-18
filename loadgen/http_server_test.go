@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 func TestServeMuxRoutes(t *testing.T) {
 	loaded := testConfig(t)
 	loaded.Sender.API.URL = "https://example.test" + snapshotPath
-	mux := newServeMux(runtimeRequests{commands: make(chan runtimeCommand, 1)}, nil, loaded, nil)
+	mux := newServeMux(runtimeRequests{commands: make(chan runtimeCommand, 1)}, NewPrometheusMetrics(), loaded, zap.NewNop())
 
 	for _, route := range []string{snapshotPath, commandsPath} {
 		req := httptest.NewRequest(http.MethodGet, route, nil)
@@ -25,7 +27,7 @@ func TestServeMuxRoutes(t *testing.T) {
 }
 
 func TestServeMuxHasNoLocalIngest(t *testing.T) {
-	mux := newServeMux(runtimeRequests{commands: make(chan runtimeCommand)}, nil, testConfig(t), nil)
+	mux := newServeMux(runtimeRequests{commands: make(chan runtimeCommand)}, NewPrometheusMetrics(), testConfig(t), zap.NewNop())
 	for _, path := range []string{"/internal/test/ingest", "/internal/ingest"} {
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
@@ -46,7 +48,7 @@ func TestStartHTTPServerUsesConfiguredAddressAndShutsDown(t *testing.T) {
 	}
 	loaded := testConfig(t)
 	loaded.HTTP.Addr = addr
-	server, done, err := startHTTPServer(runtimeRequests{commands: make(chan runtimeCommand)}, nil, loaded, nil)
+	server, done, err := startHTTPServer(runtimeRequests{commands: make(chan runtimeCommand)}, NewPrometheusMetrics(), loaded, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +95,7 @@ func TestStartHTTPServerReturnsOccupiedAddressError(t *testing.T) {
 	defer listener.Close()
 	loaded := testConfig(t)
 	loaded.HTTP.Addr = listener.Addr().String()
-	server, done, err := startHTTPServer(runtimeRequests{commands: make(chan runtimeCommand)}, nil, loaded, nil)
+	server, done, err := startHTTPServer(runtimeRequests{commands: make(chan runtimeCommand)}, NewPrometheusMetrics(), loaded, zap.NewNop())
 	if server != nil || done != nil {
 		t.Fatal("failed startup returned server or done channel")
 	}

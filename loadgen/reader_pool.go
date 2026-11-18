@@ -68,8 +68,6 @@ type readerPool struct {
 	available *sync.Cond
 	// Is canceled when the whole pool must stop.
 	ctx context.Context
-	// Requests cancellation of the pool context.
-	cancel context.CancelFunc
 	// Tracks every started worker goroutine until it exits.
 	wg sync.WaitGroup
 	// Closes after pool cancellation and all workers have exited.
@@ -111,12 +109,8 @@ func startReaderPool(
 	channel *channelTelemetry,
 	logger *zap.Logger,
 ) *readerPool {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-	poolCtx, cancel := context.WithCancel(ctx)
 	pool := &readerPool{
-		ctx: poolCtx, cancel: cancel, source: source, active: make(map[string]bool),
+		ctx: ctx, source: source, active: make(map[string]bool),
 		batchSize: batchSize, batches: batches, telemetry: telemetry, channel: channel,
 		workers: make([]*readerWorker, 0, workers), done: make(chan struct{}),
 		readingDone:  make(chan struct{}),
@@ -127,7 +121,7 @@ func startReaderPool(
 	pool.reconcile(workers)
 	go func() {
 		select {
-		case <-poolCtx.Done():
+		case <-ctx.Done():
 			pool.stopReading()
 		case <-pool.readingDone:
 		}
@@ -159,12 +153,6 @@ func (p *readerPool) reconcile(desired int) {
 		p.startReplacementLocked()
 	}
 	p.available.Broadcast()
-}
-
-func (p *readerPool) stop() <-chan struct{} {
-	p.cancel()
-	p.stopReading()
-	return p.done
 }
 
 func (p *readerPool) stopReading() {

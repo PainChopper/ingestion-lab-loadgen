@@ -7,7 +7,6 @@ import (
 )
 
 type channelMeasurements struct {
-	capacity                      int
 	depthBatches                  int
 	bufferedTransactions          int
 	blockedSenders                int
@@ -65,13 +64,6 @@ func (q *channelTelemetry) start(batches <-chan []Transaction, batchSize int) {
 	q.batchSize = batchSize
 }
 
-func (q *channelTelemetry) send(ctx context.Context, batches chan<- []Transaction, batch []Transaction) bool {
-	if q.trySend(batches, batch) {
-		return true
-	}
-	return q.beginBlockedSend(batches, batch).wait(ctx)
-}
-
 func (q *channelTelemetry) trySend(batches chan<- []Transaction, batch []Transaction) bool {
 	select {
 	case batches <- batch:
@@ -110,7 +102,6 @@ func (q *channelTelemetry) snapshot(now time.Time) channelMeasurements {
 	measurements := channelMeasurements{}
 	totalBlocked := q.measurements.blockedMs
 	if q.batches != nil {
-		measurements.capacity = cap(q.batches)
 		measurements.depthBatches = len(q.batches)
 		measurements.bufferedTransactions = measurements.depthBatches * q.batchSize
 	}
@@ -166,37 +157,6 @@ func (q *channelTelemetry) sample(window time.Duration) {
 	q.measurements.sentTransactionsSinceTick = 0
 	q.measurements.receivedBatchesSinceTick = 0
 	q.measurements.receivedTransactionsSinceTick = 0
-}
-
-func (q *channelTelemetry) clearMeasurements() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.clearMeasurementsLocked()
-}
-
-func (q *channelTelemetry) startInterval() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.measurements.sentBatchesPerSecond = 0
-	q.measurements.sentTransactionsPerSecond = 0
-	q.measurements.receivedBatchesPerSecond = 0
-	q.measurements.receivedTransactionsPerSecond = 0
-	q.measurements.sentBatchesSinceTick = 0
-	q.measurements.sentTransactionsSinceTick = 0
-	q.measurements.receivedBatchesSinceTick = 0
-	q.measurements.receivedTransactionsSinceTick = 0
-}
-
-func (q *channelTelemetry) detach() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.batches = nil
-	q.batchSize = 0
-	q.clearMeasurementsLocked()
-}
-
-func (q *channelTelemetry) clearMeasurementsLocked() {
-	q.measurements = channelTelemetryMeasurements{}
 }
 
 func (q *channelTelemetry) startBlocked(now time.Time) uint64 {

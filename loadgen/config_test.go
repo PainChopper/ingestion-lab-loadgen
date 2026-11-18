@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	"go.uber.org/zap"
 )
 
 const testSenderURL = "http://127.0.0.1:8081/internal/ingest"
@@ -42,7 +43,7 @@ func newTestControlState(t *testing.T) controlState {
 		t.Fatal(err)
 	}
 	loaded.Sender.API.URL = server.URL
-	return newControlState(loaded, nil)
+	return newControlState(loaded, zap.NewNop())
 }
 
 func testConfigContents() string {

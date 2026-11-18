@@ -11,11 +11,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 func TestDeveloperRoutes(t *testing.T) {
 	requests := make(chan runtimeCommand, 1)
-	mux := newServeMux(runtimeRequests{commands: requests}, nil, testConfig(t), nil)
+	mux := newServeMux(runtimeRequests{commands: requests}, NewPrometheusMetrics(), testConfig(t), zap.NewNop())
 	tests := []struct {
 		name        string
 		path        string
