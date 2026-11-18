@@ -255,7 +255,7 @@ describe('LabShell', () => {
       screen.getByRole('spinbutton', { name: /^Requested TPS/ }),
     ])
     expect(screen.getAllByRole('checkbox')).toEqual([
-      screen.getByRole('checkbox', { name: 'Valve mode' }),
+      screen.getByRole('checkbox', { name: 'Throttler valve installed' }),
     ])
     expect(screen.getByRole('button', { name: 'Remove throttler valve' })).not.toBeNull()
   })
@@ -296,8 +296,6 @@ describe('LabShell', () => {
     expect(settingsButtons.sort()).toEqual([
       'Add reader worker',
       'Add sender worker',
-      'Decrease throttle opening',
-      'Increase throttle opening',
       'Remove reader worker',
       'Remove sender worker',
       'Remove throttler valve',
@@ -305,6 +303,8 @@ describe('LabShell', () => {
     expect(diagram.getAllByRole('slider')).toEqual([
       diagram.getByRole('slider', { name: 'Throttle opening' }),
     ])
+    expect(diagram.getByRole('group', { name: 'reader workers' })).not.toBeNull()
+    expect(diagram.getByRole('group', { name: 'sender workers' })).not.toBeNull()
     expect(diagram.getByText('Batch 1,000 tx')).not.toBeNull()
     expect(diagram.getByText(/^Depth \d+ \/ 4 batches$/)).not.toBeNull()
     expect(diagram.getByText(/^Depth \d+ \/ 100 batches$/)).not.toBeNull()
@@ -324,7 +324,7 @@ describe('LabShell', () => {
       inspector.getByRole('spinbutton', { name: /^Requested TPS/ }),
     ])
     expect(inspector.getAllByRole('checkbox')).toEqual([
-      inspector.getByRole('checkbox', { name: 'Valve mode' }),
+      inspector.getByRole('checkbox', { name: 'Throttler valve installed' }),
     ])
     expect(inspector.getAllByText('Requested TPS')).toHaveLength(1)
     await user.click(diagram.getByRole('button', { name: /Inspect ingestion service/ }))
@@ -358,7 +358,9 @@ describe('LabShell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Inspect throttler' }))
     const requestedTps = screen.getByRole('spinbutton', { name: /^Requested TPS/ })
-    const valveMode = screen.getByRole<HTMLInputElement>('checkbox', { name: 'Valve mode' })
+    const valveMode = screen.getByRole<HTMLInputElement>('checkbox', {
+      name: 'Throttler valve installed',
+    })
     await act(async () => {
       fireEvent.change(requestedTps, { target: { value: '0' } })
       fireEvent.keyDown(requestedTps, { key: 'Enter' })
@@ -408,6 +410,8 @@ describe('LabShell', () => {
     for (const label of ['Normal flow', 'Near limit', 'Backpressure', 'Stopped']) {
       expect(screen.getByText(label)).not.toBeNull()
     }
+    const legend = screen.getByRole('contentinfo', { name: 'Channel states' })
+    expect(legend.querySelectorAll('i[aria-hidden="true"]')).toHaveLength(4)
   })
 
   it('renders all Sender sections and keeps long config rows full width', async () => {
@@ -518,9 +522,12 @@ describe('LabShell', () => {
     act(() => orientationListeners.forEach((listener) => listener()))
 
     expect(screen.getByTestId('pipeline-viewport').dataset.layout).toBe('portrait')
-    expect(screen.getByLabelText('Load generator laboratory').getAttribute('data-layout')).toBe(
-      'portrait',
-    )
+    expect(
+      screen
+        .getByRole('main', { name: 'Pipeline viewport' })
+        .closest('.lab-shell')
+        ?.getAttribute('data-layout'),
+    ).toBe('portrait')
     expect(screen.getByRole('heading', { name: 'THROTTLER' })).not.toBeNull()
     expect(
       screen.getByRole('button', { name: 'Inspect throttler' }).getAttribute('aria-pressed'),

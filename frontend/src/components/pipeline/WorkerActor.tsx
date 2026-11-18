@@ -231,6 +231,7 @@ export function WorkerActor({
       >
         <div
           className="pipeline-worker-control__body"
+          role="group"
           aria-label={`${title.toLocaleLowerCase()} workers`}
         >
           <button

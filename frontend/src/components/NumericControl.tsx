@@ -1,6 +1,6 @@
 import { clsx } from 'clsx'
 import { useId, useRef, useState } from 'react'
-import type { ChangeEvent, KeyboardEvent } from 'react'
+import type { ChangeEvent, FocusEvent, KeyboardEvent } from 'react'
 import type { NumericControlSnapshot } from '../model/loadgen'
 import type { DesiredControl } from '../hooks/useDesiredControl'
 
@@ -70,7 +70,7 @@ export function NumericControl({ label, control, desiredControl, className }: Nu
     }
   }
 
-  const handleBlur = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleBlur = (event: FocusEvent<HTMLInputElement>) => {
     setDraft(null)
     if (suppressBlurCommit.current) {
       suppressBlurCommit.current = false
