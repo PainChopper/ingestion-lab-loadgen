@@ -140,7 +140,6 @@ export function ThrottlerValveInstallationControl({
       aria-label={
         appliedInstalled === false ? 'Reinsert throttler valve' : 'Remove throttler valve'
       }
-      aria-pressed={appliedInstalled === false}
       aria-describedby={installationStatusId}
       aria-disabled={!installationControlAvailable}
       data-applied-mode={

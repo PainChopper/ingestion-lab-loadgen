@@ -4,7 +4,12 @@ import type {
   ChannelSnapshot,
   SelectableId,
 } from '../model/loadgen'
-import { formatInteger, formatMilliseconds, formatRate } from './pipeline/formatters'
+import {
+  formatInteger,
+  formatMilliseconds,
+  formatRate,
+  formatReaderErrorCount,
+} from './pipeline/formatters'
 
 export interface InspectorRow {
   readonly label: string
@@ -85,7 +90,7 @@ export function getInspectorViewModel(
       const { idleWorkers, readingWorkers, blockedWorkers } = snapshot.reader
       const sourceError = snapshot.reader.sourceError
       const hasSourceError = sourceError !== null && sourceError !== undefined
-      const errorCount = hasSourceError ? '1 error' : '— errors'
+      const errorCount = formatReaderErrorCount(snapshot.reader)
       const rows: InspectorRow[] = [
         {
           label: 'Workers desired / live / draining',
