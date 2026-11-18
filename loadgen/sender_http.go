@@ -6,7 +6,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 )
+
+const maxSenderResponseDrainBytes = 64 << 10
+
+func newSenderHTTPClient(maxWorkers int, timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = maxWorkers
+	transport.MaxConnsPerHost = maxWorkers
+	return &http.Client{Transport: transport, Timeout: timeout}
+}
 
 type senderHTTPAttempt struct {
 	url    string
@@ -37,7 +47,7 @@ func (a senderHTTPAttempt) deliver(ctx context.Context, batch []Transaction, _ i
 		return senderAttemptFailure
 	}
 	defer response.Body.Close()
-	if _, err := io.Copy(io.Discard, response.Body); err != nil {
+	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, maxSenderResponseDrainBytes)); err != nil {
 		return senderAttemptFailure
 	}
 

@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestSenderHTTPAttemptPostsJSONBatch(t *testing.T) {
@@ -107,7 +110,7 @@ func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 			config := testConfig(t).Sender
 			config.Retry.DelaysMS = []int{1}
 			config.API.URL = server.URL
-			pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config.API, config.Retry, nil)
+			pool := startSenderPool(context.Background(), batches, &channel, &consumed, 1, config, nil)
 			batches <- []Transaction{{ClientID: "invalid"}}
 			waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
 			<-pool.stop()
@@ -118,12 +121,116 @@ func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 	}
 }
 
+func TestSenderPoolReusesConnectionsAcrossConcurrentWaves(t *testing.T) {
+	const requestsPerWave = 4
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	entered := make(chan struct{}, requestsPerWave)
+	release := make(chan struct{})
+	var connections atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			return
+		}
+		entered <- struct{}{}
+		select {
+		case <-release:
+			_, _ = io.WriteString(w, "retry")
+		case <-r.Context().Done():
+		}
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+	defer close(release)
+
+	batches := make(chan []Transaction)
+	var telemetry channelTelemetry
+	var completed atomic.Int64
+	config := testConfig(t).Sender
+	config.API.URL = server.URL
+	pool := startSenderPool(ctx, batches, &telemetry, &completed, requestsPerWave, config, nil)
+	defer func() { <-pool.stop() }()
+
+	for wave := 1; wave <= 2; wave++ {
+		results := make(chan senderAttemptOutcome, requestsPerWave)
+		for range requestsPerWave {
+			go func() {
+				results <- pool.attempt(ctx, []Transaction{{ClientID: "client"}}, 1)
+			}()
+		}
+		for range requestsPerWave {
+			select {
+			case <-entered:
+			case <-ctx.Done():
+				t.Fatalf("wave %d did not reach four simultaneous requests", wave)
+			}
+		}
+		for range requestsPerWave {
+			select {
+			case release <- struct{}{}:
+			case <-ctx.Done():
+				t.Fatalf("wave %d did not release all responses", wave)
+			}
+		}
+		for range requestsPerWave {
+			select {
+			case got := <-results:
+				if got != senderAttemptFailure {
+					t.Errorf("wave %d outcome = %d, want failure for HTTP 200", wave, got)
+				}
+			case <-ctx.Done():
+				t.Fatalf("wave %d did not finish reading all responses", wave)
+			}
+		}
+		if got := connections.Load(); got != requestsPerWave {
+			t.Fatalf("wave %d total new connections = %d, want %d", wave, got, requestsPerWave)
+		}
+	}
+}
+
+func TestSenderPoolEntersBackoffWhenReceiverTimesOut(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			return
+		}
+		entered <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	batches := make(chan []Transaction)
+	var telemetry channelTelemetry
+	var completed atomic.Int64
+	config := testConfig(t).Sender
+	config.API.URL = server.URL
+	config.API.TimeoutMS = 50
+	config.Retry.DelaysMS = []int{3_600_000}
+	pool := startSenderPool(ctx, batches, &telemetry, &completed, 1, config, nil)
+	defer func() { <-pool.stop() }()
+	batches <- []Transaction{{ClientID: "client"}}
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("receiver did not get the request")
+	}
+	waitForSenderCondition(t, func() bool { return pool.aggregateSnapshot().backoffWorkers == 1 })
+}
+
 func TestSenderHTTPAttemptRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 	closed := atomic.Bool{}
+	body := &closeTrackingBody{Reader: strings.NewReader(strings.Repeat("x", 128<<10)), closed: &closed}
 	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusServiceUnavailable,
-			Body:       &closeTrackingBody{closed: &closed},
+			Body:       body,
 			Header:     make(http.Header),
 		}, nil
 	})}
@@ -133,6 +240,9 @@ func TestSenderHTTPAttemptRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 	}
 	if !closed.Load() {
 		t.Fatal("response body was not closed")
+	}
+	if got := body.Len(); got != 64<<10 {
+		t.Errorf("bytes left unread = %d, want %d", got, 64<<10)
 	}
 
 	client.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
@@ -162,11 +272,8 @@ func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, erro
 }
 
 type closeTrackingBody struct {
+	*strings.Reader
 	closed *atomic.Bool
-}
-
-func (*closeTrackingBody) Read([]byte) (int, error) {
-	return 0, io.EOF
 }
 
 func (b *closeTrackingBody) Close() error {

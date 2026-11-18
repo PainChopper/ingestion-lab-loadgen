@@ -24,9 +24,22 @@ func main() {
 		os.Exit(2)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	signalsDone := make(chan struct{})
+	go func() {
+		defer close(signalsDone)
+		select {
+		case <-signals:
+		case <-ctx.Done():
+		}
+		signal.Stop(signals)
+		cancel()
+	}()
 	err := run(ctx, *configPath)
-	stop()
+	cancel()
+	<-signalsDone
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "receiver:", err)
 		os.Exit(1)

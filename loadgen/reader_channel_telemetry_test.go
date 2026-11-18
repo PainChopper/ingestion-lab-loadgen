@@ -89,7 +89,7 @@ func TestReaderChannelTelemetrySnapshotAccumulatesSubMillisecondBlockedDurations
 		t.Fatalf("active readerChannel measurements = %+v", active)
 	}
 
-	telemetry.finishBlocked(now)
+	telemetry.finishBlockedWriter(1, now)
 	completed := telemetry.snapshot(now)
 	if completed.blockedSenders != 0 || completed.oldestBlockedSenderMs != 0 || completed.blockedMs != 1 {
 		t.Fatalf("completed readerChannel measurements = %+v", completed)

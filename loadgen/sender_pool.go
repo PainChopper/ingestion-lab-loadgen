@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"hash/fnv"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,13 +52,13 @@ type senderPool struct {
 	done                                     chan struct{}
 	wg                                       sync.WaitGroup
 	workers                                  []*senderWorker
-	desired                                  int
 	stopping                                 bool
 	retry                                    senderRetryConfig
 	batches                                  <-chan []Transaction
 	channelTelemetry                         *channelTelemetry
 	terminallyCompletedTransactionsSinceTick *atomic.Int64
 	attempt                                  senderAttempt
+	client                                   *http.Client
 	logger                                   *zap.Logger
 }
 
@@ -67,24 +68,25 @@ func startSenderPool(
 	channelTelemetry *channelTelemetry,
 	terminallyCompletedTransactionsSinceTick *atomic.Int64,
 	workers int,
-	api senderAPIConfig,
-	retry senderRetryConfig,
+	cfg senderConfig,
 	logger *zap.Logger,
 ) *senderPool {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	ctx, cancel := context.WithCancel(parent)
+	client := newSenderHTTPClient(cfg.Workers.Max, time.Duration(cfg.API.TimeoutMS)*time.Millisecond)
 	pool := &senderPool{
 		ctx:                                      ctx,
 		cancel:                                   cancel,
 		done:                                     make(chan struct{}),
 		workers:                                  make([]*senderWorker, 0, workers),
-		retry:                                    retry,
+		retry:                                    cfg.Retry,
 		batches:                                  batches,
 		channelTelemetry:                         channelTelemetry,
 		terminallyCompletedTransactionsSinceTick: terminallyCompletedTransactionsSinceTick,
-		attempt:                                  newSenderHTTPAttempt(api.URL, http.DefaultClient).deliver,
+		attempt:                                  newSenderHTTPAttempt(cfg.API.URL, client).deliver,
+		client:                                   client,
 		logger:                                   logger,
 	}
 	pool.available = sync.NewCond(&pool.mu)
@@ -100,7 +102,6 @@ func (p *senderPool) reconcile(desired int) {
 		return
 	}
 	var idleDraining []<-chan struct{}
-	p.desired = desired
 	activeWorkers := 0
 	for _, worker := range p.workers {
 		if !worker.draining {
@@ -117,12 +118,16 @@ func (p *senderPool) reconcile(desired int) {
 			activeWorkers--
 		}
 	} else if activeWorkers < desired {
-		for _, worker := range p.workers {
-			if !worker.draining {
-				continue
+		for _, backoff := range []bool{false, true} {
+			for _, worker := range p.workers {
+				if activeWorkers == desired {
+					break
+				}
+				if worker.draining && worker.backoff == backoff {
+					worker.draining = false
+					activeWorkers++
+				}
 			}
-			worker.draining = false
-			activeWorkers++
 		}
 	}
 	for _, worker := range p.workers {
@@ -165,6 +170,7 @@ func (p *senderPool) finishIntake() {
 	p.mu.Unlock()
 	p.wg.Wait()
 	p.cancel()
+	p.client.CloseIdleConnections()
 	close(p.done)
 }
 
@@ -238,7 +244,6 @@ func (p *senderPool) availableWorkerLocked() *senderWorker {
 func (p *senderPool) runWorker(worker *senderWorker) {
 	defer p.wg.Done()
 	defer close(worker.done)
-	defer p.workerExited(worker)
 	p.logger.Debug("sender worker started", zap.String("event", "sender_worker_started"))
 	defer p.logger.Debug("sender worker stopped", zap.String("event", "sender_worker_stopped"))
 	for {
@@ -250,11 +255,13 @@ func (p *senderPool) runWorker(worker *senderWorker) {
 			continue
 		default:
 		}
-		stop := p.stopping || worker.draining
-		p.mu.Unlock()
-		if stop {
+		if p.stopping || worker.draining {
+			// Remove the worker before reconcile or intake can offer it more work.
+			p.removeWorkerLocked(worker)
+			p.mu.Unlock()
 			return
 		}
+		p.mu.Unlock()
 
 		select {
 		case <-worker.wake:
@@ -276,34 +283,14 @@ func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transacti
 	p.mu.Unlock()
 }
 
-func (p *senderPool) workerExited(worker *senderWorker) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	index := -1
-	for candidateIndex, candidate := range p.workers {
+func (p *senderPool) removeWorkerLocked(worker *senderWorker) {
+	for index, candidate := range p.workers {
 		if candidate == worker {
-			index = candidateIndex
-			break
+			p.workers = slices.Delete(p.workers, index, index+1)
+			p.available.Broadcast()
+			return
 		}
 	}
-	if index < 0 {
-		return
-	}
-	p.workers = append(p.workers[:index], p.workers[index+1:]...)
-	if !p.stopping && !worker.draining && p.activeWorkerCountLocked() < p.desired {
-		p.startWorkerLocked()
-	}
-	p.available.Broadcast()
-}
-
-func (p *senderPool) activeWorkerCountLocked() int {
-	activeWorkers := 0
-	for _, worker := range p.workers {
-		if !worker.draining {
-			activeWorkers++
-		}
-	}
-	return activeWorkers
 }
 
 func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) bool {

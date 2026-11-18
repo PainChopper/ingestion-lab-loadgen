@@ -32,8 +32,23 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		return cliExitSuccess
 	}
 
-	appCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSignals()
+	appCtx, cancel := context.WithCancel(context.Background())
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	signalsDone := make(chan struct{})
+	go func() {
+		defer close(signalsDone)
+		select {
+		case <-signals:
+		case <-appCtx.Done():
+		}
+		signal.Stop(signals)
+		cancel()
+	}()
+	defer func() {
+		cancel()
+		<-signalsDone
+	}()
 	if err := runServe(appCtx, command.configPath); err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return cliExitLocal

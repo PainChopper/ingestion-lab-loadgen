@@ -211,16 +211,6 @@ func (q *channelTelemetry) startBlocked(now time.Time) uint64 {
 	return id
 }
 
-// finishBlocked keeps the single-writer Sender path unchanged.
-func (q *channelTelemetry) finishBlocked(now time.Time) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for id := range q.measurements.blockedAt {
-		q.finishBlockedLocked(id, now)
-		return
-	}
-}
-
 func (q *channelTelemetry) finishBlockedWriter(id uint64, now time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
