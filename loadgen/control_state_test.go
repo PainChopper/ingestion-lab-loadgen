@@ -26,7 +26,7 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 			if got := state.run.state; got != runStateStarting {
 				t.Fatalf("initial run state = %q, want %q", got, runStateStarting)
 			}
-			snapshot := state.runtimeStatusAt(nil, time.Now())
+			snapshot := state.snapshotAt(nil, time.Now())
 			got := []int{
 				snapshot.Reader.ReadBatchSize, snapshot.Reader.Workers,
 				snapshot.ReaderChannel.Capacity, snapshot.SenderChannel.Capacity,

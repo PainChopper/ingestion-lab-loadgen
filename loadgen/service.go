@@ -26,21 +26,24 @@ func runServe(appCtx context.Context, configPath string) error {
 	defer func() { _ = logger.Sync() }()
 
 	state := newControlState(cfg, logger)
-	commands := make(chan runtimeCommand, 10)
+	queue := make(chan runtimeRequest, 10)
 	loopDone := make(chan struct{})
-	requests := runtimeRequests{commands: commands, done: loopDone}
-	metrics := newServiceMetrics(cfg)
-	defer metrics.stop()
+	requests := runtimeRequests{queue: queue, done: loopDone}
+	metrics := newPrometheusMetrics()
+	metrics.targetTPS.Set(float64(cfg.Throttler.RequestedTPS.Initial))
+	ticker := time.NewTicker(state.metricsWindow)
+	defer ticker.Stop()
 
-	server, serverDone, err := startHTTPServer(requests, metrics.prometheusMetrics, cfg, logger)
+	server, serverDone, err := startHTTPServer(requests, metrics, cfg, logger)
 	if err != nil {
 		return err
 	}
 	logger.Info("service started", zap.String("event", "service_started"))
 	events := runtimeEvents{
-		requests:   commands,
+		requests:   queue,
 		source:     prepareSourceAsync(cfg.Source.Path),
 		serverDone: serverDone,
+		ticks:      ticker.C,
 		metrics:    metrics,
 	}
 	deadline, runErr := state.runEventLoop(appCtx, events, gracefulShutdownTimeout)
@@ -77,25 +80,7 @@ func prepareSourceAsync(path string) <-chan sourceDiscovery {
 	return ready
 }
 
-type serviceMetrics struct {
-	ticks             <-chan time.Time
-	prometheusMetrics *PrometheusMetrics
-	ticker            *time.Ticker
-}
-
-func newServiceMetrics(config config) serviceMetrics {
-	window := time.Duration(config.Metrics.WindowMS.Initial) * time.Millisecond
-	prometheusMetrics := NewPrometheusMetrics()
-	prometheusMetrics.targetTPS.Set(float64(config.Throttler.RequestedTPS.Initial))
-	ticker := time.NewTicker(window)
-	return serviceMetrics{ticks: ticker.C, prometheusMetrics: prometheusMetrics, ticker: ticker}
-}
-
-func (m serviceMetrics) stop() {
-	m.ticker.Stop()
-}
-
-type PrometheusMetrics struct {
+type prometheusMetrics struct {
 	registry *prometheus.Registry
 
 	targetTPS prometheus.Gauge
@@ -104,13 +89,13 @@ type PrometheusMetrics struct {
 	transactionsTotal prometheus.Counter
 }
 
-func NewPrometheusMetrics() *PrometheusMetrics {
+func newPrometheusMetrics() *prometheusMetrics {
 	reg := prometheus.NewRegistry()
 	target := prometheus.NewGauge(prometheus.GaugeOpts{Name: "loadgen_target_tps"})
 	actual := prometheus.NewGauge(prometheus.GaugeOpts{Name: "loadgen_actual_tps"})
 	total := prometheus.NewCounter(prometheus.CounterOpts{Name: "loadgen_transactions_total"})
 	reg.MustRegister(target, actual, total)
-	return &PrometheusMetrics{registry: reg, targetTPS: target, actualTPS: actual, transactionsTotal: total}
+	return &prometheusMetrics{registry: reg, targetTPS: target, actualTPS: actual, transactionsTotal: total}
 }
 
 func newApplicationLogger(level string, output io.Writer) (*zap.Logger, error) {

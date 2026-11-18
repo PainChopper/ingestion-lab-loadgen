@@ -230,7 +230,7 @@ func waitForHTTPSnapshotState(t *testing.T, baseURL string, want runState) {
 	for time.Now().Before(deadline) {
 		response, err := client.Get(baseURL + snapshotPath)
 		if err == nil {
-			var snapshot runtimeStatus
+			var snapshot runtimeSnapshot
 			decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
 			closeErr := response.Body.Close()
 			if decodeErr == nil && closeErr == nil && snapshot.Run.State == want {

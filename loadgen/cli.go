@@ -88,14 +88,14 @@ func cliExitCode(err error) int {
 	return cliExitRemote
 }
 
-func (command cliCommand) usage() string {
-	if command.remoteAction == "set" {
+func (c cliCommand) usage() string {
+	if c.remoteAction == "set" {
 		return cliSetUsage
 	}
-	if command.remoteAction == "" {
+	if c.remoteAction == "" {
 		return cliUsage
 	}
-	return fmt.Sprintf("usage: ingestion-lab-loadgen %s [--url <url>]", command.remoteAction)
+	return fmt.Sprintf("usage: ingestion-lab-loadgen %s [--url <url>]", c.remoteAction)
 }
 
 const cliSetUsage = `usage:
