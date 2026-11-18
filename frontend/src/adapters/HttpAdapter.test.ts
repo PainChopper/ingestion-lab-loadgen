@@ -630,6 +630,15 @@ const malformedCases: ReadonlyArray<{
         reader: { ...VALID_WIRE.reader, readingWorkers: -1 },
       }),
   },
+  ...[
+    { liveWorkers: 2 },
+    { drainingWorkers: 1 },
+    { drainingBlockedWorkers: 1, drainingWorkers: 1 },
+  ].map((reader) => ({
+    name: `invalid Reader partition ${JSON.stringify(reader)}`,
+    result: async () =>
+      mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, ...reader } }),
+  })),
   {
     name: 'missing key',
     result: async () =>
@@ -638,28 +647,14 @@ const malformedCases: ReadonlyArray<{
         reader: { workers: 1 },
       }),
   },
-  {
-    name: 'extra key',
-    result: async () => mockResponse({ ...VALID_WIRE, extra: true }),
-  },
-  ...(['run', 'reader', 'throttler', 'sender', 'readerChannel', 'senderChannel'] as const).flatMap(
-    (section) => [
-      {
-        name: `missing ${section} section key`,
-        result: async () => {
-          const { [section]: _removed, ...withoutSection } = VALID_WIRE
-          return mockResponse(withoutSection)
-        },
+  ...(['run', 'reader', 'throttler', 'sender', 'readerChannel', 'senderChannel'] as const).map(
+    (section) => ({
+      name: `missing ${section} section key`,
+      result: async () => {
+        const { [section]: _removed, ...withoutSection } = VALID_WIRE
+        return mockResponse(withoutSection)
       },
-      {
-        name: `extra ${section} section key`,
-        result: async () =>
-          mockResponse({
-            ...VALID_WIRE,
-            [section]: { ...VALID_WIRE[section], extra: true },
-          }),
-      },
-    ],
+    }),
   ),
   {
     name: 'missing config',
@@ -718,14 +713,6 @@ const malformedCases: ReadonlyArray<{
         })(),
       }),
   },
-  {
-    name: 'extra sender field',
-    result: async () =>
-      mockResponse({
-        ...VALID_WIRE,
-        sender: { ...VALID_WIRE.sender, extra: true },
-      }),
-  },
   ...(['senderWorkers'] as const).flatMap((field) => [
     {
       name: `missing config ${field}`,
@@ -734,14 +721,6 @@ const malformedCases: ReadonlyArray<{
         delete config[field]
         return mockResponse({ ...VALID_WIRE, config })
       },
-    },
-    {
-      name: `extra config ${field}`,
-      result: async () =>
-        mockResponse({
-          ...VALID_WIRE,
-          config: { ...VALID_WIRE.config, [field]: { ...VALID_WIRE.config[field], extra: true } },
-        }),
     },
     {
       name: `wrong-type config ${field}`,
@@ -762,52 +741,6 @@ const malformedCases: ReadonlyArray<{
           senderWorkers: { ...VALID_WIRE.config.senderWorkers, initial: 6, min: 2, step: 3 },
         },
       }),
-  },
-  {
-    name: 'unexpected sender retry policy',
-    result: async () =>
-      mockResponse({
-        ...VALID_WIRE,
-        config: {
-          ...VALID_WIRE.config,
-          senderRetry: {
-            maxAttempts: 3,
-            backoffBaseMs: 250,
-            backoffMultiplier: 2,
-            jitterPercent: 20,
-            mutability: 'startup-only',
-          },
-        },
-      }),
-  },
-  {
-    name: 'extra obsolete Sender simulation config fields',
-    result: async () => {
-      const obsoleteDelayKey = ['sender', 'Simulated', 'DelayMs'].join('')
-      const obsoleteErrorRateKey = ['sender', 'Simulated', 'ErrorRatePercent'].join('')
-      return mockResponse({
-        ...VALID_WIRE,
-        config: {
-          ...VALID_WIRE.config,
-          [obsoleteDelayKey]: {
-            initial: 10,
-            min: 0,
-            max: 2000,
-            step: 10,
-            unit: 'milliseconds',
-            mutability: 'immediate',
-          },
-          [obsoleteErrorRateKey]: {
-            initial: 2,
-            min: 0,
-            max: 100,
-            step: 1,
-            unit: 'percent',
-            mutability: 'immediate',
-          },
-        },
-      })
-    },
   },
   {
     name: 'aggregate sender count has wrong type',
@@ -871,20 +804,6 @@ const malformedCases: ReadonlyArray<{
           metricsWindowMs: {
             ...VALID_WIRE.config.metricsWindowMs,
             mutability: 'immediate',
-          },
-        },
-      }),
-  },
-  {
-    name: 'unknown throttler installation mode config field',
-    result: async () =>
-      mockResponse({
-        ...VALID_WIRE,
-        config: {
-          ...VALID_WIRE.config,
-          throttlerInstalled: {
-            ...VALID_WIRE.config.throttlerInstalled,
-            unknown: true,
           },
         },
       }),
@@ -1023,6 +942,17 @@ const malformedCases: ReadonlyArray<{
         },
       }),
   },
+  ...['', '/absolute.parquet', '../outside.parquet'].map((relativePath) => ({
+    name: `invalid Reader source path ${JSON.stringify(relativePath)}`,
+    result: async () =>
+      mockResponse({
+        ...VALID_WIRE,
+        reader: {
+          ...VALID_WIRE.reader,
+          sourceError: { category: 'source', operation: 'read', relativePath, message: 'error' },
+        },
+      }),
+  })),
   {
     name: 'negative integer',
     result: async () =>
@@ -1046,6 +976,10 @@ const malformedCases: ReadonlyArray<{
     result: async () =>
       mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, readTps: -0.5 } }),
   },
+  ...[NaN, Infinity].map((readTps) => ({
+    name: `non-finite reader rate ${readTps}`,
+    result: async () => mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, readTps } }),
+  })),
   {
     name: 'unsafe reader rows',
     result: async () =>
@@ -1126,8 +1060,9 @@ describe('HttpAdapter', () => {
     'senderWorkers',
     'metricsWindowMs',
   ] as const)(
-    'requires initial without a legacy alias in %s and blocks stale dispatch',
+    'requires initial in %s and treats a legacy alias as an unknown field',
     async (field) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
       const valid = JSON.parse(JSON.stringify(VALID_WIRE))
       if (field === 'readerChannelCapacity' || field === 'senderChannelCapacity')
         valid.config[field].initial = 0
@@ -1145,9 +1080,14 @@ describe('HttpAdapter', () => {
         expect(adapter.getSnapshot().connectionState).toBe('connected')
         await vi.advanceTimersByTimeAsync(1_000)
         await flushPoll()
-        if (shape === 'initial-only') {
+        if (shape === 'initial-only' || shape === 'both') {
           expect(adapter.getSnapshot().connectionState).toBe('connected')
           expect(adapter.getSnapshot().config).toEqual(valid.config)
+          if (shape === 'both') {
+            expect(warn).toHaveBeenLastCalledWith(
+              expect.stringContaining(`config.${field}.default`),
+            )
+          }
         } else {
           expect(adapter.getSnapshot()).toMatchObject({
             connectionState: 'error',
@@ -1214,7 +1154,7 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it.each(['legacy-only', 'both', 'missing', 'null', 'invalid'] as const)(
+  it.each(['legacy-only', 'missing', 'null', 'invalid'] as const)(
     'rejects %s config contract and blocks stale dispatch',
     async (shape) => {
       const { config: settings, ...telemetry } = VALID_WIRE
@@ -1222,11 +1162,9 @@ describe('HttpAdapter', () => {
       const invalid =
         shape === 'legacy-only'
           ? { ...telemetry, ['policy']: settings }
-          : shape === 'both'
-            ? { ...valid, ['policy']: settings }
-            : shape === 'missing'
-              ? telemetry
-              : { ...telemetry, config: shape === 'null' ? null : [] }
+          : shape === 'missing'
+            ? telemetry
+            : { ...telemetry, config: shape === 'null' ? null : [] }
       fetchMock
         .mockResolvedValueOnce(mockResponse(valid))
         .mockResolvedValueOnce(mockResponse(invalid))
@@ -1452,6 +1390,108 @@ describe('HttpAdapter', () => {
     expect(snapshot).toEqual(expectedSnapshot(1, 'error'))
     expectDeepFrozen(snapshot)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    adapter.dispose()
+  })
+
+  it.each([
+    { path: 'extra', wire: { ...VALID_WIRE, extra: true } },
+    { path: 'policy', wire: { ...VALID_WIRE, policy: VALID_WIRE.config } },
+    ...(['run', 'reader', 'throttler', 'sender', 'readerChannel', 'senderChannel'] as const).map(
+      (section) => ({
+        path: `${section}.extra`,
+        wire: { ...VALID_WIRE, [section]: { ...VALID_WIRE[section], extra: true } },
+      }),
+    ),
+    {
+      path: 'config.senderWorkers.extra',
+      wire: {
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          senderWorkers: { ...VALID_WIRE.config.senderWorkers, extra: true },
+        },
+      },
+    },
+    {
+      path: 'config.senderRetry',
+      wire: { ...VALID_WIRE, config: { ...VALID_WIRE.config, senderRetry: { maxAttempts: 3 } } },
+    },
+    {
+      path: 'config.throttlerInstalled.unknown',
+      wire: {
+        ...VALID_WIRE,
+        config: {
+          ...VALID_WIRE.config,
+          throttlerInstalled: { ...VALID_WIRE.config.throttlerInstalled, unknown: true },
+        },
+      },
+    },
+  ])('accepts and strips $path with a warning', async ({ path, wire }) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    fetchMock.mockResolvedValueOnce(mockResponse(wire))
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    expect(adapter.getSnapshot()).toEqual(expectedSnapshot(1, 'connected', VALID_WIRE))
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(path))
+    adapter.dispose()
+  })
+
+  it('warns once per set of unknown paths regardless of key order, independently per adapter', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const obsoleteDelay = ['sender', 'Simulated', 'DelayMs'].join('')
+    const obsoleteErrorRate = ['sender', 'Simulated', 'ErrorRatePercent'].join('')
+    const obsoleteFields = { [obsoleteDelay]: { initial: 10 }, [obsoleteErrorRate]: { initial: 2 } }
+    const first = {
+      ...VALID_WIRE,
+      config: { ...VALID_WIRE.config, ...obsoleteFields },
+      extra: true,
+    }
+    const reordered = {
+      extra: false,
+      ...VALID_WIRE,
+      config: { [obsoleteErrorRate]: null, ...VALID_WIRE.config, [obsoleteDelay]: null },
+    }
+    const sourceError = {
+      category: 'source',
+      operation: 'read',
+      relativePath: 'broken.parquet',
+      message: 'Could not read file',
+    } as const
+    const second = {
+      ...VALID_WIRE,
+      reader: { ...VALID_WIRE.reader, sourceError: { ...sourceError, 'future.path': true } },
+    }
+    fetchMock
+      .mockResolvedValueOnce(mockResponse(first))
+      .mockResolvedValueOnce(mockResponse(reordered))
+      .mockResolvedValueOnce(mockResponse(second))
+      .mockResolvedValueOnce(mockResponse(first))
+      .mockResolvedValueOnce(mockResponse(first))
+    const adapter = new HttpAdapter()
+
+    await flushPoll()
+    const firstWarning = expect.stringContaining(
+      `config.${obsoleteDelay}, config.${obsoleteErrorRate}, extra`,
+    )
+    expect(warn).toHaveBeenCalledExactlyOnceWith(firstWarning)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(warn).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenLastCalledWith(
+      expect.stringContaining('reader.sourceError["future.path"]'),
+    )
+    expect(adapter.getSnapshot().reader.sourceError).toEqual(sourceError)
+    expectDeepFrozen(adapter.getSnapshot().reader.sourceError)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(warn).toHaveBeenCalledTimes(2)
+
+    const other = new HttpAdapter()
+    await flushPoll()
+    expect(warn).toHaveBeenCalledTimes(3)
+    expect(warn).toHaveBeenLastCalledWith(firstWarning)
+    other.dispose()
     adapter.dispose()
   })
 
