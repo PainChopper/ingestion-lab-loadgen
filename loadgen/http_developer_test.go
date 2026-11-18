@@ -432,10 +432,10 @@ func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 		"SenderStatus":      reflect.TypeOf(senderSnapshot{}),
 		"ChannelStatus":     reflect.TypeOf(channelSnapshot{}),
 		"ConfigStatus":      reflect.TypeOf(configSnapshot{}),
-		"RangeConfig":       reflect.TypeOf(rangeConfigSnapshot{}),
-		"AllowedConfig":     reflect.TypeOf(allowedConfigSnapshot{}),
-		"InstalledConfig":   reflect.TypeOf(installedConfigSnapshot{}),
-		"LoggingConfig":     reflect.TypeOf(loggingConfigSnapshot{}),
+		"RangeConfig":       reflect.TypeOf(rangeConfig{}),
+		"AllowedConfig":     reflect.TypeOf(allowedConfig{}),
+		"InstalledConfig":   reflect.TypeOf(installedConfig{}),
+		"LoggingConfig":     reflect.TypeOf(loggingConfig{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
@@ -626,4 +626,12 @@ func anyStrings(values []any) []string {
 		result[i] = value.(string)
 	}
 	return result
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
 }

@@ -3,6 +3,8 @@ package main
 import (
 	"time"
 
+	"loadgen/internal/pipeline"
+
 	"go.uber.org/zap"
 )
 
@@ -82,90 +84,47 @@ type channelSnapshot struct {
 }
 
 type configSnapshot struct {
-	ReaderReadBatchSize   rangeConfigSnapshot     `json:"readerReadBatchSize"`
-	ReaderWorkers         rangeConfigSnapshot     `json:"readerWorkers"`
-	ReaderChannelCapacity allowedConfigSnapshot   `json:"readerChannelCapacity"`
-	SenderChannelCapacity allowedConfigSnapshot   `json:"senderChannelCapacity"`
-	ThrottlerRequestedTPS rangeConfigSnapshot     `json:"throttlerRequestedTps"`
-	ThrottlerInstalled    installedConfigSnapshot `json:"throttlerInstalled"`
-	MetricsWindowMS       rangeConfigSnapshot     `json:"metricsWindowMs"`
-	SenderWorkers         rangeConfigSnapshot     `json:"senderWorkers"`
-	Logging               loggingConfigSnapshot   `json:"logging"`
+	ReaderReadBatchSize   rangeConfig     `json:"readerReadBatchSize"`
+	ReaderWorkers         rangeConfig     `json:"readerWorkers"`
+	ReaderChannelCapacity allowedConfig   `json:"readerChannelCapacity"`
+	SenderChannelCapacity allowedConfig   `json:"senderChannelCapacity"`
+	ThrottlerRequestedTPS rangeConfig     `json:"throttlerRequestedTps"`
+	ThrottlerInstalled    installedConfig `json:"throttlerInstalled"`
+	MetricsWindowMS       rangeConfig     `json:"metricsWindowMs"`
+	SenderWorkers         rangeConfig     `json:"senderWorkers"`
+	Logging               loggingConfig   `json:"logging"`
 }
 
-type rangeConfigSnapshot struct {
-	Initial    int    `json:"initial"`
-	Min        int    `json:"min"`
-	Max        int    `json:"max"`
-	Step       int    `json:"step"`
-	Unit       string `json:"unit"`
-	Mutability string `json:"mutability"`
-}
-
-type allowedConfigSnapshot struct {
-	Initial    int    `json:"initial"`
-	Allowed    []int  `json:"allowed"`
-	Unit       string `json:"unit"`
-	Mutability string `json:"mutability"`
-}
-
-type installedConfigSnapshot struct {
-	Initial    bool   `json:"initial"`
-	Allowed    []bool `json:"allowed"`
-	Mutability string `json:"mutability"`
-}
-
-type loggingConfigSnapshot struct {
-	Level      string `json:"level"`
-	Mutability string `json:"mutability"`
+func snapshotChannel(measurements pipeline.QueueSnapshot, capacity int) channelSnapshot {
+	return channelSnapshot{
+		Capacity:                      capacity,
+		DepthBatches:                  measurements.DepthBatches,
+		BufferedTransactions:          measurements.BufferedTransactions,
+		BlockedSenders:                measurements.BlockedSenders,
+		OldestBlockedSenderMs:         measurements.OldestBlockedSenderMS,
+		BlockedMs:                     measurements.BlockedMS,
+		SentBatchesTotal:              measurements.SentBatchesTotal,
+		SentTransactionsTotal:         measurements.SentTransactionsTotal,
+		ReceivedBatchesTotal:          measurements.ReceivedBatchesTotal,
+		ReceivedTransactionsTotal:     measurements.ReceivedTransactionsTotal,
+		SentBatchesPerSecond:          measurements.SentBatchesPerSecond,
+		SentTransactionsPerSecond:     measurements.SentTransactionsPerSecond,
+		ReceivedBatchesPerSecond:      measurements.ReceivedBatchesPerSecond,
+		ReceivedTransactionsPerSecond: measurements.ReceivedTransactionsPerSecond,
+	}
 }
 
 func snapshotConfig(config config) configSnapshot {
 	return configSnapshot{
-		ReaderReadBatchSize:   snapshotRangeConfig(config.Reader.ReadBatchSize),
-		ReaderWorkers:         snapshotRangeConfig(config.Reader.Workers),
-		ReaderChannelCapacity: snapshotAllowedConfig(config.ReaderChannel.Capacity),
-		SenderChannelCapacity: snapshotAllowedConfig(config.SenderChannel.Capacity),
-		ThrottlerRequestedTPS: snapshotRangeConfig(config.Throttler.RequestedTPS),
-		ThrottlerInstalled:    snapshotInstalledConfig(config.Throttler.Installed),
-		MetricsWindowMS:       snapshotRangeConfig(config.Metrics.WindowMS),
-		SenderWorkers:         snapshotRangeConfig(config.Sender.Workers),
-		Logging:               snapshotLoggingConfig(config.Logging),
-	}
-}
-
-func snapshotRangeConfig(config rangeConfig) rangeConfigSnapshot {
-	return rangeConfigSnapshot{
-		Initial:    config.Initial,
-		Min:        config.Min,
-		Max:        config.Max,
-		Step:       config.Step,
-		Unit:       config.Unit,
-		Mutability: config.Mutability,
-	}
-}
-
-func snapshotAllowedConfig(config allowedConfig) allowedConfigSnapshot {
-	return allowedConfigSnapshot{
-		Initial:    config.Initial,
-		Allowed:    config.Allowed,
-		Unit:       config.Unit,
-		Mutability: config.Mutability,
-	}
-}
-
-func snapshotInstalledConfig(config installedConfig) installedConfigSnapshot {
-	return installedConfigSnapshot{
-		Initial:    config.Initial,
-		Allowed:    config.Allowed,
-		Mutability: config.Mutability,
-	}
-}
-
-func snapshotLoggingConfig(config loggingConfig) loggingConfigSnapshot {
-	return loggingConfigSnapshot{
-		Level:      config.Level,
-		Mutability: config.Mutability,
+		ReaderReadBatchSize:   config.Reader.ReadBatchSize,
+		ReaderWorkers:         config.Reader.Workers,
+		ReaderChannelCapacity: config.ReaderChannel.Capacity,
+		SenderChannelCapacity: config.SenderChannel.Capacity,
+		ThrottlerRequestedTPS: config.Throttler.RequestedTPS,
+		ThrottlerInstalled:    config.Throttler.Installed,
+		MetricsWindowMS:       config.Metrics.WindowMS,
+		SenderWorkers:         config.Sender.Workers,
+		Logging:               config.Logging,
 	}
 }
 
