@@ -4,25 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
-)
-
-const (
-	defaultCLIBaseURL   = "http://127.0.0.1:8080"
-	remoteClientTimeout = 10 * time.Second
-
-	cliExitSuccess = 0
-	cliExitLocal   = 1
-	cliExitUsage   = 2
-	cliExitHTTP    = 3
-	cliExitRemote  = 4
+	"unicode"
 )
 
 type remoteHTTPError struct {
@@ -38,145 +25,6 @@ func (err remoteHTTPError) Error() string {
 		return message + ": " + err.detail
 	}
 	return message
-}
-
-func cliExitCode(err error) int {
-	var httpErr remoteHTTPError
-	if errors.As(err, &httpErr) {
-		return cliExitHTTP
-	}
-	return cliExitRemote
-}
-
-func (command cliCommand) usage() string {
-	if command.remoteAction == "set" {
-		return cliSetUsage
-	}
-	if command.remoteAction == "" {
-		return cliUsage
-	}
-	return fmt.Sprintf("usage: ingestion-lab-loadgen %s [--url <url>]", command.remoteAction)
-}
-
-const cliSetUsage = `usage:
-  ingestion-lab-loadgen set readers <N> [--url <url>]
-  ingestion-lab-loadgen set senders <N> [--url <url>]
-  ingestion-lab-loadgen set tps <N> [--url <url>]
-  ingestion-lab-loadgen set throttle <true|false> [--url <url>]`
-
-type remoteSetCommand struct {
-	target        string
-	requestAction string
-	value         any
-}
-
-func parseRemoteCLI(args []string) (cliCommand, error) {
-	command := cliCommand{remoteAction: args[0], remoteURL: defaultCLIBaseURL}
-	if len(args) == 2 && args[1] == "--help" {
-		command.showUsage = true
-		return command, nil
-	}
-	if len(args) == 1 {
-		return command, nil
-	}
-	if len(args) != 3 || args[1] != "--url" || args[2] == "" {
-		return command, fmt.Errorf("invalid %s arguments", args[0])
-	}
-	baseURL, err := validateCLIBaseURL(args[2])
-	if err != nil {
-		return command, err
-	}
-	command.remoteURL = baseURL
-	return command, nil
-}
-
-func parseSetCLI(args []string) (cliCommand, error) {
-	command := cliCommand{remoteAction: "set", remoteURL: defaultCLIBaseURL}
-	if len(args) == 2 && args[1] == "--help" {
-		command.showUsage = true
-		return command, nil
-	}
-	if len(args) < 2 {
-		return command, fmt.Errorf("invalid set arguments")
-	}
-	setCommand, err := newRemoteSetCommand(args[1], "")
-	if err != nil {
-		return command, err
-	}
-	if len(args) == 3 && args[2] == "--help" {
-		command.showUsage = true
-		return command, nil
-	}
-	if len(args) != 3 && len(args) != 5 {
-		return command, fmt.Errorf("invalid set arguments")
-	}
-	if args[2] == "" {
-		return command, fmt.Errorf("invalid set arguments")
-	}
-	if len(args) == 5 {
-		if args[3] != "--url" || args[4] == "" {
-			return command, fmt.Errorf("invalid set arguments")
-		}
-		baseURL, err := validateCLIBaseURL(args[4])
-		if err != nil {
-			return command, err
-		}
-		command.remoteURL = baseURL
-	}
-	setCommand, err = newRemoteSetCommand(args[1], args[2])
-	if err != nil {
-		return command, err
-	}
-	command.remoteSet = setCommand
-	return command, nil
-}
-
-func newRemoteSetCommand(target, rawValue string) (remoteSetCommand, error) {
-	setCommand := remoteSetCommand{target: target}
-	switch target {
-	case "readers":
-		setCommand.requestAction = "set-reader-workers"
-	case "senders":
-		setCommand.requestAction = "set-sender-workers"
-	case "tps":
-		setCommand.requestAction = "set-requested-tps"
-	case "throttle":
-		setCommand.requestAction = "set-throttler-installed"
-		if rawValue == "" {
-			return setCommand, nil
-		}
-		if rawValue != "true" && rawValue != "false" {
-			return remoteSetCommand{}, fmt.Errorf("invalid %s value %q", target, rawValue)
-		}
-		setCommand.value = rawValue == "true"
-		return setCommand, nil
-	default:
-		return remoteSetCommand{}, fmt.Errorf("unknown set target %q", target)
-	}
-	if rawValue == "" {
-		return setCommand, nil
-	}
-	value, err := strconv.Atoi(rawValue)
-	if err != nil {
-		return remoteSetCommand{}, fmt.Errorf("invalid %s value %q", target, rawValue)
-	}
-	setCommand.value = value
-	return setCommand, nil
-}
-
-func validateCLIBaseURL(rawURL string) (string, error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
-		return "", fmt.Errorf("--url must be an absolute HTTP(S) URL with host")
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("--url must use http or https")
-	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return "", fmt.Errorf("--url must not include userinfo, query, fragment, or a base path")
-	}
-	parsed.Path = ""
-	return parsed.String(), nil
 }
 
 func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) error {
@@ -445,4 +293,101 @@ func validateExactKeys(name string, object map[string]json.RawMessage, expected 
 		}
 	}
 	return nil
+}
+
+func formatRuntimeStatusCard(status runtimeStatus) string {
+	sourceDirectory := sanitizeRuntimeStatusValue(status.Reader.SourceDirectory)
+	if sourceDirectory == "" {
+		sourceDirectory = "none"
+	}
+
+	sourceError := "none"
+	if status.Reader.SourceError != nil {
+		sourceError = fmt.Sprintf(
+			"%s/%s %s: %s",
+			sanitizeRuntimeStatusValue(status.Reader.SourceError.Category),
+			sanitizeRuntimeStatusValue(status.Reader.SourceError.Operation),
+			sanitizeRuntimeStatusValue(status.Reader.SourceError.RelativePath),
+			sanitizeRuntimeStatusValue(status.Reader.SourceError.Message),
+		)
+	}
+
+	var card strings.Builder
+	fmt.Fprintf(&card, "INGESTION LAB LOADGEN STATUS\n")
+	fmt.Fprintf(&card, "State:                    %s\n", sanitizeRuntimeStatusValue(string(status.Run.State)))
+	fmt.Fprintf(&card, "Elapsed:                  %s\n", time.Duration(status.Run.ElapsedMs)*time.Millisecond)
+	fmt.Fprintf(&card, "Transactions:             %d\n\n", status.Run.TotalTransactions)
+	fmt.Fprintf(&card, "Throttler\n")
+	fmt.Fprintf(&card, "Requested TPS:            %d\n", status.Throttler.RequestedTps)
+	fmt.Fprintf(&card, "Admitted TPS:             %.1f\n", status.Throttler.AdmittedTps)
+	fmt.Fprintf(&card, "Installed:                %t\n\n", status.Throttler.Installed)
+	fmt.Fprintf(&card, "Reader\n")
+	fmt.Fprintf(
+		&card,
+		"Workers:                  configured=%d live=%d reading=%d idle=%d blocked=%d draining=%d\n",
+		status.Reader.Workers,
+		status.Reader.LiveWorkers,
+		status.Reader.ReadingWorkers,
+		status.Reader.IdleWorkers,
+		status.Reader.BlockedWorkers,
+		status.Reader.DrainingWorkers,
+	)
+	fmt.Fprintf(&card, "Read TPS:                 %.1f\n", status.Reader.ReadTps)
+	fmt.Fprintf(&card, "Rows read:                %d\n", status.Reader.RowsRead)
+	fmt.Fprintf(&card, "Source:                   %s\n", sourceDirectory)
+	fmt.Fprintf(&card, "Source error:             %s\n\n", sourceError)
+	writeRuntimeStatusChannel(&card, "Reader channel", status.ReaderChannel)
+	writeRuntimeStatusChannel(&card, "Sender channel", status.SenderChannel)
+	fmt.Fprintf(&card, "Sender\n")
+	fmt.Fprintf(
+		&card,
+		"Workers:                  configured=%d live=%d in-flight=%d idle=%d backoff=%d draining=%d\n",
+		status.Sender.Workers,
+		status.Sender.LiveWorkers,
+		status.Sender.InFlightWorkers,
+		status.Sender.IdleWorkers,
+		status.Sender.BackoffWorkers,
+		status.Sender.DrainingWorkers,
+	)
+	return card.String()
+}
+
+func sanitizeRuntimeStatusValue(value string) string {
+	var sanitized strings.Builder
+	for _, character := range value {
+		if !unicode.IsControl(character) {
+			sanitized.WriteRune(character)
+			continue
+		}
+		if character <= 0xff {
+			fmt.Fprintf(&sanitized, "\\x%02x", character)
+			continue
+		}
+		fmt.Fprintf(&sanitized, "\\u%04x", character)
+	}
+	return sanitized.String()
+}
+
+func writeRuntimeStatusChannel(card *strings.Builder, title string, channel runtimeChannelStatus) {
+	fmt.Fprintf(card, "%s\n", title)
+	fmt.Fprintf(
+		card,
+		"Queue:                    %d/%d batches; %d transactions\n",
+		channel.DepthBatches,
+		channel.Capacity,
+		channel.BufferedTransactions,
+	)
+	fmt.Fprintf(
+		card,
+		"Input / output TPS:       %.1f / %.1f\n",
+		channel.SentTransactionsPerSecond,
+		channel.ReceivedTransactionsPerSecond,
+	)
+	fmt.Fprintf(
+		card,
+		"Blocked:                  senders=%d oldest=%dms total=%dms\n\n",
+		channel.BlockedSenders,
+		channel.OldestBlockedSenderMs,
+		channel.BlockedMs,
+	)
 }

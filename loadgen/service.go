@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
+	zaplogfmt "github.com/jsternberg/zap-logfmt"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func runServe(appCtx context.Context, configPath string) error {
@@ -71,4 +75,61 @@ func prepareSourceAsync(path string) <-chan sourceDiscovery {
 		ready <- sourceDiscovery{source: source, err: err}
 	}()
 	return ready
+}
+
+type serviceMetrics struct {
+	ticks             <-chan time.Time
+	prometheusMetrics *PrometheusMetrics
+	ticker            *time.Ticker
+}
+
+func newServiceMetrics(config config) serviceMetrics {
+	window := time.Duration(config.Metrics.WindowMS.Initial) * time.Millisecond
+	prometheusMetrics := NewPrometheusMetrics()
+	prometheusMetrics.targetTPS.Set(float64(config.Throttler.RequestedTPS.Initial))
+	ticker := time.NewTicker(window)
+	return serviceMetrics{ticks: ticker.C, prometheusMetrics: prometheusMetrics, ticker: ticker}
+}
+
+func (m serviceMetrics) stop() {
+	m.ticker.Stop()
+}
+
+type PrometheusMetrics struct {
+	registry *prometheus.Registry
+
+	targetTPS prometheus.Gauge
+	actualTPS prometheus.Gauge
+
+	transactionsTotal prometheus.Counter
+}
+
+func NewPrometheusMetrics() *PrometheusMetrics {
+	reg := prometheus.NewRegistry()
+	target := prometheus.NewGauge(prometheus.GaugeOpts{Name: "loadgen_target_tps"})
+	actual := prometheus.NewGauge(prometheus.GaugeOpts{Name: "loadgen_actual_tps"})
+	total := prometheus.NewCounter(prometheus.CounterOpts{Name: "loadgen_transactions_total"})
+	reg.MustRegister(target, actual, total)
+	return &PrometheusMetrics{registry: reg, targetTPS: target, actualTPS: actual, transactionsTotal: total}
+}
+
+func newApplicationLogger(level string, output io.Writer) (*zap.Logger, error) {
+	var atomicLevel zapcore.Level
+	if err := atomicLevel.UnmarshalText([]byte(level)); err != nil {
+		return nil, err
+	}
+
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.TimeKey = "ts"
+	encoderConfig.LevelKey = "level"
+	encoderConfig.MessageKey = "msg"
+	encoderConfig.EncodeTime = zapcore.RFC3339TimeEncoder
+	encoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
+
+	core := zapcore.NewCore(
+		zaplogfmt.NewEncoder(encoderConfig),
+		zapcore.AddSync(output),
+		atomicLevel,
+	)
+	return zap.New(core), nil
 }

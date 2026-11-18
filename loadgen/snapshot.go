@@ -1,5 +1,11 @@
 package main
 
+import (
+	"time"
+
+	"go.uber.org/zap"
+)
+
 type runtimeStatus struct {
 	Run           runtimeRunStatus       `json:"run"`
 	Reader        runtimeReaderStatus    `json:"reader"`
@@ -164,5 +170,59 @@ func runtimeLoggingConfigFromConfig(config loggingConfig) runtimeLoggingConfig {
 	return runtimeLoggingConfig{
 		Level:      config.Level,
 		Mutability: config.Mutability,
+	}
+}
+
+const runtimeSummaryInterval = time.Minute
+
+func runtimeSummaryFields(status runtimeStatus) []zap.Field {
+	sourceErrorCategory := ""
+	sourceErrorOperation := ""
+	sourceErrorRelativePath := ""
+	if status.Reader.SourceError != nil {
+		sourceErrorCategory = status.Reader.SourceError.Category
+		sourceErrorOperation = status.Reader.SourceError.Operation
+		sourceErrorRelativePath = status.Reader.SourceError.RelativePath
+	}
+
+	return []zap.Field{
+		zap.String("event", "runtime_summary"),
+		zap.String("state", string(status.Run.State)),
+		zap.Int64("elapsed_ms", status.Run.ElapsedMs),
+		zap.Int64("total_transactions", status.Run.TotalTransactions),
+		zap.Float64("reader_read_tps", status.Reader.ReadTps),
+		zap.Int64("reader_rows_read", status.Reader.RowsRead),
+		zap.Int("reader_workers", status.Reader.Workers),
+		zap.Int("reader_live_workers", status.Reader.LiveWorkers),
+		zap.Int("reader_reading_workers", status.Reader.ReadingWorkers),
+		zap.Int("reader_blocked_workers", status.Reader.BlockedWorkers),
+		zap.Int("reader_draining_workers", status.Reader.DrainingWorkers),
+		zap.Int("throttler_requested_tps", status.Throttler.RequestedTps),
+		zap.Float64("throttler_admitted_tps", status.Throttler.AdmittedTps),
+		zap.Bool("installed", status.Throttler.Installed),
+		zap.Int("reader_channel_capacity", status.ReaderChannel.Capacity),
+		zap.Int("reader_channel_depth_batches", status.ReaderChannel.DepthBatches),
+		zap.Int("reader_channel_buffered_transactions", status.ReaderChannel.BufferedTransactions),
+		zap.Float64("reader_channel_input_tps", status.ReaderChannel.SentTransactionsPerSecond),
+		zap.Float64("reader_channel_output_tps", status.ReaderChannel.ReceivedTransactionsPerSecond),
+		zap.Int("reader_channel_blocked_senders", status.ReaderChannel.BlockedSenders),
+		zap.Int64("reader_channel_oldest_blocked_ms", status.ReaderChannel.OldestBlockedSenderMs),
+		zap.Int64("reader_channel_blocked_ms", status.ReaderChannel.BlockedMs),
+		zap.Int("sender_channel_capacity", status.SenderChannel.Capacity),
+		zap.Int("sender_channel_depth_batches", status.SenderChannel.DepthBatches),
+		zap.Int("sender_channel_buffered_transactions", status.SenderChannel.BufferedTransactions),
+		zap.Float64("sender_channel_input_tps", status.SenderChannel.SentTransactionsPerSecond),
+		zap.Float64("sender_channel_output_tps", status.SenderChannel.ReceivedTransactionsPerSecond),
+		zap.Int("sender_channel_blocked_senders", status.SenderChannel.BlockedSenders),
+		zap.Int64("sender_channel_oldest_blocked_ms", status.SenderChannel.OldestBlockedSenderMs),
+		zap.Int64("sender_channel_blocked_ms", status.SenderChannel.BlockedMs),
+		zap.Int("sender_workers", status.Sender.Workers),
+		zap.Int("sender_live_workers", status.Sender.LiveWorkers),
+		zap.Int("sender_in_flight_workers", status.Sender.InFlightWorkers),
+		zap.Int("sender_backoff_workers", status.Sender.BackoffWorkers),
+		zap.Int("sender_draining_workers", status.Sender.DrainingWorkers),
+		zap.String("source_error_category", sourceErrorCategory),
+		zap.String("source_error_operation", sourceErrorOperation),
+		zap.String("source_error_relative_path", sourceErrorRelativePath),
 	}
 }
