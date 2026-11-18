@@ -1,6 +1,6 @@
 import { act, fireEvent, render, renderHook, screen } from '@testing-library/react'
 import { StrictMode, useLayoutEffect, useState } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useDesiredControl } from './useDesiredControl'
 
 function renderPreviewParent(removeChild: boolean) {
@@ -56,6 +56,10 @@ function renderPreviewParent(removeChild: boolean) {
 }
 
 describe('useDesiredControl', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('cancels preview from child layout cleanup while the parent stays mounted', () => {
     const { dispatch, childCancelled } = renderPreviewParent(true)
     const parent = screen.getByLabelText('Parent control')
@@ -143,7 +147,8 @@ describe('useDesiredControl', () => {
     expect(dispatch.mock.calls).toEqual([[7]])
   })
 
-  it('keeps accepted false desired pending through stale snapshots until an exact newer snapshot', async () => {
+  it('keeps the desired value through stale snapshots and confirms it at five seconds', async () => {
+    vi.useFakeTimers()
     const dispatch = vi.fn().mockResolvedValue({ accepted: true })
     const view = renderHook(
       ({ applied, revision }) =>
@@ -167,8 +172,99 @@ describe('useDesiredControl', () => {
 
     view.rerender({ applied: true, revision: 11 })
     expect(view.result.current).toMatchObject({ desired: false, phase: 'pending' })
+    act(() => vi.advanceTimersByTime(4_999))
+    expect(view.result.current).toMatchObject({ applied: true, desired: false, phase: 'pending' })
+    expect(vi.getTimerCount()).toBe(1)
+    act(() => vi.advanceTimersByTime(1))
     view.rerender({ applied: false, revision: 11 })
-    expect(view.result.current).toMatchObject({ desired: false, phase: 'idle' })
+    expect(view.result.current).toMatchObject({ applied: false, desired: false, phase: 'idle' })
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => vi.advanceTimersByTime(1_000))
+    expect(view.result.current).toMatchObject({ applied: false, desired: false, phase: 'idle' })
+  })
+
+  it('returns to the latest applied value six seconds after a delayed acceptance', async () => {
+    vi.useFakeTimers()
+    let accept!: (receipt: { accepted: boolean }) => void
+    const receipt = new Promise<{ accepted: boolean }>((resolve) => {
+      accept = resolve
+    })
+    const dispatch = vi.fn().mockResolvedValue({ accepted: true }).mockReturnValueOnce(receipt)
+    const props = { applied: 4, revision: 10, available: true, dispatch }
+    const { result, rerender } = renderHook(useDesiredControl<number>, { initialProps: props })
+    let submission!: Promise<boolean>
+    act(() => {
+      submission = result.current.commit(8)
+    })
+    act(() => vi.advanceTimersByTime(1_000))
+    rerender({ ...props, applied: 5, revision: 11 })
+    expect(result.current).toMatchObject({ applied: 5, desired: 8, phase: 'pending' })
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => vi.advanceTimersByTime(1_000))
+    await act(async () => {
+      accept({ accepted: true })
+      expect(await submission).toBe(true)
+    })
+
+    act(() => vi.advanceTimersByTime(1_000))
+    rerender({ ...props, applied: 6, revision: 12 })
+    act(() => vi.advanceTimersByTime(4_999))
+    expect(result.current).toMatchObject({ applied: 6, desired: 8, phase: 'pending' })
+    act(() => vi.advanceTimersByTime(1))
+    expect(result.current).toMatchObject({
+      applied: 6,
+      desired: 6,
+      phase: 'idle',
+      error: null,
+      available: true,
+    })
+    expect(vi.getTimerCount()).toBe(0)
+    await act(async () => {
+      expect(await result.current.commit(9)).toBe(true)
+    })
+    expect(dispatch.mock.calls).toEqual([[8], [9]])
+  })
+
+  it('keeps one timer in StrictMode and cancels it on replacement and unmount', async () => {
+    vi.useFakeTimers()
+    const dispatch = vi.fn().mockResolvedValue({ accepted: true })
+    const props = { applied: 4, revision: 10, available: true, dispatch }
+    const first = renderHook(useDesiredControl<number>, {
+      initialProps: props,
+      wrapper: StrictMode,
+    })
+    await act(async () => {
+      expect(await first.result.current.commit(7)).toBe(true)
+    })
+    expect(vi.getTimerCount()).toBe(1)
+    act(() => vi.advanceTimersByTime(1_000))
+    first.rerender({ ...props, available: false })
+    expect(first.result.current.phase).toBe('idle')
+    expect(vi.getTimerCount()).toBe(0)
+    first.rerender(props)
+    await act(async () => {
+      expect(await first.result.current.commit(8)).toBe(true)
+    })
+    expect(vi.getTimerCount()).toBe(1)
+    act(() => vi.advanceTimersByTime(1_000))
+    first.unmount()
+    expect(vi.getTimerCount()).toBe(0)
+
+    const remounted = renderHook(useDesiredControl<number>, {
+      initialProps: props,
+      wrapper: StrictMode,
+    })
+    await act(async () => {
+      expect(await remounted.result.current.commit(9)).toBe(true)
+    })
+    expect(vi.getTimerCount()).toBe(1)
+    act(() => vi.advanceTimersByTime(5_000))
+    expect(remounted.result.current).toMatchObject({ desired: 9, phase: 'pending' })
+    expect(vi.getTimerCount()).toBe(1)
+    remounted.rerender({ ...props, applied: 9, revision: 11 })
+    expect(remounted.result.current).toMatchObject({ desired: 9, phase: 'idle' })
+    expect(vi.getTimerCount()).toBe(0)
+    expect(dispatch.mock.calls).toEqual([[7], [8], [9]])
   })
 
   it('rolls rejected and unavailable commands back to the latest applied value', async () => {
