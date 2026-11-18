@@ -17,6 +17,8 @@ import (
 
 // readerWorker holds the per-worker lifecycle state.
 type readerWorker struct {
+	id   int
+	wake chan struct{}
 	// Prevents the worker from claiming another file.
 	draining bool
 	// Indicates that the worker currently owns a source file.
@@ -96,10 +98,8 @@ func DiscoverSource(dataPath string) (Source, error) {
 // readerPool owns file admission. A file is assigned once to exactly one worker;
 // workers emit their locally completed batches directly to the reader channel.
 type readerPool struct {
-	// Protects mutable pool state and coordinates condition-variable waits.
+	// Protects file ownership and mutable worker state.
 	mu sync.Mutex
-	// Wakes workers when a file, configuration change, or shutdown is available.
-	available *sync.Cond
 	// Is canceled when the whole pool must stop.
 	ctx context.Context
 	// Tracks every started worker goroutine until it exits.
@@ -120,8 +120,6 @@ type readerPool struct {
 	channel *batchQueue
 	// Contains live Reader workers in their start order.
 	workers []*readerWorker
-	// Is the requested number of active Reader workers.
-	desired int
 	// Prevents new work while the pool is shutting down.
 	stopping bool
 	// Closes at the end of admission; in-progress sends still use ctx.
@@ -131,6 +129,8 @@ type readerPool struct {
 	sourceErrorOnce sync.Once
 	logger          *zap.Logger
 	openFile        func(string) (ReaderFile, error)
+	beforeClaim     func(*readerWorker)
+	nextWorkerID    int
 }
 
 func startReaderPool(
@@ -140,6 +140,7 @@ func startReaderPool(
 	queue *batchQueue,
 	telemetry *readerTelemetry,
 	openFile func(string) (ReaderFile, error),
+	beforeClaim func(*readerWorker),
 	logger *zap.Logger,
 ) *readerPool {
 	if openFile == nil {
@@ -153,8 +154,8 @@ func startReaderPool(
 		sourceErrors: make(chan error, 1),
 		logger:       logger,
 		openFile:     openFile,
+		beforeClaim:  beforeClaim,
 	}
-	pool.available = sync.NewCond(&pool.mu)
 	pool.reconcile(workers)
 	go func() {
 		select {
@@ -174,22 +175,49 @@ func (p *readerPool) reconcile(desired int) {
 	if p.stopping || p.ctx.Err() != nil {
 		return
 	}
-	p.desired = desired
-	orderedWorkers := append([]*readerWorker(nil), p.workers...)
-	sort.SliceStable(orderedWorkers, func(i, j int) bool {
-		left, right := orderedWorkers[i], orderedWorkers[j]
-		if left.busy != right.busy {
-			return !left.busy
+	active := 0
+	for _, worker := range p.workers {
+		if !worker.draining {
+			active++
 		}
-		return false
-	})
-	for index, worker := range orderedWorkers {
-		worker.draining = index < len(orderedWorkers)-desired
 	}
-	for len(p.workers) < desired {
-		p.startReplacementLocked()
+	if active > desired {
+		for _, busy := range []bool{false, true} {
+			for _, worker := range p.workers {
+				if active == desired {
+					break
+				}
+				if !worker.draining && worker.busy == busy {
+					worker.draining = true
+					active--
+				}
+			}
+		}
+	} else if active < desired {
+		for _, worker := range p.workers {
+			if active == desired {
+				break
+			}
+			if worker.draining {
+				worker.draining = false
+				active++
+			}
+		}
 	}
-	p.available.Broadcast()
+	for active < desired {
+		p.startWorkerLocked()
+		active++
+	}
+	for _, worker := range p.workers {
+		wakeReader(worker)
+	}
+}
+
+func wakeReader(worker *readerWorker) {
+	select {
+	case worker.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (p *readerPool) stopReading() {
@@ -198,7 +226,9 @@ func (p *readerPool) stopReading() {
 	if !p.stopping {
 		p.stopping = true
 		close(p.readingDone)
-		p.available.Broadcast()
+		for _, worker := range p.workers {
+			wakeReader(worker)
+		}
 	}
 }
 
@@ -214,15 +244,7 @@ func (p *readerPool) canRead() bool {
 func (p *readerPool) runWorker(worker *readerWorker) {
 	defer p.wg.Done()
 	p.logger.Debug("reader worker started", zap.String("event", "reader_worker_started"))
-	defer func() {
-		p.logger.Debug("reader worker stopped", zap.String("event", "reader_worker_stopped"))
-		p.mu.Lock()
-		p.removeWorkerLocked(worker)
-		if !p.stopping && p.ctx.Err() == nil && len(p.workers) < p.desired {
-			p.startReplacementLocked()
-		}
-		p.mu.Unlock()
-	}()
+	defer p.logger.Debug("reader worker stopped", zap.String("event", "reader_worker_stopped"))
 	for {
 		filePath, ok := p.claimNextFile(worker)
 		if !ok {
@@ -236,9 +258,6 @@ func (p *readerPool) runWorker(worker *readerWorker) {
 		p.mu.Lock()
 		p.releaseFileLocked(worker, filePath)
 		p.mu.Unlock()
-		if p.ctx.Err() != nil {
-			return
-		}
 	}
 }
 
@@ -252,11 +271,16 @@ func (p *readerPool) reportSourceError(sourceError *SourceError) {
 func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
 	delete(p.active, filePath)
 	worker.busy = false
-	p.available.Broadcast()
+	for _, worker := range p.workers {
+		if !worker.busy && !worker.draining {
+			wakeReader(worker)
+		}
+	}
 }
 
-func (p *readerPool) startReplacementLocked() {
-	worker := &readerWorker{}
+func (p *readerPool) startWorkerLocked() {
+	worker := &readerWorker{id: p.nextWorkerID, wake: make(chan struct{}, 1)}
+	p.nextWorkerID++
 	p.workers = append(p.workers, worker)
 	p.wg.Add(1)
 	go p.runWorker(worker)
@@ -272,25 +296,33 @@ func (p *readerPool) removeWorkerLocked(worker *readerWorker) {
 }
 
 func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for !p.stopping && p.ctx.Err() == nil {
-		if worker.draining {
+	for {
+		if p.beforeClaim != nil {
+			p.beforeClaim(worker)
+		}
+		p.mu.Lock()
+		if p.stopping || p.ctx.Err() != nil || worker.draining {
+			p.removeWorkerLocked(worker)
+			p.mu.Unlock()
 			return "", false
 		}
 		for offset := range p.source.files {
 			index := (p.nextFile + offset) % len(p.source.files)
-			filePath := p.source.files[index]
-			if !p.active[filePath] {
-				p.active[filePath] = true
+			path := p.source.files[index]
+			if !p.active[path] {
+				p.active[path] = true
 				p.nextFile = index + 1
 				worker.busy = true
-				return filePath, true
+				p.mu.Unlock()
+				return path, true
 			}
 		}
-		p.available.Wait()
+		p.mu.Unlock()
+		select {
+		case <-p.ctx.Done():
+		case <-worker.wake:
+		}
 	}
-	return "", false
 }
 
 func (p *readerPool) readFile(worker *readerWorker, filePath string) *SourceError {

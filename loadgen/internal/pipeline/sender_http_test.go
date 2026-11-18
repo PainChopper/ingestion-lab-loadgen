@@ -110,13 +110,13 @@ func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 			var channel batchQueue
 			channel.ch = batches
 			channel.batchSize = 0
-			var consumed atomic.Int64
+
 			config := testSenderOptions()
 			config.RetryDelays = []time.Duration{1 * time.Millisecond}
 			config.SenderURL = server.URL
-			pool := startSenderPool(context.Background(), &channel, &consumed, 1, config, zap.NewNop())
+			pool := startSenderPool(context.Background(), &channel, 1, config, nil, zap.NewNop(), nil)
 			batches <- []Transaction{{ClientID: "invalid"}}
-			waitForSenderCondition(t, func() bool { return consumed.Load() == 1 })
+			waitForSenderCondition(t, func() bool { return pool.completed.Load() == 1 })
 			close(batches)
 			<-pool.done
 			if requests.Load() != 4 {
@@ -157,10 +157,10 @@ func TestSenderPoolReusesConnectionsAcrossConcurrentWaves(t *testing.T) {
 	var telemetry batchQueue
 	telemetry.ch = batches
 	telemetry.batchSize = 0
-	var completed atomic.Int64
+
 	config := testSenderOptions()
 	config.SenderURL = server.URL
-	pool := startSenderPool(ctx, &telemetry, &completed, requestsPerWave, config, zap.NewNop())
+	pool := startSenderPool(ctx, &telemetry, requestsPerWave, config, nil, zap.NewNop(), nil)
 	defer func() {
 		cancel()
 		<-pool.done
@@ -220,12 +220,12 @@ func TestSenderPoolEntersBackoffWhenReceiverTimesOut(t *testing.T) {
 	var telemetry batchQueue
 	telemetry.ch = batches
 	telemetry.batchSize = 0
-	var completed atomic.Int64
+
 	config := testSenderOptions()
 	config.SenderURL = server.URL
 	config.SenderTimeout = 50 * time.Millisecond
 	config.RetryDelays = []time.Duration{3_600_000 * time.Millisecond}
-	pool := startSenderPool(ctx, &telemetry, &completed, 1, config, zap.NewNop())
+	pool := startSenderPool(ctx, &telemetry, 1, config, nil, zap.NewNop(), nil)
 	defer func() {
 		cancel()
 		<-pool.done
