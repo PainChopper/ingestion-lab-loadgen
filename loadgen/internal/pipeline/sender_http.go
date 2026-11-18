@@ -14,6 +14,7 @@ const maxSenderResponseDrainBytes = 64 << 10
 
 func newSenderHTTPClient(maxWorkers int, timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = maxWorkers
 	transport.MaxIdleConnsPerHost = maxWorkers
 	transport.MaxConnsPerHost = maxWorkers
 	return &http.Client{Transport: transport, Timeout: timeout}

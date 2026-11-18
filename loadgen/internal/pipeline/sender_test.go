@@ -57,79 +57,85 @@ func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 }
 
 func TestSenderPoolReusesConnectionsAcrossConcurrentWaves(t *testing.T) {
-	const requestsPerWave = 4
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	entered := make(chan struct{}, requestsPerWave)
-	release := make(chan struct{})
-	var connections atomic.Int32
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := io.Copy(io.Discard, r.Body); err != nil {
-			return
-		}
-		entered <- struct{}{}
-		select {
-		case <-release:
-			_, _ = io.WriteString(w, "retry")
-		case <-r.Context().Done():
-		}
-	}))
-	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
-		if state == http.StateNew {
-			connections.Add(1)
-		}
-	}
-	server.Start()
-	defer server.Close()
-	defer close(release)
-
-	batches := make(chan []Transaction)
-	var telemetry batchQueue
-	telemetry.ch = batches
-	telemetry.batchSize = 0
-
-	config := testSenderOptions()
-	config.SenderURL = server.URL
-	pool := startSenderPool(ctx, &telemetry, requestsPerWave, config, nil, zap.NewNop(), nil)
-	defer func() {
-		cancel()
-		<-pool.done
-	}()
-
-	for wave := 1; wave <= 2; wave++ {
-		results := make(chan senderAttemptOutcome, requestsPerWave)
-		for range requestsPerWave {
-			go func() {
-				results <- pool.attempt(ctx, []Transaction{{ClientID: "client"}}, 1)
-			}()
-		}
-		for range requestsPerWave {
-			select {
-			case <-entered:
-			case <-ctx.Done():
-				t.Fatalf("wave %d did not reach four simultaneous requests", wave)
-			}
-		}
-		for range requestsPerWave {
-			select {
-			case release <- struct{}{}:
-			case <-ctx.Done():
-				t.Fatalf("wave %d did not release all responses", wave)
-			}
-		}
-		for range requestsPerWave {
-			select {
-			case got := <-results:
-				if got != senderAttemptFailure {
-					t.Errorf("wave %d outcome = %d, want failure for HTTP 200", wave, got)
+	for _, requestsPerWave := range []int{4, 112} {
+		t.Run(fmt.Sprintf("workers=%d", requestsPerWave), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			entered := make(chan struct{}, requestsPerWave)
+			release := make(chan struct{})
+			var connections atomic.Int32
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, err := io.Copy(io.Discard, r.Body); err != nil {
+					return
 				}
-			case <-ctx.Done():
-				t.Fatalf("wave %d did not finish reading all responses", wave)
+				entered <- struct{}{}
+				select {
+				case <-release:
+					_, _ = io.WriteString(w, "retry")
+				case <-r.Context().Done():
+				}
+			}))
+			server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+				if state == http.StateNew {
+					connections.Add(1)
+				}
 			}
-		}
-		if got := connections.Load(); got != requestsPerWave {
-			t.Fatalf("wave %d total new connections = %d, want %d", wave, got, requestsPerWave)
-		}
+			server.Start()
+			defer server.Close()
+			defer close(release)
+
+			batches := make(chan []Transaction)
+			var telemetry batchQueue
+			telemetry.ch = batches
+			telemetry.batchSize = 0
+
+			config := testSenderOptions()
+			config.SenderURL = server.URL
+			config.SenderMaxConns = requestsPerWave
+			pool := startSenderPool(ctx, &telemetry, requestsPerWave, config, nil, zap.NewNop(), nil)
+			defer func() {
+				cancel()
+				<-pool.done
+			}()
+
+			for wave := 1; wave <= 2; wave++ {
+				results := make(chan senderAttemptOutcome, requestsPerWave)
+				for range requestsPerWave {
+					go func() {
+						results <- pool.attempt(ctx, []Transaction{{ClientID: "client"}}, 1)
+					}()
+				}
+				for range requestsPerWave {
+					select {
+					case <-entered:
+					case <-ctx.Done():
+						t.Fatalf("wave %d did not reach %d simultaneous requests", wave, requestsPerWave)
+					}
+				}
+				for range requestsPerWave {
+					select {
+					case release <- struct{}{}:
+					case <-ctx.Done():
+						t.Fatalf("wave %d did not release all responses", wave)
+					}
+				}
+				for range requestsPerWave {
+					select {
+					case got := <-results:
+						if got != senderAttemptFailure {
+							t.Errorf("wave %d outcome = %d, want failure for HTTP 200", wave, got)
+						}
+					case <-ctx.Done():
+						t.Fatalf("wave %d did not finish reading all responses", wave)
+					}
+				}
+				got := connections.Load()
+				t.Logf("wave %d total TCP connections = %d", wave, got)
+				if got != int32(requestsPerWave) {
+					t.Fatalf("wave %d total new connections = %d, want %d", wave, got, requestsPerWave)
+				}
+			}
+		})
 	}
 }
 
