@@ -132,6 +132,7 @@ The HTTP Sender posts a JSON array with `Content-Type: application/json` and tre
 ## HTTP API and observability
 
 - `GET /api/loadgen/snapshot`: run status, stage and queue telemetry, and configuration.
+- `HEAD /api/loadgen/snapshot`: the same response headers without a body.
 - `POST /api/loadgen/commands`: change live settings while the pipeline is running.
 - `GET /metrics`: Prometheus metrics.
 - `/debug/pprof/`: Go profiling.
@@ -146,6 +147,8 @@ Supported actions: `set-reader-workers`, `set-sender-workers`, `set-requested-tp
 
 Invalid actions or values receive `400 Bad Request`. During shutdown, snapshots remain available while batches drain and commands receive `409 Conflict`. The backend UI shows batch size and queue capacity as read-only values.
 
+Unsupported methods return `405` with `Allow: GET, HEAD` for snapshots or `Allow: POST` for commands. Command bodies over 4096 bytes return `413` before JSON validation. Interrupted runtime waits return `503`; a command may already have been applied. Command `200` and `409` responses have empty bodies.
+
 ## Tests
 
 Backend checks, from the `loadgen/` directory:
@@ -156,6 +159,8 @@ go test -race ./...
 go vet ./...
 go build ./...
 ```
+
+CLI black-box tests choose an available port and also run delivery while port 8080 is occupied. Startup retries are limited to three attempts and only recognize an address-in-use error from their own subprocess. A separate test holds a listener to verify a real bind conflict before restarting through the ordinary helper.
 
 Frontend checks, from the `frontend/` directory:
 

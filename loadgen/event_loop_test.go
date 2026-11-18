@@ -132,6 +132,10 @@ func TestSignalKeepsZeroTPSUntilGraceExpires(t *testing.T) {
 		}
 
 		assertExitAtDeadline(t, loop)
+		drainLogs := events.FilterMessage("pipeline drain timed out").All()
+		if len(drainLogs) != 1 || drainLogs[0].ContextMap()["event"] != "pipeline_drain_timed_out" {
+			t.Fatalf("drain event=%v", drainLogs)
+		}
 		rowsRead := stopping.Reader.RowsRead
 		if rowsRead == 0 {
 			t.Fatal("fixture produced no rows")

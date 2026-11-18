@@ -55,10 +55,10 @@ func parseCLI(args []string) (cliCommand, error) {
 				command.showUsage = true
 				return command, nil
 			}
-			return cliCommand{}, fmt.Errorf("invalid serve arguments")
+			return cliCommand{}, errors.New("invalid serve arguments")
 		case "--config":
 			if command.configPath != "" || index+1 >= len(args) || args[index+1] == "" || strings.HasPrefix(args[index+1], "-") {
-				return cliCommand{}, fmt.Errorf("invalid serve arguments: --config requires one non-empty path")
+				return cliCommand{}, errors.New("invalid serve arguments: --config requires one non-empty path")
 			}
 			index++
 			command.configPath = args[index]
@@ -108,6 +108,8 @@ type remoteSetCommand struct {
 	target        string
 	requestAction string
 	value         any
+	field         string
+	actual        func(remoteSetSnapshot) any
 }
 
 func parseRemoteCLI(args []string) (cliCommand, error) {
@@ -137,25 +139,25 @@ func parseSetCLI(args []string) (cliCommand, error) {
 		return command, nil
 	}
 	if len(args) < 2 {
-		return command, fmt.Errorf("invalid set arguments")
+		return command, errors.New("invalid set arguments")
 	}
-	setCommand, err := newRemoteSetCommand(args[1], "")
-	if err != nil {
-		return command, err
+	setting, ok := remoteSetTargets()[args[1]]
+	if !ok {
+		return command, fmt.Errorf("unknown set target %q", args[1])
 	}
 	if len(args) == 3 && args[2] == "--help" {
 		command.showUsage = true
 		return command, nil
 	}
 	if len(args) != 3 && len(args) != 5 {
-		return command, fmt.Errorf("invalid set arguments")
+		return command, errors.New("invalid set arguments")
 	}
 	if args[2] == "" {
-		return command, fmt.Errorf("invalid set arguments")
+		return command, errors.New("invalid set arguments")
 	}
 	if len(args) == 5 {
 		if args[3] != "--url" || args[4] == "" {
-			return command, fmt.Errorf("invalid set arguments")
+			return command, errors.New("invalid set arguments")
 		}
 		baseURL, err := validateCLIBaseURL(args[4])
 		if err != nil {
@@ -163,57 +165,74 @@ func parseSetCLI(args []string) (cliCommand, error) {
 		}
 		command.remoteURL = baseURL
 	}
-	setCommand, err = newRemoteSetCommand(args[1], args[2])
+	value, err := setting.parse(args[2])
 	if err != nil {
-		return command, err
+		return command, fmt.Errorf("invalid %s value %q", args[1], args[2])
 	}
-	command.remoteSet = setCommand
+	command.remoteSet = remoteSetCommand{
+		target: args[1], requestAction: setting.action, value: value,
+		field: setting.field, actual: setting.actual,
+	}
 	return command, nil
 }
 
-func newRemoteSetCommand(target, rawValue string) (remoteSetCommand, error) {
-	setCommand := remoteSetCommand{target: target}
-	switch target {
-	case "readers":
-		setCommand.requestAction = "set-reader-workers"
-	case "senders":
-		setCommand.requestAction = "set-sender-workers"
-	case "tps":
-		setCommand.requestAction = "set-requested-tps"
-	case "throttle":
-		setCommand.requestAction = "set-throttler-installed"
-		if rawValue == "" {
-			return setCommand, nil
-		}
-		if rawValue != "true" && rawValue != "false" {
-			return remoteSetCommand{}, fmt.Errorf("invalid %s value %q", target, rawValue)
-		}
-		setCommand.value = rawValue == "true"
-		return setCommand, nil
+type remoteSetTarget struct {
+	action, field string
+	parse         func(string) (any, error)
+	actual        func(remoteSetSnapshot) any
+}
+
+func remoteSetTargets() map[string]remoteSetTarget {
+	return map[string]remoteSetTarget{
+		"readers": {
+			action: "set-reader-workers", field: "reader.workers", parse: parseRemoteInteger,
+			actual: func(s remoteSetSnapshot) any { return verificationValue(s.Reader.Workers) },
+		},
+		"senders": {
+			action: "set-sender-workers", field: "sender.workers", parse: parseRemoteInteger,
+			actual: func(s remoteSetSnapshot) any { return verificationValue(s.Sender.Workers) },
+		},
+		"tps": {
+			action: "set-requested-tps", field: "throttler.requestedTps", parse: parseRemoteInteger,
+			actual: func(s remoteSetSnapshot) any { return verificationValue(s.Throttler.RequestedTps) },
+		},
+		"throttle": {
+			action: "set-throttler-installed", field: "throttler.installed", parse: parseRemoteBool,
+			actual: func(s remoteSetSnapshot) any { return verificationValue(s.Throttler.Installed) },
+		},
+	}
+}
+
+func parseRemoteInteger(raw string) (any, error) { return strconv.Atoi(raw) }
+
+func parseRemoteBool(raw string) (any, error) {
+	switch raw {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
 	default:
-		return remoteSetCommand{}, fmt.Errorf("unknown set target %q", target)
+		return nil, errors.New("must be true or false")
 	}
-	if rawValue == "" {
-		return setCommand, nil
+}
+
+func verificationValue[T comparable](value *T) any {
+	if value == nil {
+		return nil
 	}
-	value, err := strconv.Atoi(rawValue)
-	if err != nil {
-		return remoteSetCommand{}, fmt.Errorf("invalid %s value %q", target, rawValue)
-	}
-	setCommand.value = value
-	return setCommand, nil
+	return *value
 }
 
 func validateCLIBaseURL(rawURL string) (string, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
-		return "", fmt.Errorf("--url must be an absolute HTTP(S) URL with host")
+		return "", errors.New("--url must be an absolute HTTP(S) URL with host")
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("--url must use http or https")
+		return "", errors.New("--url must use http or https")
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
-		return "", fmt.Errorf("--url must not include userinfo, query, fragment, or a base path")
+		return "", errors.New("--url must not include userinfo, query, fragment, or a base path")
 	}
 	parsed.Path = ""
 	return parsed.String(), nil

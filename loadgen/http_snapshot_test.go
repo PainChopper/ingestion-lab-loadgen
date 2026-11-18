@@ -2,13 +2,35 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
+
+type failingSnapshotWriter struct{ *httptest.ResponseRecorder }
+
+func (w failingSnapshotWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestSnapshotEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
+	requests := make(chan runtimeRequest)
+	go func() {
+		(<-requests).(snapshotRequest).reply <- runtimeSnapshot{Run: runSnapshot{State: runStateRunning}}
+	}()
+	core, events := observer.New(zap.WarnLevel)
+	snapshotHandler(runtimeRequests{queue: requests}, zap.New(core)).ServeHTTP(
+		failingSnapshotWriter{ResponseRecorder: httptest.NewRecorder()},
+		httptest.NewRequest(http.MethodGet, snapshotPath, nil),
+	)
+	entries := events.FilterMessage("snapshot response encoding failed").All()
+	if len(entries) != 1 || entries[0].ContextMap()["event"] != "snapshot_response_failed" || entries[0].ContextMap()["error"] != io.ErrClosedPipe.Error() {
+		t.Fatalf("encoding failure log=%v", entries)
+	}
+}
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	requests := make(chan runtimeRequest, 1)
@@ -172,11 +194,14 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 func TestSnapshotHandlerRejectsPost(t *testing.T) {
 	requests := make(chan runtimeRequest, 1)
 	rec := httptest.NewRecorder()
-	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
+	newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
-	if got := rec.Header().Get("Allow"); got != http.MethodGet {
-		t.Errorf("Allow = %q, want %q", got, http.MethodGet)
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Errorf("Allow = %q, want %q", got, "GET, HEAD")
+	}
+	if rec.Body.String() != "Method Not Allowed\n" {
+		t.Errorf("405 body=%q", rec.Body.String())
 	}
 }

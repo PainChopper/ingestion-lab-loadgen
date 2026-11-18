@@ -26,8 +26,8 @@ const commandsPath = "/api/loadgen/commands"
 
 func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle(snapshotPath, snapshotHandler(requests, logger))
-	mux.Handle(commandsPath, commandsHandler(requests, config))
+	mux.Handle("GET "+snapshotPath, snapshotHandler(requests, logger))
+	mux.Handle("POST "+commandsPath, commandsHandler(requests, config))
 	registerDeveloperRoutes(mux)
 
 	mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))
@@ -64,7 +64,7 @@ func startHTTPServer(requests runtimeRequests, metrics *prometheusMetrics, confi
 		}
 		done <- err
 	}()
-	logger.Info("HTTP server starting", zap.String("event", "service_started"), zap.String("http_addr", server.Addr))
+	logger.Info("service started", zap.String("event", "service_started"), zap.String("http_addr", listener.Addr().String()))
 	return server, done, nil
 }
 
@@ -88,30 +88,26 @@ type commandRequest struct {
 
 func commandsHandler(requests runtimeRequests, cfg config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCommandBodyBytes))
 		if err != nil {
 			var limitErr *http.MaxBytesError
 			if errors.As(err, &limitErr) {
-				http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			} else {
-				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				http.Error(w, "invalid request body", http.StatusBadRequest)
 			}
 			return
 		}
+		// Decode instead of Unmarshal to reject unknown fields as well as trailing JSON.
 		decoder := json.NewDecoder(bytes.NewReader(body))
 		decoder.DisallowUnknownFields()
 		var request commandRequest
 		if err := decoder.Decode(&request); err != nil {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			http.Error(w, "Invalid request body", http.StatusBadRequest)
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
 		command, err := request.runtimeCommand(cfg)
@@ -121,9 +117,7 @@ func commandsHandler(requests runtimeRequests, cfg config) http.Handler {
 		}
 		applied, err := executeRuntimeCommand(r.Context(), requests, command)
 		if err != nil {
-			if errors.Is(err, errRuntimeUnavailable) {
-				http.Error(w, "Runtime unavailable", http.StatusServiceUnavailable)
-			}
+			http.Error(w, "runtime unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		if !applied {
@@ -138,19 +132,19 @@ func (r commandRequest) runtimeCommand(cfg config) (runtimeCommand, error) {
 	var invalid string
 	switch r.Action {
 	case "set-reader-workers":
-		command.kind, limits, invalid = setReaderWorkers, cfg.Reader.Workers, "Invalid Reader workers"
+		command.kind, limits, invalid = setReaderWorkers, cfg.Reader.Workers, "invalid reader workers"
 	case "set-sender-workers":
-		command.kind, limits, invalid = setSenderWorkers, cfg.Sender.Workers, "Invalid Sender setting"
+		command.kind, limits, invalid = setSenderWorkers, cfg.Sender.Workers, "invalid sender workers"
 	case "set-requested-tps":
-		command.kind, limits, invalid = setRequestedTPS, cfg.Throttler.RequestedTPS, "Invalid requested TPS"
+		command.kind, limits, invalid = setRequestedTPS, cfg.Throttler.RequestedTPS, "invalid requested tps"
 	case "set-throttler-installed":
 		var value *bool
 		if err := json.Unmarshal(r.Value, &value); err != nil || value == nil || !cfg.Throttler.Installed.contains(*value) {
-			return runtimeCommand{}, errors.New("Invalid throttler installed value")
+			return runtimeCommand{}, errors.New("invalid throttler installed value")
 		}
 		return runtimeCommand{kind: setThrottlerInstalled, installed: *value}, nil
 	default:
-		return runtimeCommand{}, errors.New("Unknown command")
+		return runtimeCommand{}, errors.New("unknown command")
 	}
 	var value *int
 	if err := json.Unmarshal(r.Value, &value); err != nil || value == nil || !limits.contains(*value) {
@@ -162,21 +156,14 @@ func (r commandRequest) runtimeCommand(cfg config) (runtimeCommand, error) {
 
 func snapshotHandler(requests runtimeRequests, logger *zap.Logger) http.Handler {
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
 		snapshot, err := requestSnapshot(r.Context(), requests)
 		if err != nil {
-			if errors.Is(err, errRuntimeUnavailable) {
-				http.Error(w, "Runtime unavailable", http.StatusServiceUnavailable)
-			}
+			http.Error(w, "runtime unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(snapshot); err != nil {
-			logger.Error("snapshot response encoding failed", zap.String("event", "run_failed"))
+			logger.Warn("snapshot response encoding failed", zap.String("event", "snapshot_response_failed"), zap.Error(err))
 			return
 		}
 	}
