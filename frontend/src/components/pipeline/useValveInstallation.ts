@@ -29,12 +29,28 @@ export function useValveInstallation(
     setInstallationDragProgress(0)
   }, [cancelInstalled])
 
+  const cancelInstallationDrag = useCallback(() => {
+    if (installationDrag.current === null) return false
+    suppressInstallationClick.current = true
+    cancelInstallationPreview()
+    return true
+  }, [cancelInstallationPreview])
+
   useEffect(() => {
     if (cancelInstalled === undefined) return
     const handleWindowBlur = () => cancelInstallationPreview()
+    const handleWindowKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented && cancelInstallationDrag()) {
+        event.preventDefault()
+      }
+    }
     window.addEventListener('blur', handleWindowBlur)
-    return () => window.removeEventListener('blur', handleWindowBlur)
-  }, [cancelInstallationPreview, cancelInstalled])
+    window.addEventListener('keydown', handleWindowKeyDown)
+    return () => {
+      window.removeEventListener('blur', handleWindowBlur)
+      window.removeEventListener('keydown', handleWindowKeyDown)
+    }
+  }, [cancelInstallationDrag, cancelInstallationPreview, cancelInstalled])
 
   useEffect(() => {
     if (previousAppliedMode.current === appliedInstalled) return
@@ -135,9 +151,10 @@ export function useValveInstallation(
 
   const handleInstallationKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key === 'Escape') {
-      event.preventDefault()
-      event.stopPropagation()
-      cancelInstallationPreview()
+      if (cancelInstallationDrag()) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
       return
     }
     if ((event.key !== 'Enter' && event.key !== ' ') || event.repeat) return

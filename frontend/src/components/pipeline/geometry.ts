@@ -1,5 +1,5 @@
 import type { ChannelId } from '../../model/loadgen'
-import type { PipelineOrientation } from './pipelineLayout'
+import { PIPELINE_LANDSCAPE_MIN_WIDTH, type PipelineOrientation } from './pipelineLayout'
 import { getPortraitWorkerGridMetrics } from './workerActorLayout'
 
 export interface Point {
@@ -44,11 +44,12 @@ export interface WorkerActorBounds {
 }
 
 export const PIPELINE_VIEW_BOX = Object.freeze({
-  width: 1120,
-  height: 650,
+  y: 22,
+  width: PIPELINE_LANDSCAPE_MIN_WIDTH,
+  height: 582,
 })
 
-export const PIPELINE_VIEW_BOX_VALUE = `0 0 ${PIPELINE_VIEW_BOX.width} ${PIPELINE_VIEW_BOX.height}`
+export const PIPELINE_VIEW_BOX_VALUE = `0 ${PIPELINE_VIEW_BOX.y} ${PIPELINE_VIEW_BOX.width} ${PIPELINE_VIEW_BOX.height}`
 
 export const FLOW_BASELINE = 415
 export const ACTOR_BOTTOM = 475
@@ -367,13 +368,14 @@ function landscapeGeometry(contentWidth: number) {
       },
     },
   }
+  const httpStatusY = Math.max(target.bounds.y + target.bounds.height, sender.metrics.status.y) + 18
 
   return {
     orientation: 'landscape' as const,
     viewBox: {
       width,
       height: PIPELINE_VIEW_BOX.height,
-      value: `0 0 ${width} ${PIPELINE_VIEW_BOX.height}`,
+      value: `0 ${PIPELINE_VIEW_BOX.y} ${width} ${PIPELINE_VIEW_BOX.height}`,
     },
     stationDelta: delta,
     batchLabel: batchLabelGeometry({
@@ -392,9 +394,9 @@ function landscapeGeometry(contentWidth: number) {
       end: target.ports.input,
       metrics: {
         x: (sender.ports.output.x + target.ports.input.x) / 2,
-        statusY: Math.max(target.bounds.y + target.bounds.height, sender.metrics.status.y) + 37,
-        throughputY: Math.max(target.bounds.y + target.bounds.height, sender.metrics.status.y) + 58,
-        detailY: Math.max(target.bounds.y + target.bounds.height, sender.metrics.status.y) + 79,
+        statusY: httpStatusY,
+        throughputY: httpStatusY + 16,
+        detailY: httpStatusY + 32,
       },
     },
   }

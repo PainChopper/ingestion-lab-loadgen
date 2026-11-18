@@ -2,6 +2,10 @@ import { useEffect, useState } from 'react'
 
 export type PipelineLayoutMode = 'auto' | 'portrait' | 'landscape'
 export type PipelineOrientation = Exclude<PipelineLayoutMode, 'auto'>
+export type PipelineInspectorLayout = 'stacked' | 'drawer' | 'column'
+
+export const PIPELINE_LANDSCAPE_MIN_WIDTH = 1120
+const INSPECTOR_COLUMN_MIN_WIDTH = 1440
 
 export function getPipelineLayoutMode(search: string): PipelineLayoutMode {
   const value = new URLSearchParams(search).get('layout')
@@ -10,38 +14,33 @@ export function getPipelineLayoutMode(search: string): PipelineLayoutMode {
 
 export function resolvePipelineOrientation(
   mode: PipelineLayoutMode,
-  portraitMediaMatches: boolean,
   viewportWidth: number,
-  viewportHeight: number,
 ): PipelineOrientation {
   if (mode !== 'auto') return mode
-  if (viewportWidth < 900) return 'portrait'
-  if (viewportWidth === viewportHeight) return 'landscape'
-  return portraitMediaMatches ? 'portrait' : 'landscape'
+  return viewportWidth < PIPELINE_LANDSCAPE_MIN_WIDTH ? 'portrait' : 'landscape'
 }
 
-function currentOrientation(mode: PipelineLayoutMode, media: MediaQueryList): PipelineOrientation {
-  return resolvePipelineOrientation(mode, media.matches, window.innerWidth, window.innerHeight)
-}
-
-export function usePipelineOrientation(): PipelineOrientation {
+export function usePipelineLayout() {
   const mode = getPipelineLayoutMode(window.location.search)
-  const [orientation, setOrientation] = useState<PipelineOrientation>(() => {
-    const media = window.matchMedia('(orientation: portrait)')
-    return currentOrientation(mode, media)
-  })
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
 
   useEffect(() => {
-    const media = window.matchMedia('(orientation: portrait)')
-    const update = () => setOrientation(currentOrientation(mode, media))
-    update()
-    media.addEventListener('change', update)
+    const update = () => setViewportWidth(window.innerWidth)
     window.addEventListener('resize', update)
-    return () => {
-      media.removeEventListener('change', update)
-      window.removeEventListener('resize', update)
-    }
-  }, [mode])
+    update()
+    return () => window.removeEventListener('resize', update)
+  }, [])
 
-  return orientation
+  const orientation = resolvePipelineOrientation(mode, viewportWidth)
+  const inspectorLayout: PipelineInspectorLayout =
+    orientation === 'portrait'
+      ? 'stacked'
+      : viewportWidth < INSPECTOR_COLUMN_MIN_WIDTH
+        ? 'drawer'
+        : 'column'
+  return {
+    orientation,
+    inspectorLayout,
+    toggleSelection: inspectorLayout === 'drawer' && viewportWidth >= PIPELINE_LANDSCAPE_MIN_WIDTH,
+  }
 }

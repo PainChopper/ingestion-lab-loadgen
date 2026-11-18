@@ -1,6 +1,7 @@
 import { FlaskConical, MousePointer2, X } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import type { LoadgenSnapshot, ChannelFlowState, SelectableId } from '../model/loadgen'
 import { useLoadgenSnapshot } from '../hooks/useLoadgenSnapshot'
@@ -11,7 +12,12 @@ import { formatInteger } from './pipeline/formatters'
 import { PipelineSvg } from './pipeline/PipelineSvg'
 import { createPipelineGeometry } from './pipeline/geometry'
 import { getWorkerGeometryCount } from './pipeline/workerActorLayout'
-import { usePipelineOrientation, type PipelineOrientation } from './pipeline/pipelineLayout'
+import {
+  PIPELINE_LANDSCAPE_MIN_WIDTH,
+  usePipelineLayout,
+  type PipelineInspectorLayout,
+  type PipelineOrientation,
+} from './pipeline/pipelineLayout'
 
 interface AdapterProps {
   adapter: LoadgenAdapter
@@ -82,14 +88,14 @@ function PipelineViewport({
   orientation,
 }: PipelineViewportProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
-  const [landscapeContentWidth, setLandscapeContentWidth] = useState(1120)
+  const [landscapeContentWidth, setLandscapeContentWidth] = useState(PIPELINE_LANDSCAPE_MIN_WIDTH)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (orientation !== 'landscape') return
     const viewport = viewportRef.current
     if (viewport === null) return
     const updateWidth = (width: number) => {
-      const resolved = Math.max(1120, Math.round(width))
+      const resolved = Math.max(PIPELINE_LANDSCAPE_MIN_WIDTH, Math.round(width))
       setLandscapeContentWidth((current) => (current === resolved ? current : resolved))
     }
 
@@ -138,7 +144,7 @@ function PipelineViewport({
         style={
           orientation === 'portrait'
             ? { aspectRatio: `480 / ${geometry.viewBox.height}` }
-            : undefined
+            : { height: geometry.viewBox.height }
         }
       >
         <PipelineSvg
@@ -357,6 +363,7 @@ interface WorkspaceProps {
   onClearSelection: () => void
   liveControls: LiveControls
   orientation: PipelineOrientation
+  inspectorLayout: PipelineInspectorLayout
 }
 
 function Workspace({
@@ -366,9 +373,45 @@ function Workspace({
   onClearSelection,
   liveControls,
   orientation,
+  inspectorLayout,
 }: WorkspaceProps) {
+  const workspaceRef = useRef<HTMLDivElement>(null)
+  const isDrawer = inspectorLayout === 'drawer'
+  const drawerOpen = isDrawer && selectedId !== null
+  const closeInspector = useCallback(() => {
+    const workspace = workspaceRef.current
+    const active = document.activeElement
+    if (
+      isDrawer &&
+      (active === document.body || workspace?.querySelector('.inspector')?.contains(active))
+    ) {
+      workspace
+        ?.querySelector<SVGElement>('.pipeline-selectable--selected[role="button"]')
+        ?.focus({ preventScroll: true })
+    }
+    onClearSelection()
+  }, [isDrawer, onClearSelection])
+
+  useEffect(() => {
+    if (!drawerOpen) return
+    let closeTimer: number | undefined
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.repeat) return
+      window.clearTimeout(closeTimer)
+      // Wait until the input and pointer gesture handlers have processed Escape.
+      closeTimer = window.setTimeout(() => {
+        if (!event.defaultPrevented) closeInspector()
+      }, 0)
+    }
+    window.addEventListener('keydown', onEscape, true)
+    return () => {
+      window.removeEventListener('keydown', onEscape, true)
+      window.clearTimeout(closeTimer)
+    }
+  }, [closeInspector, drawerOpen])
+
   return (
-    <div className="workspace">
+    <div ref={workspaceRef} className="workspace" data-inspector-layout={inspectorLayout}>
       <PipelineViewport
         snapshot={snapshot}
         selectedId={selectedId}
@@ -376,12 +419,14 @@ function Workspace({
         liveControls={liveControls}
         orientation={orientation}
       />
-      <InspectorDock
-        snapshot={snapshot}
-        selectedId={selectedId}
-        onClearSelection={onClearSelection}
-        liveControls={liveControls}
-      />
+      {(!isDrawer || drawerOpen) && (
+        <InspectorDock
+          snapshot={snapshot}
+          selectedId={selectedId}
+          onClearSelection={closeInspector}
+          liveControls={liveControls}
+        />
+      )}
     </div>
   )
 }
@@ -404,8 +449,11 @@ function ChannelStateLegend() {
 
 export function LabShell({ adapter }: AdapterProps) {
   const { snapshot, liveSnapshot } = useLoadgenSnapshot(adapter)
-  const orientation = usePipelineOrientation()
+  const { orientation, inspectorLayout, toggleSelection } = usePipelineLayout()
   const [selectedId, setSelectedId] = useState<SelectableId | null>(null)
+  const clearSelection = useCallback(() => setSelectedId(null), [])
+  const select = (id: SelectableId) =>
+    setSelectedId((current) => (toggleSelection && current === id ? null : id))
   const immediate = (control: { applied: number | null; applyMode: string }) =>
     control.applied !== null && control.applyMode === 'immediate'
   const readerWorkers = useDesiredControl({
@@ -453,15 +501,22 @@ export function LabShell({ adapter }: AdapterProps) {
   }
 
   return (
-    <div className={`lab-shell lab-shell--${orientation}`} data-layout={orientation}>
+    <div
+      className={`lab-shell lab-shell--${orientation}`}
+      data-layout={orientation}
+      style={
+        { '--pipeline-landscape-min-width': `${PIPELINE_LANDSCAPE_MIN_WIDTH}px` } as CSSProperties
+      }
+    >
       <TopBar snapshot={snapshot} />
       <Workspace
         snapshot={snapshot}
         selectedId={selectedId}
-        onSelect={setSelectedId}
-        onClearSelection={() => setSelectedId(null)}
+        onSelect={select}
+        onClearSelection={clearSelection}
         liveControls={liveControls}
         orientation={orientation}
+        inspectorLayout={inspectorLayout}
       />
       <ChannelStateLegend />
     </div>

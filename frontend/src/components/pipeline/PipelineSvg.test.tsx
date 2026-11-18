@@ -16,7 +16,12 @@ import {
   CHANNEL_PRESSURE_YELLOW,
   ChannelFlowStateDeriver,
 } from '../../model/channelFlowState'
-import { createPipelineGeometry, FLOW_BASELINE, type TextPlacement } from './geometry'
+import {
+  createPipelineGeometry,
+  FLOW_BASELINE,
+  PIPELINE_VIEW_BOX,
+  type TextPlacement,
+} from './geometry'
 import { CHANNEL_CAPACITY_SCALE_OFFSET, CHANNEL_CABLE_MAX_LIFT } from './channelCableGeometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { PipelineSvg } from './PipelineSvg'
@@ -66,8 +71,8 @@ describe('responsive pipeline geometry', () => {
 
     expect(geometry.viewBox).toEqual({
       width,
-      height: 650,
-      value: `0 0 ${width} 650`,
+      height: 582,
+      value: `0 22 ${width} 582`,
     })
     expect(geometry.stationDelta).toBe(delta)
     expect(geometry.batchLabel.anchor.x).toBeCloseTo(430 + delta, 10)
@@ -119,11 +124,11 @@ describe('responsive pipeline geometry', () => {
     ]
     for (const baseline of httpRows) {
       expect(baseline - 12).toBeGreaterThan(target.bounds.y + target.bounds.height + 8)
-      expect(baseline - 12).toBeGreaterThan(geometry.actors.sender.metrics.status.y + 15 + 8)
-      expect(baseline + 3).toBeLessThan(geometry.viewBox.height - 12)
+      expect(baseline - 12).toBeGreaterThan(geometry.actors.sender.metrics.status.y + 3)
+      expect(baseline + 3).toBeLessThan(PIPELINE_VIEW_BOX.y + geometry.viewBox.height)
     }
-    expect(httpRows[1] - httpRows[0]).toBeGreaterThanOrEqual(20)
-    expect(httpRows[2] - httpRows[1]).toBeGreaterThanOrEqual(20)
+    expect(httpRows[1] - httpRows[0]).toBeGreaterThanOrEqual(16)
+    expect(httpRows[2] - httpRows[1]).toBeGreaterThanOrEqual(16)
   })
 
   it('reserves a landscape row for upstream waiting labels', () => {
@@ -135,11 +140,9 @@ describe('responsive pipeline geometry', () => {
     })
     const { reader, sender } = geometry.actors
     const workerStatusY = Math.max(reader.metrics.status.y, sender.metrics.status.y)
-    const httpStatusY = geometry.http.metrics.statusY
-
     for (const { metrics } of Object.values(geometry.channels)) {
       expect(metrics.waitingY - workerStatusY).toBeGreaterThanOrEqual(16)
-      expect(httpStatusY - metrics.waitingY).toBeGreaterThanOrEqual(16)
+      expect(geometry.http.metrics.x - metrics.x).toBeGreaterThanOrEqual(200)
     }
   })
 
@@ -2007,8 +2010,10 @@ describe('PipelineSvg rendering', () => {
       expect(textTop).toBeGreaterThan(
         Number(targetBox.getAttribute('y')) + Number(targetBox.getAttribute('height')) + 8,
       )
-      expect(textTop).toBeGreaterThan(Number(senderStatus.getAttribute('y')) + 15 + 8)
-      expect(Number(metric.getAttribute('y')) + 3).toBeLessThan(650 - 12)
+      expect(textTop).toBeGreaterThan(Number(senderStatus.getAttribute('y')) + 3)
+      expect(Number(metric.getAttribute('y')) + 3).toBeLessThan(
+        PIPELINE_VIEW_BOX.y + PIPELINE_VIEW_BOX.height,
+      )
     }
     landscape.unmount()
 
