@@ -1,8 +1,127 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react'
+import { StrictMode, useLayoutEffect, useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { useDesiredControl } from './useDesiredControl'
 
+function renderPreviewParent(removeChild: boolean) {
+  const dispatch = vi.fn()
+  const childCancelled = vi.fn()
+
+  function Child({ cancel, trigger }: { cancel: () => void; trigger: boolean }) {
+    useLayoutEffect(() => {
+      if (removeChild) {
+        return () => {
+          childCancelled('cleanup')
+          cancel()
+        }
+      }
+    }, [cancel])
+
+    useLayoutEffect(() => {
+      if (trigger) {
+        childCancelled('update')
+        cancel()
+      }
+    }, [cancel, trigger])
+    return <span>Child</span>
+  }
+
+  function Parent() {
+    const { cancel, desired, phase, preview } = useDesiredControl({
+      applied: 4, revision: 10, available: true, dispatch,
+    })
+    const [trigger, setTrigger] = useState(false)
+    const handlePreview = () => {
+      preview(7)
+      setTrigger(true)
+    }
+    return (
+      <>
+        <button type="button" onClick={handlePreview}>Preview</button>
+        <output aria-label="Parent control">{phase}: {desired}</output>
+        {(!removeChild || !trigger) && <Child cancel={cancel} trigger={trigger} />}
+      </>
+    )
+  }
+
+  render(<Parent />)
+  return { dispatch, childCancelled }
+}
+
 describe('useDesiredControl', () => {
+  it('cancels preview from child layout cleanup while the parent stays mounted', () => {
+    const { dispatch, childCancelled } = renderPreviewParent(true)
+    const parent = screen.getByLabelText('Parent control')
+    expect(parent.textContent).toBe('idle: 4')
+    expect(screen.getByText('Child')).toBeDefined()
+    expect(childCancelled).not.toHaveBeenCalled()
+
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Preview' })))
+
+    expect(childCancelled.mock.calls).toEqual([['cleanup']])
+    expect(screen.queryByText('Child')).toBeNull()
+    expect(screen.getByLabelText('Parent control')).toBe(parent)
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(parent.textContent).toBe('idle: 4')
+  })
+
+  it('cancels preview from the mounted child layout effect on update', () => {
+    const { dispatch, childCancelled } = renderPreviewParent(false)
+    const parent = screen.getByLabelText('Parent control')
+    const child = screen.getByText('Child')
+    expect(parent.textContent).toBe('idle: 4')
+    expect(childCancelled).not.toHaveBeenCalled()
+
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Preview' })))
+
+    expect(childCancelled.mock.calls).toEqual([['update']])
+    expect(screen.getByText('Child')).toBe(child)
+    expect(screen.getByLabelText('Parent control')).toBe(parent)
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(parent.textContent).toBe('idle: 4')
+  })
+
+  it('previews and commits after StrictMode restarts layout effects', async () => {
+    const dispatch = vi.fn().mockResolvedValue({ accepted: true })
+    const { result } = renderHook(() => useDesiredControl({
+      applied: 4, revision: 10, available: true, dispatch,
+    }), { wrapper: StrictMode })
+
+    act(() => result.current.preview(7))
+    expect(result.current).toMatchObject({ desired: 7, phase: 'preview' })
+
+    await act(async () => {
+      expect(await result.current.commit()).toBe(true)
+    })
+    expect(dispatch.mock.calls).toEqual([[7]])
+    expect(result.current).toMatchObject({ desired: 7, phase: 'pending' })
+  })
+
+  it('ignores a late dispatch failure after unmount and leaves saved callbacks inactive', async () => {
+    let rejectReceipt!: (reason: Error) => void
+    const receipt = new Promise<{ accepted: boolean }>((_, reject) => {
+      rejectReceipt = reject
+    })
+    const dispatch = vi.fn().mockResolvedValue({ accepted: true }).mockReturnValueOnce(receipt)
+    const { result, unmount } = renderHook(() => useDesiredControl({
+      applied: 4, revision: 10, available: true, dispatch,
+    }))
+    const { commit, preview } = result.current
+
+    let inFlight!: Promise<boolean>
+    act(() => { inFlight = commit(7) })
+    expect(result.current).toMatchObject({ desired: 7, phase: 'pending' })
+    unmount()
+
+    await act(async () => {
+      rejectReceipt(new Error('offline'))
+      expect(await inFlight).toBe(false)
+      preview(8)
+      expect(await commit(8)).toBe(false)
+    })
+    expect(dispatch.mock.calls).toEqual([[7]])
+  })
+
   it('keeps accepted false desired pending through stale snapshots until an exact newer snapshot', async () => {
     const dispatch = vi.fn().mockResolvedValue({ accepted: true })
     const view = renderHook(
