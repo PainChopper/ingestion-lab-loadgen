@@ -79,7 +79,7 @@ function moveDisplayedPressure(current: number, target: number, elapsedMs: numbe
 
 function channelMode(
   channel: ChannelTelemetrySnapshot,
-  runState: RunState,
+  runState: RunState | null,
   connectionState: ConnectionState,
 ): Extract<ChannelFlowState, 'stopped' | 'connection-error'> | null {
   const missingTelemetry =
@@ -88,6 +88,7 @@ function channelMode(
     !Number.isFinite(channel.blockedSenders) ||
     !Number.isFinite(channel.oldestBlockedSenderMs)
 
+  if (runState === null) return 'stopped'
   if (connectionState !== 'connected' || missingTelemetry) {
     return 'connection-error'
   }
@@ -177,7 +178,7 @@ export class ChannelFlowStateDeriver {
 
   private deriveChannel(
     channel: ChannelTelemetrySnapshot,
-    runState: RunState,
+    runState: RunState | null,
     connectionState: ConnectionState,
     observedAtMs: number,
   ): ChannelSnapshot {

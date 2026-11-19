@@ -6,7 +6,6 @@ import type {
   LoadgenCommand,
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
-  LoadgenConfigSnapshot,
   ChannelTelemetrySnapshot,
   RunState,
 } from '../model/loadgen'
@@ -57,7 +56,15 @@ interface TestWireSnapshot {
   }
   readonly readerChannel: TestWireChannel
   readonly senderChannel: TestWireChannel
-  readonly config: LoadgenConfigSnapshot
+  readonly config: {
+    readonly readerWorkers: { readonly initial: number; readonly max: number }
+    readonly senderWorkers: { readonly initial: number; readonly max: number }
+    readonly throttlerRequestedTps: {
+      readonly initial: number
+      readonly max: number
+      readonly step: number
+    }
+  }
 }
 
 interface TestWireChannel {
@@ -255,8 +262,6 @@ async function flushPoll(): Promise<void> {
 function control(unit: string, applied: number | null = null): NumericControlSnapshot {
   return {
     applied,
-    preview: null,
-    pending: null,
     min: applied ?? 0,
     max: applied ?? 0,
     step: 1,
@@ -267,15 +272,13 @@ function control(unit: string, applied: number | null = null): NumericControlSna
 
 function requestedTpsControl(
   value: number | null,
-  config: LoadgenConfigSnapshot['throttlerRequestedTps'] | null,
+  config: TestWireSnapshot['config']['throttlerRequestedTps'] | null,
   writable: boolean,
 ): NumericControlSnapshot {
   if (config === null) return control('transactions/s')
 
   return {
     applied: value,
-    preview: null,
-    pending: null,
     min: 0,
     max: config.max,
     step: config.step,
@@ -295,18 +298,10 @@ function neutralChannel(
     to,
     capacity: null,
     depthBatches: null,
-    bufferedTransactions: null,
-    handoffBatches: 0,
-    handoffBatchesTotal: 0,
     blockedSenders: 0,
     oldestBlockedSenderMs: 0,
-    inputTransactionsPerSecond: 0,
-    outputTransactionsPerSecond: 0,
-    inputTps: null,
-    outputTps: null,
-    throughputTps: null,
-    blockedMs: null,
-    trend: 'unknown',
+    inputTransactionsPerSecond: null,
+    outputTransactionsPerSecond: null,
   }
 }
 
@@ -318,15 +313,10 @@ function readerChannel(wire: TestWireSnapshot | null): ChannelTelemetrySnapshot 
     ...channel,
     capacity: wire.readerChannel.capacity,
     depthBatches: wire.readerChannel.depthBatches,
-    bufferedTransactions: wire.readerChannel.bufferedTransactions,
     inputTransactionsPerSecond: wire.readerChannel.inputTransactionsPerSecond,
     outputTransactionsPerSecond: wire.readerChannel.outputTransactionsPerSecond,
-    inputTps: wire.readerChannel.inputTransactionsPerSecond,
-    outputTps: wire.readerChannel.outputTransactionsPerSecond,
-    throughputTps: wire.readerChannel.outputTransactionsPerSecond,
     blockedSenders: wire.readerChannel.blockedSenders,
     oldestBlockedSenderMs: wire.readerChannel.oldestBlockedSenderMs,
-    blockedMs: wire.readerChannel.blockedMs,
   }
 }
 
@@ -338,15 +328,10 @@ function senderChannel(wire: TestWireSnapshot | null): ChannelTelemetrySnapshot 
     ...channel,
     capacity: wire.senderChannel.capacity,
     depthBatches: wire.senderChannel.depthBatches,
-    bufferedTransactions: wire.senderChannel.bufferedTransactions,
     inputTransactionsPerSecond: wire.senderChannel.inputTransactionsPerSecond,
     outputTransactionsPerSecond: wire.senderChannel.outputTransactionsPerSecond,
-    inputTps: wire.senderChannel.inputTransactionsPerSecond,
-    outputTps: wire.senderChannel.outputTransactionsPerSecond,
-    throughputTps: wire.senderChannel.outputTransactionsPerSecond,
     blockedSenders: wire.senderChannel.blockedSenders,
     oldestBlockedSenderMs: wire.senderChannel.oldestBlockedSenderMs,
-    blockedMs: wire.senderChannel.blockedMs,
   }
 }
 
@@ -355,7 +340,7 @@ function expectedSnapshot(
   connectionState: ConnectionState,
   wire: TestWireSnapshot | null = null,
 ): LoadgenTelemetrySnapshot {
-  const runState = wire?.run.state ?? 'idle'
+  const runState = wire?.run.state ?? null
   const writable = connectionState === 'connected' && runState === 'running'
 
   return {
@@ -365,7 +350,6 @@ function expectedSnapshot(
     runState,
     elapsedMs: wire?.run.elapsedMs ?? 0,
     totalTransactions: wire?.run.totalTransactions ?? 0,
-    config: wire?.config ?? null,
     reader: {
       id: 'reader',
       workers:
@@ -373,8 +357,6 @@ function expectedSnapshot(
           ? control('workers', null)
           : {
               applied: wire.reader.workers,
-              preview: null,
-              pending: null,
               min: 1,
               max: wire.config.readerWorkers!.max,
               step: 1,
@@ -391,12 +373,9 @@ function expectedSnapshot(
       drainingBlockedWorkers: wire?.reader.drainingBlockedWorkers ?? 0,
       readBatchSize: wire?.reader.readBatchSize ?? null,
       readTps: wire?.reader.readTps ?? null,
-      configuredCapacityTps: null,
-      limitationReason: null,
       rowsRead: wire?.reader.rowsRead ?? null,
       sourceDirectory: wire?.reader.sourceDirectory,
       sourceError: wire?.reader.sourceError ?? null,
-      state: runState,
     },
     throttler: {
       id: 'throttler',
@@ -407,14 +386,9 @@ function expectedSnapshot(
       ),
       installed: {
         applied: wire?.throttler.installed ?? null,
-        pending: null,
         applyMode: writable ? 'immediate' : 'unavailable',
-        writable,
-        unavailableReason: writable ? null : 'Unavailable in HTTP mode',
       },
       admittedTps: wire?.throttler.admittedTps ?? null,
-      limitedMs: null,
-      state: runState,
     },
     readerChannel: readerChannel(wire),
     senderChannel: senderChannel(wire),
@@ -437,49 +411,6 @@ function expectedSnapshot(
       drainingIdleWorkers: wire?.sender.drainingIdleWorkers ?? 0,
       drainingInFlightWorkers: wire?.sender.drainingInFlightWorkers ?? 0,
       drainingBackoffWorkers: wire?.sender.drainingBackoffWorkers ?? 0,
-      timeoutMs: null,
-      retryPolicy: null,
-      attemptedTps: null,
-      retryAttemptedTps: null,
-      terminalFailedTps: null,
-      inFlightRequests: null,
-      attemptsStartedTotal: 0,
-      retryAttemptsStartedTotal: 0,
-      successfulResponses: null,
-      failedResponses: null,
-      retries: null,
-      timeoutsTotal: 0,
-      terminalFailedBatchesTotal: 0,
-      terminalFailedTransactionsTotal: 0,
-      ambiguousTimeoutTransactionsTotal: 0,
-      duplicateRiskTransactionsTotal: 0,
-      ambiguousTerminalTransactionsTotal: 0,
-      state: runState,
-    },
-    http: {
-      id: 'http',
-      connectionState: 'disconnected',
-      statusCode: null,
-      lastOutcome: null,
-      throughputTps: null,
-      inFlightRequests: null,
-      requestsStartedTotal: 0,
-      requestsCompletedTotal: 0,
-      requestsSucceededTotal: 0,
-      requestsFailedTotal: 0,
-      requestsTimedOutTotal: 0,
-      networkErrorsTotal: 0,
-      latencyP95Ms: null,
-    },
-    target: {
-      id: 'target',
-      endpoint: null,
-      acceptedTps: null,
-      rejectedTps: null,
-      latencyP95Ms: null,
-      http200Responses: null,
-      http503Responses: null,
-      connectionState: 'disconnected',
     },
   }
 }
@@ -869,11 +800,10 @@ describe('HttpAdapter', () => {
         await flushPoll()
         if (shape === 'initial-only') {
           expect(adapter.getSnapshot().connectionState).toBe('connected')
-          expect(adapter.getSnapshot().config).toEqual(valid.config)
+          expect(adapter.getSnapshot().reader.workers.max).toBe(valid.config.readerWorkers.max)
         } else {
           expect(adapter.getSnapshot()).toMatchObject({
             connectionState: 'error',
-            config: valid.config,
           })
           const receipt = await adapter.dispatch({ type: 'set-requested-tps', value: 200 })
           expect(receipt).toMatchObject({ accepted: false, error: { code: 'unavailable' } })
@@ -890,7 +820,17 @@ describe('HttpAdapter', () => {
     const adapter = new HttpAdapter()
     await flushPoll()
     expect(adapter.getSnapshot().connectionState).toBe('connected')
-    expect(adapter.getSnapshot()).toMatchObject({ config: settings })
+    expect(adapter.getSnapshot()).toMatchObject({
+      reader: { workers: { min: 1, max: settings.readerWorkers.max } },
+      sender: { workers: { min: 1, max: settings.senderWorkers.max } },
+      throttler: {
+        requestedTps: {
+          min: 0,
+          max: settings.throttlerRequestedTps.max,
+          step: settings.throttlerRequestedTps.step,
+        },
+      },
+    })
     adapter.dispose()
   })
 
@@ -909,7 +849,6 @@ describe('HttpAdapter', () => {
         runState: state,
         elapsedMs: 102,
         totalTransactions: 101,
-        config: wire.config,
         reader: {
           workers: { applied: 11 },
           liveWorkers: 12,
@@ -978,7 +917,6 @@ describe('HttpAdapter', () => {
 
     expect(adapter.getSnapshot()).toMatchObject({
       connectionState: 'connected',
-      config: { senderWorkers },
       sender: { workers: { applied: 35, min: 1, max: 35, step: 1, applyMode: 'immediate' } },
     })
     adapter.dispose()
@@ -1003,7 +941,7 @@ describe('HttpAdapter', () => {
       expect(adapter.getSnapshot().connectionState).toBe('connected')
       await vi.advanceTimersByTimeAsync(1_000)
       await flushPoll()
-      expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'error', config: settings })
+      expect(adapter.getSnapshot()).toMatchObject({ connectionState: 'error' })
       const receipt = await adapter.dispatch({ type: 'set-requested-tps', value: 200 })
       expect(receipt).toMatchObject({ accepted: false, error: { code: 'unavailable' } })
       expect(commandFetchCalls()).toHaveLength(0)
@@ -1074,37 +1012,25 @@ describe('HttpAdapter', () => {
       installed: {
         applied: true,
         applyMode: 'immediate',
-        writable: true,
-        unavailableReason: null,
       },
     })
     expect(snapshot.readerChannel).toEqual({
       ...neutralChannel('reader-to-throttler', 'reader', 'throttler'),
       capacity: 8,
       depthBatches: 6,
-      bufferedTransactions: 300_000,
       inputTransactionsPerSecond: 125_000.5,
       outputTransactionsPerSecond: 62_500.25,
-      inputTps: 125_000.5,
-      outputTps: 62_500.25,
-      throughputTps: 62_500.25,
       blockedSenders: 1,
       oldestBlockedSenderMs: 450,
-      blockedMs: 1_600,
     })
     expect(snapshot.senderChannel).toEqual({
       ...neutralChannel('throttler-to-sender', 'throttler', 'sender'),
       capacity: 0,
       depthBatches: 0,
-      bufferedTransactions: 0,
       inputTransactionsPerSecond: 75_000.5,
       outputTransactionsPerSecond: 62_500.25,
-      inputTps: 75_000.5,
-      outputTps: 62_500.25,
-      throughputTps: 62_500.25,
       blockedSenders: 1,
       oldestBlockedSenderMs: 450,
-      blockedMs: 1_600,
     })
     expectDeepFrozen(snapshot)
     adapter.dispose()
@@ -1148,7 +1074,6 @@ describe('HttpAdapter', () => {
         ...VALID_WIRE.senderChannel,
         blockedSenders: 0,
         oldestBlockedSenderMs: 0,
-        blockedMs: 0,
         inputTransactionsPerSecond: 0,
         outputTransactionsPerSecond: 0,
       },
@@ -1161,16 +1086,13 @@ describe('HttpAdapter', () => {
     expect(adapter.getSnapshot().reader).toMatchObject({
       readTps: 0,
       rowsRead: 0,
-      state: 'starting',
     })
     expect(adapter.getSnapshot().throttler.admittedTps).toBe(0)
     expect(adapter.getSnapshot().senderChannel).toMatchObject({
       capacity: 0,
       depthBatches: 0,
-      bufferedTransactions: 0,
       blockedSenders: 0,
       oldestBlockedSenderMs: 0,
-      blockedMs: 0,
       inputTransactionsPerSecond: 0,
       outputTransactionsPerSecond: 0,
     })
@@ -1337,7 +1259,7 @@ describe('HttpAdapter', () => {
     expect(derived.readerChannel.flowState).toBe('connection-error')
     expect(derived.senderChannel.flowState).toBe('connection-error')
     await expect(adapter.dispatch({ type: 'set-requested-tps', value: 25 })).resolves.toMatchObject(
-      { accepted: false, error: { code: 'unavailable', retryable: false } },
+      { accepted: false, error: { code: 'unavailable' } },
     )
     expect(commandFetchCalls()).toHaveLength(0)
 
@@ -1392,7 +1314,7 @@ describe('HttpAdapter', () => {
       expect(snapshot.reader.workers.applyMode).toBe('unavailable')
       expect(snapshot.sender.workers.applyMode).toBe('unavailable')
       expect(snapshot.throttler.requestedTps.applyMode).toBe('unavailable')
-      expect(snapshot.throttler.installed.writable).toBe(false)
+      expect(snapshot.throttler.installed.applyMode).toBe('unavailable')
       await expect(
         adapter.dispatch({ type: 'set-reader-workers', value: 2 }),
       ).resolves.toMatchObject({ accepted: false })
@@ -1542,7 +1464,6 @@ describe('HttpAdapter', () => {
       for (const command of [{ type: 'set-sender-workers', value: 7 }] as const) {
         await expect(adapter.dispatch(command)).resolves.toMatchObject({
           accepted: true,
-          applyMode: 'immediate',
         })
       }
       expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
@@ -1608,7 +1529,6 @@ describe('HttpAdapter', () => {
           }),
         ).resolves.toMatchObject({
           accepted: true,
-          applyMode: 'immediate',
         })
         await vi.advanceTimersByTimeAsync(1_000)
         await flushPoll()
@@ -1703,7 +1623,7 @@ describe('HttpAdapter', () => {
     await expect(first).resolves.toMatchObject({ accepted: true })
     await expect(buffered).resolves.toMatchObject({
       accepted: false,
-      error: { code: 'unavailable', retryable: false },
+      error: { code: 'unavailable' },
     })
     expect(commandFetchCalls()).toHaveLength(1)
     adapter.dispose()
@@ -1722,12 +1642,7 @@ describe('HttpAdapter', () => {
     const receipt = await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
 
     expect(receipt).toEqual({
-      commandId: 'http-local-1',
-      commandType: 'set-sender-workers',
       accepted: true,
-      applyMode: 'immediate',
-      appliedAtMs: NOW_MS,
-      snapshotRevision: 1,
       error: null,
     })
     expectDeepFrozen(receipt)
@@ -1749,7 +1664,6 @@ describe('HttpAdapter', () => {
     const receipt = await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
 
     expect(receipt.accepted).toBe(true)
-    expect(receipt.appliedAtMs).toBe(NOW_MS)
     const init = commandFetchCalls()[0]?.[1] as RequestInit
     expect(init.signal?.aborted).toBe(true)
     Object.values(accessors).forEach((accessor) => {
@@ -1765,17 +1679,10 @@ describe('HttpAdapter', () => {
 
     const receipt = await adapter.dispatch(command)
     expect(receipt).toEqual({
-      commandId: 'http-local-1',
-      commandType: command.type,
       accepted: false,
-      applyMode: 'unavailable',
-      appliedAtMs: null,
-      snapshotRevision: 0,
       error: {
         code: 'unavailable',
         message: 'command is not available in the HTTP adapter',
-        retryable: false,
-        details: null,
       },
     })
     expect(Object.isFrozen(receipt)).toBe(true)
@@ -1787,12 +1694,9 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it.each([
-    { status: 409, retryable: false },
-    { status: 503, retryable: true },
-  ])(
-    'maps HTTP $status to an unavailable receipt with retryable=$retryable',
-    async ({ status, retryable }) => {
+  it.each([{ status: 409 }, { status: 503 }])(
+    'maps HTTP $status to an unavailable receipt ',
+    async ({ status }) => {
       const { response, accessors } = responseWithThrowingRepresentation(status)
       fetchMock.mockImplementation((input) =>
         input === COMMAND_ENDPOINT
@@ -1806,17 +1710,10 @@ describe('HttpAdapter', () => {
       const receipt = await adapter.dispatch({ type: 'set-throttler-installed', value: false })
 
       expect(receipt).toEqual({
-        commandId: 'http-local-1',
-        commandType: 'set-throttler-installed',
         accepted: false,
-        applyMode: 'unavailable',
-        appliedAtMs: null,
-        snapshotRevision: 1,
         error: {
           code: 'unavailable',
           message: `command request failed with HTTP status ${status}`,
-          retryable,
-          details: null,
         },
       })
       expectDeepFrozen(receipt)
@@ -1844,17 +1741,10 @@ describe('HttpAdapter', () => {
     const receipt = await adapter.dispatch({ type: 'set-requested-tps', value: 25 })
 
     expect(receipt).toEqual({
-      commandId: 'http-local-1',
-      commandType: 'set-requested-tps',
       accepted: false,
-      applyMode: 'unavailable',
-      appliedAtMs: null,
-      snapshotRevision: 1,
       error: {
         code: 'unavailable',
         message: 'command request failed due to a network error',
-        retryable: true,
-        details: null,
       },
     })
     expectDeepFrozen(receipt)
@@ -1870,17 +1760,10 @@ describe('HttpAdapter', () => {
     const receipt = await adapter.dispatch({ type: 'set-sender-workers', value: 7 })
 
     expect(receipt).toEqual({
-      commandId: 'http-local-1',
-      commandType: 'set-sender-workers',
       accepted: false,
-      applyMode: 'unavailable',
-      appliedAtMs: null,
-      snapshotRevision: 0,
       error: {
         code: 'disposed',
         message: 'http adapter is disposed',
-        retryable: false,
-        details: null,
       },
     })
     expectDeepFrozen(receipt)
@@ -1912,19 +1795,16 @@ describe('HttpAdapter', () => {
 
     const [firstReceipt, secondReceipt, thirdReceipt] = await Promise.all([first, second, third])
     expect(firstReceipt).toMatchObject({
-      commandId: 'http-local-1',
       accepted: false,
-      error: { code: 'disposed', retryable: false },
+      error: { code: 'disposed' },
     })
     expect(secondReceipt).toMatchObject({
-      commandId: 'http-local-2',
       accepted: false,
-      error: { code: 'disposed', retryable: false },
+      error: { code: 'disposed' },
     })
     expect(thirdReceipt).toMatchObject({
-      commandId: 'http-local-3',
       accepted: false,
-      error: { code: 'disposed', retryable: false },
+      error: { code: 'disposed' },
     })
     expect(commandFetchCalls()).toHaveLength(1)
   })
@@ -1954,7 +1834,7 @@ describe('HttpAdapter', () => {
     expect(init.signal?.aborted).toBe(true)
     await expect(first).resolves.toMatchObject({
       accepted: false,
-      error: { code: 'unavailable', message: 'command request timed out', retryable: true },
+      error: { code: 'unavailable', message: 'command request timed out' },
     })
     await expect(queued).resolves.toMatchObject({ accepted: true })
     expect(commandFetchCalls()).toHaveLength(2)
@@ -2000,15 +1880,9 @@ describe('HttpAdapter', () => {
 
     responses[2].resolve(mockCommandResponse(204))
     const settled = await Promise.all(receipts)
-    expect(settled.map(({ commandId }) => commandId)).toEqual([
-      'http-local-1',
-      'http-local-2',
-      'http-local-3',
-    ])
     expect(settled.map(({ accepted }) => accepted)).toEqual([true, false, true])
     expect(settled[1]?.error).toMatchObject({
       code: 'unavailable',
-      retryable: true,
     })
     adapter.dispose()
   })
@@ -2037,32 +1911,10 @@ describe('HttpAdapter', () => {
     expect(stopping).toMatchObject({ revision: 2, runState: 'stopping' })
 
     command.resolve(mockCommandResponse(204))
-    await expect(first).resolves.toMatchObject({ accepted: true, snapshotRevision: 2 })
-    await expect(queued).resolves.toMatchObject({ accepted: false, snapshotRevision: 2 })
+    await expect(first).resolves.toMatchObject({ accepted: true })
+    await expect(queued).resolves.toMatchObject({ accepted: false })
     expect(adapter.getSnapshot()).toBe(stopping)
     expect(commandFetchCalls()).toHaveLength(1)
-    adapter.dispose()
-  })
-
-  it('assigns monotonic invocation IDs across local rejection and HTTP dispatch', async () => {
-    fetchMock.mockImplementation((input) =>
-      Promise.resolve(
-        input === COMMAND_ENDPOINT ? mockCommandResponse(204) : mockResponse(VALID_WIRE),
-      ),
-    )
-    const adapter = new HttpAdapter()
-    const unavailable = await adapter.dispatch({ type: 'set-requested-tps', value: 25 })
-    await flushPoll()
-    const first = adapter.dispatch({ type: 'set-reader-workers', value: 2 })
-    const second = adapter.dispatch({ type: 'set-sender-workers', value: 7 })
-    const receipts = [unavailable, ...(await Promise.all([first, second]))]
-    expect(receipts.map(({ commandId }) => commandId)).toEqual([
-      'http-local-1',
-      'http-local-2',
-      'http-local-3',
-    ])
-    expect(receipts.map(({ accepted }) => accepted)).toEqual([false, true, true])
-    receipts.forEach((receipt) => expectDeepFrozen(receipt))
     adapter.dispose()
   })
 })

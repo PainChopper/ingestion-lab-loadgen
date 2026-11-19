@@ -11,8 +11,6 @@ function control(
 ): NumericControlSnapshot {
   return {
     applied,
-    preview: null,
-    pending: null,
     min: 0,
     max: 12,
     step: 1,

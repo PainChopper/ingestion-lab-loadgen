@@ -6,27 +6,8 @@ import type {
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
 } from '../model/loadgen'
-import {
-  FIXED_STEP_MS,
-  FixedStepSimulation,
-  RETRY_BACKOFF_BASE_MS,
-  RETRY_BACKOFF_MULTIPLIER,
-  RETRY_JITTER_PERCENT,
-  RETRY_MAX_ATTEMPTS,
-  RETRYABLE_STATUS_CODES,
-  SNAPSHOT_INTERVAL_MS,
-} from '../model/simulation'
+import { FIXED_STEP_MS, FixedStepSimulation, SNAPSHOT_INTERVAL_MS } from '../model/simulation'
 import type { ChannelTelemetry, SimulationConfig, SimulationTelemetry } from '../model/simulation'
-
-const TARGET_ENDPOINT = 'http://target:8080/ingest'
-const RETRY_POLICY = Object.freeze({
-  maxAttempts: RETRY_MAX_ATTEMPTS,
-  backoffBaseMs: RETRY_BACKOFF_BASE_MS,
-  backoffMultiplier: RETRY_BACKOFF_MULTIPLIER,
-  jitterPercent: RETRY_JITTER_PERCENT,
-  retryableStatusCodes: Object.freeze([...RETRYABLE_STATUS_CODES]),
-  retryTimeouts: true,
-})
 
 const RANGES = Object.freeze({
   readerWorkers: Object.freeze({ min: 1, max: 7, step: 1 }),
@@ -48,8 +29,6 @@ function numericControl(
 ): NumericControlSnapshot {
   return Object.freeze({
     applied,
-    preview: null,
-    pending: null,
     min: range.min,
     max: range.max,
     step: range.step,
@@ -78,18 +57,10 @@ function freezeChannelSnapshot(
     to: identity.to,
     capacity: channel.capacity,
     depthBatches: channel.depthBatches,
-    bufferedTransactions: channel.bufferedTransactions,
-    handoffBatches: channel.handoffBatches,
-    handoffBatchesTotal: channel.handoffBatchesTotal,
     blockedSenders: channel.blockedSenders,
     oldestBlockedSenderMs: channel.oldestBlockedSenderMs,
     inputTransactionsPerSecond: Math.round(channel.inputTransactionsPerSecond),
     outputTransactionsPerSecond: Math.round(channel.outputTransactionsPerSecond),
-    inputTps: Math.round(channel.inputTransactionsPerSecond),
-    outputTps: Math.round(channel.outputTransactionsPerSecond),
-    throughputTps: Math.round(channel.outputTransactionsPerSecond),
-    blockedMs: Math.floor(channel.blockedMsTotal),
-    trend: channel.trend,
   })
 }
 
@@ -99,7 +70,6 @@ function freezeSnapshot(
 ): LoadgenTelemetrySnapshot {
   const telemetry: SimulationTelemetry = simulation.telemetry()
   const config = simulation.config
-  const readerCapacityTps = Math.round(telemetry.readerCapacityTps)
   const readerReadTps = Math.round(telemetry.readerTransactionsPerSecond)
   const senderWorkerStates = telemetry.sender.workerStates
   const drainingSenderWorkerStates = telemetry.sender.drainingWorkerStates
@@ -107,10 +77,6 @@ function freezeSnapshot(
     drainingSenderWorkerStates.idle +
     drainingSenderWorkerStates.inFlight +
     drainingSenderWorkerStates.backoff
-  const readerLimitationReason =
-    telemetry.readerChannel.blockedSenders > 0 && readerReadTps < readerCapacityTps
-      ? 'downstream-backpressure'
-      : null
 
   return Object.freeze({
     revision,
@@ -119,7 +85,6 @@ function freezeSnapshot(
     runState: 'running',
     elapsedMs: telemetry.elapsedMs,
     totalTransactions: telemetry.totalTransactions,
-    config: null,
     reader: Object.freeze({
       id: 'reader',
       workers: numericControl(config.readerWorkers, RANGES.readerWorkers, 'workers'),
@@ -133,25 +98,17 @@ function freezeSnapshot(
       drainingBlockedWorkers: 0,
       readBatchSize: config.readBatchSize,
       readTps: readerReadTps,
-      configuredCapacityTps: readerCapacityTps,
-      limitationReason: readerLimitationReason,
-      rowsRead: telemetry.readerChannel.sentTransactionsTotal,
+      rowsRead: telemetry.rowsRead,
       sourceError: null,
-      state: 'running',
     }),
     throttler: Object.freeze({
       id: 'throttler',
       requestedTps: numericControl(config.requestedTps, RANGES.requestedTps, 'tx/s'),
       installed: Object.freeze({
         applied: config.throttlerInstalled,
-        pending: null,
         applyMode: 'immediate',
-        writable: true,
-        unavailableReason: null,
       }),
       admittedTps: Math.round(telemetry.admittedTransactionsPerSecond),
-      limitedMs: Math.floor(telemetry.limitedMs),
-      state: 'running',
     }),
     readerChannel: freezeChannelSnapshot(telemetry.readerChannel, {
       id: 'reader-to-throttler',
@@ -174,49 +131,6 @@ function freezeSnapshot(
       drainingIdleWorkers: drainingSenderWorkerStates.idle,
       drainingInFlightWorkers: drainingSenderWorkerStates.inFlight,
       drainingBackoffWorkers: drainingSenderWorkerStates.backoff,
-      timeoutMs: config.httpTimeoutMs,
-      retryPolicy: RETRY_POLICY,
-      attemptedTps: Math.round(telemetry.attemptedTransactionsPerSecond),
-      retryAttemptedTps: Math.round(telemetry.sender.retryAttemptedTransactionsPerSecond),
-      terminalFailedTps: Math.round(telemetry.sender.terminalFailedTransactionsPerSecond),
-      inFlightRequests: telemetry.http.inFlightRequests,
-      attemptsStartedTotal: telemetry.http.requestsStartedTotal,
-      retryAttemptsStartedTotal: telemetry.sender.retryAttemptsStartedTotal,
-      successfulResponses: telemetry.http.requestsSucceededTotal,
-      failedResponses: telemetry.http.responsesRejectedTotal,
-      retries: telemetry.sender.retryAttemptsStartedTotal,
-      timeoutsTotal: telemetry.http.requestsTimedOutTotal,
-      terminalFailedBatchesTotal: telemetry.sender.terminalFailedBatchesTotal,
-      terminalFailedTransactionsTotal: telemetry.sender.terminalFailedTransactionsTotal,
-      ambiguousTimeoutTransactionsTotal: telemetry.sender.ambiguousTimeoutTransactionsTotal,
-      duplicateRiskTransactionsTotal: telemetry.sender.duplicateRiskTransactionsTotal,
-      ambiguousTerminalTransactionsTotal: telemetry.sender.ambiguousTerminalTransactionsTotal,
-      state: 'running',
-    }),
-    http: Object.freeze({
-      id: 'http',
-      connectionState: 'connected',
-      statusCode: telemetry.http.latestStatusCode,
-      lastOutcome: telemetry.http.lastOutcome,
-      throughputTps: Math.round(telemetry.http.startedTransactionsPerSecond),
-      inFlightRequests: telemetry.http.inFlightRequests,
-      requestsStartedTotal: telemetry.http.requestsStartedTotal,
-      requestsCompletedTotal: telemetry.http.requestsCompletedTotal,
-      requestsSucceededTotal: telemetry.http.requestsSucceededTotal,
-      requestsFailedTotal: telemetry.http.requestsFailedTotal,
-      requestsTimedOutTotal: telemetry.http.requestsTimedOutTotal,
-      networkErrorsTotal: telemetry.http.networkErrorsTotal,
-      latencyP95Ms: telemetry.http.latestLatencyMs,
-    }),
-    target: Object.freeze({
-      id: 'target',
-      endpoint: TARGET_ENDPOINT,
-      acceptedTps: Math.round(telemetry.acceptedTransactionsPerSecond),
-      rejectedTps: Math.round(telemetry.rejectedTransactionsPerSecond),
-      latencyP95Ms: telemetry.http.latestResponseLatencyMs,
-      http200Responses: telemetry.http.requestsSucceededTotal,
-      http503Responses: simulation.http503ResponsesTotal,
-      connectionState: 'connected',
     }),
   })
 }
@@ -242,7 +156,6 @@ export class SimulationAdapter implements LoadgenAdapter {
   private timer: ReturnType<typeof setInterval> | null
   private lastTickMs: number
   private pendingStepMs = 0
-  private commandSequence = 0
   private disposed = false
 
   constructor() {
@@ -262,14 +175,10 @@ export class SimulationAdapter implements LoadgenAdapter {
   }
 
   dispatch = async (command: LoadgenCommand): Promise<CommandReceipt> => {
-    const commandId = `simulation-${++this.commandSequence}`
-
     if (this.disposed) {
-      return this.reject(commandId, command, {
+      return this.reject({
         code: 'disposed',
         message: 'simulation adapter is disposed',
-        retryable: false,
-        details: null,
       })
     }
 
@@ -278,7 +187,7 @@ export class SimulationAdapter implements LoadgenAdapter {
     switch (command.type) {
       case 'set-requested-tps':
         if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber(commandId, command, 'requested tps')
+          return this.rejectInvalidNumber('requested tps')
         }
         changed = this.updateConfig(
           'requestedTps',
@@ -287,7 +196,7 @@ export class SimulationAdapter implements LoadgenAdapter {
         break
       case 'set-reader-workers':
         if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber(commandId, command, 'worker count')
+          return this.rejectInvalidNumber('worker count')
         }
         changed = this.updateConfig(
           'readerWorkers',
@@ -296,7 +205,7 @@ export class SimulationAdapter implements LoadgenAdapter {
         break
       case 'set-sender-workers':
         if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber(commandId, command, 'sender workers')
+          return this.rejectInvalidNumber('sender workers')
         }
         changed = this.updateConfig(
           'senderWorkers',
@@ -307,23 +216,16 @@ export class SimulationAdapter implements LoadgenAdapter {
         changed = this.updateConfig('throttlerInstalled', command.value)
         break
       default:
-        return this.reject(commandId, command, {
+        return this.reject({
           code: 'unavailable',
           message: 'command is not available in the simulation adapter',
-          retryable: false,
-          details: null,
         })
     }
 
     if (changed) this.publish()
 
     return Object.freeze({
-      commandId,
-      commandType: command.type,
       accepted: true,
-      applyMode: 'immediate',
-      appliedAtMs: Date.now(),
-      snapshotRevision: this.snapshot.revision,
       error: null,
     })
   }
@@ -367,17 +269,8 @@ export class SimulationAdapter implements LoadgenAdapter {
     return true
   }
 
-  private rejectInvalidNumber(
-    commandId: string,
-    command: LoadgenCommand,
-    field: string,
-  ): CommandReceipt {
-    return this.reject(commandId, command, {
-      code: 'invalid-command',
-      message: `${field} must be a finite number`,
-      retryable: false,
-      details: null,
-    })
+  private rejectInvalidNumber(field: string): CommandReceipt {
+    return this.reject({ code: 'invalid-command', message: `${field} must be a finite number` })
   }
 
   private publish(): void {
@@ -385,18 +278,7 @@ export class SimulationAdapter implements LoadgenAdapter {
     this.listeners.forEach((listener) => listener(this.snapshot))
   }
 
-  private reject(commandId: string, command: LoadgenCommand, error: AdapterError): CommandReceipt {
-    return Object.freeze({
-      commandId,
-      commandType: command.type,
-      accepted: false,
-      applyMode: 'unavailable',
-      appliedAtMs: null,
-      snapshotRevision: this.snapshot.revision,
-      error: Object.freeze({
-        ...error,
-        details: error.details === null ? null : Object.freeze({ ...error.details }),
-      }),
-    })
+  private reject(error: AdapterError): CommandReceipt {
+    return Object.freeze({ accepted: false, error: Object.freeze(error) })
   }
 }

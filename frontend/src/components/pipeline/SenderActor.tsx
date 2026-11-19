@@ -1,4 +1,4 @@
-import type { SelectableId, SenderSnapshot } from '../../model/loadgen'
+import type { SelectableId, RunState, SenderSnapshot } from '../../model/loadgen'
 import { formatInteger, formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
@@ -7,6 +7,8 @@ import type { DesiredControl } from '../../hooks/useDesiredControl'
 
 interface SenderActorProps {
   snapshot: SenderSnapshot
+  runState: RunState | null
+  outputTps: number | null
   selected: boolean
   onSelect: (id: SelectableId) => void
   desiredControl: DesiredControl<number>
@@ -16,6 +18,8 @@ interface SenderActorProps {
 
 export function SenderActor({
   snapshot,
+  runState,
+  outputTps,
   selected,
   onSelect,
   desiredControl,
@@ -62,10 +66,10 @@ export function SenderActor({
         'in-flight': snapshot.drainingInFlightWorkers,
         backoff: snapshot.drainingBackoffWorkers,
       }}
-      runState={snapshot.state}
+      runState={runState}
       inputPort={geometry.ports.input}
       outputPort={geometry.ports.output}
-      primaryMetric={formatRate(snapshot.attemptedTps)}
+      primaryMetric={formatRate(outputTps)}
       statusMetricSegments={workerStateSegments}
       metricPoints={geometry.metrics}
       orientation={orientation}

@@ -41,8 +41,6 @@ function SenderWorkers({
         controls={sender.controls}
         workers={{
           applied,
-          preview: null,
-          pending: null,
           min: 2,
           max,
           step: 3,
@@ -51,7 +49,7 @@ function SenderWorkers({
         }}
         activityCounts={activityCounts}
         drainingActivityCounts={activityCounts}
-        runState="idle"
+        runState={null}
         outputPort={sender.ports.output}
         primaryMetric=""
         metricPoints={sender.metrics}

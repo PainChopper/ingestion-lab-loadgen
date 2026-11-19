@@ -1,11 +1,8 @@
-import type { HttpLastOutcome, ChannelTrend } from './loadgen'
-
 export const FIXED_STEP_MS = 10
 export const SNAPSHOT_INTERVAL_MS = 100
 export const RETRY_MAX_ATTEMPTS = 3
 export const RETRY_BACKOFF_BASE_MS = 250
 export const RETRY_BACKOFF_MULTIPLIER = 2
-export const RETRY_JITTER_PERCENT = 20
 export const RETRYABLE_STATUS_CODES = Object.freeze([408, 425, 429, 500, 502, 503, 504])
 
 const RATE_WINDOW_STEPS = 100
@@ -25,73 +22,28 @@ export interface SimulationConfig {
 
 export interface ChannelTelemetry {
   readonly capacity: number
-  readonly sentBatchesTotal: number
-  readonly sentTransactionsTotal: number
-  readonly receivedBatchesTotal: number
-  readonly receivedTransactionsTotal: number
   readonly depthBatches: number
-  readonly bufferedTransactions: number
-  readonly handoffBatches: number
-  readonly handoffBatchesTotal: number
   readonly blockedSenders: number
   readonly oldestBlockedSenderMs: number
-  readonly blockedMsTotal: number
-  readonly inputBatchesPerSecond: number
-  readonly outputBatchesPerSecond: number
   readonly inputTransactionsPerSecond: number
   readonly outputTransactionsPerSecond: number
-  readonly trend: ChannelTrend
-}
-
-export interface HttpTelemetry {
-  readonly requestsStartedTotal: number
-  readonly requestsCompletedTotal: number
-  readonly requestsSucceededTotal: number
-  readonly requestsFailedTotal: number
-  readonly responsesRejectedTotal: number
-  readonly requestsTimedOutTotal: number
-  readonly networkErrorsTotal: number
-  readonly successfulTransactionsTotal: number
-  readonly failedAttemptTransactionsTotal: number
-  readonly inFlightRequests: number
-  readonly startedTransactionsPerSecond: number
-  readonly completedTransactionsPerSecond: number
-  readonly succeededTransactionsPerSecond: number
-  readonly rejectedTransactionsPerSecond: number
-  readonly latestStatusCode: number | null
-  readonly lastOutcome: HttpLastOutcome
-  readonly latestLatencyMs: number | null
-  readonly latestResponseLatencyMs: number | null
 }
 
 export interface SenderTelemetry {
   readonly liveWorkers: number
   readonly workerStates: WorkerStateCounts
   readonly drainingWorkerStates: WorkerStateCounts
-  readonly retryAttemptsStartedTotal: number
-  readonly retryAttemptedTransactionsPerSecond: number
-  readonly terminalFailedTransactionsPerSecond: number
-  readonly terminalFailedBatchesTotal: number
-  readonly terminalFailedTransactionsTotal: number
-  readonly ambiguousTimeoutTransactionsTotal: number
-  readonly duplicateRiskTransactionsTotal: number
-  readonly ambiguousTerminalTransactionsTotal: number
 }
 
 export interface SimulationTelemetry {
   readonly elapsedMs: number
   readonly totalTransactions: number
-  readonly limitedMs: number
-  readonly readerCapacityTps: number
+  readonly rowsRead: number
   readonly readerTransactionsPerSecond: number
   readonly admittedTransactionsPerSecond: number
-  readonly attemptedTransactionsPerSecond: number
-  readonly acceptedTransactionsPerSecond: number
-  readonly rejectedTransactionsPerSecond: number
   readonly readerChannel: ChannelTelemetry
   readonly senderChannel: ChannelTelemetry
   readonly sender: SenderTelemetry
-  readonly http: HttpTelemetry
 }
 
 export interface SimulationBatch {
@@ -129,22 +81,13 @@ export type SimulationAttemptOutcomeSource = (
 ) => SimulationAttemptOutcome
 
 interface ChannelActivity {
-  inputBatches: number
   inputTransactions: number
-  outputBatches: number
   outputTransactions: number
-  handoffBatches: number
 }
 
 interface StepActivity {
   readerChannel: ChannelActivity
   senderChannel: ChannelActivity
-  httpStartedTransactions: number
-  httpRetryStartedTransactions: number
-  httpCompletedTransactions: number
-  httpSucceededTransactions: number
-  httpRejectedTransactions: number
-  terminalFailedTransactions: number
 }
 
 interface AdmissionResult {
@@ -167,24 +110,18 @@ interface WorkerStateCounts {
 interface SenderWorker {
   readonly workerId: number
   retiring: boolean
-  terminalError: boolean
   state: SenderWorkerState
   batch: SimulationBatch | null
   attempt: number
   completeAtMs: number
   retryAtMs: number
   outcome: SimulationAttemptOutcome | null
-  attemptLatencyMs: number
-  hadAmbiguousOutcome: boolean
 }
 
 function createChannelActivity(): ChannelActivity {
   return {
-    inputBatches: 0,
     inputTransactions: 0,
-    outputBatches: 0,
     outputTransactions: 0,
-    handoffBatches: 0,
   }
 }
 
@@ -192,12 +129,6 @@ function createStepActivity(): StepActivity {
   return {
     readerChannel: createChannelActivity(),
     senderChannel: createChannelActivity(),
-    httpStartedTransactions: 0,
-    httpRetryStartedTransactions: 0,
-    httpCompletedTransactions: 0,
-    httpSucceededTransactions: 0,
-    httpRejectedTransactions: 0,
-    terminalFailedTransactions: 0,
   }
 }
 
@@ -205,15 +136,12 @@ function createWorker(workerId: number): SenderWorker {
   return {
     workerId,
     retiring: false,
-    terminalError: false,
     state: 'idle',
     batch: null,
     attempt: 0,
     completeAtMs: 0,
     retryAtMs: 0,
     outcome: null,
-    attemptLatencyMs: 0,
-    hadAmbiguousOutcome: false,
   }
 }
 
@@ -235,13 +163,8 @@ class StatefulChannel<TItem> {
   private readonly transactionsOf: (item: TItem) => number
   readonly capacity: number
   private blockedForMs = 0
-
-  sentBatchesTotal = 0
   sentTransactionsTotal = 0
-  receivedBatchesTotal = 0
   receivedTransactionsTotal = 0
-  handoffBatchesTotal = 0
-  blockedMsTotal = 0
   blockedSenders = 0
 
   constructor(capacity: number, transactionsOf: (item: TItem) => number) {
@@ -251,10 +174,6 @@ class StatefulChannel<TItem> {
 
   get depthBatches(): number {
     return this.items.length
-  }
-
-  get bufferedTransactions(): number {
-    return this.items.reduce((total, item) => total + this.transactionsOf(item), 0)
   }
 
   get oldestBlockedSenderMs(): number {
@@ -284,67 +203,41 @@ class StatefulChannel<TItem> {
   handoff(item: TItem, activity: ChannelActivity): void {
     this.recordInput(item, activity)
     this.recordOutput(item, activity)
-    this.handoffBatchesTotal += 1
-    activity.handoffBatches += 1
   }
 
   observeBlocked(blocked: boolean, senderProgressed: boolean): void {
     this.blockedSenders = blocked ? 1 : 0
     if (blocked) {
       this.blockedForMs = senderProgressed ? FIXED_STEP_MS : this.blockedForMs + FIXED_STEP_MS
-      this.blockedMsTotal += FIXED_STEP_MS
     } else {
       this.blockedForMs = 0
     }
   }
 
   telemetry(activity: ChannelActivity, rateSeconds: number): ChannelTelemetry {
-    const inputBatchesPerSecond = rateSeconds === 0 ? 0 : activity.inputBatches / rateSeconds
-    const outputBatchesPerSecond = rateSeconds === 0 ? 0 : activity.outputBatches / rateSeconds
     const inputTransactionsPerSecond =
       rateSeconds === 0 ? 0 : activity.inputTransactions / rateSeconds
     const outputTransactionsPerSecond =
       rateSeconds === 0 ? 0 : activity.outputTransactions / rateSeconds
-    const trend: ChannelTrend =
-      inputTransactionsPerSecond > outputTransactionsPerSecond
-        ? 'rising'
-        : inputTransactionsPerSecond < outputTransactionsPerSecond
-          ? 'falling'
-          : 'steady'
     return {
       capacity: this.capacity,
-      sentBatchesTotal: this.sentBatchesTotal,
-      sentTransactionsTotal: this.sentTransactionsTotal,
-      receivedBatchesTotal: this.receivedBatchesTotal,
-      receivedTransactionsTotal: this.receivedTransactionsTotal,
       depthBatches: this.depthBatches,
-      bufferedTransactions: this.bufferedTransactions,
-      handoffBatches: activity.handoffBatches,
-      handoffBatchesTotal: this.handoffBatchesTotal,
       blockedSenders: this.blockedSenders,
       oldestBlockedSenderMs: this.oldestBlockedSenderMs,
-      blockedMsTotal: this.blockedMsTotal,
-      inputBatchesPerSecond: inputBatchesPerSecond,
-      outputBatchesPerSecond: outputBatchesPerSecond,
       inputTransactionsPerSecond: inputTransactionsPerSecond,
       outputTransactionsPerSecond: outputTransactionsPerSecond,
-      trend,
     }
   }
 
   private recordInput(item: TItem, activity: ChannelActivity): void {
     const transactions = this.transactionsOf(item)
-    this.sentBatchesTotal += 1
     this.sentTransactionsTotal += transactions
-    activity.inputBatches += 1
     activity.inputTransactions += transactions
   }
 
   private recordOutput(item: TItem, activity: ChannelActivity): void {
     const transactions = this.transactionsOf(item)
-    this.receivedBatchesTotal += 1
     this.receivedTransactionsTotal += transactions
-    activity.outputBatches += 1
     activity.outputTransactions += transactions
   }
 }
@@ -366,28 +259,7 @@ export class FixedStepSimulation {
   } | null = null
   private nextBatchSequence = 0
   private failureCredit = 0
-  private latestStatusCode: number | null = null
-  private lastOutcome: HttpLastOutcome = null
-  private latestLatencyMs: number | null = null
-  private latestResponseLatencyMs: number | null = null
-  private requestStartedTotal = 0
-  private retryAttemptStartedTotal = 0
-  private requestCompletedTotal = 0
-  private requestSucceededTotal = 0
-  private requestFailedTotal = 0
-  private responseRejectedTotal = 0
-  private requestTimedOutTotal = 0
-  private networkErrorTotal = 0
-  private http503ResponseTotal = 0
-  private successfulTransactionsTotal = 0
-  private failedAttemptTransactionsTotal = 0
-  private terminalFailedBatchesTotal = 0
-  private terminalFailedTransactionsTotal = 0
-  private ambiguousTimeoutTransactionsTotal = 0
-  private duplicateRiskTransactionsTotal = 0
-  private ambiguousTerminalTransactionsTotal = 0
   private elapsedMs = 0
-  private limitedMs = 0
 
   constructor(
     config: Omit<SimulationConfig, 'throttlerInstalled'> & { throttlerInstalled?: boolean },
@@ -409,8 +281,8 @@ export class FixedStepSimulation {
     this.elapsedMs += FIXED_STEP_MS
     const activity = createStepActivity()
 
-    this.completeDueAttempts(activity)
-    this.startDueRetries(activity)
+    this.completeDueAttempts()
+    this.startDueRetries()
     this.finalizeSenderScaleDown()
     this.refillThrottlerTokens()
     this.drainSenderChannel(activity)
@@ -422,15 +294,12 @@ export class FixedStepSimulation {
 
     this.readerChannel.observeBlocked(
       production.readerChannelBlocked,
-      activity.readerChannel.inputBatches > 0 || activity.readerChannel.handoffBatches > 0,
+      activity.readerChannel.inputTransactions > 0,
     )
     this.senderChannel.observeBlocked(
       admission.senderChannelBlocked || production.senderChannelBlocked,
-      activity.senderChannel.inputBatches > 0 || activity.senderChannel.handoffBatches > 0,
+      activity.senderChannel.inputTransactions > 0,
     )
-    if (admission.tokenLimited || production.tokenLimited) {
-      this.limitedMs += FIXED_STEP_MS
-    }
 
     this.activities.push(activity)
     if (this.activities.length > RATE_WINDOW_STEPS) this.activities.shift()
@@ -466,59 +335,22 @@ export class FixedStepSimulation {
     const rateSeconds = (RATE_WINDOW_STEPS * FIXED_STEP_MS) / 1_000
     const readerChannel = this.readerChannel.telemetry(aggregate.readerChannel, rateSeconds)
     const senderChannel = this.senderChannel.telemetry(aggregate.senderChannel, rateSeconds)
-    const divisor = rateSeconds === 0 ? 1 : rateSeconds
     const { active: workerStates, draining: drainingWorkerStates } = this.workerStateCounts()
 
     return {
       elapsedMs: this.elapsedMs,
       totalTransactions: this.readerChannel.receivedTransactionsTotal,
-      limitedMs: this.limitedMs,
-      readerCapacityTps: this.readerCapacityTps,
+      rowsRead: this.readerChannel.sentTransactionsTotal,
       readerTransactionsPerSecond: readerChannel.inputTransactionsPerSecond,
       admittedTransactionsPerSecond: readerChannel.outputTransactionsPerSecond,
-      attemptedTransactionsPerSecond: aggregate.httpStartedTransactions / divisor,
-      acceptedTransactionsPerSecond: aggregate.httpSucceededTransactions / divisor,
-      rejectedTransactionsPerSecond: aggregate.httpRejectedTransactions / divisor,
       readerChannel,
       senderChannel,
       sender: {
         liveWorkers: this.workers.length,
         workerStates,
         drainingWorkerStates,
-        retryAttemptsStartedTotal: this.retryAttemptStartedTotal,
-        retryAttemptedTransactionsPerSecond: aggregate.httpRetryStartedTransactions / divisor,
-        terminalFailedTransactionsPerSecond: aggregate.terminalFailedTransactions / divisor,
-        terminalFailedBatchesTotal: this.terminalFailedBatchesTotal,
-        terminalFailedTransactionsTotal: this.terminalFailedTransactionsTotal,
-        ambiguousTimeoutTransactionsTotal: this.ambiguousTimeoutTransactionsTotal,
-        duplicateRiskTransactionsTotal: this.duplicateRiskTransactionsTotal,
-        ambiguousTerminalTransactionsTotal: this.ambiguousTerminalTransactionsTotal,
-      },
-      http: {
-        requestsStartedTotal: this.requestStartedTotal,
-        requestsCompletedTotal: this.requestCompletedTotal,
-        requestsSucceededTotal: this.requestSucceededTotal,
-        requestsFailedTotal: this.requestFailedTotal,
-        responsesRejectedTotal: this.responseRejectedTotal,
-        requestsTimedOutTotal: this.requestTimedOutTotal,
-        networkErrorsTotal: this.networkErrorTotal,
-        successfulTransactionsTotal: this.successfulTransactionsTotal,
-        failedAttemptTransactionsTotal: this.failedAttemptTransactionsTotal,
-        inFlightRequests: workerStates.inFlight + drainingWorkerStates.inFlight,
-        startedTransactionsPerSecond: aggregate.httpStartedTransactions / divisor,
-        completedTransactionsPerSecond: aggregate.httpCompletedTransactions / divisor,
-        succeededTransactionsPerSecond: aggregate.httpSucceededTransactions / divisor,
-        rejectedTransactionsPerSecond: aggregate.httpRejectedTransactions / divisor,
-        latestStatusCode: this.latestStatusCode,
-        lastOutcome: this.lastOutcome,
-        latestLatencyMs: this.latestLatencyMs,
-        latestResponseLatencyMs: this.latestResponseLatencyMs,
       },
     }
-  }
-
-  get http503ResponsesTotal(): number {
-    return this.http503ResponseTotal
   }
 
   private get readerCapacityTps(): number {
@@ -553,44 +385,27 @@ export class FixedStepSimulation {
     }
   }
 
-  private completeDueAttempts(activity: StepActivity): void {
+  private completeDueAttempts(): void {
     for (const worker of this.workers) {
       if (worker.state !== 'in-flight' || worker.completeAtMs > this.elapsedMs) {
         continue
       }
-      this.completeAttempt(worker, activity)
+      this.completeAttempt(worker)
     }
   }
 
-  private completeAttempt(worker: SenderWorker, activity: StepActivity): void {
+  private completeAttempt(worker: SenderWorker): void {
     const batch = worker.batch
     const outcome = worker.outcome
     if (batch === null || outcome === null) {
       throw new Error('in-flight worker must own a batch and outcome')
     }
 
-    this.requestCompletedTotal += 1
-    activity.httpCompletedTransactions += batch.transactions
-    this.latestLatencyMs = worker.attemptLatencyMs
-
     if (outcome.kind === 'http-response') {
-      this.lastOutcome = 'http-response'
-      this.latestStatusCode = outcome.statusCode
-      this.latestResponseLatencyMs = worker.attemptLatencyMs
       if (outcome.statusCode >= 200 && outcome.statusCode < 300) {
-        this.requestSucceededTotal += 1
-        this.successfulTransactionsTotal += batch.transactions
-        activity.httpSucceededTransactions += batch.transactions
-        worker.terminalError = false
         this.releaseWorker(worker)
         return
       }
-
-      this.requestFailedTotal += 1
-      this.responseRejectedTotal += 1
-      this.failedAttemptTransactionsTotal += batch.transactions
-      activity.httpRejectedTransactions += batch.transactions
-      if (outcome.statusCode === 503) this.http503ResponseTotal += 1
       if (
         RETRYABLE_STATUS_CODES.includes(outcome.statusCode) &&
         worker.attempt < RETRY_MAX_ATTEMPTS
@@ -598,28 +413,15 @@ export class FixedStepSimulation {
         this.scheduleRetry(worker)
         return
       }
-      this.failTerminally(worker, activity)
+      this.releaseWorker(worker)
       return
-    }
-
-    this.requestFailedTotal += 1
-    this.failedAttemptTransactionsTotal += batch.transactions
-    this.latestStatusCode = null
-    worker.hadAmbiguousOutcome = true
-    if (outcome.kind === 'timeout') {
-      this.lastOutcome = 'timeout'
-      this.requestTimedOutTotal += 1
-      this.ambiguousTimeoutTransactionsTotal += batch.transactions
-    } else {
-      this.lastOutcome = 'network-error'
-      this.networkErrorTotal += 1
     }
 
     if (worker.attempt < RETRY_MAX_ATTEMPTS) {
       this.scheduleRetry(worker)
       return
     }
-    this.failTerminally(worker, activity)
+    this.releaseWorker(worker)
   }
 
   private scheduleRetry(worker: SenderWorker): void {
@@ -632,20 +434,6 @@ export class FixedStepSimulation {
     worker.retryAtMs = this.elapsedMs + deterministicRetryDelayMs(batch.sequence, retryNumber)
     worker.completeAtMs = 0
     worker.outcome = null
-    worker.attemptLatencyMs = 0
-  }
-
-  private failTerminally(worker: SenderWorker, activity: StepActivity): void {
-    const batch = worker.batch
-    if (batch === null) throw new Error('terminal failure requires owned batch')
-    this.terminalFailedBatchesTotal += 1
-    worker.terminalError = true
-    this.terminalFailedTransactionsTotal += batch.transactions
-    activity.terminalFailedTransactions += batch.transactions
-    if (worker.hadAmbiguousOutcome) {
-      this.ambiguousTerminalTransactionsTotal += batch.transactions
-    }
-    this.releaseWorker(worker)
   }
 
   private releaseWorker(worker: SenderWorker): void {
@@ -655,16 +443,14 @@ export class FixedStepSimulation {
     worker.completeAtMs = 0
     worker.retryAtMs = 0
     worker.outcome = null
-    worker.attemptLatencyMs = 0
-    worker.hadAmbiguousOutcome = false
   }
 
-  private startDueRetries(activity: StepActivity): void {
+  private startDueRetries(): void {
     for (const worker of this.workers) {
       if (worker.state !== 'backoff' || worker.retryAtMs > this.elapsedMs) {
         continue
       }
-      this.startAttempt(worker, worker.attempt + 1, activity)
+      this.startAttempt(worker, worker.attempt + 1)
     }
   }
 
@@ -691,8 +477,7 @@ export class FixedStepSimulation {
       const batch = this.senderChannel.receive(activity.senderChannel)
       if (batch === null) return
       worker.batch = batch
-      worker.hadAmbiguousOutcome = false
-      this.startAttempt(worker, 1, activity)
+      this.startAttempt(worker, 1)
     }
   }
 
@@ -717,8 +502,7 @@ export class FixedStepSimulation {
       if (worker === null) return { senderChannelBlocked: true, tokenLimited: false }
       this.senderChannel.handoff(batch, activity.senderChannel)
       worker.batch = batch
-      worker.hadAmbiguousOutcome = false
-      this.startAttempt(worker, 1, activity)
+      this.startAttempt(worker, 1)
     } else {
       if (!this.senderChannel.send(batch, activity.senderChannel)) {
         return { senderChannelBlocked: true, tokenLimited: false }
@@ -819,7 +603,7 @@ export class FixedStepSimulation {
     }
   }
 
-  private startAttempt(worker: SenderWorker, attempt: number, activity: StepActivity): void {
+  private startAttempt(worker: SenderWorker, attempt: number): void {
     const batch = worker.batch
     if (batch === null) throw new Error('attempt requires an owned batch')
     const context: SimulationAttemptContext = {
@@ -840,16 +624,6 @@ export class FixedStepSimulation {
     worker.completeAtMs = this.elapsedMs + latencyMs
     worker.retryAtMs = 0
     worker.outcome = outcome
-    worker.attemptLatencyMs = latencyMs
-    this.requestStartedTotal += 1
-    activity.httpStartedTransactions += batch.transactions
-    if (attempt > 1) {
-      this.retryAttemptStartedTotal += 1
-      activity.httpRetryStartedTransactions += batch.transactions
-      if (worker.hadAmbiguousOutcome) {
-        this.duplicateRiskTransactionsTotal += batch.transactions
-      }
-    }
   }
 
   private defaultAttemptOutcome(context: SimulationAttemptContext): SimulationAttemptOutcome {
@@ -917,22 +691,10 @@ export class FixedStepSimulation {
   private aggregateActivity(): StepActivity {
     const aggregate = createStepActivity()
     for (const activity of this.activities) {
-      aggregate.readerChannel.inputBatches += activity.readerChannel.inputBatches
       aggregate.readerChannel.inputTransactions += activity.readerChannel.inputTransactions
-      aggregate.readerChannel.outputBatches += activity.readerChannel.outputBatches
       aggregate.readerChannel.outputTransactions += activity.readerChannel.outputTransactions
-      aggregate.readerChannel.handoffBatches += activity.readerChannel.handoffBatches
-      aggregate.senderChannel.inputBatches += activity.senderChannel.inputBatches
       aggregate.senderChannel.inputTransactions += activity.senderChannel.inputTransactions
-      aggregate.senderChannel.outputBatches += activity.senderChannel.outputBatches
       aggregate.senderChannel.outputTransactions += activity.senderChannel.outputTransactions
-      aggregate.senderChannel.handoffBatches += activity.senderChannel.handoffBatches
-      aggregate.httpStartedTransactions += activity.httpStartedTransactions
-      aggregate.httpRetryStartedTransactions += activity.httpRetryStartedTransactions
-      aggregate.httpCompletedTransactions += activity.httpCompletedTransactions
-      aggregate.httpSucceededTransactions += activity.httpSucceededTransactions
-      aggregate.httpRejectedTransactions += activity.httpRejectedTransactions
-      aggregate.terminalFailedTransactions += activity.terminalFailedTransactions
     }
     return aggregate
   }

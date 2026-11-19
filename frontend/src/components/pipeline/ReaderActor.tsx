@@ -1,4 +1,4 @@
-import type { ReaderSnapshot, SelectableId } from '../../model/loadgen'
+import type { ReaderSnapshot, SelectableId, RunState } from '../../model/loadgen'
 import { formatInteger, formatRate, formatReaderErrorCount } from './formatters'
 import type { PipelineGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
@@ -8,6 +8,7 @@ import type { DesiredControl } from '../../hooks/useDesiredControl'
 interface ReaderActorProps {
   snapshot: ReaderSnapshot
   rateDriven: boolean
+  runState: RunState | null
   selected: boolean
   onSelect: (id: SelectableId) => void
   desiredControl: DesiredControl<number>
@@ -17,6 +18,7 @@ interface ReaderActorProps {
 
 export function ReaderActor({
   snapshot,
+  runState,
   rateDriven,
   selected,
   onSelect,
@@ -70,7 +72,7 @@ export function ReaderActor({
         'in-flight': 0,
         backoff: 0,
       }}
-      runState={snapshot.state}
+      runState={runState}
       active={rateDriven ? snapshot.readTps !== null && snapshot.readTps > 0 : undefined}
       outputPort={geometry.ports.output}
       primaryMetric={`Read ${formatRate(snapshot.readTps)}`}

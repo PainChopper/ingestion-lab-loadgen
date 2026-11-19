@@ -28,38 +28,33 @@ describe('FixedStepSimulation pipeline batch', () => {
 
       for (let step = 0; step < 50; step += 1) simulation.advanceStep()
       const installed = simulation.telemetry()
-      expect(installed.senderChannel.sentBatchesTotal).toBe(0)
-      expect(installed.limitedMs).toBeGreaterThan(0)
+      expect(installed.senderChannel.inputTransactionsPerSecond).toBe(0)
+      expect(installed.readerChannel.blockedSenders).toBeGreaterThan(0)
 
       simulation.updateConfig({ throttlerInstalled: false })
       for (let step = 0; step < 50; step += 1) simulation.advanceStep()
       const bypassed = simulation.telemetry()
-      expect(bypassed.senderChannel.sentBatchesTotal).toBeGreaterThan(0)
-      expect(bypassed.senderChannel.blockedMsTotal).toBeGreaterThan(0)
+      expect(bypassed.senderChannel.inputTransactionsPerSecond).toBeGreaterThan(0)
+      expect(bypassed.senderChannel.blockedSenders).toBeGreaterThan(0)
+      expect(bypassed.senderChannel.oldestBlockedSenderMs).toBeGreaterThan(0)
       expect(bypassed.senderChannel.depthBatches).toBe(capacity)
-      expect(bypassed.senderChannel.handoffBatchesTotal > 0).toBe(capacity === 0)
-      expect(bypassed.readerChannel.handoffBatchesTotal > 0).toBe(capacity === 0)
-      expect(bypassed.limitedMs).toBe(installed.limitedMs)
-      expect(bypassed.readerChannel.receivedBatchesTotal).toBe(
-        bypassed.senderChannel.sentBatchesTotal + 1,
-      )
+      expect(bypassed.readerChannel.outputTransactionsPerSecond).toBeGreaterThan(0)
+      expect(bypassed.senderChannel.outputTransactionsPerSecond).toBeGreaterThan(0)
+      if (capacity === 0) expect(bypassed.readerChannel.depthBatches).toBe(0)
 
       simulation.updateConfig({ throttlerInstalled: true })
-      for (let step = 0; step < 50; step += 1) simulation.advanceStep()
+      for (let step = 0; step < 100; step += 1) simulation.advanceStep()
       const reinstalled = simulation.telemetry()
       expect(simulation.config.requestedTps).toBe(0)
-      expect(reinstalled.readerChannel.receivedBatchesTotal).toBe(
-        bypassed.readerChannel.receivedBatchesTotal,
-      )
-      expect(reinstalled.senderChannel.sentBatchesTotal).toBe(
-        bypassed.senderChannel.sentBatchesTotal,
-      )
-      expect(reinstalled.limitedMs).toBeGreaterThan(bypassed.limitedMs)
+      expect(reinstalled.totalTransactions).toBe(bypassed.totalTransactions)
+      expect(reinstalled.senderChannel.inputTransactionsPerSecond).toBe(0)
+      expect(reinstalled.readerChannel.blockedSenders).toBeGreaterThan(0)
 
       simulation.updateConfig({ requestedTps: CONFIG.requestedTps })
       for (let step = 0; step < 50; step += 1) simulation.advanceStep()
-      expect(simulation.telemetry().senderChannel.sentBatchesTotal).toBeGreaterThan(
-        reinstalled.senderChannel.sentBatchesTotal,
+      expect(simulation.telemetry().senderChannel.inputTransactionsPerSecond).toBeGreaterThan(0)
+      expect(simulation.telemetry().totalTransactions).toBeGreaterThan(
+        reinstalled.totalTransactions,
       )
     },
   )
@@ -82,12 +77,10 @@ describe('FixedStepSimulation pipeline batch', () => {
           batch.identity === `pipeline-batch-${batch.sequence}`,
       ),
     ).toBe(true)
-    expect(telemetry.senderChannel.sentBatchesTotal).toBe(
-      telemetry.readerChannel.receivedBatchesTotal,
-    )
-    expect(telemetry.senderChannel.sentTransactionsTotal).toBe(
-      telemetry.readerChannel.receivedTransactionsTotal,
-    )
+    expect(telemetry.totalTransactions).toBe(attempts.length * CONFIG.readBatchSize)
+    expect(telemetry.rowsRead).toBe(telemetry.totalTransactions)
+    expect(telemetry.readerChannel.depthBatches).toBe(0)
+    expect(telemetry.senderChannel.depthBatches).toBe(0)
   })
 
   it('keeps a scale-down worker in the draining aggregate while it is in flight', () => {
@@ -119,6 +112,44 @@ describe('FixedStepSimulation pipeline batch', () => {
       inFlight: 1,
       backoff: 0,
     })
-    expect(simulation.telemetry().http.inFlightRequests).toBe(2)
+  })
+
+  it('retains batches across backoff and drains retiring workers after retry', () => {
+    const attempts: SimulationAttemptContext[] = []
+    const simulation = new FixedStepSimulation(
+      { ...CONFIG, senderWorkers: 2, readBatchSize: 1_000 },
+      4,
+      4,
+      (context) => {
+        attempts.push(context)
+        return {
+          kind: 'http-response',
+          statusCode: context.attempt === 1 ? 503 : 200,
+          latencyMs: 0,
+        }
+      },
+    )
+    for (let step = 0; step < 50; step += 1) {
+      simulation.advanceStep()
+      if (simulation.telemetry().sender.workerStates.backoff === 2) break
+    }
+    expect(simulation.telemetry().sender.workerStates.backoff).toBe(2)
+    simulation.updateConfig({ senderWorkers: 1, requestedTps: 0 })
+    expect(simulation.telemetry().sender).toMatchObject({
+      liveWorkers: 2,
+      workerStates: { backoff: 1 },
+      drainingWorkerStates: { backoff: 1 },
+    })
+    for (let step = 0; step < 50; step += 1) simulation.advanceStep()
+    expect(simulation.telemetry().sender).toMatchObject({
+      liveWorkers: 1,
+      workerStates: { idle: 1, backoff: 0, inFlight: 0 },
+      drainingWorkerStates: { idle: 0, backoff: 0, inFlight: 0 },
+    })
+    for (const first of attempts.filter(({ attempt }) => attempt === 1)) {
+      const retry = attempts.find(({ batch, attempt }) => batch === first.batch && attempt === 2)
+      expect(retry?.batch).toBe(first.batch)
+      expect(retry!.startedAtMs).toBeGreaterThan(first.startedAtMs)
+    }
   })
 })

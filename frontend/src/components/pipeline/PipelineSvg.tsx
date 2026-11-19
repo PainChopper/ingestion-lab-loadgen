@@ -40,13 +40,7 @@ export function PipelineSvg({
       aria-label="Reader to target load generation pipeline"
       data-layout={orientation}
     >
-      <HttpLink
-        snapshot={snapshot.http}
-        telemetryAvailable={snapshot.adapterKind !== 'http'}
-        selected={selectedId === snapshot.http.id}
-        onSelect={onSelect}
-        geometry={geometry}
-      />
+      <HttpLink geometry={geometry} />
       <ChannelCable
         snapshot={snapshot.readerChannel}
         batchSize={snapshot.reader.readBatchSize}
@@ -91,6 +85,7 @@ export function PipelineSvg({
       />
       <ReaderActor
         snapshot={snapshot.reader}
+        runState={snapshot.runState}
         rateDriven={snapshot.adapterKind === 'http'}
         selected={selectedId === snapshot.reader.id}
         onSelect={onSelect}
@@ -118,19 +113,17 @@ export function PipelineSvg({
       </text>
       <SenderActor
         snapshot={snapshot.sender}
+        runState={snapshot.runState}
+        outputTps={
+          snapshot.elapsedMs === 0 ? null : snapshot.senderChannel.outputTransactionsPerSecond
+        }
         selected={selectedId === snapshot.sender.id}
         onSelect={onSelect}
         desiredControl={liveControls.senderWorkers}
         geometry={geometry.actors.sender}
         orientation={orientation}
       />
-      <TargetActor
-        snapshot={snapshot.target}
-        telemetryAvailable={snapshot.adapterKind !== 'http'}
-        selected={selectedId === snapshot.target.id}
-        onSelect={onSelect}
-        geometry={geometry.actors.target}
-      />
+      <TargetActor geometry={geometry.actors.target} />
     </svg>
   )
 }

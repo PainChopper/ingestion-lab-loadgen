@@ -39,9 +39,11 @@ export function ChannelCable({
     (snapshot.flowState === 'normal' ||
       snapshot.flowState === 'near-limit' ||
       snapshot.flowState === 'backpressure') &&
-    (snapshot.inputTransactionsPerSecond > 0 || snapshot.outputTransactionsPerSecond > 0)
+    ((snapshot.inputTransactionsPerSecond ?? 0) > 0 ||
+      (snapshot.outputTransactionsPerSecond ?? 0) > 0)
   const markersVisible =
-    snapshot.inputTransactionsPerSecond > 0 || snapshot.outputTransactionsPerSecond > 0
+    (snapshot.inputTransactionsPerSecond ?? 0) > 0 ||
+    (snapshot.outputTransactionsPerSecond ?? 0) > 0
   const channelStyle = {
     '--pipeline-channel-pressure-color': channelPressureColor(snapshot.displayedPressure),
   } as CSSProperties
@@ -71,8 +73,8 @@ export function ChannelCable({
       aria-label={`Inspect ${snapshot.from} to ${snapshot.to} channel`}
       aria-pressed={selected}
       data-pressure={snapshot.displayedPressure.toFixed(2)}
-      data-input-active={snapshot.inputTransactionsPerSecond > 0}
-      data-output-active={snapshot.outputTransactionsPerSecond > 0}
+      data-input-active={(snapshot.inputTransactionsPerSecond ?? 0) > 0}
+      data-output-active={(snapshot.outputTransactionsPerSecond ?? 0) > 0}
       data-leg-count={presentation.legCount}
       style={channelStyle}
       onClick={() => onSelect(snapshot.id)}
@@ -91,7 +93,7 @@ export function ChannelCable({
         textAnchor="middle"
         className="pipeline-small-strong pipeline-channel-metric"
       >
-        {formatRate(snapshot.throughputTps)}
+        {formatRate(snapshot.outputTransactionsPerSecond)}
       </text>
       <text
         x={metrics.x}

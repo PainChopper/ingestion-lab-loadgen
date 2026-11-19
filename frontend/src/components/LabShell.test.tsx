@@ -1,13 +1,15 @@
+import { readFileSync } from 'node:fs'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import { SimulationAdapter } from '../adapters/SimulationAdapter'
+import { HttpAdapter } from '../adapters/HttpAdapter'
 import type { LoadgenTelemetrySnapshot } from '../model/loadgen'
 import { LabShell } from './LabShell'
 
-let adapter: SimulationAdapter | null = null
+let adapter: LoadgenAdapter | null = null
 
 afterEach(() => {
   adapter?.dispose()
@@ -18,6 +20,109 @@ afterEach(() => {
 })
 
 describe('LabShell', () => {
+  it('keeps HTTP cold start unknown with stopped channels and unavailable controls', () => {
+    vi.useFakeTimers()
+    const fetch = vi.fn(() => new Promise<Response>(() => undefined))
+    vi.stubGlobal('fetch', fetch)
+    adapter = new HttpAdapter()
+    const view = render(<LabShell adapter={adapter} />)
+
+    expect(adapter.getSnapshot().runState).toBeNull()
+    expect(screen.getByText('CONNECTING')).toBeDefined()
+    expect(view.container.querySelectorAll('.pipeline-channel')).toHaveLength(2)
+    for (const channel of view.container.querySelectorAll('.pipeline-channel')) {
+      expect(channel.classList.contains('pipeline-channel--stopped')).toBe(true)
+    }
+    expect(
+      view.container.querySelector('#sender-actor .pipeline-worker-primary')?.textContent,
+    ).toBe('—')
+    for (const name of ['Add reader worker', 'Add sender worker']) {
+      expect(screen.getByRole<HTMLButtonElement>('button', { name }).disabled).toBe(true)
+    }
+    expect(screen.queryByRole('slider', { name: 'Throttle opening' })).toBeNull()
+    expect(view.container.querySelector('.pipeline-valve-readonly-label')?.textContent).toBe(
+      'UNAVAILABLE',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect throttler' }))
+    expect(
+      screen.getByRole<HTMLInputElement>('checkbox', { name: 'Throttler valve installed' })
+        .disabled,
+    ).toBe(true)
+    expect(
+      screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Requested TPS/ }).disabled,
+    ).toBe(true)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('recovers after the first HTTP failure and retains measurements after connection loss', async () => {
+    vi.useFakeTimers()
+    const wire = JSON.parse(readFileSync('../loadgen/testdata/snapshot.json', 'utf8'))
+    wire.run.state = 'running'
+    wire.run.elapsedMs = 1_000
+    wire.reader.workers = 1
+    wire.sender.workers = 2
+    wire.reader.sourceError = null
+    wire.throttler.installed = true
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('offline'))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(wire), { headers: { 'Content-Type': 'application/json' } }),
+      )
+      .mockRejectedValue(new TypeError('offline'))
+    vi.stubGlobal('fetch', fetch)
+    adapter = new HttpAdapter()
+    const view = render(<LabShell adapter={adapter} />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(adapter.getSnapshot()).toMatchObject({ runState: null, connectionState: 'error' })
+    expect(screen.getByText('ERROR')).toBeDefined()
+    expect(screen.queryByText('idle')).toBeNull()
+    expect(view.container.querySelectorAll('.pipeline-channel')).toHaveLength(2)
+    for (const channel of view.container.querySelectorAll('.pipeline-channel')) {
+      expect(channel.classList.contains('pipeline-channel--stopped')).toBe(true)
+    }
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+    expect(adapter.getSnapshot()).toMatchObject({
+      runState: 'running',
+      connectionState: 'connected',
+    })
+    expect(screen.getByText('running')).toBeDefined()
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Add reader worker' }).disabled,
+    ).toBe(false)
+    expect(
+      view.container.querySelector('#sender-actor .pipeline-worker-primary')?.textContent,
+    ).toBe('85 tx/s')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+    expect(adapter.getSnapshot()).toMatchObject({
+      runState: 'running',
+      connectionState: 'error',
+      elapsedMs: 1_000,
+      totalTransactions: 101,
+    })
+    expect(screen.getByText('running')).toBeDefined()
+    expect(
+      view.container.querySelector('#sender-actor .pipeline-worker-primary')?.textContent,
+    ).toBe('85 tx/s')
+    for (const channel of view.container.querySelectorAll('.pipeline-channel')) {
+      expect(channel.classList.contains('pipeline-channel--connection-error')).toBe(true)
+    }
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Add reader worker' }).disabled,
+    ).toBe(true)
+    expect(
+      screen.getByRole('slider', { name: 'Throttle opening' }).getAttribute('aria-disabled'),
+    ).toBe('true')
+  })
+
   it('autostarts in StrictMode and advances the counters without input', () => {
     vi.useFakeTimers()
     adapter = new SimulationAdapter()
@@ -46,11 +151,10 @@ describe('LabShell', () => {
       runState: 'faulted',
       reader: {
         ...simulation.getSnapshot().reader,
-        state: 'faulted',
         sourceDirectory: 'C:/dataset',
         sourceError: {
           category: 'source',
-          operation: 'read',
+          operation: 'future-operation',
           relativePath: 'broken.parquet',
           message: 'corrupt parquet',
         },
@@ -71,8 +175,14 @@ describe('LabShell', () => {
     render(<LabShell adapter={errorAdapter} />)
 
     expect(screen.getByRole('alert').textContent).toBe('SOURCE ERROR')
+    expect(
+      screen.getByRole('alert', { name: 'Reader source error: future-operation' }),
+    ).toBeDefined()
     await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect reader' }))
     const label = screen.getByTestId('reader-source-error-label')
+    expect(label.parentElement?.textContent).toContain(
+      'future-operation: C:/dataset/broken.parquet: corrupt parquet',
+    )
     expect(label.textContent).toBe('SOURCE ERROR')
     expect(label.parentElement?.className).toBe(
       'inspector-data__row--full-width inspector-data__row--source-error',
@@ -83,8 +193,8 @@ describe('LabShell', () => {
     act(() => {
       snapshot = {
         ...snapshot,
-        runState: 'idle',
-        reader: { ...snapshot.reader, state: 'idle', sourceError: null },
+        runState: 'running',
+        reader: { ...snapshot.reader, sourceError: null },
       }
       listeners.forEach((listener) => listener(snapshot))
     })
@@ -187,7 +297,7 @@ describe('LabShell', () => {
       runState: 'running',
       throttler: {
         ...initial.throttler,
-        installed: { ...initial.throttler.installed, applyMode: 'immediate', writable: true },
+        installed: { ...initial.throttler.installed, applyMode: 'immediate' },
       },
       reader: {
         ...initial.reader,
@@ -244,9 +354,8 @@ describe('LabShell', () => {
 
     await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
     const inspector = within(screen.getByRole('complementary'))
-    expect(
-      inspector.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent),
-    ).toEqual(['Controls', 'Pool'])
+    expect(inspector.queryAllByRole('heading', { level: 3 })).toHaveLength(0)
+    expect(inspector.getByText('Worker states')).toBeDefined()
     expect(screen.getAllByRole('spinbutton')).toEqual([
       screen.getByRole('spinbutton', { name: /^Workers/ }),
     ])
@@ -410,10 +519,7 @@ describe('LabShell', () => {
       inspector.getByRole('checkbox', { name: 'Throttler valve installed' }),
     ])
     expect(inspector.getAllByText('Requested TPS')).toHaveLength(1)
-    await user.click(diagram.getByRole('button', { name: /Inspect ingestion service/ }))
-    expect(inspector.queryAllByRole('spinbutton')).toHaveLength(0)
-    expect(inspector.queryAllByRole('checkbox')).toHaveLength(0)
-    expect(inspector.queryAllByRole('slider')).toHaveLength(0)
+    expect(diagram.queryByRole('button', { name: /Inspect ingestion service/ })).toBeNull()
     await user.click(diagram.getByRole('button', { name: 'Inspect reader to throttler channel' }))
     expect(inspector.getByText(/^\d+ \/ 4 batches$/)).not.toBeNull()
     await user.click(diagram.getByRole('button', { name: 'Inspect throttler to sender channel' }))
@@ -453,7 +559,6 @@ describe('LabShell', () => {
     const installed = simulation.getSnapshot()
     expect(installed.throttler.installed).toMatchObject({
       applied: true,
-      writable: true,
       applyMode: 'immediate',
     })
     expect(installed.throttler.requestedTps.applied).toBe(0)
@@ -497,48 +602,19 @@ describe('LabShell', () => {
     expect(legend.querySelectorAll('i[aria-hidden="true"]')).toHaveLength(4)
   })
 
-  it('renders all Sender sections and keeps long config rows full width', async () => {
-    const user = userEvent.setup()
+  it('renders Sender pool rows and worker states without sections', async () => {
     adapter = new SimulationAdapter()
     render(<LabShell adapter={adapter} />)
-
-    await user.click(screen.getByRole('button', { name: /Inspect sender/ }))
-
-    const sectionTitles = screen
-      .getAllByRole('heading', { level: 3 })
-      .map((heading) => heading.textContent)
-    expect(sectionTitles).toEqual(['Controls', 'Pool', 'Delivery', 'Diagnostics'])
-    for (const label of [
-      'Workers desired / live / draining',
-      'Worker states',
-      'Attempted TPS',
-      'Retry TPS',
-      'Terminal failed TPS',
-      'In-flight',
-      'Backoff',
-      'Attempts',
-      'Retry attempts',
-      '2xx responses',
-      'Rejected responses',
-      'Timeouts',
-      'Terminal failed batches',
-      'Terminal failed transactions',
-      'Ambiguous timeout transactions',
-      'Duplicate-risk transactions',
-      'Ambiguous terminal transactions',
-      'Diagnostic interpretation',
-    ]) {
-      expect(screen.getByText(label)).not.toBeNull()
-    }
-    expect(screen.getByText('Diagnostic interpretation').parentElement?.className).toContain(
-      'inspector-data__row--full-width',
-    )
-    const workerSummary = screen.getByText('Worker states').parentElement
+    await userEvent.setup().click(screen.getByRole('button', { name: /Inspect sender/ }))
+    const inspector = within(screen.getByRole('complementary'))
+    expect(inspector.queryAllByRole('heading', { level: 3 })).toHaveLength(0)
+    expect(inspector.getByText('Workers desired / live / draining')).toBeDefined()
+    const workerSummary = inspector.getByText('Worker states').parentElement
     expect(workerSummary?.className).toBe(
       'inspector-data__row--full-width inspector-data__row--worker-states',
     )
     expect(workerSummary?.querySelectorAll('.worker-state')).toHaveLength(3)
-    expect(screen.getAllByTestId('sender-inspector-section-data')).toHaveLength(3)
+    expect(inspector.getByRole('spinbutton', { name: /^Workers/ })).toBeDefined()
   })
 
   it('preserves adapter state, selection, and valve focus on live resize', async () => {

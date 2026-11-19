@@ -1,30 +1,11 @@
-import { clsx } from 'clsx'
-import type { KeyboardEvent } from 'react'
-import type { SelectableId, TargetSnapshot } from '../../model/loadgen'
-import { formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
 
 interface TargetActorProps {
-  snapshot: TargetSnapshot
-  telemetryAvailable: boolean
-  selected: boolean
-  onSelect: (id: SelectableId) => void
   geometry: PipelineGeometry['actors']['target']
 }
 
-export function TargetActor({
-  snapshot,
-  telemetryAvailable,
-  selected,
-  onSelect,
-  geometry,
-}: TargetActorProps) {
+export function TargetActor({ geometry }: TargetActorProps) {
   const [receiver, storage, outbox, kafka] = geometry.stages
-  const handleKeyDown = (event: KeyboardEvent<SVGGElement>) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return
-    event.preventDefault()
-    onSelect(snapshot.id)
-  }
 
   return (
     <>
@@ -36,19 +17,7 @@ export function TargetActor({
       >
         INGESTION SERVICE
       </text>
-      <g
-        id="target-actor"
-        className={clsx(
-          'pipeline-actor pipeline-selectable',
-          selected && 'pipeline-selectable--selected',
-        )}
-        role="button"
-        tabIndex={0}
-        aria-label="Inspect ingestion service"
-        aria-pressed={selected}
-        onClick={() => onSelect(snapshot.id)}
-        onKeyDown={handleKeyDown}
-      >
+      <g id="target-actor" className="pipeline-actor">
         <rect
           x={geometry.bounds.x}
           y={geometry.bounds.y}
@@ -93,16 +62,6 @@ export function TargetActor({
           HTTP receiver
         </text>
         <text
-          x={receiver.detail!.x}
-          y={receiver.detail!.y}
-          textAnchor={receiver.detail!.anchor}
-          className="pipeline-small pipeline-target-secondary"
-        >
-          {telemetryAvailable
-            ? `Accepted TPS ${formatRate(snapshot.acceptedTps)}`
-            : 'TELEMETRY UNAVAILABLE'}
-        </text>
-        <text
           x={storage.label.x}
           y={storage.label.y}
           textAnchor={storage.label.anchor}
@@ -125,14 +84,6 @@ export function TargetActor({
           className="pipeline-small-strong"
         >
           Kafka
-        </text>
-        <text
-          x={receiver.request!.x}
-          y={receiver.request!.y}
-          textAnchor={receiver.request!.anchor}
-          className="pipeline-small pipeline-target-secondary"
-        >
-          POST batch
         </text>
       </g>
     </>

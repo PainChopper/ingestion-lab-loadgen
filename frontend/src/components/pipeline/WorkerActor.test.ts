@@ -12,8 +12,6 @@ import { getWorkerActorLayout } from './workerActorLayout'
 function workers(applied: number): NumericControlSnapshot {
   return {
     applied,
-    preview: null,
-    pending: null,
     min: 0,
     max: 32,
     step: 1,
