@@ -41,7 +41,7 @@ function formatDuration(elapsedMs: number): string {
 }
 
 function TopBar({ snapshot }: { snapshot: LoadgenSnapshot }) {
-  const stateLabel = snapshot.runState ?? snapshot.connectionState.toUpperCase()
+  const state = snapshot.runState ?? snapshot.connectionState
   return (
     <header className="topbar">
       <div className="brand">
@@ -49,13 +49,9 @@ function TopBar({ snapshot }: { snapshot: LoadgenSnapshot }) {
         <span>Go Load Generator Lab</span>
       </div>
 
-      <div
-        id="run-state"
-        className={`run-state run-state--${snapshot.runState ?? snapshot.connectionState}`}
-        aria-live="polite"
-      >
+      <div id="run-state" className={`run-state run-state--${state}`} aria-live="polite">
         <span className="state-dot" aria-hidden="true" />
-        <span>{stateLabel}</span>
+        <span>{state}</span>
       </div>
 
       <dl className="run-counters">

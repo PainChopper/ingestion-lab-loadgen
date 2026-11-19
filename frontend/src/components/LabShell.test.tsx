@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
 import userEvent from '@testing-library/user-event'
@@ -6,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import { SimulationAdapter } from '../adapters/SimulationAdapter'
 import { HttpAdapter } from '../adapters/HttpAdapter'
+import { readWireFixture } from '../test/wireFixture'
 import { LabShell } from './LabShell'
 
 let adapter: LoadgenAdapter | null = null
@@ -27,7 +27,7 @@ describe('LabShell', () => {
     const view = render(<LabShell adapter={adapter} />)
 
     expect(adapter.getSnapshot().runState).toBeNull()
-    expect(screen.getByText('CONNECTING')).toBeDefined()
+    expect(view.container.querySelector('#run-state')?.textContent).toBe('connecting')
     expect(view.container.querySelectorAll('.pipeline-channel')).toHaveLength(2)
     for (const channel of view.container.querySelectorAll('.pipeline-channel')) {
       expect(channel.classList.contains('pipeline-channel--stopped')).toBe(true)
@@ -55,7 +55,7 @@ describe('LabShell', () => {
 
   it('recovers after the first HTTP failure and retains measurements after connection loss', async () => {
     vi.useFakeTimers()
-    const wire = JSON.parse(readFileSync('../loadgen/testdata/snapshot.json', 'utf8'))
+    const wire = readWireFixture()
     wire.run.state = 'running'
     wire.run.elapsedMs = 1_000
     wire.reader.workers = 1
@@ -76,7 +76,7 @@ describe('LabShell', () => {
       await Promise.resolve()
     })
     expect(adapter.getSnapshot()).toMatchObject({ runState: null, connectionState: 'error' })
-    expect(screen.getByText('ERROR')).toBeDefined()
+    expect(view.container.querySelector('#run-state')?.textContent).toBe('error')
     expect(screen.queryByText('idle')).toBeNull()
     expect(view.container.querySelectorAll('.pipeline-channel')).toHaveLength(2)
     for (const channel of view.container.querySelectorAll('.pipeline-channel')) {
@@ -90,7 +90,7 @@ describe('LabShell', () => {
       runState: 'running',
       connectionState: 'connected',
     })
-    expect(screen.getByText('running')).toBeDefined()
+    expect(view.container.querySelector('#run-state')?.textContent).toBe('running')
     expect(
       screen.getByRole<HTMLButtonElement>('button', { name: 'Add reader worker' }).disabled,
     ).toBe(false)
@@ -107,7 +107,7 @@ describe('LabShell', () => {
       elapsedMs: 1_000,
       totalTransactions: 101,
     })
-    expect(screen.getByText('running')).toBeDefined()
+    expect(view.container.querySelector('#run-state')?.textContent).toBe('running')
     expect(
       view.container.querySelector('#sender-actor .pipeline-worker-primary')?.textContent,
     ).toBe('85 tx/s')
@@ -145,7 +145,7 @@ describe('LabShell', () => {
 
   it('renders a Reader source error overlay and clears it on the next snapshot', async () => {
     vi.useFakeTimers()
-    const wire = JSON.parse(readFileSync('../loadgen/testdata/snapshot.json', 'utf8'))
+    const wire = readWireFixture()
     const response = (body: unknown) =>
       new Response(JSON.stringify(body), {
         headers: { 'Content-Type': 'application/json' },

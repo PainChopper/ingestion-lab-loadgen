@@ -64,7 +64,7 @@ describe('useDesiredControl', () => {
     const { dispatch, childCancelled } = renderPreviewParent(true)
     const parent = screen.getByLabelText('Parent control')
     expect(parent.textContent).toBe('idle: 4')
-    expect(screen.getByText('Child')).toBeDefined()
+    screen.getByText('Child')
     expect(childCancelled).not.toHaveBeenCalled()
 
     act(() => fireEvent.click(screen.getByRole('button', { name: 'Preview' })))
