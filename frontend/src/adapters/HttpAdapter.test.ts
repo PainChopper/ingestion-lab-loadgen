@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChannelFlowStateDeriver } from '../model/channelFlowState'
+import { readWireFixture } from '../test/wireFixture'
 import type { LoadgenCommand, LoadgenTelemetrySnapshot, RunState } from '../model/loadgen'
 import { HttpAdapter } from './HttpAdapter'
 
@@ -10,7 +10,7 @@ interface MockResponseOptions {
   readonly jsonError?: Error
 }
 
-const FIXTURE = JSON.parse(readFileSync('../loadgen/testdata/snapshot.json', 'utf8'))
+const FIXTURE = readWireFixture()
 // Small command grid keeps boundary/FIFO tests readable; the contract test uses the unmodified profile.
 const WIRE = {
   ...FIXTURE,
@@ -770,84 +770,78 @@ describe('HttpAdapter', () => {
     },
   )
 
-  it.each(['running'] as const)(
-    'sends exact immediate Sender commands in %s and reads applied values from the next snapshot',
-    async (runState) => {
-      const firstWire = withRunState(runState)
-      const appliedWire = {
-        ...firstWire,
-        sender: {
-          ...firstWire.sender,
-          workers: 7,
-        },
-      }
-      let polls = 0
-      fetchMock.mockImplementation((input) =>
-        input === COMMAND_ENDPOINT
-          ? Promise.resolve(mockCommandResponse())
-          : Promise.resolve(mockResponse(++polls === 1 ? firstWire : appliedWire)),
-      )
-      const adapter = new HttpAdapter()
-      await flushPoll()
+  it('sends an exact immediate Sender command while running and reads the next snapshot', async () => {
+    const firstWire = withRunState('running')
+    const appliedWire = {
+      ...firstWire,
+      sender: {
+        ...firstWire.sender,
+        workers: 7,
+      },
+    }
+    let polls = 0
+    fetchMock.mockImplementation((input) =>
+      input === COMMAND_ENDPOINT
+        ? Promise.resolve(mockCommandResponse())
+        : Promise.resolve(mockResponse(++polls === 1 ? firstWire : appliedWire)),
+    )
+    const adapter = new HttpAdapter()
+    await flushPoll()
 
-      for (const command of [{ type: 'set-sender-workers', value: 7 }] as const) {
-        await expect(adapter.dispatch(command)).resolves.toMatchObject({
-          accepted: true,
-        })
-      }
-      expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
-        '{"action":"set-sender-workers","value":7}',
-      ])
+    await expect(adapter.dispatch({ type: 'set-sender-workers', value: 7 })).resolves.toMatchObject(
+      {
+        accepted: true,
+      },
+    )
+    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
+      '{"action":"set-sender-workers","value":7}',
+    ])
+    await vi.advanceTimersByTimeAsync(1_000)
+    await flushPoll()
+    expect(adapter.getSnapshot().sender.workers.applied).toBe(7)
+    adapter.dispose()
+  })
+
+  it('sends exact Reader worker commands while running and reads each applied value from the next snapshot', async () => {
+    const firstWire = withRunState('running')
+    const oneReaderWire = {
+      ...firstWire,
+      reader: { ...firstWire.reader, workers: 1 },
+    }
+    const sevenReaderWire = {
+      ...oneReaderWire,
+      reader: { ...oneReaderWire.reader, workers: 7 },
+    }
+    let polls = 0
+    fetchMock.mockImplementation((input) =>
+      input === COMMAND_ENDPOINT
+        ? Promise.resolve(mockCommandResponse())
+        : Promise.resolve(
+            mockResponse([firstWire, oneReaderWire, sevenReaderWire][Math.min(polls++, 2)]!),
+          ),
+    )
+    const adapter = new HttpAdapter()
+    await flushPoll()
+
+    for (const value of [1, 7]) {
+      await expect(
+        adapter.dispatch({
+          type: 'set-reader-workers',
+          value,
+        }),
+      ).resolves.toMatchObject({
+        accepted: true,
+      })
       await vi.advanceTimersByTimeAsync(1_000)
       await flushPoll()
-      expect(adapter.getSnapshot().sender.workers.applied).toBe(7)
-      adapter.dispose()
-    },
-  )
-
-  it.each(['running'] as const)(
-    'sends exact Reader worker commands in %s and reads each applied value from the next snapshot',
-    async (runState) => {
-      const firstWire = withRunState(runState)
-      const oneReaderWire = {
-        ...firstWire,
-        reader: { ...firstWire.reader, workers: 1 },
-      }
-      const sevenReaderWire = {
-        ...oneReaderWire,
-        reader: { ...oneReaderWire.reader, workers: 7 },
-      }
-      let polls = 0
-      fetchMock.mockImplementation((input) =>
-        input === COMMAND_ENDPOINT
-          ? Promise.resolve(mockCommandResponse())
-          : Promise.resolve(
-              mockResponse([firstWire, oneReaderWire, sevenReaderWire][Math.min(polls++, 2)]!),
-            ),
-      )
-      const adapter = new HttpAdapter()
-      await flushPoll()
-
-      for (const value of [1, 7]) {
-        await expect(
-          adapter.dispatch({
-            type: 'set-reader-workers',
-            value,
-          }),
-        ).resolves.toMatchObject({
-          accepted: true,
-        })
-        await vi.advanceTimersByTimeAsync(1_000)
-        await flushPoll()
-        expect(adapter.getSnapshot().reader.workers.applied).toBe(value)
-      }
-      expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
-        '{"action":"set-reader-workers","value":1}',
-        '{"action":"set-reader-workers","value":7}',
-      ])
-      adapter.dispose()
-    },
-  )
+      expect(adapter.getSnapshot().reader.workers.applied).toBe(value)
+    }
+    expect(commandFetchCalls().map(([, init]) => (init as RequestInit).body)).toEqual([
+      '{"action":"set-reader-workers","value":1}',
+      '{"action":"set-reader-workers","value":7}',
+    ])
+    adapter.dispose()
+  })
 
   it.each([true, false])(
     'sends immediate throttler installed=%s and confirms only by poll',
