@@ -2,8 +2,6 @@ import type { ChannelCapacitySnapshot } from '../../model/loadgen'
 import type { Point } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
 
-export type CapacityRange = Pick<ChannelCapacitySnapshot, 'min' | 'max' | 'step'>
-
 export type CapacityValues = readonly number[]
 
 export interface Box {
@@ -19,16 +17,10 @@ export interface ChannelCapacityGeometryPresentation {
   readonly cablePath: string
   readonly legCount: ChannelCableLegCount
   readonly desiredLegCount: ChannelCableLegCount
-  readonly scaleForbiddenBox: Box
 }
 
-export const CHANNEL_CABLE_MAX_LIFT = 240
-const PORTRAIT_CHANNEL_CABLE_MAX_LIFT = 140
-const CHANNEL_HANDLE_HALF_HEIGHT = 12
-const CHANNEL_CABLE_MAX_STROKE_WIDTH = 10
-const CHANNEL_SCALE_HOSE_CLEARANCE = 8
-export const CHANNEL_CAPACITY_SCALE_OFFSET =
-  CHANNEL_HANDLE_HALF_HEIGHT + CHANNEL_CABLE_MAX_STROKE_WIDTH / 2 + CHANNEL_SCALE_HOSE_CLEARANCE
+export const LANDSCAPE_CHANNEL_CABLE_HEIGHT = 190
+const PORTRAIT_LABEL_CLEARANCE = 8
 
 const SERPENTINE_MIN_LEG_GAP = 4
 const SERPENTINE_CORNER_RADIUS = 8
@@ -79,23 +71,6 @@ function fittedLegCount(
 function spacedCoordinates(start: number, end: number, count: number): readonly number[] {
   if (count === 1) return [(start + end) / 2]
   return Array.from({ length: count }, (_, index) => start + (index / (count - 1)) * (end - start))
-}
-
-function spacedCoordinatesAroundForbiddenRange(
-  start: number,
-  end: number,
-  count: number,
-  forbiddenStart: number,
-  forbiddenEnd: number,
-): readonly number[] {
-  const before = Math.max(0, forbiddenStart - start)
-  const after = Math.max(0, end - forbiddenEnd)
-  const available = before + after
-  if (available <= 0) return []
-
-  return spacedCoordinates(0, available, count).map((offset) =>
-    offset <= before ? start + offset : forbiddenEnd + offset - before,
-  )
 }
 
 interface AxisRange {
@@ -211,40 +186,16 @@ function buildLandscapeCapacityPath(
   start: Point,
   end: Point,
   legCount: ChannelCableLegCount,
-  forbidden: Box,
 ): string {
-  const topY = start.y - 190
+  const topY = start.y - LANDSCAPE_CHANNEL_CABLE_HEIGHT
   if (legCount === 0) {
     return buildRoundedOrthogonalPath([start, end], SERPENTINE_CORNER_RADIUS)
   }
 
-  const legs = spacedCoordinatesAroundForbiddenRange(
-    start.x + 24,
-    end.x - 24,
-    legCount,
-    forbidden.x,
-    forbidden.x + forbidden.width,
-  )
+  const legs = spacedCoordinates(start.x + 24, end.x - 24, legCount)
   const points: Point[] = [start]
   let y = start.y
   for (const x of legs) {
-    const previous = points[points.length - 1]!
-    const crossesMarker =
-      previous.x < forbidden.x &&
-      x > forbidden.x + forbidden.width &&
-      y > forbidden.y &&
-      y < forbidden.y + forbidden.height
-    if (crossesMarker) {
-      const above = y - forbidden.y
-      const below = forbidden.y + forbidden.height - y
-      const neckY = above < below ? forbidden.y : forbidden.y + forbidden.height
-      points.push(
-        { x: forbidden.x, y },
-        { x: forbidden.x, y: neckY },
-        { x: forbidden.x + forbidden.width, y: neckY },
-        { x: forbidden.x + forbidden.width, y },
-      )
-    }
     points.push({ x, y })
     y = y === start.y ? topY : start.y
     points.push({ x, y })
@@ -267,10 +218,10 @@ function buildPortraitCapacityPath(
 ): string {
   const outerX = Math.max(
     start.x + 60,
-    ...forbidden.map((box) => box.x + box.width + CHANNEL_SCALE_HOSE_CLEARANCE),
+    ...forbidden.map((box) => box.x + box.width + PORTRAIT_LABEL_CLEARANCE),
   )
   if (legCount === 0) {
-    if (forbidden.length === 1) {
+    if (forbidden.length === 0) {
       return buildRoundedOrthogonalPath([start, end], SERPENTINE_CORNER_RADIUS)
     }
     return buildRoundedOrthogonalPath(
@@ -284,8 +235,8 @@ function buildPortraitCapacityPath(
     end.y - 28,
     legCount,
     forbidden.map((box) => ({
-      start: box.y - CHANNEL_SCALE_HOSE_CLEARANCE,
-      end: box.y + box.height + CHANNEL_SCALE_HOSE_CLEARANCE,
+      start: box.y - PORTRAIT_LABEL_CLEARANCE,
+      end: box.y + box.height + PORTRAIT_LABEL_CLEARANCE,
     })),
   )
   const points: Point[] = [start]
@@ -297,12 +248,12 @@ function buildPortraitCapacityPath(
       forbidden
         .filter(
           (box) =>
-            x > box.x - CHANNEL_SCALE_HOSE_CLEARANCE &&
-            x < box.x + box.width + CHANNEL_SCALE_HOSE_CLEARANCE,
+            x > box.x - PORTRAIT_LABEL_CLEARANCE &&
+            x < box.x + box.width + PORTRAIT_LABEL_CLEARANCE,
         )
         .map((box) => ({
-          start: box.y - CHANNEL_SCALE_HOSE_CLEARANCE,
-          end: box.y + box.height + CHANNEL_SCALE_HOSE_CLEARANCE,
+          start: box.y - PORTRAIT_LABEL_CLEARANCE,
+          end: box.y + box.height + PORTRAIT_LABEL_CLEARANCE,
         })),
     )
     for (const crossing of crossings) {
@@ -317,7 +268,7 @@ function buildPortraitCapacityPath(
   }
   let x = start.x
   for (const [index, legY] of legs.entries()) {
-    const y = forbidden.length > 1 && index === legs.length - 1 ? end.y : legY
+    const y = forbidden.length > 0 && index === legs.length - 1 ? end.y : legY
     appendVertical(x, y)
     x = x === start.x ? outerX : start.x
     points.push({ x, y })
@@ -342,20 +293,12 @@ export function getChannelCapacityGeometryPresentation(
 ): ChannelCapacityGeometryPresentation {
   const desiredLegCount = getCapacityLegCount(control, values)
   if (orientation === 'portrait') {
-    const centerY = (start.y + end.y) / 2 - CHANNEL_CAPACITY_SCALE_OFFSET
-    const scaleForbiddenBox = {
-      x: start.x - PORTRAIT_CHANNEL_CABLE_MAX_LIFT - 20,
-      y: centerY - 26,
-      width: PORTRAIT_CHANNEL_CABLE_MAX_LIFT + 40,
-      height: 74,
-    }
-    const forbiddenBoxes = [scaleForbiddenBox, ...hoseForbiddenBoxes]
     const forbiddenRanges = mergeAxisRanges(
       start.y + 28,
       end.y - 28,
-      forbiddenBoxes.map((box) => ({
-        start: box.y - CHANNEL_SCALE_HOSE_CLEARANCE,
-        end: box.y + box.height + CHANNEL_SCALE_HOSE_CLEARANCE,
+      hoseForbiddenBoxes.map((box) => ({
+        start: box.y - PORTRAIT_LABEL_CLEARANCE,
+        end: box.y + box.height + PORTRAIT_LABEL_CLEARANCE,
       })),
     )
     const availableSpan =
@@ -365,92 +308,21 @@ export function getChannelCapacityGeometryPresentation(
       forbiddenRanges.reduce((total, range) => total + range.end - range.start, 0)
     const legCount = fittedLegCount(desiredLegCount, availableSpan)
     return {
-      cablePath: buildPortraitCapacityPath(start, end, legCount, forbiddenBoxes),
+      cablePath: buildPortraitCapacityPath(start, end, legCount, hoseForbiddenBoxes),
       legCount,
       desiredLegCount,
-      scaleForbiddenBox,
     }
   }
 
-  const centerX = (start.x + end.x) / 2
-  const sliderY = capacityToCableY(
-    control.applied ?? control.min,
-    control,
-    start.y - CHANNEL_CAPACITY_SCALE_OFFSET,
-    CHANNEL_CABLE_MAX_LIFT,
-    values,
-  )
-  const scaleForbiddenBox = {
-    x: centerX - 26,
-    y: sliderY - 20,
-    width: 86,
-    height: 40,
-  }
-  const availableSpan = end.x - start.x - 48 - scaleForbiddenBox.width
+  const availableSpan = end.x - start.x - 48
   const legCount = fittedLegCount(desiredLegCount, availableSpan)
   return {
-    cablePath: buildLandscapeCapacityPath(start, end, legCount, scaleForbiddenBox),
+    cablePath: buildLandscapeCapacityPath(start, end, legCount),
     legCount,
     desiredLegCount,
-    scaleForbiddenBox,
   }
-}
-
-function decimalPlaces(value: number): number {
-  const [, fraction = ''] = String(value).split('.')
-  return fraction.length
 }
 
 function formatCoordinate(value: number): string {
   return Number(value.toFixed(2)).toString()
-}
-
-export function normalizeCapacity(
-  value: number,
-  range: CapacityRange,
-  values?: CapacityValues,
-): number {
-  if (!Number.isFinite(value)) return range.min
-
-  if (values !== undefined && values.length > 0) {
-    const bounded = Math.min(range.max, Math.max(range.min, value))
-    return values.reduce((closest, candidate) =>
-      Math.abs(candidate - bounded) < Math.abs(closest - bounded) ? candidate : closest,
-    )
-  }
-
-  const step = range.step > 0 ? range.step : 1
-  const bounded = Math.min(range.max, Math.max(range.min, value))
-  const stepped = range.min + Math.round((bounded - range.min) / step) * step
-  const precision = Math.max(
-    decimalPlaces(range.min),
-    decimalPlaces(range.max),
-    decimalPlaces(step),
-  )
-
-  return Number(Math.min(range.max, Math.max(range.min, stepped)).toFixed(precision))
-}
-
-function capacityIndex(value: number, range: CapacityRange, values: CapacityValues): number {
-  return values.indexOf(normalizeCapacity(value, range, values))
-}
-
-function capacityToCableY(
-  capacity: number,
-  range: CapacityRange,
-  baseline: number,
-  maxLift: number,
-  values?: CapacityValues,
-): number {
-  if (values !== undefined && values.length > 1 && maxLift > 0) {
-    const index = capacityIndex(capacity, range, values)
-    return baseline - (index / (values.length - 1)) * maxLift
-  }
-
-  const span = range.max - range.min
-  if (span <= 0 || maxLift <= 0) return baseline
-
-  const normalized = normalizeCapacity(capacity, range, values)
-  const ratio = (normalized - range.min) / span
-  return baseline - ratio * maxLift
 }

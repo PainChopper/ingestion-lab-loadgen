@@ -127,14 +127,14 @@ describe('ChannelCable mounted behavior', () => {
     const constrained = getChannelCapacityGeometryPresentation(
       control,
       { x: 150, y: 415 },
-      { x: 250, y: 415 },
+      { x: 200, y: 415 },
     )
 
     expect(full.legCount).toBe(14)
     expect(full.cablePath).toContain(' Q')
     expect(full.cablePath).toMatch(/V/)
     expect(constrained.legCount).toBe(0)
-    expect(constrained.cablePath).toBe('M150 415 L250 415')
+    expect(constrained.cablePath).toBe('M150 415 L200 415')
     adapter.dispose()
   })
 
