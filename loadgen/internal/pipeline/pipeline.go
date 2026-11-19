@@ -22,10 +22,11 @@ type Options struct {
 	SenderMaxConns     int
 	RetryDelays        []time.Duration
 	RetryJitterPercent int
-	Logger             *zap.Logger
-	OpenFile           func(string) (ReaderFile, error)
-	Deliver            func(context.Context, []Transaction, int) error
-	RandomIntN         func(int) int
+	// Logger defaults to a no-op logger when nil.
+	Logger     *zap.Logger
+	OpenFile   func(string) (ReaderFile, error)
+	Deliver    func(context.Context, []Transaction, int) error
+	RandomIntN func(int) int
 }
 
 type Snapshot struct {
@@ -48,6 +49,9 @@ type Pipeline struct {
 }
 
 func Start(ctx context.Context, options Options) *Pipeline {
+	if options.Logger == nil {
+		options.Logger = zap.NewNop()
+	}
 	now := time.Now()
 	p := &Pipeline{
 		done:        make(chan struct{}),
@@ -59,7 +63,7 @@ func Start(ctx context.Context, options Options) *Pipeline {
 	p.reader = startReaderPool(ctx, options.Source, options.BatchSize, options.Readers,
 		p.readerQueue, &p.readerTelemetry, options.OpenFile, nil, options.Logger)
 	p.throttler = startThrottler(ctx, p.readerQueue, p.senderQueue, options.Rate)
-	p.sender = startSenderPool(ctx, p.senderQueue, options.Senders, options, nil, options.Logger, nil)
+	p.sender = startSenderPool(ctx, p.senderQueue, options, nil)
 	go func() {
 		<-p.reader.done
 		close(p.readerQueue.ch)

@@ -10,8 +10,8 @@ type Rate struct {
 	Installed bool
 }
 
-func (s Rate) interval(batchSize int) time.Duration {
-	return time.Duration(batchSize) * time.Second / time.Duration(s.TPS)
+func (r Rate) interval(batchSize int) time.Duration {
+	return time.Duration(batchSize) * time.Second / time.Duration(r.TPS)
 }
 
 type throttler struct {
@@ -58,7 +58,6 @@ func (t *throttler) forwardBatch(
 	settings *Rate,
 	anchor time.Time,
 ) (time.Time, bool) {
-	senderChannel := t.output
 	slotStart := time.Now()
 	outputBlocked := false
 	if settings.Installed && settings.TPS > 0 && !anchor.IsZero() {
@@ -108,24 +107,24 @@ func (t *throttler) forwardBatch(
 			if !settings.Installed || outputBlocked {
 				deadline = time.Now()
 			}
-			senderChannel.recordSend(len(batch))
+			t.output.recordSend(len(batch))
 			return deadline, true
 		default:
 		}
 
 		outputBlocked = true
-		blockedID := senderChannel.startBlocked(time.Now())
+		blockedID := t.output.startBlocked(time.Now())
 		select {
 		case <-ctx.Done():
-			senderChannel.finishBlockedWriter(blockedID, time.Now())
+			t.output.finishBlockedWriter(blockedID, time.Now())
 			return time.Time{}, false
 		case update := <-t.updates:
-			senderChannel.finishBlockedWriter(blockedID, time.Now())
+			t.output.finishBlockedWriter(blockedID, time.Now())
 			*settings = update
 		case t.output.ch <- batch:
 			sentAt := time.Now()
-			senderChannel.finishBlockedWriter(blockedID, sentAt)
-			senderChannel.recordSend(len(batch))
+			t.output.finishBlockedWriter(blockedID, sentAt)
+			t.output.recordSend(len(batch))
 			return sentAt, true
 		}
 	}

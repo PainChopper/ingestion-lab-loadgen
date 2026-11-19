@@ -17,6 +17,7 @@ func TestPipelineSetRateIsReadyAfterStart(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		options := testPipelineOptions()
+		options.Logger = nil
 		options.Rate = Rate{TPS: 0, Installed: true}
 		allowRead := make(chan struct{})
 		var run *Pipeline

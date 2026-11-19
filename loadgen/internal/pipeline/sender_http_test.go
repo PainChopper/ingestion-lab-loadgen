@@ -34,9 +34,9 @@ func TestSenderClientPostsJSONBatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	attempt := newSenderClient(server.URL+"/internal/ingest", server.Client())
-	if got := attempt.attempt(context.Background(), batch, 1); got != senderAttemptSuccess {
-		t.Fatalf("deliver outcome = %d, want success", got)
+	client := newSenderClient(server.URL+"/internal/ingest", server.Client())
+	if err := client.deliver(context.Background(), batch, 1); err != nil {
+		t.Fatalf("deliver: %v", err)
 	}
 }
 
@@ -48,9 +48,9 @@ func TestSenderClientPreservesTargetQuery(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	attempt := newSenderClient(server.URL+target, server.Client())
-	if got := attempt.attempt(t.Context(), []Transaction{{ClientID: "client-1"}}, 1); got != senderAttemptSuccess {
-		t.Fatalf("deliver outcome = %d, want success", got)
+	client := newSenderClient(server.URL+target, server.Client())
+	if err := client.deliver(t.Context(), []Transaction{{ClientID: "client-1"}}, 1); err != nil {
+		t.Fatalf("deliver: %v", err)
 	}
 	select {
 	case got := <-observed:
@@ -64,15 +64,15 @@ func TestSenderClientPreservesTargetQuery(t *testing.T) {
 
 func TestSenderClientClassifiesResponseStatuses(t *testing.T) {
 	tests := []struct {
-		status int
-		want   senderAttemptOutcome
+		status  int
+		wantErr bool
 	}{
-		{status: http.StatusNoContent, want: senderAttemptSuccess},
-		{status: http.StatusBadRequest, want: senderAttemptFailure},
-		{status: http.StatusMethodNotAllowed, want: senderAttemptFailure},
-		{status: http.StatusRequestEntityTooLarge, want: senderAttemptFailure},
-		{status: http.StatusOK, want: senderAttemptFailure},
-		{status: http.StatusInternalServerError, want: senderAttemptFailure},
+		{status: http.StatusNoContent, wantErr: false},
+		{status: http.StatusBadRequest, wantErr: true},
+		{status: http.StatusMethodNotAllowed, wantErr: true},
+		{status: http.StatusRequestEntityTooLarge, wantErr: true},
+		{status: http.StatusOK, wantErr: true},
+		{status: http.StatusInternalServerError, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(http.StatusText(test.status), func(t *testing.T) {
@@ -81,9 +81,9 @@ func TestSenderClientClassifiesResponseStatuses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			attempt := newSenderClient(server.URL, server.Client())
-			if got := attempt.attempt(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != test.want {
-				t.Fatalf("deliver outcome = %d, want %d", got, test.want)
+			client := newSenderClient(server.URL, server.Client())
+			if err := client.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); (err != nil) != test.wantErr {
+				t.Fatalf("deliver error = %v, wantErr %t", err, test.wantErr)
 			}
 		})
 	}
@@ -99,9 +99,9 @@ func TestSenderClientRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 			Header:     make(http.Header),
 		}, nil
 	})}
-	attempt := newSenderClient("http://example.test/ingest", client)
-	if got := attempt.attempt(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptFailure {
-		t.Fatalf("response outcome = %d, want failure", got)
+	sender := newSenderClient("http://example.test/ingest", client)
+	if err := sender.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); err == nil {
+		t.Fatal("HTTP error response accepted")
 	}
 	if !closed.Load() {
 		t.Fatal("response body was not closed")
@@ -113,20 +113,20 @@ func TestSenderClientRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 	client.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("network failure")
 	})
-	if got := attempt.attempt(context.Background(), []Transaction{{ClientID: "client"}}, 1); got != senderAttemptFailure {
-		t.Fatalf("network outcome = %d, want failure", got)
+	if err := sender.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); err == nil {
+		t.Fatal("network error accepted")
 	}
 }
 
 func TestSenderClientStopsOnCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("request should be canceled")
+	client := &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, request.Context().Err()
 	})}
-	attempt := newSenderClient("http://example.test/ingest", client)
-	if got := attempt.attempt(ctx, []Transaction{{ClientID: "client"}}, 1); got != senderAttemptCanceled {
-		t.Fatalf("canceled outcome = %d, want canceled", got)
+	sender := newSenderClient("http://example.test/ingest", client)
+	if err := sender.deliver(ctx, []Transaction{{ClientID: "client"}}, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled error = %v, want context.Canceled", err)
 	}
 }
 

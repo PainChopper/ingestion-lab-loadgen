@@ -29,7 +29,7 @@ func newSenderClient(url string, client *http.Client) senderClient {
 	return senderClient{url: url, client: client}
 }
 
-func (c senderClient) deliver(ctx context.Context, batch []Transaction) error {
+func (c senderClient) deliver(ctx context.Context, batch []Transaction, _ int) error {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return err
@@ -54,14 +54,4 @@ func (c senderClient) deliver(ctx context.Context, batch []Transaction) error {
 		return nil
 	}
 	return fmt.Errorf("HTTP status %s", response.Status)
-}
-
-func (c senderClient) attempt(ctx context.Context, batch []Transaction, _ int) senderAttemptOutcome {
-	if err := c.deliver(ctx, batch); err == nil {
-		return senderAttemptSuccess
-	}
-	if ctx.Err() != nil {
-		return senderAttemptCanceled
-	}
-	return senderAttemptFailure
 }

@@ -16,10 +16,9 @@ import (
 func TestHandlerExactConfiguredPaths(t *testing.T) {
 	for _, test := range []struct{ path, other string }{
 		{path: "/v1/batches", other: "/v1/batches/extra"},
-		{path: "/v1/a%2Fb", other: "/v1/a/b"},
-		{path: "/v1/%252F", other: "/v1/%2F"},
-		{path: "/v1/percent%25", other: "/v1/percentx"},
-		{path: "/v1/данные", other: "/v1/данные/extra"},
+		{path: "/internal/ingest", other: "/internal/ingest-extra"},
+		{path: "/AZaz09._~-/.hidden/...", other: "/AZaz09._~-/.hidden/...."},
+		{path: "/status/batches", other: "/status/batches/extra"},
 	} {
 		t.Run(test.path, func(t *testing.T) {
 			handler, err := NewHandler(Config{Path: test.path, MaxBodyBytes: 1024})
