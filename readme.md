@@ -36,10 +36,10 @@ Start Receiver in its own terminal, from the repository root:
 
 ```bash
 cd receiver
-go run ./cmd/receiver --config config.example.toml
+go run .
 ```
 
-The example Receiver uses configuration schema 2, listens on `127.0.0.1:8081`, accepts batches at `POST /internal/ingest`, and reports acceptance counters at `GET /status` (also supports HEAD). To migrate schema 1, set `schema_version = 2` and explicitly provide `lab.response_delay_ms`, including zero. Omit `lab.response_status` for 204; an explicit zero is invalid. See [configuration](docs/configuration.md#конфигурация-receiver) for exact paths and lab settings.
+The default Receiver configuration uses configuration schema 2, listens on `127.0.0.1:8081`, accepts batches at `POST /internal/ingest`, and reports acceptance counters at `GET /status` (also supports HEAD). To migrate schema 1, set `schema_version = 2` and explicitly provide `lab.response_delay_ms`, including zero. Omit `lab.response_status` for 204; an explicit zero is invalid. See [configuration](docs/configuration.md#конфигурация-receiver) for exact paths and lab settings.
 
 Start LoadGen in another terminal.
 

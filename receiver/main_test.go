@@ -19,7 +19,7 @@ type logWriterFunc func([]byte) (int, error)
 func (f logWriterFunc) Write(data []byte) (int, error) { return f(data) }
 
 func TestRunLogsLifecycleAndReleasesListener(t *testing.T) {
-	configPath := exampleConfigAt(t, "127.0.0.1:0")
+	configPath := receiverConfigAt(t, "127.0.0.1:0")
 	var output bytes.Buffer
 	started := make(chan string, 1)
 	writer := logWriterFunc(func(data []byte) (int, error) {
@@ -78,7 +78,7 @@ func TestRunLogsBindFailureWithoutStartedEvent(t *testing.T) {
 	}
 	defer listener.Close()
 	var output bytes.Buffer
-	err = run(t.Context(), exampleConfigAt(t, listener.Addr().String()), &output)
+	err = run(t.Context(), receiverConfigAt(t, listener.Addr().String()), &output)
 	if err == nil || !strings.Contains(output.String(), "event=http_server_failed") || strings.Contains(output.String(), "event=service_started") {
 		t.Fatalf("bind error=%v logs=%s", err, output.String())
 	}
@@ -168,15 +168,15 @@ func TestApplicationLoggerHonorsConfiguredLevel(t *testing.T) {
 	}
 }
 
-func exampleConfigAt(t *testing.T, addr string) string {
+func receiverConfigAt(t *testing.T, addr string) string {
 	t.Helper()
-	content, err := os.ReadFile(filepath.Join("..", "..", "config.example.toml"))
+	content, err := os.ReadFile("config.toml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	updated := strings.Replace(string(content), `address = "127.0.0.1:8081"`, `address = "`+addr+`"`, 1)
 	if updated == string(content) {
-		t.Fatal("example address replacement did not apply")
+		t.Fatal("configured address replacement did not apply")
 	}
 	path := filepath.Join(t.TempDir(), "receiver.toml")
 	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
