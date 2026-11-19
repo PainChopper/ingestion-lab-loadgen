@@ -16,12 +16,7 @@ import {
   CHANNEL_PRESSURE_YELLOW,
   ChannelFlowStateDeriver,
 } from '../../model/channelFlowState'
-import {
-  createPipelineGeometry,
-  FLOW_BASELINE,
-  PIPELINE_VIEW_BOX,
-  type TextPlacement,
-} from './geometry'
+import { createPipelineGeometry, FLOW_BASELINE, type TextPlacement } from './geometry'
 import { LANDSCAPE_CHANNEL_CABLE_HEIGHT } from './channelCableGeometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { PipelineSvg } from './PipelineSvg'
@@ -102,28 +97,13 @@ describe('responsive pipeline geometry', () => {
     expect(geometry.http.end.x - geometry.http.start.x).toBeCloseTo(60 + delta, 10)
     const { reader, target } = geometry.actors
     const receiver = target.stages[0]
-    // Live wide text bounds measured 15px high; reserve spacing and inner padding.
-    expect(receiver.label.y - receiver.request!.y).toBeGreaterThanOrEqual(20)
-    expect(receiver.detail!.y - receiver.label.y).toBeGreaterThanOrEqual(20)
-    expect(receiver.request!.y - 12).toBeGreaterThanOrEqual(receiver.y + 4)
-    expect(receiver.detail!.y + 3).toBeLessThanOrEqual(receiver.y + receiver.height - 4)
+    expect(receiver.label.y - 12).toBeGreaterThanOrEqual(receiver.y + 4)
+    expect(receiver.label.y + 3).toBeLessThanOrEqual(receiver.y + receiver.height - 4)
     expect(target.connectors[0].y1).toBe(receiver.y + receiver.height)
     expect(target.connectors[0].y2).toBeGreaterThan(target.connectors[0].y1)
     expect(reader.metrics.status.anchor).toBe('start')
     expect(reader.metrics.status.x).toBeGreaterThanOrEqual(reader.bounds.x)
     expect(reader.metrics.status.x).toBeGreaterThanOrEqual(16)
-    const httpRows = [
-      geometry.http.metrics.statusY,
-      geometry.http.metrics.throughputY,
-      geometry.http.metrics.detailY,
-    ]
-    for (const baseline of httpRows) {
-      expect(baseline - 12).toBeGreaterThan(target.bounds.y + target.bounds.height + 8)
-      expect(baseline - 12).toBeGreaterThan(geometry.actors.sender.metrics.status.y + 3)
-      expect(baseline + 3).toBeLessThan(PIPELINE_VIEW_BOX.y + geometry.viewBox.height)
-    }
-    expect(httpRows[1] - httpRows[0]).toBeGreaterThanOrEqual(16)
-    expect(httpRows[2] - httpRows[1]).toBeGreaterThanOrEqual(16)
   })
 
   it('reserves a landscape row for upstream waiting labels', () => {
@@ -137,7 +117,6 @@ describe('responsive pipeline geometry', () => {
     const workerStatusY = Math.max(reader.metrics.status.y, sender.metrics.status.y)
     for (const { metrics } of Object.values(geometry.channels)) {
       expect(metrics.waitingY - workerStatusY).toBeGreaterThanOrEqual(16)
-      expect(geometry.http.metrics.x - metrics.x).toBeGreaterThanOrEqual(200)
     }
   })
 
@@ -214,7 +193,6 @@ describe('responsive pipeline geometry', () => {
     })
     expect(throttler.metrics.installed.requested.caption.y).toBeGreaterThan(throttlerBottom)
     expect(throttler.metrics.bypass.admitted.caption.y).toBeGreaterThan(throttlerBottom)
-    expect(geometry.actors.target.labels.state.anchor).toBe('middle')
   })
 
   it.each([true, false] as const)(
@@ -383,9 +361,6 @@ function activeChannel<TChannel extends ChannelTelemetrySnapshot>(
   return {
     ...channel,
     depthBatches: Math.min(applied, 4),
-    throughputTps: 50_000,
-    inputTps: 50_000,
-    outputTps: 50_000,
     inputTransactionsPerSecond: 50_000,
     outputTransactionsPerSecond: 50_000,
     capacity: applied,
@@ -399,9 +374,6 @@ function activeSnapshot(): LoadgenSnapshot {
   const telemetry: LoadgenTelemetrySnapshot = {
     ...base,
     runState: 'running',
-    reader: { ...base.reader, state: 'running' },
-    throttler: { ...base.throttler, state: 'running' },
-    sender: { ...base.sender, state: 'running' },
     readerChannel: activeChannel(base.readerChannel, 10),
     senderChannel: activeChannel(base.senderChannel, 160),
   }
@@ -484,8 +456,6 @@ function withWorkerCount(snapshot: LoadgenSnapshot, count: number): LoadgenSnaps
   const control = (workers: LoadgenSnapshot['reader']['workers']) => ({
     ...workers,
     applied: count,
-    preview: null,
-    pending: null,
     min: 0,
     max: 32,
   })
@@ -559,7 +529,7 @@ describe('PipelineSvg rendering', () => {
     adapter.dispose()
     const withReadRate = (
       adapterKind: 'simulation' | 'http',
-      runState: 'idle' | 'running' | 'stopping',
+      runState: null | 'running' | 'stopping',
       readTps: number,
     ) =>
       new ChannelFlowStateDeriver().derive(
@@ -567,9 +537,7 @@ describe('PipelineSvg rendering', () => {
           ...base,
           adapterKind,
           runState,
-          reader: { ...base.reader, state: runState, readTps },
-          throttler: { ...base.throttler, state: runState },
-          sender: { ...base.sender, state: runState },
+          reader: { ...base.reader, readTps },
         },
         0,
       )
@@ -580,7 +548,7 @@ describe('PipelineSvg rendering', () => {
     ).toHaveLength(0)
     simulation.unmount()
 
-    const idle = renderPipeline(withReadRate('http', 'idle', 0))
+    const idle = renderPipeline(withReadRate('http', null, 0))
     expect(idle.container.querySelectorAll('#reader-actor .pipeline-worker--active')).toHaveLength(
       0,
     )
@@ -729,14 +697,12 @@ describe('PipelineSvg rendering', () => {
         ...base,
         reader: {
           ...base.reader,
-          limitationReason: 'downstream-backpressure',
         },
         throttler: {
           ...base.throttler,
           installed: {
             ...base.throttler.installed,
             applied: installed,
-            pending: null,
           },
         },
       }
@@ -776,12 +742,6 @@ describe('PipelineSvg rendering', () => {
         view.container.querySelector('.pipeline-title--target'),
         actorGeometry.target.title,
       )
-      const receiverDetails = view.container.querySelectorAll(
-        '#target-actor .pipeline-target-secondary',
-      )
-      expectTextPlacement(receiverDetails.item(0), actorGeometry.target.stages[0].detail!)
-      expectTextPlacement(receiverDetails.item(1), actorGeometry.target.stages[0].request!)
-
       const throttlerMetrics =
         installed === true
           ? actorGeometry.throttler.metrics.installed
@@ -842,8 +802,6 @@ describe('PipelineSvg rendering', () => {
         reader: {
           ...base.reader,
           readTps: 50_000,
-          configuredCapacityTps: 350_000,
-          limitationReason: 'downstream-backpressure',
           liveWorkers: 3,
           idleWorkers: 1,
           readingWorkers: 1,
@@ -1045,17 +1003,10 @@ describe('PipelineSvg rendering', () => {
   )
 
   it.each(['landscape', 'portrait'] as const)(
-    'renders the static ingestion stages and receiver Accepted TPS in %s',
+    'renders noninteractive static ingestion stages in %s',
     (orientation) => {
       const base = activeSnapshot()
-      const snapshot: LoadgenSnapshot = {
-        ...base,
-        target: {
-          ...base.target,
-          acceptedTps: 245_000,
-          rejectedTps: 5_000,
-        },
-      }
+      const snapshot = base
       const view = renderPipeline(snapshot, orientation)
       const target = view.container.querySelector('#target-actor')!
       const geometry = createPipelineGeometry({
@@ -1064,8 +1015,13 @@ describe('PipelineSvg rendering', () => {
         senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
       })
       expect(target.textContent).toContain('HTTP receiver')
-      expect(target.textContent).toContain('Accepted TPS 245,000 tx/s')
-      expect(target.textContent).toContain('POST batch')
+      expect(target.textContent).not.toContain('Accepted TPS')
+      expect(target.hasAttribute('role')).toBe(false)
+      expect(target.hasAttribute('tabindex')).toBe(false)
+      expect(view.container.querySelector('#http-link')?.hasAttribute('tabindex')).toBe(false)
+      expect(view.container.querySelector('#http-link')?.hasAttribute('role')).toBe(false)
+      expect(view.container.querySelector('#http-link text')).toBeNull()
+      expect(target.textContent).not.toContain('POST batch')
       expect(target.textContent).toContain('S3 / Vaultbox')
       expect(target.textContent).toContain('Postgres outbox')
       expect(target.textContent).toContain('Kafka')
@@ -1083,27 +1039,6 @@ describe('PipelineSvg rendering', () => {
     },
   )
 
-  it('keeps HTTP adapter telemetry unavailable without invented service telemetry', () => {
-    const base = activeSnapshot()
-    const cases = [null, 0] as const
-
-    for (const testCase of cases) {
-      const snapshot: LoadgenSnapshot = {
-        ...base,
-        adapterKind: 'http',
-        target: {
-          ...base.target,
-          rejectedTps: testCase,
-        },
-      }
-      const view = renderPipeline(snapshot)
-      expect(view.container.querySelector('#target-actor')?.textContent).toContain(
-        'TELEMETRY UNAVAILABLE',
-      )
-      view.unmount()
-    }
-  })
-
   it.each(['simulation', 'http'] as const)(
     'uses one capacity scale for both %s hoses',
     (adapterKind) => {
@@ -1113,14 +1048,6 @@ describe('PipelineSvg rendering', () => {
       const snapshot: LoadgenSnapshot = {
         ...base,
         adapterKind,
-        config:
-          adapterKind === 'http'
-            ? {
-                readerWorkers: { initial: 1, max: 7 },
-                senderWorkers: { initial: 1, max: 32 },
-                throttlerRequestedTps: { initial: 0, max: 250_000, step: 5_000 },
-              }
-            : null,
         readerChannel: {
           ...readerChannel,
           capacity: 100,
@@ -1150,21 +1077,19 @@ describe('PipelineSvg rendering', () => {
         requestedTps: {
           ...base.throttler.requestedTps,
           applied: 0,
-          preview: 250_000,
-          pending: 225_000,
         },
       },
       readerChannel: {
         ...base.readerChannel,
         depthBatches: 0,
-        throughputTps: 0,
+        outputTransactionsPerSecond: 0,
         flowState: 'normal',
         displayedPressure: 0,
       },
       senderChannel: {
         ...base.senderChannel,
         depthBatches: 0,
-        throughputTps: 0,
+        outputTransactionsPerSecond: 0,
         flowState: 'normal',
         displayedPressure: 0,
       },
@@ -1186,7 +1111,7 @@ describe('PipelineSvg rendering', () => {
       readerChannel: {
         ...base.readerChannel,
         depthBatches: 0,
-        throughputTps: 0,
+        outputTransactionsPerSecond: 0,
         blockedSenders: 1,
         oldestBlockedSenderMs: 10,
         displayedPressure: 1,
@@ -1196,7 +1121,7 @@ describe('PipelineSvg rendering', () => {
       senderChannel: {
         ...base.senderChannel,
         depthBatches: 0,
-        throughputTps: 0,
+        outputTransactionsPerSecond: 0,
         displayedPressure: 0,
         flowState: 'normal',
       },
@@ -1244,8 +1169,6 @@ describe('PipelineSvg rendering', () => {
         requestedTps: {
           ...base.throttler.requestedTps,
           applied: 120_000,
-          preview: null,
-          pending: null,
         },
       },
     }
@@ -1409,7 +1332,6 @@ describe('PipelineSvg rendering', () => {
         installed: {
           ...base.throttler.installed,
           applied: false,
-          pending: null,
         },
       },
     }
@@ -1455,13 +1377,9 @@ describe('PipelineSvg rendering', () => {
 
     assertTypography('#reader-actor .pipeline-worker-primary', '15px', '650')
     assertTypography('#target-actor .pipeline-small-strong', '11px', '650')
-    assertTypography('#target-actor .pipeline-target-secondary', '12px', '600')
     assertTypography('.pipeline-channel-metric.pipeline-small-strong', '15px', '700')
     assertTypography('.pipeline-channel-metric.pipeline-small', '13px', '600')
     assertTypography('.pipeline-channel-wait-status', '12px', '700')
-    assertTypography('.pipeline-http-status', '14px', '700')
-    assertTypography('.pipeline-http-throughput', '13px', '650')
-    assertTypography('.pipeline-http-detail', '12px', '600')
     assertTypography('#requested-display', '14px', '650')
     assertTypography('.pipeline-valve-opening-label', '13px', '800')
   })
@@ -1481,7 +1399,6 @@ describe('PipelineSvg rendering', () => {
           drainingIdleWorkers: 0,
           drainingInFlightWorkers: 0,
           drainingBackoffWorkers: 0,
-          inFlightRequests: 1,
         },
       }
       const view = renderPipeline(snapshot, orientation)
@@ -1529,27 +1446,23 @@ describe('PipelineSvg rendering', () => {
     expect(sender.querySelectorAll('.pipeline-worker--backoff')).toHaveLength(0)
   })
 
-  it.each(['idle', 'stopping'] as const)(
+  it.each(['starting', 'stopping'] as const)(
     'keeps known empty pools and zero-flow channel state visible in %s',
     (state) => {
       const base = activeSnapshot()
       const zeroFlowChannel = (channel: typeof base.readerChannel) => ({
         ...channel,
         depthBatches: 0,
-        bufferedTransactions: 0,
         inputTransactionsPerSecond: 0,
         outputTransactionsPerSecond: 0,
-        inputTps: 0,
-        outputTps: 0,
-        throughputTps: 0,
         displayedPressure: 0,
         flowState: 'normal' as const,
       })
       const snapshot: LoadgenSnapshot = {
         ...base,
+        runState: state,
         reader: {
           ...base.reader,
-          state,
           workers: { ...base.reader.workers, applied: 2 },
           liveWorkers: 0,
           drainingWorkers: 0,
@@ -1563,7 +1476,6 @@ describe('PipelineSvg rendering', () => {
         },
         sender: {
           ...base.sender,
-          state,
           workers: { ...base.sender.workers, applied: 3 },
           liveWorkers: 0,
           drainingWorkers: 0,
@@ -1892,148 +1804,5 @@ describe('PipelineSvg rendering', () => {
     } finally {
       matchMedia.mockImplementation((query) => mediaQueryList(query, false))
     }
-  })
-
-  it('shows timeout as a status without synthetic HTTP 504', () => {
-    const base = activeSnapshot()
-    const snapshot: LoadgenSnapshot = {
-      ...base,
-      http: {
-        ...base.http,
-        statusCode: null,
-        lastOutcome: 'timeout',
-        throughputTps: 1_000,
-        inFlightRequests: 0,
-      },
-    }
-    const view = renderPipeline(snapshot)
-    const http = view.container.querySelector('#http-link')!
-
-    expect(http.classList).toContain('pipeline-http--error')
-    expect(http.querySelector('.pipeline-http-status')?.textContent).toBe('TIMEOUT')
-    expect(http.textContent).not.toContain('504')
-  })
-
-  it('hides and neutralizes an idle stale HTTP 503', () => {
-    const base = activeSnapshot()
-    const snapshot: LoadgenSnapshot = {
-      ...base,
-      http: {
-        ...base.http,
-        connectionState: 'connected',
-        statusCode: 503,
-        throughputTps: 0,
-        inFlightRequests: 0,
-      },
-    }
-    const view = renderPipeline(snapshot)
-    const http = view.container.querySelector('#http-link')!
-
-    expect(http.classList).toContain('pipeline-http--normal')
-    expect(http.classList).not.toContain('pipeline-http--error')
-    expect(http.querySelector('.pipeline-http-status')?.textContent).toBe('HTTP —')
-  })
-
-  it('shows and classifies statuses whenever HTTP work is not known idle', () => {
-    const base = activeSnapshot()
-    const cases = [
-      [503, 25_000, 0, 'pipeline-http--error'],
-      [503, 0, 1, 'pipeline-http--error'],
-      [404, 25_000, 0, 'pipeline-http--warning'],
-      [503, null, null, 'pipeline-http--error'],
-    ] as const
-
-    for (const [statusCode, throughputTps, inFlightRequests, expectedClass] of cases) {
-      const snapshot: LoadgenSnapshot = {
-        ...base,
-        http: {
-          ...base.http,
-          connectionState: 'connected',
-          statusCode,
-          throughputTps,
-          inFlightRequests,
-        },
-      }
-      const view = renderPipeline(snapshot)
-      const http = view.container.querySelector('#http-link')!
-
-      expect(http.classList).toContain(expectedClass)
-      expect(http.querySelector('.pipeline-http-status')?.textContent).toBe(`HTTP ${statusCode}`)
-      view.unmount()
-    }
-  })
-
-  it('keeps transport connection states authoritative', () => {
-    const base = activeSnapshot()
-    const cases = [
-      ['error', 0, 0, 'pipeline-http--error', 'HTTP —'],
-      ['disconnected', 25_000, 0, 'pipeline-http--stopped', 'HTTP 503'],
-      ['connecting', 0, 1, 'pipeline-http--warning', 'HTTP 503'],
-    ] as const
-
-    for (const [
-      connectionState,
-      throughputTps,
-      inFlightRequests,
-      expectedClass,
-      expectedStatus,
-    ] of cases) {
-      const snapshot: LoadgenSnapshot = {
-        ...base,
-        http: {
-          ...base.http,
-          connectionState,
-          statusCode: 503,
-          throughputTps,
-          inFlightRequests,
-        },
-      }
-      const view = renderPipeline(snapshot)
-      const http = view.container.querySelector('#http-link')!
-
-      expect(http.classList).toContain(expectedClass)
-      expect(http.querySelector('.pipeline-http-status')?.textContent).toBe(expectedStatus)
-      if (connectionState !== 'error') {
-        expect(http.classList).not.toContain('pipeline-http--error')
-      }
-      view.unmount()
-    }
-  })
-
-  it('places all landscape HTTP metrics below actor labels and preserves portrait coordinates', () => {
-    const snapshot = activeSnapshot()
-    const landscape = renderPipeline(snapshot)
-    const landscapeMetrics = [...landscape.container.querySelectorAll('#http-link text')]
-    const targetBox = landscape.container.querySelector('#target-actor .pipeline-actor-box')!
-    const senderStatus = landscape.container.querySelector('#sender-actor .pipeline-worker-status')!
-
-    expect(landscapeMetrics).toHaveLength(3)
-    for (const metric of landscapeMetrics) {
-      const textTop = Number(metric.getAttribute('y')) - 12
-      expect(textTop).toBeGreaterThan(
-        Number(targetBox.getAttribute('y')) + Number(targetBox.getAttribute('height')) + 8,
-      )
-      expect(textTop).toBeGreaterThan(Number(senderStatus.getAttribute('y')) + 3)
-      expect(Number(metric.getAttribute('y')) + 3).toBeLessThan(
-        PIPELINE_VIEW_BOX.y + PIPELINE_VIEW_BOX.height,
-      )
-    }
-    landscape.unmount()
-
-    const portrait = renderPipeline(snapshot, 'portrait')
-    const geometry = createPipelineGeometry({
-      orientation: 'portrait',
-      readerWorkers: normalizedWorkerCount(snapshot.reader.workers),
-      senderWorkers: normalizedWorkerCount(snapshot.sender.workers),
-    })
-    const portraitMetrics = [...portrait.container.querySelectorAll('#http-link text')]
-    expect(portraitMetrics.map((metric) => metric.getAttribute('x'))).toEqual(
-      Array(3).fill(String(geometry.http.metrics.x)),
-    )
-    expect(portraitMetrics.map((metric) => metric.getAttribute('y'))).toEqual([
-      String(geometry.http.metrics.statusY),
-      String(geometry.http.metrics.throughputY),
-      String(geometry.http.metrics.detailY),
-    ])
   })
 })

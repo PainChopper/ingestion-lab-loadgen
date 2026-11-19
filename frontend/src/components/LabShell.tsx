@@ -41,6 +41,7 @@ function formatDuration(elapsedMs: number): string {
 }
 
 function TopBar({ snapshot }: { snapshot: LoadgenSnapshot }) {
+  const stateLabel = snapshot.runState ?? snapshot.connectionState.toUpperCase()
   return (
     <header className="topbar">
       <div className="brand">
@@ -50,11 +51,11 @@ function TopBar({ snapshot }: { snapshot: LoadgenSnapshot }) {
 
       <div
         id="run-state"
-        className={`run-state run-state--${snapshot.runState}`}
+        className={`run-state run-state--${snapshot.runState ?? snapshot.connectionState}`}
         aria-live="polite"
       >
         <span className="state-dot" aria-hidden="true" />
-        <span>{snapshot.runState}</span>
+        <span>{stateLabel}</span>
       </div>
 
       <dl className="run-counters">
@@ -223,23 +224,7 @@ function InspectorDock({
 }: InspectorDockProps) {
   const inspectorId = useId()
   const titleId = `${inspectorId}-title`
-  const controlsTitleId = `${inspectorId}-controls`
   const model = getInspectorViewModel(snapshot, selectedId)
-  const controls =
-    model?.id === 'sender' ? (
-      <section className="inspector-section" aria-labelledby={controlsTitleId}>
-        <h3 id={controlsTitleId} className="inspector-section__title">
-          Controls
-        </h3>
-        <InspectorControls
-          snapshot={snapshot}
-          selectedId={selectedId}
-          liveControls={liveControls}
-        />
-      </section>
-    ) : (
-      <InspectorControls snapshot={snapshot} selectedId={selectedId} liveControls={liveControls} />
-    )
 
   return (
     <aside className="inspector" aria-labelledby={titleId}>
@@ -269,37 +254,16 @@ function InspectorDock({
         </div>
       ) : (
         <div className="inspector-content">
-          {controls}
-          {model.sections === undefined ? (
-            <dl className="inspector-data">
-              {model.rows.map((row) => (
-                <InspectorDataRow key={row.key ?? row.label} row={row} />
-              ))}
-            </dl>
-          ) : (
-            model.sections.map((section, index) => {
-              const sectionTitleId = `${inspectorId}-section-${index}`
-              return (
-                <section
-                  className="inspector-section"
-                  key={section.title}
-                  aria-labelledby={sectionTitleId}
-                >
-                  <h3 id={sectionTitleId} className="inspector-section__title">
-                    {section.title}
-                  </h3>
-                  <dl
-                    className="inspector-data inspector-data--sender"
-                    data-testid="sender-inspector-section-data"
-                  >
-                    {section.rows.map((row) => (
-                      <InspectorDataRow key={row.label} row={row} />
-                    ))}
-                  </dl>
-                </section>
-              )
-            })
-          )}
+          <InspectorControls
+            snapshot={snapshot}
+            selectedId={selectedId}
+            liveControls={liveControls}
+          />
+          <dl className="inspector-data">
+            {model.rows.map((row) => (
+              <InspectorDataRow key={row.key ?? row.label} row={row} />
+            ))}
+          </dl>
         </div>
       )}
     </aside>
@@ -326,24 +290,14 @@ function InspectorDataRow({ row }: { row: InspectorRow }) {
         <dt>{row.label}</dt>
       )}
       <dd>
-        {row.segments === undefined ? (
-          row.disclosureValue === undefined ? (
-            row.value
-          ) : (
-            <details className="inspector-disclosure">
-              <summary>{row.value}</summary>
-              <span>{row.disclosureLabel}</span>
-              <code>{row.disclosureValue}</code>
-            </details>
-          )
-        ) : (
-          row.segments.map((segment, index) => (
-            <span className={`worker-state worker-state--${segment.tone}`} key={segment.value}>
-              {index > 0 && <span aria-hidden="true">· </span>}
-              {segment.value}
-            </span>
-          ))
-        )}
+        {row.segments === undefined
+          ? row.value
+          : row.segments.map((segment, index) => (
+              <span className={`worker-state worker-state--${segment.tone}`} key={segment.value}>
+                {index > 0 && <span aria-hidden="true">· </span>}
+                {segment.value}
+              </span>
+            ))}
       </dd>
     </div>
   )
@@ -470,7 +424,6 @@ export function LabShell({ adapter }: AdapterProps) {
     revision: liveSnapshot.revision,
     available:
       liveSnapshot.throttler.installed.applied !== null &&
-      liveSnapshot.throttler.installed.writable &&
       liveSnapshot.throttler.installed.applyMode === 'immediate',
     dispatch: (value) =>
       adapter.dispatch({

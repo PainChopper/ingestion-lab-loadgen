@@ -15,8 +15,6 @@ import {
 function control(overrides: Partial<NumericControlSnapshot> = {}): NumericControlSnapshot {
   return {
     applied: 0,
-    preview: null,
-    pending: null,
     min: 0,
     max: 250_000,
     step: 5_000,

@@ -18,8 +18,6 @@ export interface InspectorRow {
   readonly kind?: 'source-error'
   readonly layout?: 'full-width'
   readonly segments?: ReadonlyArray<InspectorRowSegment>
-  readonly disclosureLabel?: string
-  readonly disclosureValue?: string
 }
 
 export interface InspectorRowSegment {
@@ -27,26 +25,16 @@ export interface InspectorRowSegment {
   readonly tone: 'idle' | 'in-flight' | 'backoff' | 'error'
 }
 
-export interface InspectorSection {
-  readonly title: string
-  readonly rows: ReadonlyArray<InspectorRow>
-}
-
 export interface InspectorViewModel {
   readonly id: SelectableId
   readonly title: string
   readonly kind: string
   readonly rows: ReadonlyArray<InspectorRow>
-  readonly sections?: ReadonlyArray<InspectorSection>
 }
 
 function formatControl(control: ChannelCapacitySnapshot): string {
   const value = formatInteger(control)
   return value === '—' ? value : `${value} batches`
-}
-
-function unavailableRow(): InspectorRow {
-  return { label: 'Telemetry', value: '—' }
 }
 
 export function formatStateLabel(value: string): string {
@@ -64,7 +52,7 @@ function channelViewModel(channel: ChannelSnapshot): InspectorViewModel {
     title: channel.id === 'reader-to-throttler' ? 'Reader channel' : 'Sender channel',
     kind: `${formatStateLabel(channel.from)} to ${formatStateLabel(channel.to)}`,
     rows: [
-      { label: 'Throughput', value: formatRate(channel.throughputTps) },
+      { label: 'Throughput', value: formatRate(channel.outputTransactionsPerSecond) },
       {
         label: 'Depth / capacity',
         value: `${depth} / ${appliedCapacity}`,
@@ -121,7 +109,7 @@ export function getInspectorViewModel(
           label: '',
           key: 'source-error',
           kind: 'source-error',
-          value: `${sourcePath}: ${sourceError.message}`,
+          value: `${sourceError.operation}: ${sourcePath}: ${sourceError.message}`,
           layout: 'full-width',
         })
       }
@@ -164,150 +152,12 @@ export function getInspectorViewModel(
           ],
         },
       ]
-      const poolSection = { title: 'Pool', rows: poolRows }
-      if (snapshot.adapterKind === 'http') {
-        return { ...sender, rows: poolRows, sections: [poolSection] }
-      }
-      const deliveryRows: ReadonlyArray<InspectorRow> = [
-        { label: 'Attempted TPS', value: formatRate(snapshot.sender.attemptedTps) },
-        { label: 'Retry TPS', value: formatRate(snapshot.sender.retryAttemptedTps) },
-        {
-          label: 'Terminal failed TPS',
-          value: formatRate(snapshot.sender.terminalFailedTps),
-        },
-        { label: 'In-flight', value: formatInteger(snapshot.sender.inFlightRequests) },
-        { label: 'Backoff', value: formatInteger(backoffWorkers) },
-        {
-          label: '2xx responses',
-          value: formatInteger(snapshot.sender.successfulResponses),
-        },
-        {
-          label: 'Rejected responses',
-          value: formatInteger(snapshot.sender.failedResponses),
-        },
-        { label: 'Timeouts', value: formatInteger(snapshot.sender.timeoutsTotal) },
-      ]
-      const diagnosticsRows: ReadonlyArray<InspectorRow> = [
-        { label: 'Attempts', value: formatInteger(snapshot.sender.attemptsStartedTotal) },
-        {
-          label: 'Retry attempts',
-          value: formatInteger(snapshot.sender.retryAttemptsStartedTotal),
-        },
-        {
-          label: 'Terminal failed batches',
-          value: formatInteger(snapshot.sender.terminalFailedBatchesTotal),
-        },
-        {
-          label: 'Terminal failed transactions',
-          value: formatInteger(snapshot.sender.terminalFailedTransactionsTotal),
-        },
-        {
-          label: 'Ambiguous timeout transactions',
-          value: formatInteger(snapshot.sender.ambiguousTimeoutTransactionsTotal),
-        },
-        {
-          label: 'Duplicate-risk transactions',
-          value: formatInteger(snapshot.sender.duplicateRiskTransactionsTotal),
-        },
-        {
-          label: 'Ambiguous terminal transactions',
-          value: formatInteger(snapshot.sender.ambiguousTerminalTransactionsTotal),
-        },
-        {
-          label: 'Diagnostic interpretation',
-          value:
-            'Retries, timeouts, terminal failures, and ambiguous outcomes are counted separately.',
-          layout: 'full-width',
-        },
-      ]
-      const sections: ReadonlyArray<InspectorSection> = [
-        poolSection,
-        { title: 'Delivery', rows: deliveryRows },
-        { title: 'Diagnostics', rows: diagnosticsRows },
-      ]
-      return {
-        ...sender,
-        rows: [...poolRows, ...deliveryRows, ...diagnosticsRows],
-        sections,
-      }
-    }
-    case 'target': {
-      if (snapshot.adapterKind === 'http') {
-        return {
-          id: selectedId,
-          title: 'TARGET',
-          kind: 'HTTP endpoint',
-          rows: [unavailableRow()],
-        }
-      }
-      return {
-        id: selectedId,
-        title: 'TARGET',
-        kind: snapshot.target.endpoint ?? 'HTTP endpoint',
-        rows: [
-          { label: 'Accepted TPS', value: formatRate(snapshot.target.acceptedTps) },
-          { label: 'Rejected TPS', value: formatRate(snapshot.target.rejectedTps) },
-          { label: 'p95 latency', value: formatMilliseconds(snapshot.target.latencyP95Ms) },
-          { label: 'HTTP 200', value: formatInteger(snapshot.target.http200Responses) },
-          { label: 'HTTP 503', value: formatInteger(snapshot.target.http503Responses) },
-          { label: 'Connection', value: formatStateLabel(snapshot.target.connectionState) },
-        ],
-      }
+      return { ...sender, rows: poolRows }
     }
     case 'reader-to-throttler':
       return channelViewModel(snapshot.readerChannel)
     case 'throttler-to-sender':
       return channelViewModel(snapshot.senderChannel)
-    case 'http':
-      if (snapshot.adapterKind === 'http') {
-        return {
-          id: selectedId,
-          title: 'HTTP',
-          kind: 'Sender to target',
-          rows: [unavailableRow()],
-        }
-      }
-      return {
-        id: selectedId,
-        title: 'HTTP',
-        kind: 'Sender to target',
-        rows: [
-          {
-            label: 'Status',
-            value:
-              snapshot.http.lastOutcome === 'timeout'
-                ? 'TIMEOUT'
-                : snapshot.http.lastOutcome === 'network-error'
-                  ? 'NETWORK ERROR'
-                  : snapshot.http.statusCode === null
-                    ? '—'
-                    : `HTTP ${formatInteger(snapshot.http.statusCode)}`,
-          },
-          { label: 'Connection', value: formatStateLabel(snapshot.http.connectionState) },
-          { label: 'Throughput', value: formatRate(snapshot.http.throughputTps) },
-          { label: 'In-flight', value: formatInteger(snapshot.http.inFlightRequests) },
-          {
-            label: 'Attempts',
-            value: formatInteger(snapshot.http.requestsStartedTotal),
-          },
-          {
-            label: 'Rejected responses',
-            value: formatInteger(
-              Math.max(
-                0,
-                snapshot.http.requestsFailedTotal -
-                  snapshot.http.requestsTimedOutTotal -
-                  snapshot.http.networkErrorsTotal,
-              ),
-            ),
-          },
-          {
-            label: 'Timeouts',
-            value: formatInteger(snapshot.http.requestsTimedOutTotal),
-          },
-          { label: 'p95 latency', value: formatMilliseconds(snapshot.http.latencyP95Ms) },
-        ],
-      }
     case null:
       return null
   }

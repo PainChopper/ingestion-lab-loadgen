@@ -24,9 +24,6 @@ function baseTelemetry(): LoadgenTelemetrySnapshot {
   return {
     ...snapshot,
     runState: 'running',
-    reader: { ...snapshot.reader, state: 'running' },
-    throttler: { ...snapshot.throttler, state: 'running' },
-    sender: { ...snapshot.sender, state: 'running' },
   }
 }
 
@@ -255,7 +252,7 @@ describe('channel flow state derivation', () => {
           applied: 0,
           blockedSenders: 0,
           oldestBlockedSenderMs: 0,
-          runState: 'idle',
+          runState: 'starting',
         },
       },
       {
@@ -292,18 +289,12 @@ describe('channel flow state derivation', () => {
     ])
   })
 
-  it('derives senderChannel pressure from occupancy and blocking while retries grow', () => {
+  it('derives senderChannel pressure from occupancy and blocking', () => {
     const base = baseTelemetry()
     const deriver = new ChannelFlowStateDeriver()
-    const retryHeavy: LoadgenTelemetrySnapshot = {
+    const saturatedInput: LoadgenTelemetrySnapshot = {
       ...base,
       revision: base.revision + 1,
-      sender: {
-        ...base.sender,
-        attemptsStartedTotal: 900,
-        retryAttemptsStartedTotal: 600,
-        retries: 600,
-      },
       senderChannel: {
         ...base.senderChannel,
         depthBatches: 100,
@@ -313,30 +304,18 @@ describe('channel flow state derivation', () => {
       },
     }
     deriver.derive(base, 0)
-    const saturated = deriver.derive(retryHeavy, 500).senderChannel
+    const saturated = deriver.derive(saturatedInput, 500).senderChannel
     expect(saturated).toMatchObject({
       displayedPressure: 1,
       flowState: 'backpressure',
       depthBatches: 100,
     })
 
-    const retryCountersOnly: LoadgenTelemetrySnapshot = {
-      ...retryHeavy,
-      revision: retryHeavy.revision + 1,
-      sender: {
-        ...retryHeavy.sender,
-        attemptsStartedTotal: 9_000,
-        retryAttemptsStartedTotal: 8_000,
-        retries: 8_000,
-      },
-    }
-    expect(deriver.derive(retryCountersOnly, 600).senderChannel.displayedPressure).toBe(1)
-
     const unsaturated: LoadgenTelemetrySnapshot = {
-      ...retryCountersOnly,
-      revision: retryCountersOnly.revision + 1,
+      ...saturatedInput,
+      revision: saturatedInput.revision + 1,
       senderChannel: {
-        ...retryCountersOnly.senderChannel,
+        ...saturatedInput.senderChannel,
         depthBatches: 25,
         blockedSenders: 0,
         oldestBlockedSenderMs: 0,
@@ -348,18 +327,12 @@ describe('channel flow state derivation', () => {
       depthBatches: 25,
     })
 
-    const emptyWithMoreRetries: LoadgenTelemetrySnapshot = {
+    const empty: LoadgenTelemetrySnapshot = {
       ...unsaturated,
       revision: unsaturated.revision + 1,
-      sender: {
-        ...unsaturated.sender,
-        attemptsStartedTotal: 20_000,
-        retryAttemptsStartedTotal: 18_000,
-        retries: 18_000,
-      },
       senderChannel: { ...unsaturated.senderChannel, depthBatches: 0 },
     }
-    expect(deriver.derive(emptyWithMoreRetries, 1_500).senderChannel).toMatchObject({
+    expect(deriver.derive(empty, 1_500).senderChannel).toMatchObject({
       displayedPressure: 0,
       flowState: 'normal',
       depthBatches: 0,

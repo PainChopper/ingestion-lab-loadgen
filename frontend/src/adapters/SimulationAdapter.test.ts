@@ -28,7 +28,6 @@ describe('SimulationAdapter', () => {
         'inFlightWorkers',
         'backoffWorkers',
         'drainingWorkers',
-        'timeoutMs',
       ]),
     )
     adapter.dispose()
@@ -49,7 +48,7 @@ describe('SimulationAdapter', () => {
     const snapshot = adapter.getSnapshot()
     expect(snapshot).toMatchObject({ revision: 2, elapsedMs: 200 })
     expect(snapshot.totalTransactions).toBeGreaterThan(0)
-    expect(snapshot.http.requestsCompletedTotal).toBeGreaterThan(0)
+    expect(snapshot.senderChannel.outputTransactionsPerSecond).toBeGreaterThan(0)
     expect(listener).toHaveBeenCalledTimes(4)
 
     unsubscribe()
@@ -77,14 +76,14 @@ describe('SimulationAdapter', () => {
     await vi.advanceTimersByTimeAsync(200)
     const initial = adapter.getSnapshot()
     await expect(adapter.dispatch({ type: 'set-reader-workers', value: 7 })).resolves.toMatchObject(
-      { accepted: true, applyMode: 'immediate' },
+      { accepted: true },
     )
     await expect(adapter.dispatch({ type: 'set-sender-workers', value: 4 })).resolves.toMatchObject(
-      { accepted: true, applyMode: 'immediate' },
+      { accepted: true },
     )
     await expect(
       adapter.dispatch({ type: 'set-requested-tps', value: 75_000 }),
-    ).resolves.toMatchObject({ accepted: true, applyMode: 'immediate' })
+    ).resolves.toMatchObject({ accepted: true })
 
     const updated = adapter.getSnapshot()
     expect(updated).toMatchObject({
@@ -116,30 +115,26 @@ describe('SimulationAdapter', () => {
         await adapter.dispatch({ type: 'set-sender-workers', value: workers })
         await vi.advanceTimersByTimeAsync(10_000)
         const before = adapter.getSnapshot()
-        await vi.advanceTimersByTimeAsync(30_000)
+        let sawBlockedSender = false
+        for (let interval = 0; interval < 300; interval += 1) {
+          await vi.advanceTimersByTimeAsync(100)
+          sawBlockedSender ||= adapter.getSnapshot().senderChannel.blockedSenders > 0
+        }
         const after = adapter.getSnapshot()
-        const deliveredTps =
-          ((after.sender.successfulResponses! - before.sender.successfulResponses!) *
-            initial.reader.readBatchSize!) /
-          30
-
-        expect(after.sender.timeoutsTotal).toBe(0)
-        expect(after.sender.terminalFailedTransactionsTotal).toBe(0)
+        const forwardedTps = (after.totalTransactions - before.totalTransactions) / 30
         if (workers < 32) {
-          expect(deliveredTps).toBeLessThan(250_000)
+          expect(forwardedTps).toBeLessThan(250_000)
           expect(after.senderChannel.depthBatches).toBeGreaterThanOrEqual(
             after.senderChannel.capacity! - 1,
           )
-          expect(after.senderChannel.blockedMs).toBeGreaterThan(before.senderChannel.blockedMs!)
-          expect(after.reader.limitationReason).toBe('downstream-backpressure')
+          expect(sawBlockedSender).toBe(true)
         } else {
           // A long window absorbs batch completion and retry timing jitter.
-          expect(deliveredTps).toBeGreaterThanOrEqual(249_000)
-          expect(deliveredTps).toBeLessThanOrEqual(251_000)
+          expect(forwardedTps).toBeGreaterThanOrEqual(249_000)
+          expect(forwardedTps).toBeLessThanOrEqual(251_000)
           expect(before.senderChannel.depthBatches).toBe(0)
           expect(after.senderChannel.depthBatches).toBe(0)
-          expect(after.senderChannel.blockedMs).toBe(before.senderChannel.blockedMs)
-          expect(after.reader.limitationReason).toBeNull()
+          expect(sawBlockedSender).toBe(false)
         }
       }
     } finally {
@@ -147,7 +142,7 @@ describe('SimulationAdapter', () => {
     }
   })
 
-  it('keeps draining in-flight workers in aggregate and HTTP telemetry', async () => {
+  it('keeps draining in-flight workers in the aggregate', async () => {
     vi.useFakeTimers()
     const adapter = new SimulationAdapter()
 
@@ -160,9 +155,7 @@ describe('SimulationAdapter', () => {
       inFlightWorkers: 2,
       drainingWorkers: 1,
       drainingInFlightWorkers: 1,
-      inFlightRequests: 2,
     })
-    expect(adapter.getSnapshot().http.inFlightRequests).toBe(2)
     adapter.dispose()
   })
 })

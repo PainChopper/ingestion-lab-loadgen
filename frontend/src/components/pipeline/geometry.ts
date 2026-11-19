@@ -307,9 +307,7 @@ function landscapeGeometry(contentWidth: number) {
         y: 240,
         width: 162,
         height: 64,
-        request: { x: 995 + targetOffset, y: 256, anchor: 'middle' } satisfies TextPlacement,
         label: { x: 995 + targetOffset, y: 276, anchor: 'middle' } satisfies TextPlacement,
-        detail: { x: 995 + targetOffset, y: 296, anchor: 'middle' } satisfies TextPlacement,
       },
       {
         x: 914 + targetOffset,
@@ -338,12 +336,6 @@ function landscapeGeometry(contentWidth: number) {
       { x: 995 + targetOffset, y1: 349, y2: 370 },
       { x: 995 + targetOffset, y1: 404, y2: 425 },
     ],
-    labels: {
-      caption: { x: 995 + targetOffset, y: 271, anchor: 'middle' } satisfies TextPlacement,
-      value: { x: 995 + targetOffset, y: 286, anchor: 'middle' } satisfies TextPlacement,
-      failure: { x: 995 + targetOffset, y: 286, anchor: 'middle' } satisfies TextPlacement,
-      state: { x: 995 + targetOffset, y: 286, anchor: 'middle' } satisfies TextPlacement,
-    },
     markerPoint: { x: 914 + targetOffset, y: FLOW_BASELINE },
   }
   const channels: Record<ChannelId, PipelineChannelGeometry> = {
@@ -368,7 +360,6 @@ function landscapeGeometry(contentWidth: number) {
       },
     },
   }
-  const httpStatusY = Math.max(target.bounds.y + target.bounds.height, sender.metrics.status.y) + 18
 
   return {
     orientation: 'landscape' as const,
@@ -392,12 +383,6 @@ function landscapeGeometry(contentWidth: number) {
     http: {
       start: sender.ports.output,
       end: target.ports.input,
-      metrics: {
-        x: (sender.ports.output.x + target.ports.input.x) / 2,
-        statusY: httpStatusY,
-        throughputY: httpStatusY + 16,
-        detailY: httpStatusY + 32,
-      },
     },
   }
 }
@@ -577,9 +562,7 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
         y: targetTop + 28,
         width: 324,
         height: 72,
-        request: { x: 240, y: targetTop + 44, anchor: 'middle' } satisfies TextPlacement,
         label: { x: 240, y: targetTop + 62, anchor: 'middle' } satisfies TextPlacement,
-        detail: { x: 240, y: targetTop + 83, anchor: 'middle' } satisfies TextPlacement,
       },
       {
         x: 78,
@@ -608,12 +591,6 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
       { x: 240, y1: targetTop + 158, y2: targetTop + 180 },
       { x: 240, y1: targetTop + 218, y2: targetTop + 240 },
     ],
-    labels: {
-      caption: { x: 240, y: targetTop + 50, anchor: 'middle' } satisfies TextPlacement,
-      value: { x: 240, y: targetTop + 67, anchor: 'middle' } satisfies TextPlacement,
-      failure: { x: 240, y: targetTop + 67, anchor: 'middle' } satisfies TextPlacement,
-      state: { x: 240, y: targetTop + 67, anchor: 'middle' } satisfies TextPlacement,
-    },
     markerPoint: { x: 240, y: targetTop + 28 } satisfies Point,
   }
   const channels: Record<ChannelId, PipelineChannelGeometry> = {
@@ -656,12 +633,6 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
     http: {
       start: sender.ports.output,
       end: target.ports.input,
-      metrics: {
-        x: 240,
-        statusY: senderBottom + 60,
-        throughputY: senderBottom + 84,
-        detailY: senderBottom + 108,
-      },
     },
   }
 }

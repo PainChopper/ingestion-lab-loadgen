@@ -1,39 +1,22 @@
-export type ActorId = 'reader' | 'throttler' | 'sender' | 'target'
+export type ActorId = 'reader' | 'throttler' | 'sender'
 
 export type ChannelId = 'reader-to-throttler' | 'throttler-to-sender'
 
-export type SelectableId = ActorId | ChannelId | 'http'
+export type SelectableId = ActorId | ChannelId
 
 export type AdapterKind = 'simulation' | 'http'
 
-export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
+export type ConnectionState = 'connecting' | 'connected' | 'error'
 
-export type RunState = 'idle' | 'starting' | 'running' | 'stopping' | 'faulted'
+export type RunState = 'starting' | 'running' | 'stopping' | 'faulted'
 
 export type ApplyMode = 'immediate' | 'unavailable'
-
-export type ReaderLimitationReason = 'downstream-backpressure'
-
-export interface RetryPolicySnapshot {
-  readonly maxAttempts: number
-  readonly backoffBaseMs: number
-  readonly backoffMultiplier: number
-  readonly jitterPercent: number
-  readonly retryableStatusCodes: readonly number[]
-  readonly retryTimeouts: boolean
-}
-
-export type HttpLastOutcome = 'http-response' | 'timeout' | 'network-error' | null
-
-export type ChannelTrend = 'rising' | 'steady' | 'falling' | 'unknown'
 
 export type ChannelFlowState =
   'normal' | 'near-limit' | 'backpressure' | 'stopped' | 'connection-error'
 
 export interface NumericControlSnapshot {
   readonly applied: number | null
-  readonly preview: number | null
-  readonly pending: number | null
   readonly min: number
   readonly max: number
   readonly step: number
@@ -41,27 +24,9 @@ export interface NumericControlSnapshot {
   readonly applyMode: ApplyMode
 }
 
-export interface WorkersConfigSnapshot {
-  readonly initial: number
-  readonly max: number
-}
-
-export interface TpsConfigSnapshot extends WorkersConfigSnapshot {
-  readonly step: number
-}
-
-export interface LoadgenConfigSnapshot {
-  readonly readerWorkers: WorkersConfigSnapshot
-  readonly senderWorkers: WorkersConfigSnapshot
-  readonly throttlerRequestedTps: TpsConfigSnapshot
-}
-
 export interface InstalledControlSnapshot {
   readonly applied: boolean | null
-  readonly pending: boolean | null
   readonly applyMode: ApplyMode
-  readonly writable: boolean
-  readonly unavailableReason: string | null
 }
 
 export interface ReaderSnapshot {
@@ -77,12 +42,9 @@ export interface ReaderSnapshot {
   readonly drainingBlockedWorkers: number
   readonly readBatchSize: number | null
   readonly readTps: number | null
-  readonly configuredCapacityTps: number | null
-  readonly limitationReason: ReaderLimitationReason | null
   readonly rowsRead: number | null
   readonly sourceDirectory?: string
   readonly sourceError: ReaderSourceErrorSnapshot | null
-  readonly state: RunState
 }
 
 export interface ThrottlerSnapshot {
@@ -90,8 +52,6 @@ export interface ThrottlerSnapshot {
   readonly requestedTps: NumericControlSnapshot
   readonly installed: InstalledControlSnapshot
   readonly admittedTps: number | null
-  readonly limitedMs: number | null
-  readonly state: RunState
 }
 
 export type ChannelCapacitySnapshot = number | null
@@ -102,18 +62,10 @@ export interface ChannelTelemetrySnapshot {
   readonly to: ActorId
   readonly capacity: ChannelCapacitySnapshot
   readonly depthBatches: number | null
-  readonly bufferedTransactions: number | null
-  readonly handoffBatches: number
-  readonly handoffBatchesTotal: number
   readonly blockedSenders: number
   readonly oldestBlockedSenderMs: number
-  readonly inputTransactionsPerSecond: number
-  readonly outputTransactionsPerSecond: number
-  readonly inputTps: number | null
-  readonly outputTps: number | null
-  readonly throughputTps: number | null
-  readonly blockedMs: number | null
-  readonly trend: ChannelTrend
+  readonly inputTransactionsPerSecond: number | null
+  readonly outputTransactionsPerSecond: number | null
 }
 
 export interface ChannelSnapshot extends ChannelTelemetrySnapshot {
@@ -132,24 +84,6 @@ export interface SenderSnapshot {
   readonly drainingIdleWorkers: number
   readonly drainingInFlightWorkers: number
   readonly drainingBackoffWorkers: number
-  readonly timeoutMs: number | null
-  readonly retryPolicy: RetryPolicySnapshot | null
-  readonly attemptedTps: number | null
-  readonly retryAttemptedTps: number | null
-  readonly terminalFailedTps: number | null
-  readonly inFlightRequests: number | null
-  readonly attemptsStartedTotal: number
-  readonly retryAttemptsStartedTotal: number
-  readonly successfulResponses: number | null
-  readonly failedResponses: number | null
-  readonly retries: number | null
-  readonly timeoutsTotal: number
-  readonly terminalFailedBatchesTotal: number
-  readonly terminalFailedTransactionsTotal: number
-  readonly ambiguousTimeoutTransactionsTotal: number
-  readonly duplicateRiskTransactionsTotal: number
-  readonly ambiguousTerminalTransactionsTotal: number
-  readonly state: RunState
 }
 
 export interface ReaderSourceErrorSnapshot {
@@ -159,48 +93,18 @@ export interface ReaderSourceErrorSnapshot {
   readonly message: string
 }
 
-export interface HttpSnapshot {
-  readonly id: 'http'
-  readonly connectionState: ConnectionState
-  readonly statusCode: number | null
-  readonly lastOutcome: HttpLastOutcome
-  readonly throughputTps: number | null
-  readonly inFlightRequests: number | null
-  readonly requestsStartedTotal: number
-  readonly requestsCompletedTotal: number
-  readonly requestsSucceededTotal: number
-  readonly requestsFailedTotal: number
-  readonly requestsTimedOutTotal: number
-  readonly networkErrorsTotal: number
-  readonly latencyP95Ms: number | null
-}
-
-export interface TargetSnapshot {
-  readonly id: 'target'
-  readonly endpoint: string | null
-  readonly acceptedTps: number | null
-  readonly rejectedTps: number | null
-  readonly latencyP95Ms: number | null
-  readonly http200Responses: number | null
-  readonly http503Responses: number | null
-  readonly connectionState: ConnectionState
-}
-
 export interface LoadgenTelemetrySnapshot {
   readonly revision: number
   readonly adapterKind: AdapterKind
   readonly connectionState: ConnectionState
-  readonly runState: RunState
+  readonly runState: RunState | null
   readonly elapsedMs: number
   readonly totalTransactions: number
-  readonly config: LoadgenConfigSnapshot | null
   readonly reader: ReaderSnapshot
   readonly throttler: ThrottlerSnapshot
   readonly readerChannel: ChannelTelemetrySnapshot
   readonly senderChannel: ChannelTelemetrySnapshot
   readonly sender: SenderSnapshot
-  readonly http: HttpSnapshot
-  readonly target: TargetSnapshot
 }
 
 export interface LoadgenSnapshot extends Omit<
@@ -221,18 +125,11 @@ export type LoadgenCommand =
   | { type: 'set-sender-workers'; value: number }
 
 export interface AdapterError {
-  readonly code: 'invalid-command' | 'disposed' | 'unavailable' | 'internal'
+  readonly code: 'invalid-command' | 'disposed' | 'unavailable'
   readonly message: string
-  readonly retryable: boolean
-  readonly details: Readonly<Record<string, unknown>> | null
 }
 
 export interface CommandReceipt {
-  readonly commandId: string
-  readonly commandType: LoadgenCommand['type']
   readonly accepted: boolean
-  readonly applyMode: ApplyMode
-  readonly appliedAtMs: number | null
-  readonly snapshotRevision: number
   readonly error: AdapterError | null
 }

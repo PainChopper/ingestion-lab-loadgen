@@ -6,8 +6,6 @@ import type {
   LoadgenCommand,
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
-  WorkersConfigSnapshot,
-  TpsConfigSnapshot,
   ChannelTelemetrySnapshot,
 } from '../model/loadgen'
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
@@ -48,8 +46,6 @@ function isSupportedCommand(command: LoadgenCommand): command is SupportedComman
 function unavailableControl(unit: string): NumericControlSnapshot {
   return {
     applied: null,
-    preview: null,
-    pending: null,
     min: 0,
     max: 0,
     step: 1,
@@ -60,15 +56,16 @@ function unavailableControl(unit: string): NumericControlSnapshot {
 
 function numericControl(
   value: number | null,
-  config: WorkersConfigSnapshot | TpsConfigSnapshot | null,
+  config:
+    | WireSnapshot['config']['readerWorkers']
+    | WireSnapshot['config']['throttlerRequestedTps']
+    | null,
   applyMode: NumericControlSnapshot['applyMode'],
   unit: string,
 ): NumericControlSnapshot {
   if (config === null) return unavailableControl(unit)
   return {
     applied: value,
-    preview: null,
-    pending: null,
     min: 'step' in config ? 0 : 1,
     max: config.max,
     step: 'step' in config ? config.step : 1,
@@ -88,18 +85,10 @@ function neutralChannel(
     to,
     capacity: null,
     depthBatches: null,
-    bufferedTransactions: null,
-    handoffBatches: 0,
-    handoffBatchesTotal: 0,
     blockedSenders: 0,
     oldestBlockedSenderMs: 0,
-    inputTransactionsPerSecond: 0,
-    outputTransactionsPerSecond: 0,
-    inputTps: null,
-    outputTps: null,
-    throughputTps: null,
-    blockedMs: null,
-    trend: 'unknown',
+    inputTransactionsPerSecond: null,
+    outputTransactionsPerSecond: null,
   }
 }
 
@@ -118,15 +107,10 @@ function channelSnapshot(
     ...channel,
     capacity: telemetry.capacity,
     depthBatches: telemetry.depthBatches,
-    bufferedTransactions: telemetry.bufferedTransactions,
     inputTransactionsPerSecond: telemetry.inputTransactionsPerSecond,
     outputTransactionsPerSecond: telemetry.outputTransactionsPerSecond,
-    inputTps: telemetry.inputTransactionsPerSecond,
-    outputTps: telemetry.outputTransactionsPerSecond,
-    throughputTps: telemetry.outputTransactionsPerSecond,
     blockedSenders: telemetry.blockedSenders,
     oldestBlockedSenderMs: telemetry.oldestBlockedSenderMs,
-    blockedMs: telemetry.blockedMs,
   }
 }
 
@@ -135,7 +119,7 @@ function createSnapshot(
   connectionState: ConnectionState,
   wire: WireSnapshot | null,
 ): LoadgenTelemetrySnapshot {
-  const runState = wire?.run.state ?? 'idle'
+  const runState = wire?.run.state ?? null
   const writable = connectionState === 'connected' && runState === 'running'
   const applyMode = writable ? 'immediate' : 'unavailable'
 
@@ -146,7 +130,6 @@ function createSnapshot(
     runState,
     elapsedMs: wire?.run.elapsedMs ?? 0,
     totalTransactions: wire?.run.totalTransactions ?? 0,
-    config: wire?.config ?? null,
     reader: {
       id: 'reader',
       workers: numericControl(
@@ -165,12 +148,9 @@ function createSnapshot(
       drainingBlockedWorkers: wire?.reader.drainingBlockedWorkers ?? 0,
       readBatchSize: wire?.reader.readBatchSize ?? null,
       readTps: wire?.reader.readTps ?? null,
-      configuredCapacityTps: null,
-      limitationReason: null,
       rowsRead: wire?.reader.rowsRead ?? null,
       sourceDirectory: wire?.reader.sourceDirectory,
       sourceError: wire?.reader.sourceError ?? null,
-      state: runState,
     },
     throttler: {
       id: 'throttler',
@@ -182,14 +162,9 @@ function createSnapshot(
       ),
       installed: {
         applied: wire?.throttler.installed ?? null,
-        pending: null,
         applyMode,
-        writable,
-        unavailableReason: writable ? null : 'Unavailable in HTTP mode',
       },
       admittedTps: wire?.throttler.admittedTps ?? null,
-      limitedMs: null,
-      state: runState,
     },
     readerChannel: channelSnapshot(wire, 'reader'),
     senderChannel: channelSnapshot(wire, 'sender'),
@@ -203,55 +178,12 @@ function createSnapshot(
       ),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
-      timeoutMs: null,
       idleWorkers: wire?.sender.idleWorkers ?? 0,
       inFlightWorkers: wire?.sender.inFlightWorkers ?? 0,
       backoffWorkers: wire?.sender.backoffWorkers ?? 0,
       drainingIdleWorkers: wire?.sender.drainingIdleWorkers ?? 0,
       drainingInFlightWorkers: wire?.sender.drainingInFlightWorkers ?? 0,
       drainingBackoffWorkers: wire?.sender.drainingBackoffWorkers ?? 0,
-      retryPolicy: null,
-      attemptedTps: null,
-      retryAttemptedTps: null,
-      terminalFailedTps: null,
-      inFlightRequests: null,
-      attemptsStartedTotal: 0,
-      retryAttemptsStartedTotal: 0,
-      successfulResponses: null,
-      failedResponses: null,
-      retries: null,
-      timeoutsTotal: 0,
-      terminalFailedBatchesTotal: 0,
-      terminalFailedTransactionsTotal: 0,
-      ambiguousTimeoutTransactionsTotal: 0,
-      duplicateRiskTransactionsTotal: 0,
-      ambiguousTerminalTransactionsTotal: 0,
-      state: runState,
-    },
-    http: {
-      id: 'http',
-      connectionState: 'disconnected',
-      statusCode: null,
-      lastOutcome: null,
-      throughputTps: null,
-      inFlightRequests: null,
-      requestsStartedTotal: 0,
-      requestsCompletedTotal: 0,
-      requestsSucceededTotal: 0,
-      requestsFailedTotal: 0,
-      requestsTimedOutTotal: 0,
-      networkErrorsTotal: 0,
-      latencyP95Ms: null,
-    },
-    target: {
-      id: 'target',
-      endpoint: null,
-      acceptedTps: null,
-      rejectedTps: null,
-      latencyP95Ms: null,
-      http200Responses: null,
-      http503Responses: null,
-      connectionState: 'disconnected',
     },
   })
 }
@@ -399,8 +331,8 @@ function collectUnknownPaths(input: unknown, parsed: unknown, paths: string[], p
 function canDispatchConfigCommand(
   command: SupportedCommand,
   snapshot: LoadgenTelemetrySnapshot,
+  config: WireSnapshot['config'] | null,
 ): boolean {
-  const config = snapshot.config
   if (
     snapshot.connectionState !== 'connected' ||
     snapshot.runState !== 'running' ||
@@ -469,7 +401,6 @@ export class HttpAdapter implements LoadgenAdapter {
   private activeCommand: ActiveRequest | null = null
   private lastWire: WireSnapshot | null = null
   private lastDecodeError: string | null = null
-  private commandSequence = 0
   private commandChannel: Promise<void> = Promise.resolve()
   private disposed = false
 
@@ -495,27 +426,17 @@ export class HttpAdapter implements LoadgenAdapter {
   }
 
   dispatch = (command: LoadgenCommand): Promise<CommandReceipt> => {
-    const commandId = `http-local-${++this.commandSequence}`
-
     if (!isSupportedCommand(command)) {
-      return Promise.resolve(
-        this.rejectCommand(commandId, command, 'unavailable', UNAVAILABLE_COMMAND_MESSAGE, false),
-      )
+      return Promise.resolve(this.rejectCommand('unavailable', UNAVAILABLE_COMMAND_MESSAGE))
     }
-
     if (this.disposed) {
-      return Promise.resolve(
-        this.rejectCommand(commandId, command, 'disposed', DISPOSED_COMMAND_MESSAGE, false),
-      )
+      return Promise.resolve(this.rejectCommand('disposed', DISPOSED_COMMAND_MESSAGE))
+    }
+    if (!canDispatchConfigCommand(command, this.snapshot, this.lastWire?.config ?? null)) {
+      return Promise.resolve(this.rejectCommand('unavailable', UNAVAILABLE_COMMAND_MESSAGE))
     }
 
-    if (!canDispatchConfigCommand(command, this.snapshot)) {
-      return Promise.resolve(
-        this.rejectCommand(commandId, command, 'unavailable', UNAVAILABLE_COMMAND_MESSAGE, false),
-      )
-    }
-
-    const receipt = this.commandChannel.then(() => this.sendCommand(commandId, command))
+    const receipt = this.commandChannel.then(() => this.sendCommand(command))
     this.commandChannel = receipt.then(
       () => undefined,
       () => undefined,
@@ -592,22 +513,13 @@ export class HttpAdapter implements LoadgenAdapter {
     this.publish(createSnapshot(revision, 'connected', wire))
   }
 
-  private sendCommand = async (
-    commandId: string,
-    command: SupportedCommand,
-  ): Promise<CommandReceipt> => {
+  private sendCommand = async (command: SupportedCommand): Promise<CommandReceipt> => {
     if (this.disposed) {
-      return this.rejectCommand(commandId, command, 'disposed', DISPOSED_COMMAND_MESSAGE, false)
+      return this.rejectCommand('disposed', DISPOSED_COMMAND_MESSAGE)
     }
 
-    if (!canDispatchConfigCommand(command, this.snapshot)) {
-      return this.rejectCommand(
-        commandId,
-        command,
-        'unavailable',
-        UNAVAILABLE_COMMAND_MESSAGE,
-        false,
-      )
+    if (!canDispatchConfigCommand(command, this.snapshot, this.lastWire?.config ?? null)) {
+      return this.rejectCommand('unavailable', UNAVAILABLE_COMMAND_MESSAGE)
     }
 
     const request = startRequest(COMMAND_TIMEOUT_MS)
@@ -634,60 +546,36 @@ export class HttpAdapter implements LoadgenAdapter {
     }
 
     if (this.disposed) {
-      return this.rejectCommand(commandId, command, 'disposed', DISPOSED_COMMAND_MESSAGE, false)
+      return this.rejectCommand('disposed', DISPOSED_COMMAND_MESSAGE)
     }
     if (abortedBeforeCleanup || response === null) {
       return this.rejectCommand(
-        commandId,
-        command,
         'unavailable',
         abortedBeforeCleanup
           ? 'command request timed out'
           : 'command request failed due to a network error',
-        true,
       )
     }
 
     if (isSuccessfulStatus(response.status)) {
       return deepFreeze({
-        commandId,
-        commandType: command.type,
         accepted: true,
-        applyMode: 'immediate',
-        appliedAtMs: Date.now(),
-        snapshotRevision: this.snapshot.revision,
         error: null,
       })
     }
 
     return this.rejectCommand(
-      commandId,
-      command,
       'unavailable',
       `command request failed with HTTP status ${response.status}`,
-      response.status >= 500 && response.status <= 599,
     )
   }
 
-  private rejectCommand(
-    commandId: string,
-    command: LoadgenCommand,
-    code: 'disposed' | 'unavailable',
-    message: string,
-    retryable: boolean,
-  ): CommandReceipt {
+  private rejectCommand(code: 'disposed' | 'unavailable', message: string): CommandReceipt {
     return deepFreeze({
-      commandId,
-      commandType: command.type,
       accepted: false,
-      applyMode: 'unavailable',
-      appliedAtMs: null,
-      snapshotRevision: this.snapshot.revision,
       error: {
         code,
         message,
-        retryable,
-        details: null,
       },
     })
   }

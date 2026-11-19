@@ -36,7 +36,7 @@ interface WorkerActorProps {
   drainingActivityCounts: Readonly<
     Record<'idle' | 'reading' | 'blocked' | 'in-flight' | 'backoff', number>
   >
-  runState: RunState
+  runState: RunState | null
   active?: boolean
   inputPort?: Point
   outputPort: Point

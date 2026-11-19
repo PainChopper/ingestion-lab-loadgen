@@ -28,8 +28,6 @@ beforeAll(() => {
 function requestedControl(overrides: Partial<NumericControlSnapshot> = {}): NumericControlSnapshot {
   return {
     applied: 120_000,
-    preview: null,
-    pending: null,
     min: 0,
     max: 250_000,
     step: 5_000,
@@ -63,7 +61,6 @@ interface HarnessSnapshotProps {
   onSelect?: (id: SelectableId) => void
   channelOverrides?: Partial<ChannelSnapshot>
   installed?: boolean | null
-  pendingInstalled?: boolean | null
   orientation?: PipelineOrientation
 }
 
@@ -71,6 +68,8 @@ interface HarnessOptions extends HarnessSnapshotProps {
   accepted?: boolean
   onCommand?: (value: number) => void
   modeAccepted?: boolean
+  confirmRequested?: boolean
+  confirmMode?: boolean
   onModeCommand?: (value: boolean) => void
 }
 
@@ -79,7 +78,6 @@ function Harness({
   onSelect = () => undefined,
   channelOverrides = {},
   installed = true,
-  pendingInstalled = null,
   orientation = 'landscape',
   revision,
   dispatchRequested,
@@ -104,16 +102,6 @@ function Harness({
     rejectionMessage: 'Valve mode change rejected',
     unavailableMessage: 'Valve mode change unavailable',
   })
-  const requestedTpsControl =
-    control.preview !== null
-      ? { ...requestedController, desired: control.preview, phase: 'preview' as const }
-      : control.pending === null
-        ? requestedController
-        : { ...requestedController, desired: control.pending, phase: 'pending' as const }
-  const installedControl =
-    pendingInstalled === null
-      ? modeController
-      : { ...modeController, desired: pendingInstalled, phase: 'pending' as const }
   const geometry = createPipelineGeometry({
     orientation,
     readerWorkers: 7,
@@ -129,12 +117,11 @@ function Harness({
           installed: {
             ...snapshot.throttler.installed,
             applied: installed,
-            pending: pendingInstalled,
           },
         }}
         upstreamChannel={{ ...snapshot.readerChannel, ...channelOverrides }}
-        requestedTpsControl={requestedTpsControl}
-        installedControl={installedControl}
+        requestedTpsControl={requestedController}
+        installedControl={modeController}
         selected={false}
         onSelect={onSelect}
         geometry={geometry.actors.throttler}
@@ -151,7 +138,7 @@ function renderHarness(initialProps: HarnessOptions = {}) {
   function dispatchRequested(value: number) {
     const { onCommand, accepted = true } = props
     onCommand?.(value)
-    if (accepted) {
+    if (accepted && props.confirmRequested !== false) {
       rerender({ ...props, control: { ...(props.control ?? requestedControl()), applied: value } })
     }
     return Promise.resolve({ accepted })
@@ -160,7 +147,7 @@ function renderHarness(initialProps: HarnessOptions = {}) {
   async function dispatchInstalled(value: boolean) {
     const { onModeCommand, modeAccepted = true } = props
     onModeCommand?.(value)
-    if (modeAccepted) rerender({ ...props, installed: value })
+    if (modeAccepted && props.confirmMode !== false) rerender({ ...props, installed: value })
     return { accepted: modeAccepted }
   }
 
@@ -520,12 +507,13 @@ describe('ThrottlerActor valve control', () => {
     expect(onModeCommand).toHaveBeenCalledOnce()
   })
 
-  it('renders backend pending mode as a yellow ghost without changing applied state', () => {
-    const view = renderHarness({ pendingInstalled: false })
+  it('renders live pending mode as a yellow ghost without changing applied state', async () => {
+    const view = renderHarness({ confirmMode: false })
     const control = screen.getByRole('button', {
       name: 'Remove throttler valve',
     })
 
+    await userEvent.setup().click(control)
     expect(control.hasAttribute('aria-pressed')).toBe(false)
     expect(control.hasAttribute('aria-valuetext')).toBe(false)
     expect(
@@ -538,22 +526,6 @@ describe('ThrottlerActor valve control', () => {
       view.container.querySelector('.pipeline-valve-installation-ghost--pending'),
     ).not.toBeNull()
     expect(view.container.querySelector('.pipeline-valve-detached-assembly--applied')).toBeNull()
-  })
-
-  it('keeps applied opening solid while preview takes precedence over pending', () => {
-    const view = renderHarness({ control: requestedControl({ pending: 135_000 }) })
-    const slider = screen.getByRole('slider', { name: 'Throttle opening' })
-
-    expect(slider.getAttribute('aria-valuenow')).toBe('6')
-    expect(screen.getByText('45% OPEN')).not.toBeNull()
-    expect(view.container.querySelector('.pipeline-valve-ghost--pending')).not.toBeNull()
-
-    view.rerender({
-      control: requestedControl({ preview: 160_000, pending: 135_000 }),
-    })
-    expect(slider.getAttribute('aria-valuenow')).toBe('7')
-    expect(screen.getByText('45% OPEN')).not.toBeNull()
-    expect(view.container.querySelector('.pipeline-valve-ghost--preview')).not.toBeNull()
   })
 
   it('clears a rejected ghost and keeps invalid capabilities readonly', async () => {
@@ -764,7 +736,9 @@ describe('ThrottlerActor valve control', () => {
       ),
     ).toBe(true)
 
-    view.rerender({ control: requestedControl({ pending: 135_000 }) })
+    view.rerender({ control: requestedControl({ applied: 115_000 }), confirmRequested: false })
+    const pendingSlider = screen.getByRole('slider', { name: 'Throttle opening' })
+    fireEvent.keyDown(pendingSlider, { key: 'ArrowRight' })
     const ghost = view.container.querySelector('[data-gate-kind="pending"]')!
     expect(ghost.getAttribute('data-piston-axis-ratio')).toBe('0.82')
     expect(
@@ -774,7 +748,7 @@ describe('ThrottlerActor valve control', () => {
   })
 
   it('leaves an exact flange connector gap and colors it from applied flow only', () => {
-    const control = requestedControl({ applied: 0, preview: 250_000, pending: 225_000 })
+    const control = requestedControl({ applied: 0 })
     const view = renderHarness({
       control,
       channelOverrides: { flowState: 'normal', displayedPressure: 0 },
