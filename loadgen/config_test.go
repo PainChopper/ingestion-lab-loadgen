@@ -11,74 +11,6 @@ import (
 	"time"
 )
 
-const testSenderURL = "http://127.0.0.1:8081/internal/ingest"
-
-func testConfig(t *testing.T) config {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte(testConfigContents()), 0o600); err != nil {
-		t.Fatalf("write test config: %v", err)
-	}
-	loaded, err := loadConfig(path)
-	if err != nil {
-		t.Fatalf("load test config: %v", err)
-	}
-	return loaded
-}
-
-func testConfigContents() string {
-	return `schema_version = 4
-
-[http]
-addr = "127.0.0.1:8080"
-
-[source]
-path = 'C:\dataset\*.parquet'
-
-[reader]
-read_batch_size = 1000
-
-[reader.workers]
-initial = 1
-max = 7
-
-[readerChannel]
-capacity = 2
-
-[senderChannel]
-capacity = 0
-
-[throttler]
-installed = true
-
-[throttler.requested_tps]
-initial = 2000000
-max = 4000000
-step = 200000
-
-
-[sender.workers]
-initial = 32
-max = 32
-
-[sender.api]
-timeout_ms = 30000
-url = "http://127.0.0.1:8081/internal/ingest"
-
-[sender.retry]
-# After the final delay, retries continue at that delay until delivery succeeds
-# or the operator explicitly stops or resets the run.
-delays_ms = [250, 500, 1000, 2000, 5000]
-jitter_percent = 20
-
-[metrics]
-window_ms = 1000
-
-[logging]
-level = "info"
-`
-}
-
 func TestLoadConfigRejectsWeakNumericTypes(t *testing.T) {
 	for _, test := range []struct{ name, old, replacement string }{
 		{"worker string", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = \"1\""},
@@ -332,15 +264,6 @@ func TestSchema4RequiredFields(t *testing.T) {
 	}
 }
 
-func writeConfigInput(t *testing.T, input string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 func TestSchema4StrictShapeAndTypes(t *testing.T) {
 	for _, tc := range []struct{ name, old, replacement string }{
 		{"relative source", `C:\dataset\*.parquet`, "data/*.parquet"},
@@ -444,24 +367,5 @@ func TestSchema4CheckedInProfile(t *testing.T) {
 		cfg.Reader.Workers != (workersConfig{Initial: 1, Max: 7}) || cfg.Sender.Workers != (workersConfig{Initial: 32, Max: 32}) ||
 		cfg.Throttler.RequestedTPS != (tpsConfig{Initial: 2000000, Max: 4000000, Step: 200000}) || !cfg.Throttler.Installed || cfg.Metrics.WindowMS != 1000 {
 		t.Fatalf("example profile changed: %+v", cfg)
-	}
-}
-
-func TestPipelineOptionsPreservesConfiguration(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Reader.ReadBatchSize = 1500
-	cfg.ReaderChannel.Capacity = 3
-	cfg.SenderChannel.Capacity = 2
-	cfg.Reader.Workers.Initial = 4
-	cfg.Sender.Workers = workersConfig{Initial: 7, Max: 112}
-	cfg.Throttler.Installed = false
-	cfg.Sender.API.TimeoutMS = 1234
-	options := pipelineOptions(cfg, nil)
-	if options.BatchSize != 1500 || options.ReaderCapacity != 3 || options.SenderCapacity != 2 ||
-		options.Readers != 4 || options.Senders != 7 || options.SenderMaxConns != 112 ||
-		options.Rate.TPS != 2000000 || options.Rate.Installed || options.SenderURL != testSenderURL ||
-		options.SenderTimeout != 1234*time.Millisecond || options.RetryJitterPercent != 20 ||
-		!slices.Equal(options.RetryDelays, []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second, 5 * time.Second}) {
-		t.Fatalf("pool limit changed: %+v", options)
 	}
 }

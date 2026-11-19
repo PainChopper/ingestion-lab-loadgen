@@ -3,13 +3,18 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
 )
 
 func TestSenderClientPostsJSONBatch(t *testing.T) {
@@ -201,4 +206,177 @@ func (b *closeTrackingBody) Read(p []byte) (int, error) {
 func (b *closeTrackingBody) Close() error {
 	b.closed.Store(true)
 	return nil
+}
+
+func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusMethodNotAllowed, http.StatusRequestEntityTooLarge} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if requests.Add(1) == 4 {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+
+			batches := make(chan []Transaction)
+			var channel batchQueue
+			channel.ch = batches
+			channel.batchSize = 0
+
+			config := testSenderOptions()
+			config.RetryDelays = []time.Duration{1 * time.Millisecond}
+			config.SenderURL = server.URL
+			config.Senders = 1
+			config.Logger = zap.NewNop()
+			pool := startSenderPool(context.Background(), &channel, config, nil)
+			batches <- []Transaction{{ClientID: "invalid"}}
+			close(batches)
+			<-pool.done
+			if got := pool.completed.Load(); got != 1 {
+				t.Fatalf("completed=%d, want 1", got)
+			}
+			if requests.Load() != 4 {
+				t.Fatalf("HTTP requests = %d, want 4", requests.Load())
+			}
+		})
+	}
+}
+
+func TestSenderPoolReusesConnectionsAcrossConcurrentWaves(t *testing.T) {
+	for _, requestsPerWave := range []int{4, 112} {
+		t.Run(fmt.Sprintf("workers=%d", requestsPerWave), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			entered := make(chan struct{}, requestsPerWave)
+			release := make(chan struct{})
+			var connections atomic.Int32
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if _, err := io.Copy(io.Discard, r.Body); err != nil {
+					return
+				}
+				entered <- struct{}{}
+				select {
+				case <-release:
+					_, _ = io.WriteString(w, "retry")
+				case <-r.Context().Done():
+				}
+			}))
+			server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+				if state == http.StateNew {
+					connections.Add(1)
+				}
+			}
+			server.Start()
+			defer server.Close()
+			defer close(release)
+
+			batches := make(chan []Transaction)
+			var telemetry batchQueue
+			telemetry.ch = batches
+			telemetry.batchSize = 0
+
+			config := testSenderOptions()
+			config.SenderURL = server.URL
+			config.SenderMaxConns = requestsPerWave
+			config.Senders = requestsPerWave
+			config.Logger = zap.NewNop()
+			pool := startSenderPool(ctx, &telemetry, config, nil)
+			defer func() {
+				cancel()
+				<-pool.done
+			}()
+
+			for wave := 1; wave <= 2; wave++ {
+				results := make(chan error, requestsPerWave)
+				for range requestsPerWave {
+					go func() {
+						results <- pool.deliver(ctx, []Transaction{{ClientID: "client"}}, 1)
+					}()
+				}
+				for range requestsPerWave {
+					select {
+					case <-entered:
+					case <-ctx.Done():
+						t.Fatalf("wave %d did not reach %d simultaneous requests", wave, requestsPerWave)
+					}
+				}
+				for range requestsPerWave {
+					select {
+					case release <- struct{}{}:
+					case <-ctx.Done():
+						t.Fatalf("wave %d did not release all responses", wave)
+					}
+				}
+				for range requestsPerWave {
+					select {
+					case got := <-results:
+						if got == nil {
+							t.Errorf("wave %d error = %v, want failure for HTTP 200", wave, got)
+						}
+					case <-ctx.Done():
+						t.Fatalf("wave %d did not finish reading all responses", wave)
+					}
+				}
+				got := connections.Load()
+				t.Logf("wave %d total TCP connections = %d", wave, got)
+				if got != int32(requestsPerWave) {
+					t.Fatalf("wave %d total new connections = %d, want %d", wave, got, requestsPerWave)
+				}
+			}
+		})
+	}
+}
+
+func TestSenderPoolEntersBackoffWhenReceiverTimesOut(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			return
+		}
+		entered <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	batches := make(chan []Transaction)
+	var telemetry batchQueue
+	telemetry.ch = batches
+	telemetry.batchSize = 0
+
+	config := testSenderOptions()
+	config.SenderURL = server.URL
+	config.SenderTimeout = 50 * time.Millisecond
+	config.RetryDelays = []time.Duration{3_600_000 * time.Millisecond}
+	backoff := make(chan struct{}, 1)
+	config.RandomIntN = func(n int) int {
+		// retry.delay runs after the worker enters backoff.
+		backoff <- struct{}{}
+		return n / 2
+	}
+	config.Senders = 1
+	config.Logger = zap.NewNop()
+	pool := startSenderPool(ctx, &telemetry, config, nil)
+	defer func() {
+		cancel()
+		<-pool.done
+	}()
+	batches <- []Transaction{{ClientID: "client"}}
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("receiver did not get the request")
+	}
+	select {
+	case <-backoff:
+	case <-ctx.Done():
+		t.Fatal("Sender did not enter backoff after the HTTP timeout")
+	}
+	if got := pool.snapshot(); got.BackoffWorkers != 1 {
+		t.Fatalf("after HTTP timeout: %+v", got)
+	}
 }

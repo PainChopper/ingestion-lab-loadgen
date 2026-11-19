@@ -14,6 +14,56 @@ import (
 	"time"
 )
 
+func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   *int
+		want    int
+		wantErr bool
+	}{
+		{name: "absent", want: http.StatusNoContent},
+		{name: "explicit zero", input: new(0), wantErr: true},
+		{name: "success", input: new(204), want: http.StatusNoContent},
+		{name: "bad request", input: new(400), want: http.StatusBadRequest},
+		{name: "server error", input: new(500), want: http.StatusInternalServerError},
+		{name: "unsupported", input: new(201), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := Config{Path: "/internal/ingest", MaxBodyBytes: 1024, ResponseStatus: test.input}
+			if err := config.Validate(); (err != nil) != test.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %t", err, test.wantErr)
+			}
+			server, err := NewHandler(config)
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("unsupported programmatic response status accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertStatus(t, server, 0, 0, false, 0, test.want)
+			if test.input != nil {
+				*test.input = 201
+			}
+			recorder := performRequest(
+				server,
+				httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()),
+			)
+			if recorder.Code != test.want {
+				t.Fatalf("ingest status = %d, want %d", recorder.Code, test.want)
+			}
+			var accepted int64
+			if test.want == http.StatusNoContent {
+				accepted = 1
+			}
+			assertStatus(t, server, accepted, accepted, accepted != 0, 0, test.want)
+		})
+	}
+}
+
 func TestHandlerExactConfiguredPaths(t *testing.T) {
 	for _, test := range []struct{ path, other string }{
 		{path: "/v1/batches", other: "/v1/batches/extra"},

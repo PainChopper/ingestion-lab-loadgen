@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,25 @@ import (
 	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
 )
+
+func TestPipelineOptionsPreservesConfiguration(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Reader.ReadBatchSize = 1500
+	cfg.ReaderChannel.Capacity = 3
+	cfg.SenderChannel.Capacity = 2
+	cfg.Reader.Workers.Initial = 4
+	cfg.Sender.Workers = workersConfig{Initial: 7, Max: 112}
+	cfg.Throttler.Installed = false
+	cfg.Sender.API.TimeoutMS = 1234
+	options := pipelineOptions(cfg, nil)
+	if options.BatchSize != 1500 || options.ReaderCapacity != 3 || options.SenderCapacity != 2 ||
+		options.Readers != 4 || options.Senders != 7 || options.SenderMaxConns != 112 ||
+		options.Rate.TPS != 2000000 || options.Rate.Installed || options.SenderURL != testSenderURL ||
+		options.SenderTimeout != 1234*time.Millisecond || options.RetryJitterPercent != 20 ||
+		!slices.Equal(options.RetryDelays, []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second, 5 * time.Second}) {
+		t.Fatalf("pool limit changed: %+v", options)
+	}
+}
 
 func TestNewApplicationLoggerWritesLogfmtToProvidedStdout(t *testing.T) {
 	var output bytes.Buffer

@@ -181,14 +181,6 @@ func mustMarshalJSON(t *testing.T, value any) string {
 	return string(encoded)
 }
 
-func testRemoteSnapshot(t *testing.T) runtimeSnapshot {
-	t.Helper()
-	return runtimeSnapshot{
-		Run:    runSnapshot{State: runStateRunning},
-		Config: snapshotConfig(testConfig(t)),
-	}
-}
-
 func TestFormatSnapshot(t *testing.T) {
 	status := runtimeSnapshot{
 		Run: runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},

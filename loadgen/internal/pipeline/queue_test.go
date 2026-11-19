@@ -203,16 +203,3 @@ func TestBatchQueueUnbufferedHandoffCountsOnlyAfterSend(t *testing.T) {
 		}
 	})
 }
-
-func assertBlockedSender(t *testing.T, telemetry *batchQueue) {
-	t.Helper()
-	assertBlockedSenders(t, telemetry, 1)
-}
-
-func assertBlockedSenders(t *testing.T, telemetry *batchQueue, want int) {
-	t.Helper()
-	synctest.Wait()
-	if got := telemetry.snapshot(time.Now()).BlockedSenders; got != want {
-		t.Fatalf("blocked senders = %d, want %d", got, want)
-	}
-}
