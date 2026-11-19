@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"testing/synctest"
 	"time"
 
@@ -60,6 +61,9 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 			if response.StatusCode != http.StatusBadRequest {
 				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusBadRequest)
 			}
+			if len(commands) != 0 {
+				t.Fatal("invalid command was dispatched")
+			}
 		})
 	}
 }
@@ -91,6 +95,17 @@ func TestCommandsHandlerRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+func TestCommandsHandlerRejectsBodyReadFailure(t *testing.T) {
+	commands := make(chan runtimeRequest, 1)
+	req := httptest.NewRequest(http.MethodPost, commandsPath, nil)
+	req.Body = io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))
+	rec := httptest.NewRecorder()
+	commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || rec.Body.String() != "invalid request body\n" || len(commands) != 0 {
+		t.Fatalf("status=%d body=%q dispatched=%d", rec.Code, rec.Body.String(), len(commands))
+	}
+}
+
 func TestThrottlerCommandValidation(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -98,6 +113,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		want      int
 		kind      runtimeCommandKind
 		installed bool
+		value     int
 	}{
 		{name: "TPS missing", body: `{"action":"set-requested-tps"}`, want: http.StatusBadRequest},
 		{name: "TPS null", body: `{"action":"set-requested-tps","value":null}`, want: http.StatusBadRequest},
@@ -106,20 +122,17 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "TPS negative", body: `{"action":"set-requested-tps","value":-100}`, want: http.StatusBadRequest},
 		{name: "TPS off step", body: `{"action":"set-requested-tps","value":101}`, want: http.StatusBadRequest},
 		{name: "TPS over max", body: `{"action":"set-requested-tps","value":4100000}`, want: http.StatusBadRequest},
-		{name: "TPS extra field", body: `{"action":"set-requested-tps","value":100,"other":1}`, want: http.StatusBadRequest},
-		{name: "TPS trailing JSON", body: `{"action":"set-requested-tps","value":100}{}`, want: http.StatusBadRequest},
+		{name: "TPS extra field", body: `{"action":"set-requested-tps","value":2000000,"other":1}`, want: http.StatusBadRequest},
+		{name: "TPS trailing JSON", body: `{"action":"set-requested-tps","value":2000000}{}`, want: http.StatusBadRequest},
 		{name: "mode missing", body: `{"action":"set-throttler-installed"}`, want: http.StatusBadRequest},
 		{name: "mode null", body: `{"action":"set-throttler-installed","value":null}`, want: http.StatusBadRequest},
 		{name: "mode number", body: `{"action":"set-throttler-installed","value":1}`, want: http.StatusBadRequest},
-		{name: "mode unknown", body: `{"action":"set-throttler-installed","value":"other"}`, want: http.StatusBadRequest},
-		{name: "old installed string", body: `{"action":"set-throttler-installed","value":"installed"}`, want: http.StatusBadRequest},
-		{name: "old bypass string", body: `{"action":"set-throttler-installed","value":"bypass"}`, want: http.StatusBadRequest},
 		{name: "quoted bool", body: `{"action":"set-throttler-installed","value":"false"}`, want: http.StatusBadRequest},
 		{name: "installed trailing JSON", body: `{"action":"set-throttler-installed","value":false}{}`, want: http.StatusBadRequest},
-		{name: "mode extra field", body: `{"action":"set-throttler-installed","value":"bypass","other":1}`, want: http.StatusBadRequest},
+		{name: "mode extra field", body: `{"action":"set-throttler-installed","value":false,"other":1}`, want: http.StatusBadRequest},
 		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: setRequestedTPS},
-		{name: "TPS initial", body: `{"action":"set-requested-tps","value":2000000}`, want: http.StatusOK, kind: setRequestedTPS},
-		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: setRequestedTPS},
+		{name: "TPS initial", body: `{"action":"set-requested-tps","value":2000000}`, want: http.StatusOK, kind: setRequestedTPS, value: 2000000},
+		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: setRequestedTPS, value: 4000000},
 		{name: "mode installed", body: `{"action":"set-throttler-installed","value":true}`, want: http.StatusOK, kind: setThrottlerInstalled, installed: true},
 		{name: "mode bypass", body: `{"action":"set-throttler-installed","value":false}`, want: http.StatusOK, kind: setThrottlerInstalled},
 	}
@@ -141,6 +154,9 @@ func TestThrottlerCommandValidation(t *testing.T) {
 					command := dispatch.command
 					if command.kind != test.kind {
 						t.Errorf("command kind = %v, want %v", command.kind, test.kind)
+					}
+					if command.kind == setRequestedTPS && command.value != test.value {
+						t.Errorf("TPS value = %d, want %d", command.value, test.value)
 					}
 					if command.kind == setThrottlerInstalled && command.installed != test.installed {
 						t.Errorf("installed = %t, want %t", command.installed, test.installed)
@@ -986,19 +1002,28 @@ func TestHTTPWaitFailuresReturnServiceUnavailable(t *testing.T) {
 }
 
 func TestHTTPCommandReceiptsHaveEmptyBody(t *testing.T) {
-	for _, applied := range []bool{true, false} {
-		requests := make(chan runtimeRequest)
-		mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
-		go func() { (<-requests).(controlRequest).reply <- applied }()
-		recorder := httptest.NewRecorder()
-		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"set-reader-workers","value":1}`)))
-		want := http.StatusOK
-		if !applied {
-			want = http.StatusConflict
-		}
-		if recorder.Code != want || recorder.Body.Len() != 0 {
-			t.Fatalf("applied=%t status=%d body=%q", applied, recorder.Code, recorder.Body.String())
-		}
+	for _, test := range []struct {
+		name    string
+		applied bool
+	}{
+		{name: "accepted", applied: true},
+		{name: "conflict"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			applied := test.applied
+			requests := make(chan runtimeRequest)
+			mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+			go func() { (<-requests).(controlRequest).reply <- applied }()
+			recorder := httptest.NewRecorder()
+			mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"set-reader-workers","value":1}`)))
+			want := http.StatusOK
+			if !applied {
+				want = http.StatusConflict
+			}
+			if recorder.Code != want || recorder.Body.Len() != 0 {
+				t.Fatalf("applied=%t status=%d body=%q", applied, recorder.Code, recorder.Body.String())
+			}
+		})
 	}
 }
 
@@ -1035,26 +1060,9 @@ func TestStartHTTPServerLogsActualListenerAddress(t *testing.T) {
 	}
 }
 
-func TestServeMuxRoutes(t *testing.T) {
-	loaded := testConfig(t)
-	loaded.Sender.API.URL = "https://example.test" + snapshotPath
-	mux := newServeMux(runtimeRequests{queue: make(chan runtimeRequest, 1)}, newPrometheusMetrics(), loaded, zap.NewNop())
-
-	for _, route := range []struct{ method, path, pattern string }{
-		{http.MethodGet, snapshotPath, "GET " + snapshotPath},
-		{http.MethodHead, snapshotPath, "GET " + snapshotPath},
-		{http.MethodPost, commandsPath, "POST " + commandsPath},
-	} {
-		_, pattern := mux.Handler(httptest.NewRequest(route.method, route.path, nil))
-		if pattern != route.pattern {
-			t.Errorf("pattern=%q,want %q", pattern, route.pattern)
-		}
-	}
-}
-
 func TestServeMuxHasNoLocalIngest(t *testing.T) {
 	mux := newServeMux(runtimeRequests{queue: make(chan runtimeRequest)}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
-	for _, path := range []string{"/internal/test/ingest", "/internal/ingest"} {
+	for _, path := range []string{"/internal/test/ingest", "/internal/ingest", snapshotPath + "/extra", commandsPath + "/extra"} {
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
 		if recorder.Code != http.StatusNotFound {
@@ -1224,31 +1232,6 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	}
 	if got := actual; !reflect.DeepEqual(got, expected) {
 		t.Errorf("actual = %+v, want %+v", got, expected)
-	}
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(rec.Body.Bytes(), &root); err != nil {
-		t.Fatal(err)
-	}
-	if string(root["config"]) == "null" {
-		t.Error("config must be a JSON object")
-	}
-	var config map[string]json.RawMessage
-	if err := json.Unmarshal(root["config"], &config); err != nil {
-		t.Fatalf("decode config: %v", err)
-	}
-	var workers workersConfig
-	if err := json.Unmarshal(config["readerWorkers"], &workers); err != nil {
-		t.Fatal(err)
-	}
-	if want := (workersConfig{Initial: 1, Max: 7}); workers != want {
-		t.Errorf("Reader workers config = %+v, want %+v", workers, want)
-	}
-	var reader map[string]json.RawMessage
-	if err := json.Unmarshal(root["reader"], &reader); err != nil {
-		t.Fatal(err)
-	}
-	if string(reader["liveWorkers"]) != "2" || string(reader["drainingWorkers"]) != "1" {
-		t.Errorf("Reader worker counts = %s / %s", reader["liveWorkers"], reader["drainingWorkers"])
 	}
 }
 

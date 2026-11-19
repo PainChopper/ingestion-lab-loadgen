@@ -54,25 +54,28 @@ func TestThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 }
 
 func TestThrottlerCancelWhileWaitingForInput(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	readerBatches := make(chan []Transaction)
-	var readerChannel, outputTelemetry batchQueue
-	senderChannel := &outputTelemetry
-	senderBatches := make(chan []Transaction)
-	senderChannel.ch = senderBatches
-	senderChannel.batchSize = 0
-	readerChannel.ch = readerBatches
-	readerChannel.batchSize = 0
-	stage := startThrottler(ctx, &readerChannel, senderChannel, Rate{Installed: false})
-	cancel()
-	waitForThrottlerDone(t, stage.done)
-	select {
-	case _, ok := <-senderBatches:
-		if !ok {
-			t.Fatal("Throttler closed caller-owned Sender channel")
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		readerBatches := make(chan []Transaction)
+		var readerChannel, outputTelemetry batchQueue
+		senderChannel := &outputTelemetry
+		senderBatches := make(chan []Transaction)
+		senderChannel.ch = senderBatches
+		senderChannel.batchSize = 0
+		readerChannel.ch = readerBatches
+		readerChannel.batchSize = 0
+		stage := startThrottler(ctx, &readerChannel, senderChannel, Rate{Installed: false})
+		synctest.Wait()
+		cancel()
+		waitForThrottlerDone(t, stage.done)
+		select {
+		case _, ok := <-senderBatches:
+			if !ok {
+				t.Fatal("Throttler closed caller-owned Sender channel")
+			}
+		default:
 		}
-	default:
-	}
+	})
 }
 
 func TestThrottlerCancelWhileWaitingForOutput(t *testing.T) {
@@ -112,6 +115,94 @@ func TestThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 			t.Fatalf("cancelled Sender channel = %+v", completed)
 		}
 	})
+}
+
+func TestThrottlerCancelWhileWaitingForPacingOrZeroTPS(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		tps  int
+	}{
+		{name: "pacing timer", tps: 25},
+		{name: "zero TPS"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				input, output := newBatchQueue(1, 1), newBatchQueue(0, 1)
+				input.ch <- []Transaction{{ClientID: "held"}}
+				stage := startThrottler(ctx, input, output, Rate{Installed: true, TPS: test.tps})
+				synctest.Wait()
+				if got := input.snapshot(time.Now()); got.ReceivedBatchesTotal != 1 {
+					t.Fatalf("batch was not held by throttler: %+v", got)
+				}
+				if output.snapshot(time.Now()).BlockedSenders != 0 {
+					t.Fatal("pacing wait reached output before admission")
+				}
+				cancel()
+				<-stage.done
+				if got := output.snapshot(time.Now()); got.SentTransactionsTotal != 0 || got.BlockedSenders != 0 {
+					t.Fatalf("canceled wait admitted batch: %+v", got)
+				}
+			})
+		})
+	}
+}
+
+func TestThrottlerRateUpdateDuringPacingKeepsOriginalAnchor(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		tps      int
+		interval time.Duration
+	}{
+		{name: "faster", tps: 50, interval: 20 * time.Millisecond},
+		{name: "slower", tps: 10, interval: 100 * time.Millisecond},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				input, output := newBatchQueue(1, 1), newBatchQueue(1, 1)
+				input.ch <- []Transaction{{ClientID: "first"}}
+				stage := startThrottler(ctx, input, output, Rate{Installed: true, TPS: 25})
+				synctest.Wait()
+				started := time.Now()
+				time.Sleep(10 * time.Millisecond)
+				stage.update(Rate{Installed: true, TPS: test.tps})
+				synctest.Wait()
+				time.Sleep(test.interval - 10*time.Millisecond - time.Nanosecond)
+				synctest.Wait()
+				if len(output.ch) != 0 {
+					t.Fatal("updated slot admitted before original anchor plus new interval")
+				}
+				time.Sleep(time.Nanosecond)
+				synctest.Wait()
+				if len(output.ch) != 1 || time.Since(started) != test.interval {
+					t.Fatalf("at updated deadline: output=%d elapsed=%s", len(output.ch), time.Since(started))
+				}
+				if batch := <-output.ch; batch[0].ClientID != "first" {
+					t.Fatalf("held batch changed: %+v", batch)
+				}
+				input.ch <- []Transaction{{ClientID: "second"}}
+				synctest.Wait()
+				time.Sleep(test.interval - time.Nanosecond)
+				synctest.Wait()
+				if len(output.ch) != 0 {
+					t.Fatal("next slot accumulated excess credit")
+				}
+				time.Sleep(time.Nanosecond)
+				synctest.Wait()
+				if len(output.ch) != 1 {
+					t.Fatal("next slot missed its deadline")
+				}
+				if batch := <-output.ch; batch[0].ClientID != "second" {
+					t.Fatalf("next batch=%+v", batch)
+				}
+				cancel()
+				<-stage.done
+			})
+		})
+	}
 }
 
 func TestThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
@@ -193,6 +284,42 @@ func TestThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T) {
 				t.Fatal("Throttler closed caller-owned Sender channel")
 			}
 		default:
+		}
+	})
+}
+
+func TestThrottlerReadyControlUpdatePreventsBlockedSend(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		output := newBatchQueue(1, 1)
+		output.ch <- []Transaction{{ClientID: "preexisting"}}
+		stage := &throttler{output: output, updates: make(chan Rate, 1), done: make(chan struct{})}
+		// Only the update is ready: output is full before forwardBatch enters its select.
+		stage.updates <- Rate{Installed: true, TPS: 0}
+		settings := Rate{Installed: false}
+		var forwarded bool
+		go func() {
+			_, forwarded = stage.forwardBatch(ctx, []Transaction{{ClientID: "held"}}, &settings, time.Time{})
+			close(stage.done)
+		}()
+		synctest.Wait()
+		if got := output.snapshot(time.Now()); got.BlockedSenders != 0 || got.SentTransactionsTotal != 0 {
+			t.Fatalf("ready zero-TPS update started output wait: %+v", got)
+		}
+		stage.update(Rate{Installed: false})
+		synctest.Wait()
+		if got := output.snapshot(time.Now()); got.BlockedSenders != 1 {
+			t.Fatalf("bypass did not resume held batch: %+v", got)
+		}
+		<-output.ch
+		<-stage.done
+		batch := <-output.ch
+		if !forwarded || len(batch) != 1 || batch[0].ClientID != "held" {
+			t.Fatalf("forwarded=%t batch=%+v", forwarded, batch)
+		}
+		if got := output.snapshot(time.Now()); got.BlockedSenders != 0 || got.SentTransactionsTotal != 1 {
+			t.Fatalf("after handoff: %+v", got)
 		}
 	})
 }

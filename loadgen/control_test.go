@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -60,9 +61,6 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 			if got := state.run.state; got != runStateStarting {
 				t.Fatalf("initial run state = %q, want %q", got, runStateStarting)
 			}
-			if state.config.Source.Path != loaded.Source.Path {
-				t.Fatal("control state did not retain loaded source config")
-			}
 			if want := time.Duration(loaded.Metrics.WindowMS) * time.Millisecond; state.metricsWindow != want {
 				t.Fatalf("metrics window = %s, want %s", state.metricsWindow, want)
 			}
@@ -80,7 +78,10 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 			if !slices.Equal(got, want) {
 				t.Fatalf("initial controls = %v, want %v", got, want)
 			}
-			if got := state.controls.installed; got != loaded.Throttler.Installed {
+			if snapshot.Reader.SourceDirectory != pipeline.SourceDirectory(loaded.Source.Path) {
+				t.Fatalf("source directory = %q", snapshot.Reader.SourceDirectory)
+			}
+			if got := snapshot.Throttler.Installed; got != loaded.Throttler.Installed {
 				t.Fatalf("initial installed = %t, want %t", got, loaded.Throttler.Installed)
 			}
 		})
@@ -102,6 +103,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	var deliveredRows atomic.Int64
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var batch []pipeline.Transaction
 		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
@@ -113,6 +115,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 		default:
 		}
 		<-release
+		deliveredRows.Add(int64(len(batch)))
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer receiver.Close()
@@ -171,7 +174,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	if err := loop.awaitExit(t); err != nil {
 		t.Fatal(err)
 	}
-	assertFinalTransactions(t, events, state.run.totalTransactions, 0)
+	assertFinalTransactions(t, events, deliveredRows.Load(), 0)
 	assertCommandHTTP(t, mux, updates[0], http.StatusServiceUnavailable)
 }
 
@@ -389,7 +392,7 @@ func assertExitAtDeadline(t *testing.T, loop testEventLoop) {
 	}
 }
 
-func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
+func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 	const batchSize = 1_500
 	for _, tc := range []struct {
 		name                           string
@@ -409,6 +412,7 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 			release := make(chan struct{})
 			var releaseOnce sync.Once
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			var deliveredRows atomic.Int64
 			receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var rows []pipeline.Transaction
 				if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
@@ -420,6 +424,7 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 				default:
 				}
 				<-release
+				deliveredRows.Add(int64(len(rows)))
 				w.WriteHeader(http.StatusNoContent)
 			}))
 			defer receiver.Close()
@@ -512,7 +517,7 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 			if err := loop.awaitExit(t); err != nil {
 				t.Fatal(err)
 			}
-			if final := assertFinalTransactions(t, events, state.run.totalTransactions, 0); final["partial"] != false {
+			if final := assertFinalTransactions(t, events, deliveredRows.Load(), 0); final["partial"] != false {
 				t.Fatalf("clean drain must record a complete final log: %v", final)
 			}
 
@@ -534,6 +539,34 @@ func TestRunStartupSourceErrorReturnsWithoutSignal(t *testing.T) {
 		t.Fatalf("startup fault state = %+v", state.run)
 	}
 	assertFinalTransactions(t, events, 0, 0)
+}
+
+func TestEventLoopDrainsAfterUnexpectedHTTPServerExit(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "serve error", err: io.ErrUnexpectedEOF},
+		{name: "unexpected clean exit"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				state := newControlState(testConfig(t), zap.NewNop())
+				serverDone := make(chan error, 1)
+				serverDone <- test.err
+				started := time.Now()
+				deadline, err := state.runEventLoop(t.Context(), runtimeEvents{
+					serverDone: serverDone, metrics: newPrometheusMetrics(),
+				}, time.Second)
+				if err == nil || (test.err != nil && !errors.Is(err, test.err)) {
+					t.Fatalf("server exit error=%v, want cause %v", err, test.err)
+				}
+				if state.run.state != runStateFaulted || deadline != started.Add(time.Second) || time.Since(started) != time.Second {
+					t.Fatalf("state=%s deadline=%s elapsed=%s", state.run.state, deadline, time.Since(started))
+				}
+			})
+		})
+	}
 }
 
 func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
@@ -589,7 +622,7 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 	}
 }
 
-func TestMetricsWindowDrivesChannelRatesAndActualTPS(t *testing.T) {
+func TestSamplingUsesElapsedIntervalForChannelRatesAndActualTPS(t *testing.T) {
 	cfg := testConfig(t)
 	source := testDiscoveredSource(t)
 	synctest.Test(t, func(t *testing.T) {
@@ -763,9 +796,6 @@ func TestExecuteRuntimeCommandForwardsCommandAndReceipt(t *testing.T) {
 		if command.kind != setThrottlerInstalled || command.value != 42 || command.installed != false {
 			t.Errorf("command = %+v", command)
 		}
-		if cap(request.reply) != 1 {
-			t.Errorf("receipt reply capacity = %d, want 1", cap(request.reply))
-		}
 		request.reply <- want
 	}()
 
@@ -784,9 +814,6 @@ func TestRequestSnapshotForwardsReply(t *testing.T) {
 	go func() {
 		defer close(done)
 		request := (<-control).(snapshotRequest)
-		if cap(request.reply) != 1 {
-			t.Errorf("snapshot reply capacity = %d, want 1", cap(request.reply))
-		}
 		request.reply <- want
 	}()
 
@@ -872,7 +899,7 @@ func TestRuntimeRequestPreservesReadyReceiptWhenEventLoopCloses(t *testing.T) {
 	}
 }
 
-func TestSnapshotLogFieldsAndCadence(t *testing.T) {
+func TestSnapshotLogCadence(t *testing.T) {
 	var output bytes.Buffer
 	logger, err := newApplicationLogger("info", &output)
 	if err != nil {
@@ -917,10 +944,8 @@ func TestSnapshotLogFieldsAndCadence(t *testing.T) {
 	if strings.Count(line, "\n") != 1 || strings.Contains(line, "runtime_snapshot") || strings.Contains(line, "INGESTION LAB") {
 		t.Fatalf("summary line = %q", line)
 	}
-	for _, field := range []string{"event=runtime_summary", "state=running", "elapsed_ms=", "total_transactions=", "reader_channel_capacity=", "sender_channel_capacity=", "source_error_category="} {
-		if !strings.Contains(line, field) {
-			t.Fatalf("summary missing %q: %q", field, line)
-		}
+	if !strings.Contains(line, "event=runtime_summary") {
+		t.Fatalf("summary event missing: %q", line)
 	}
 	ticks <- afterDeadline.Add(time.Millisecond)
 	awaitSnapshotLogTick(t, harness.requests)

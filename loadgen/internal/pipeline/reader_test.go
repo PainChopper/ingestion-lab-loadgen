@@ -58,14 +58,135 @@ func TestDiscoverSourcePreservesGlobCause(t *testing.T) {
 	}
 }
 
-type errorCloser struct {
-	err    error
-	closed bool
+func TestReaderSourcePaths(t *testing.T) {
+	root := t.TempDir()
+	for _, test := range []struct{ name, pattern, want string }{
+		{name: "wildcard directory", pattern: filepath.Join(root, "fold=*", "part?", "*.parquet"), want: filepath.ToSlash(root)},
+		{name: "ordinary directory", pattern: filepath.Join(root, "part", "*.parquet"), want: filepath.ToSlash(filepath.Join(root, "part"))},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := SourceDirectory(test.pattern); got != test.want {
+				t.Fatalf("directory=%q, want %q", got, test.want)
+			}
+		})
+	}
+	for _, test := range []struct{ name, path, want string }{
+		{name: "inside", path: filepath.Join(root, "part", "a.parquet"), want: "part/a.parquet"},
+		{name: "same path", path: root, want: filepath.Base(root)},
+		{name: "parent", path: filepath.Dir(root), want: filepath.Base(filepath.Dir(root))},
+		{name: "outside", path: filepath.Join(filepath.Dir(root), "outside", "a.parquet"), want: "a.parquet"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := relativeSourcePath(root, test.path); got != test.want {
+				t.Fatalf("relative path=%q, want %q", got, test.want)
+			}
+		})
+	}
 }
 
-func (closer *errorCloser) Close() error {
-	closer.closed = true
-	return closer.err
+func TestOpenReaderFilePreservesMissingFileCause(t *testing.T) {
+	file, err := openReaderFile(filepath.Join(t.TempDir(), "missing.parquet"))
+	if file != nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file=%v error=%v, want missing file", file, err)
+	}
+}
+
+func TestReaderPoolReportsOnlyFirstConcurrentSourceError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{}, 2)
+		release := make(chan struct{})
+		files := make(map[string]*fixtureFile)
+		for _, path := range []string{"a.parquet", "b.parquet"} {
+			files[path] = &fixtureFile{rows: &fixtureRows{read: func([]Transaction) (int, error) {
+				entered <- struct{}{}
+				<-release
+				return 0, io.ErrUnexpectedEOF
+			}}}
+		}
+		pool := startReaderPool(t.Context(), Source{files: []string{"a.parquet", "b.parquet"}}, 1, 2,
+			newBatchQueue(0, 1), &readerTelemetry{}, func(path string) (ReaderFile, error) { return files[path], nil }, nil, zap.NewNop())
+		<-entered
+		<-entered
+		close(release)
+		<-pool.done
+		if len(pool.sourceErrors) != 1 {
+			t.Fatalf("source errors=%d, want exactly one", len(pool.sourceErrors))
+		}
+		err := <-pool.sourceErrors
+		var sourceError *SourceError
+		if !errors.Is(err, io.ErrUnexpectedEOF) || !errors.As(err, &sourceError) || sourceError.Op != "read" {
+			t.Fatalf("source error=%v (%+v)", err, sourceError)
+		}
+		if sourceError.Path != "a.parquet" && sourceError.Path != "b.parquet" {
+			t.Fatalf("source error path=%q", sourceError.Path)
+		}
+		if pool.canRead() || pool.snapshot().LiveWorkers != 0 {
+			t.Fatal("source error did not stop all readers")
+		}
+		for path, file := range files {
+			if !file.closed || !file.rows.(*fixtureRows).closed {
+				t.Errorf("resources for %s remained open", path)
+			}
+		}
+	})
+}
+
+func TestReaderPoolReactivatesOnlyNeededBlockedWorkers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		queue := newBatchQueue(0, 1)
+		pool := startReaderPool(ctx, Source{files: []string{"a", "b", "c"}}, 1, 3, queue, &readerTelemetry{},
+			func(path string) (ReaderFile, error) {
+				return &fixtureFile{rows: &fixtureRows{read: func(rows []Transaction) (int, error) {
+					rows[0].ClientID = path
+					return 1, io.EOF
+				}}}, nil
+			}, nil, zap.NewNop())
+		assertBlockedSenders(t, queue, 3)
+		pool.reconcile(1)
+		if got := pool.snapshot(); got.LiveWorkers != 3 || got.DrainingBlockedWorkers != 2 {
+			t.Fatalf("after 3 to 1: %+v", got)
+		}
+		pool.reconcile(2)
+		if got := pool.snapshot(); got.LiveWorkers != 3 || got.BlockedWorkers != 3 || got.DrainingBlockedWorkers != 1 {
+			t.Fatalf("after 1 to 2: %+v", got)
+		}
+		pool.stopReading()
+		seen := make(map[string]bool)
+		for range 3 {
+			batch := <-queue.ch
+			if len(batch) != 1 || seen[batch[0].ClientID] {
+				t.Fatalf("duplicate or invalid batch: %+v", batch)
+			}
+			seen[batch[0].ClientID] = true
+		}
+		<-pool.done
+		if got := queue.snapshot(time.Now()); got.SentTransactionsTotal != 3 || pool.snapshot().LiveWorkers != 0 {
+			t.Fatalf("after drain: %+v", got)
+		}
+	})
+}
+
+func TestReaderPoolClosesResourcesAfterCanceledFullBatch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		rows := &fixtureRows{read: func(target []Transaction) (int, error) {
+			target[0].ClientID = "full"
+			return 1, io.EOF
+		}}
+		file := &fixtureFile{rows: rows}
+		queue := newBatchQueue(0, 1)
+		pool := startReaderPool(ctx, Source{files: []string{"full.parquet"}}, 1, 1, queue, &readerTelemetry{},
+			func(string) (ReaderFile, error) { return file, nil }, nil, zap.NewNop())
+		assertBlockedSender(t, queue)
+		cancel()
+		<-pool.done
+		if !file.closed || !rows.closed || queue.snapshot(time.Now()).SentTransactionsTotal != 0 {
+			t.Fatalf("file closed=%t rows closed=%t queue=%+v", file.closed, rows.closed, queue.snapshot(time.Now()))
+		}
+	})
 }
 
 func startTestReaderPool(
@@ -191,7 +312,8 @@ func TestReaderPoolStopReadingSendsPendingPartialBatch(t *testing.T) {
 			return &fixtureFile{rows: &fixtureRows{read: func(rows []Transaction) (int, error) {
 				<-allowRead
 				if !pool.canRead() {
-					t.Fatal("Reader fetched new rows after admission stopped")
+					t.Error("Reader fetched new rows after admission stopped")
+					return 0, io.ErrUnexpectedEOF
 				}
 				rows[0] = Transaction{ClientID: "already read"}
 				pool.stopReading()
@@ -307,7 +429,7 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 	})
 }
 
-func TestReaderPoolCanceledBlockedSendDoesNotRestoreReading(t *testing.T) {
+func TestReaderPoolCanceledBlockedSendClearsBlockedState(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		batches := make(chan []Transaction, 1)
 		batches <- []Transaction{{ClientID: "preexisting"}}
@@ -770,27 +892,41 @@ func TestReaderPoolReactivatesBlockedWorkerWithoutDuplicateSlot(t *testing.T) {
 }
 
 func TestReaderPoolCancellationUnblocksDrainingWorkers(t *testing.T) {
-	dir := t.TempDir()
-	if err := parquet.WriteFile(filepath.Join(dir, "a.parquet"), []Transaction{{ClientID: "a"}}); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	batches := make(chan []Transaction)
-	var telemetry readerTelemetry
-	var channel batchQueue
-	pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 1, 2, batches, &telemetry, &channel)
-	pool.reconcile(1)
-	cancel()
-	select {
-	case <-pool.done:
-	case <-time.After(time.Second):
-		t.Fatal("cancellation left a draining or blocked worker alive")
-	}
-	pool.reconcile(2)
-	if snapshot := pool.snapshot(); snapshot.LiveWorkers != 0 {
-		t.Fatalf("cancelled pool recreated workers: %+v", snapshot)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		if err := parquet.WriteFile(filepath.Join(dir, "a.parquet"), []Transaction{{ClientID: "a"}}); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		batches := make(chan []Transaction)
+		var telemetry readerTelemetry
+		var channel batchQueue
+		pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 1, 2, batches, &telemetry, &channel)
+		assertBlockedSender(t, &channel)
+		if got := pool.snapshot(); got.BlockedWorkers != 1 || got.IdleWorkers != 1 {
+			t.Fatalf("before downscale: %+v", got)
+		}
+		pool.reconcile(1)
+		synctest.Wait()
+		if got := pool.snapshot(); got.BlockedWorkers != 1 || got.LiveWorkers != 1 {
+			t.Fatalf("after downscale: %+v", got)
+		}
+		pool.reconcile(0)
+		if got := pool.snapshot(); got.DrainingBlockedWorkers != 1 {
+			t.Fatalf("before cancellation: %+v", got)
+		}
+		cancel()
+		select {
+		case <-pool.done:
+		case <-time.After(time.Second):
+			t.Fatal("cancellation left a draining or blocked worker alive")
+		}
+		pool.reconcile(2)
+		if snapshot := pool.snapshot(); snapshot.LiveWorkers != 0 {
+			t.Fatalf("cancelled pool recreated workers: %+v", snapshot)
+		}
+	})
 }
 
 func TestReaderPoolClosesFileAfterCanceledResidualBatch(t *testing.T) {
@@ -820,34 +956,4 @@ func TestReaderPoolClosesFileAfterCanceledResidualBatch(t *testing.T) {
 			t.Fatalf("remove closed residual source: %v", err)
 		}
 	})
-}
-
-func TestReaderPoolCanceledCleanupIgnoresCloseErrors(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	pool := &readerPool{ctx: ctx}
-	reader := &errorCloser{err: errors.New("reader close failed")}
-	file := &errorCloser{err: errors.New("file close failed")}
-
-	if sourceError := pool.closeResources("source.parquet", reader, file, nil); sourceError != nil {
-		t.Fatalf("canceled cleanup source error = %+v, want nil", sourceError)
-	}
-	if !reader.closed || !file.closed {
-		t.Fatalf("cleanup closed reader=%t file=%t, want both true", reader.closed, file.closed)
-	}
-}
-
-func TestReaderPoolActiveCleanupPreservesFirstCloseError(t *testing.T) {
-	ctx := context.Background()
-	pool := &readerPool{ctx: ctx}
-	reader := &errorCloser{err: errors.New("reader close failed")}
-	file := &errorCloser{err: errors.New("file close failed")}
-
-	sourceError := pool.closeResources("source.parquet", reader, file, nil)
-	if sourceError == nil || sourceError.Op != "reader-close" || sourceError.Error() != "reader close failed" {
-		t.Fatalf("active cleanup source error = %+v", sourceError)
-	}
-	if !reader.closed || !file.closed {
-		t.Fatalf("cleanup closed reader=%t file=%t, want both true", reader.closed, file.closed)
-	}
 }

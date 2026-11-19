@@ -4,11 +4,17 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"loadgen/internal/pipeline"
+
+	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
 )
 
@@ -83,5 +89,64 @@ func TestRunServeFailsBeforePipelineWhenListenerOccupied(t *testing.T) {
 	}
 	if err := runServe(context.Background(), configPath); err == nil || !strings.Contains(err.Error(), "listen HTTP server") {
 		t.Fatalf("runServe error = %v, want listener startup failure", err)
+	}
+}
+
+func TestRunServeDrainsAndReleasesListener(t *testing.T) {
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(receiver.Close)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "input.parquet")
+	if err := parquet.WriteFile(source, []pipeline.Transaction{{ClientID: "drain"}}); err != nil {
+		t.Fatal(err)
+	}
+	input := strings.NewReplacer(
+		"127.0.0.1:8080", addr,
+		`C:\dataset\*.parquet`, filepath.ToSlash(source),
+		testSenderURL, receiver.URL,
+		"installed = true", "installed = false",
+		"initial = 32", "initial = 1",
+	).Replace(testConfigContents())
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	var runErr error
+	configPath := writeConfigInput(t, input)
+	go func() {
+		runErr = runServe(ctx, configPath)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("runServe did not stop after cancellation")
+		}
+	})
+	waitForHTTPSnapshotState(t, "http://"+addr, runStateRunning)
+	cancel()
+	select {
+	case <-done:
+		if runErr != nil {
+			t.Fatalf("runServe: %v", runErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runServe did not drain")
+	}
+	rebound, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("listener still occupied after runServe returned: %v", err)
+	}
+	if err := rebound.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

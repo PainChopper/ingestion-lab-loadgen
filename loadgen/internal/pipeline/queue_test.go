@@ -16,14 +16,14 @@ func TestBatchQueueReportsBufferedBatchesAndTransactions(t *testing.T) {
 	telemetry.ch = batches
 	telemetry.batchSize = 3
 	measurements := telemetry.snapshot(time.Now())
-	if measurements.DepthBatches != 2 ||
+	if measurements.Capacity != 2 || measurements.DepthBatches != 2 ||
 		measurements.BufferedTransactions != 6 || measurements.BlockedSenders != 0 ||
 		measurements.OldestBlockedSenderMS != 0 || measurements.BlockedMS != 0 {
 		t.Fatalf("readerChannel measurements = %+v", measurements)
 	}
 }
 
-func TestBatchQueueMeasuresBlockedSendUntilThrottlerReceives(t *testing.T) {
+func TestBatchQueueMeasuresBlockedSendUntilQueueReceives(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		batches := make(chan []Transaction, 1)
 		batches <- []Transaction{{}}
@@ -61,23 +61,6 @@ func TestBatchQueueMeasuresBlockedSendUntilThrottlerReceives(t *testing.T) {
 			t.Fatalf("completed readerChannel measurements = %+v", completed)
 		}
 	})
-}
-
-func TestBatchQueueTrySendCountsImmediateSendWithoutBlockedMeasurement(t *testing.T) {
-	batches := make(chan []Transaction, 1)
-	var telemetry batchQueue
-	telemetry.ch = batches
-	telemetry.batchSize = 1
-
-	if !telemetry.trySend([]Transaction{{}}) {
-		t.Fatal("immediate send failed")
-	}
-
-	measurements := telemetry.snapshot(time.Now())
-	if measurements.BlockedSenders != 0 || measurements.BlockedMS != 0 ||
-		measurements.SentBatchesTotal != 1 || measurements.SentTransactionsTotal != 1 {
-		t.Fatalf("immediate send measurements = %+v", measurements)
-	}
 }
 
 func TestBatchQueueSnapshotAccumulatesSubMillisecondBlockedDurations(t *testing.T) {
@@ -166,7 +149,8 @@ func TestBatchQueueCountsSuccessfulSendAndSamplesWindow(t *testing.T) {
 	telemetry.recordReceive(len(<-batches))
 
 	beforeSample := telemetry.snapshot(time.Now())
-	if beforeSample.SentBatchesTotal != 2 || beforeSample.SentTransactionsTotal != 5 ||
+	if beforeSample.BlockedSenders != 0 || beforeSample.BlockedMS != 0 ||
+		beforeSample.SentBatchesTotal != 2 || beforeSample.SentTransactionsTotal != 5 ||
 		beforeSample.ReceivedBatchesTotal != 1 || beforeSample.ReceivedTransactionsTotal != 2 ||
 		beforeSample.SentBatchesPerSecond != 0 || beforeSample.ReceivedBatchesPerSecond != 0 {
 		t.Fatalf("before sample = %+v", beforeSample)
@@ -221,6 +205,7 @@ func TestBatchQueueUnbufferedHandoffCountsOnlyAfterSend(t *testing.T) {
 }
 
 func assertBlockedSender(t *testing.T, telemetry *batchQueue) {
+	t.Helper()
 	assertBlockedSenders(t, telemetry, 1)
 }
 

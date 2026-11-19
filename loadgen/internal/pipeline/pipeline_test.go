@@ -96,11 +96,46 @@ func TestPipelineSampleUsesElapsedInterval(t *testing.T) {
 	})
 }
 
-func TestPipelineResourcesAndSourceErrors(t *testing.T) {
+func TestPipelineSampleIgnoresNonPositiveElapsed(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		offset time.Duration
+	}{
+		{name: "same time"},
+		{name: "earlier time", offset: -time.Second},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			start := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+			run := &Pipeline{sampledAt: start, readerQueue: newBatchQueue(1, 2), senderQueue: newBatchQueue(1, 2)}
+			run.readerTelemetry.startInterval(start)
+			run.readerTelemetry.recordRead(2)
+			if !run.readerQueue.trySend(make([]Transaction, 2)) || !run.senderQueue.trySend(make([]Transaction, 2)) {
+				t.Fatal("test queues did not accept a batch")
+			}
+			if got := run.Sample(start.Add(test.offset)); got != 0 {
+				t.Fatalf("nonpositive sample elapsed=%s", got)
+			}
+			if got := run.Sample(start.Add(time.Second)); got != time.Second {
+				t.Fatalf("sample moved the original anchor: %s", got)
+			}
+			if got := run.readerTelemetry.snapshot(); got.RowsRead != 2 || got.ReadTPS != 2 {
+				t.Fatalf("nonpositive sample lost read counters: %+v", got)
+			}
+			for _, queue := range []*batchQueue{run.readerQueue, run.senderQueue} {
+				if got := queue.snapshot(start.Add(time.Second)); got.SentTransactionsTotal != 2 || got.SentTransactionsPerSecond != 2 {
+					t.Fatalf("nonpositive sample lost queue counters: %+v", got)
+				}
+			}
+		})
+	}
+}
+
+func TestReaderResourcesAndSourceErrors(t *testing.T) {
 	for _, test := range []struct {
 		name             string
 		cancelDuringOpen bool
 		cancelDuringRead bool
+		openErr          error
 		initErr          error
 		readErr          error
 		readerCloseErr   error
@@ -110,6 +145,8 @@ func TestPipelineResourcesAndSourceErrors(t *testing.T) {
 	}{
 		{name: "cancel between file and parquet", cancelDuringOpen: true, fileCloseErr: io.ErrShortWrite},
 		{name: "cancel closes both resources", cancelDuringRead: true, readerCloseErr: io.ErrClosedPipe, fileCloseErr: io.ErrShortWrite},
+		{name: "file open failure", openErr: io.ErrClosedPipe, wantOp: "open", want: io.ErrClosedPipe},
+		{name: "initialization and file close failure", initErr: io.ErrUnexpectedEOF, fileCloseErr: io.ErrShortWrite, wantOp: "close", want: io.ErrShortWrite},
 		{name: "initialization failure", initErr: io.ErrUnexpectedEOF, wantOp: "open", want: io.ErrUnexpectedEOF},
 		{name: "read cause has priority", readErr: io.ErrNoProgress, readerCloseErr: io.ErrClosedPipe, fileCloseErr: io.ErrShortWrite, wantOp: "read", want: io.ErrNoProgress},
 		{name: "reader close has priority", readerCloseErr: io.ErrClosedPipe, fileCloseErr: io.ErrShortWrite, wantOp: "reader-close", want: io.ErrClosedPipe},
@@ -145,6 +182,9 @@ func TestPipelineResourcesAndSourceErrors(t *testing.T) {
 					if test.cancelDuringOpen {
 						cancel()
 					}
+					if test.openErr != nil {
+						return nil, test.openErr
+					}
 					return file, nil
 				}
 				var delivered int
@@ -156,17 +196,17 @@ func TestPipelineResourcesAndSourceErrors(t *testing.T) {
 				<-opened
 				close(allowRead)
 				<-run.Done()
-				if !file.closed {
+				if test.openErr == nil && !file.closed {
 					t.Fatal("file remained open")
 				}
-				if !test.cancelDuringOpen && test.initErr == nil && !rows.closed {
+				if test.openErr == nil && !test.cancelDuringOpen && test.initErr == nil && !rows.closed {
 					t.Fatal("row reader remained open")
 				}
 				select {
 				case err := <-run.SourceErrors():
 					var sourceError *SourceError
 					if test.want == nil || !errors.As(err, &sourceError) || !errors.Is(err, test.want) ||
-						sourceError.Op != test.wantOp || sourceError.Path != "data.parquet" {
+						sourceError.Op != test.wantOp || sourceError.Path != "data.parquet" || sourceError.Error() != test.want.Error() {
 						t.Fatalf("source error=%v (%+v), want %s %v", err, sourceError, test.wantOp, test.want)
 					}
 				default:
