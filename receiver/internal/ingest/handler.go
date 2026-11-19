@@ -59,8 +59,7 @@ type labStatusResponse struct {
 }
 
 func NewHandler(config Config) (*Handler, error) {
-	pattern, err := validateConfig(config)
-	if err != nil {
+	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -72,7 +71,7 @@ func NewHandler(config Config) (*Handler, error) {
 		},
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST "+pattern, handler.handleIngest)
+	mux.HandleFunc("POST "+config.Path, handler.handleIngest)
 	mux.HandleFunc("GET /status", handler.handleStatus)
 	handler.handler = mux
 

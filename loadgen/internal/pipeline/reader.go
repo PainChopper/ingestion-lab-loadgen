@@ -271,9 +271,9 @@ func (p *readerPool) reportSourceError(sourceError *SourceError) {
 func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
 	delete(p.active, filePath)
 	worker.busy = false
-	for _, worker := range p.workers {
-		if !worker.busy && !worker.draining {
-			wakeReader(worker)
+	for _, candidate := range p.workers {
+		if !candidate.busy && !candidate.draining {
+			wakeReader(candidate)
 		}
 	}
 }

@@ -13,16 +13,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type senderAttemptOutcome uint8
-
-const (
-	senderAttemptSuccess senderAttemptOutcome = iota
-	senderAttemptFailure
-	senderAttemptCanceled
-)
-
-type senderAttempt func(context.Context, []Transaction, int) senderAttemptOutcome
-
 type senderWorker struct {
 	id       int
 	wake     chan struct{}
@@ -57,7 +47,7 @@ type senderPool struct {
 	retry         *retryPolicy
 	queue         *batchQueue
 	completed     atomic.Int64
-	attempt       senderAttempt
+	deliver       func(context.Context, []Transaction, int) error
 	client        *http.Client
 	logger        *zap.Logger
 }
@@ -65,42 +55,27 @@ type senderPool struct {
 func startSenderPool(
 	parent context.Context,
 	queue *batchQueue,
-	workers int,
 	cfg Options,
-	attempt senderAttempt,
-	logger *zap.Logger,
 	beforeReceive func(*senderWorker),
 ) *senderPool {
 	ctx, cancel := context.WithCancel(parent)
-	client := newSenderHTTPClient(cfg.SenderMaxConns, cfg.SenderTimeout)
 	pool := &senderPool{
 		ctx:           ctx,
 		cancel:        cancel,
 		done:          make(chan struct{}),
 		stopped:       make(chan struct{}),
 		beforeReceive: beforeReceive,
-		workers:       make([]*senderWorker, 0, workers),
+		workers:       make([]*senderWorker, 0, cfg.Senders),
 		retry:         newRetryPolicy(cfg),
 		queue:         queue,
-		attempt:       newSenderClient(cfg.SenderURL, client).attempt,
-		client:        client,
-		logger:        logger,
+		deliver:       cfg.Deliver,
+		logger:        cfg.Logger,
 	}
-	if cfg.Deliver != nil {
-		pool.attempt = func(ctx context.Context, batch []Transaction, number int) senderAttemptOutcome {
-			if err := cfg.Deliver(ctx, batch, number); err == nil {
-				return senderAttemptSuccess
-			}
-			if ctx.Err() != nil {
-				return senderAttemptCanceled
-			}
-			return senderAttemptFailure
-		}
+	if pool.deliver == nil {
+		pool.client = newSenderHTTPClient(cfg.SenderMaxConns, cfg.SenderTimeout)
+		pool.deliver = newSenderClient(cfg.SenderURL, pool.client).deliver
 	}
-	if attempt != nil {
-		pool.attempt = attempt
-	}
-	pool.reconcile(workers)
+	pool.reconcile(cfg.Senders)
 	go pool.supervise()
 	return pool
 }
@@ -120,8 +95,10 @@ func (p *senderPool) reconcile(desired int) {
 	if active > desired {
 		// Retire idle workers before disturbing work already in progress.
 		for _, busy := range []bool{false, true} {
-			for index := len(p.workers) - 1; active > desired && index >= 0; index-- {
-				worker := p.workers[index]
+			for _, worker := range p.workers {
+				if active == desired {
+					break
+				}
 				if !worker.draining && worker.busy == busy {
 					worker.draining = true
 					active--
@@ -178,7 +155,9 @@ func (p *senderPool) supervise() {
 	p.mu.Unlock()
 	p.wg.Wait()
 	p.cancel()
-	p.client.CloseIdleConnections()
+	if p.client != nil {
+		p.client.CloseIdleConnections()
+	}
 	close(p.done)
 }
 
@@ -260,14 +239,13 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		if p.ctx.Err() != nil {
 			return false
 		}
-		switch p.attempt(p.ctx, batch, attempt) {
-		case senderAttemptSuccess:
+		if err := p.deliver(p.ctx, batch, attempt); err == nil {
 			return true
-		case senderAttemptCanceled:
-			return false
-		case senderAttemptFailure:
-			p.logger.Warn("batch delivery will retry", zap.String("event", "batch_delivery_retry"), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
 		}
+		if p.ctx.Err() != nil {
+			return false
+		}
+		p.logger.Warn("batch delivery will retry", zap.String("event", "batch_delivery_retry"), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
 
 		p.mu.Lock()
 		worker.backoff = true

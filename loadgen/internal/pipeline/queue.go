@@ -28,14 +28,7 @@ type queueMeasurements struct {
 	nextBlockedID uint64
 	blocked       time.Duration
 
-	SentBatchesTotal              int64
-	SentTransactionsTotal         int64
-	ReceivedBatchesTotal          int64
-	ReceivedTransactionsTotal     int64
-	SentBatchesPerSecond          float64
-	SentTransactionsPerSecond     float64
-	ReceivedBatchesPerSecond      float64
-	ReceivedTransactionsPerSecond float64
+	snapshot QueueSnapshot
 
 	sentBatchesSinceTick          int64
 	sentTransactionsSinceTick     int64
@@ -52,7 +45,7 @@ type batchQueue struct {
 }
 
 type blockedChannelSend struct {
-	telemetry *batchQueue
+	queue     *batchQueue
 	batch     []Transaction
 	blockedID uint64
 }
@@ -73,7 +66,7 @@ func (q *batchQueue) trySend(batch []Transaction) bool {
 
 func (q *batchQueue) beginBlockedSend(batch []Transaction) blockedChannelSend {
 	return blockedChannelSend{
-		telemetry: q,
+		queue:     q,
 		batch:     batch,
 		blockedID: q.startBlocked(time.Now()),
 	}
@@ -81,12 +74,12 @@ func (q *batchQueue) beginBlockedSend(batch []Transaction) blockedChannelSend {
 
 func (send blockedChannelSend) wait(ctx context.Context) bool {
 	select {
-	case send.telemetry.ch <- send.batch:
-		send.telemetry.finishBlockedWriter(send.blockedID, time.Now())
-		send.telemetry.recordSend(len(send.batch))
+	case send.queue.ch <- send.batch:
+		send.queue.finishBlockedWriter(send.blockedID, time.Now())
+		send.queue.recordSend(len(send.batch))
 		return true
 	case <-ctx.Done():
-		send.telemetry.finishBlockedWriter(send.blockedID, time.Now())
+		send.queue.finishBlockedWriter(send.blockedID, time.Now())
 		return false
 	}
 }
@@ -95,13 +88,11 @@ func (q *batchQueue) snapshot(now time.Time) QueueSnapshot {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	measurements := QueueSnapshot{}
+	measurements := q.measurements.snapshot
 	totalBlocked := q.measurements.blocked
-	if q.ch != nil {
-		measurements.Capacity = cap(q.ch)
-		measurements.DepthBatches = len(q.ch)
-		measurements.BufferedTransactions = measurements.DepthBatches * q.batchSize
-	}
+	measurements.Capacity = cap(q.ch)
+	measurements.DepthBatches = len(q.ch)
+	measurements.BufferedTransactions = measurements.DepthBatches * q.batchSize
 	measurements.BlockedSenders = len(q.measurements.blockedAt)
 	for _, since := range q.measurements.blockedAt {
 		blocked := now.Sub(since)
@@ -113,22 +104,14 @@ func (q *batchQueue) snapshot(now time.Time) QueueSnapshot {
 		}
 	}
 	measurements.BlockedMS = totalBlocked.Milliseconds()
-	measurements.SentBatchesTotal = q.measurements.SentBatchesTotal
-	measurements.SentTransactionsTotal = q.measurements.SentTransactionsTotal
-	measurements.ReceivedBatchesTotal = q.measurements.ReceivedBatchesTotal
-	measurements.ReceivedTransactionsTotal = q.measurements.ReceivedTransactionsTotal
-	measurements.SentBatchesPerSecond = q.measurements.SentBatchesPerSecond
-	measurements.SentTransactionsPerSecond = q.measurements.SentTransactionsPerSecond
-	measurements.ReceivedBatchesPerSecond = q.measurements.ReceivedBatchesPerSecond
-	measurements.ReceivedTransactionsPerSecond = q.measurements.ReceivedTransactionsPerSecond
 	return measurements
 }
 
 func (q *batchQueue) recordSend(transactions int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.measurements.SentBatchesTotal++
-	q.measurements.SentTransactionsTotal += int64(transactions)
+	q.measurements.snapshot.SentBatchesTotal++
+	q.measurements.snapshot.SentTransactionsTotal += int64(transactions)
 	q.measurements.sentBatchesSinceTick++
 	q.measurements.sentTransactionsSinceTick += int64(transactions)
 }
@@ -136,8 +119,8 @@ func (q *batchQueue) recordSend(transactions int) {
 func (q *batchQueue) recordReceive(transactions int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.measurements.ReceivedBatchesTotal++
-	q.measurements.ReceivedTransactionsTotal += int64(transactions)
+	q.measurements.snapshot.ReceivedBatchesTotal++
+	q.measurements.snapshot.ReceivedTransactionsTotal += int64(transactions)
 	q.measurements.receivedBatchesSinceTick++
 	q.measurements.receivedTransactionsSinceTick += int64(transactions)
 }
@@ -146,10 +129,10 @@ func (q *batchQueue) sample(window time.Duration) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	seconds := window.Seconds()
-	q.measurements.SentBatchesPerSecond = float64(q.measurements.sentBatchesSinceTick) / seconds
-	q.measurements.SentTransactionsPerSecond = float64(q.measurements.sentTransactionsSinceTick) / seconds
-	q.measurements.ReceivedBatchesPerSecond = float64(q.measurements.receivedBatchesSinceTick) / seconds
-	q.measurements.ReceivedTransactionsPerSecond = float64(q.measurements.receivedTransactionsSinceTick) / seconds
+	q.measurements.snapshot.SentBatchesPerSecond = float64(q.measurements.sentBatchesSinceTick) / seconds
+	q.measurements.snapshot.SentTransactionsPerSecond = float64(q.measurements.sentTransactionsSinceTick) / seconds
+	q.measurements.snapshot.ReceivedBatchesPerSecond = float64(q.measurements.receivedBatchesSinceTick) / seconds
+	q.measurements.snapshot.ReceivedTransactionsPerSecond = float64(q.measurements.receivedTransactionsSinceTick) / seconds
 	q.measurements.sentBatchesSinceTick = 0
 	q.measurements.sentTransactionsSinceTick = 0
 	q.measurements.receivedBatchesSinceTick = 0

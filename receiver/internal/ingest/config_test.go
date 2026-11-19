@@ -60,6 +60,9 @@ func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
 
 func TestConfigRejectsNonExactIngestPaths(t *testing.T) {
 	for _, path := range []string{
+		"/v1/a%2Fb", "/v1/%252F", "/v1/percent%25", "/v1/данные", "/v1/./batch",
+		"/v1/a!b", "/v1/a$b", "/v1/a&b", "/v1/a'b", "/v1/a(b", "/v1/a)b", "/v1/a*b",
+		"/v1/a+b", "/v1/a,b", "/v1/a;b", "/v1/a=b", "/v1/a:b", "/v1/a@b", "/v1/a\\b",
 		"ingest", "/", "/status", "/%73tatus", "//status", "/v1/", "/v1//batch",
 		"/v1/../batch", "/v1/%2e/batch", "/v1/%2E%2E/batch", "/{rest...}", "/%7Brest...%7D",
 		"/v1/batch?x=1", "/v1/batch#fragment", "/v1/a%20b", "/v1/a b", "/v1/%ZZ", "/v1/%00", "/v1/\u2003",
