@@ -111,7 +111,7 @@ describe('WorkerActor controls', () => {
 
     await act(async () => vi.advanceTimersByTime(660))
     expect(onCommand.mock.calls).toEqual([[expected]])
-    expect(screen.getByLabelText(`Sender worker count, ${expected} applied`)).not.toBeNull()
+    screen.getByLabelText(`Sender worker count, ${expected} applied`)
     expect(button.disabled).toBe(true)
 
     fireEvent.pointerUp(window, { pointerId: 1 })
@@ -139,5 +139,24 @@ describe('WorkerActor controls', () => {
     })
     expect(originalCommand).not.toHaveBeenCalled()
     expect(currentCommand.mock.calls).toEqual([[11]])
+  })
+
+  it('accepts keyboard activation after cancelling a worker hold', async () => {
+    vi.useFakeTimers()
+    const onCommand = vi.fn()
+    render(<SenderWorkers onCommand={onCommand} max={13} />)
+    const increase = screen.getByRole('button', { name: 'Add sender worker' })
+
+    fireEvent.pointerDown(increase, { pointerId: 1 })
+    expect(screen.getByRole('status').textContent).toBe('8')
+    fireEvent.pointerCancel(window, { pointerId: 1 })
+    act(() => vi.advanceTimersByTime(1_000))
+    expect(screen.getByRole('status').textContent).toBe('5')
+    expect(onCommand).not.toHaveBeenCalled()
+
+    vi.useRealTimers()
+    increase.focus()
+    await userEvent.setup().keyboard('{Enter}')
+    expect(onCommand.mock.calls).toEqual([[8]])
   })
 })

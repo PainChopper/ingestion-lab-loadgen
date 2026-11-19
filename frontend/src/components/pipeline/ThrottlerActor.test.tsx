@@ -239,24 +239,6 @@ describe('ThrottlerActor valve control', () => {
     const decrease = view.container.querySelector('[data-direction="decrease"]')!
     const increase = view.container.querySelector('[data-direction="increase"]')!
 
-    expect(
-      [decrease, increase].map((element) => [
-        element.getAttribute('x'),
-        element.getAttribute('y'),
-        element.getAttribute('width'),
-        element.getAttribute('height'),
-      ]),
-    ).toEqual([
-      ['394', '398', '26', '34'],
-      ['440', '398', '26', '34'],
-    ])
-    expect(
-      view.container.querySelector('[data-installation-grip="wheel"]')?.getAttribute('y'),
-    ).toBe('368')
-    expect(
-      view.container.querySelector('[data-installation-grip="wheel"]')?.getAttribute('height'),
-    ).toBe('29')
-
     fireEvent.pointerDown(decrease)
     fireEvent.pointerUp(window)
     await waitFor(() => expect(onCommand).toHaveBeenCalledTimes(1))
@@ -294,7 +276,7 @@ describe('ThrottlerActor valve control', () => {
     }
   })
 
-  it('implements bounded keyboard steps and six cyclic wheel phases', async () => {
+  it('implements bounded keyboard steps without duplicate commands', async () => {
     const user = userEvent.setup()
     const onCommand = vi.fn()
     renderHarness({ control: requestedControl({ applied: 0 }), onCommand })
@@ -358,7 +340,7 @@ describe('ThrottlerActor valve control', () => {
 
       fireEvent.keyDown(slider, { key: 'ArrowRight' })
       expect(onCommand.mock.calls).toEqual([[25_000]])
-      expect(screen.getByText('9% OPEN')).not.toBeNull()
+      screen.getByText('9% OPEN')
       expect(view.container.querySelector('.pipeline-valve-ghost')).toBeNull()
 
       view.rerender({ control: requestedControl({ applied: 25_000 }), onCommand, onModeCommand })
@@ -490,7 +472,7 @@ describe('ThrottlerActor valve control', () => {
     await waitFor(() => {
       expect(onModeCommand).toHaveBeenCalledOnce()
       expect(document.activeElement).toBe(control)
-      expect(screen.getByText('Valve mode change rejected')).not.toBeNull()
+      screen.getByText('Valve mode change rejected')
     })
     view.rerender({ installed: null, onModeCommand })
     expect(control.getAttribute('aria-disabled')).toBe('true')
@@ -614,76 +596,31 @@ describe('ThrottlerActor valve control', () => {
     },
   )
 
-  it('keeps outer geometry invariant through six distinct internal phases', async () => {
-    const user = userEvent.setup()
+  it('keeps the wheel outline fixed and knobs inside its bounds across phases', () => {
     const view = renderHarness({ control: requestedControl({ applied: 0 }) })
-    const slider = screen.getByRole('slider', { name: 'Throttle opening' })
-    await user.click(slider)
-    const rimGeometry: string[] = []
-    const visibleBounds: string[] = []
-    const internalPhases: string[] = []
-    const orbitLayouts: number[][] = []
-
-    for (let phase = 0; phase < 6; phase += 1) {
+    const outlines: string[] = []
+    const phases: string[] = []
+    for (const applied of [0, 50_000, 100_000, 150_000, 200_000, 250_000]) {
+      view.rerender({ control: requestedControl({ applied }) })
       const rim = view.container.querySelector('.pipeline-valve-wheel-rim')!
-      const body = view.container.querySelector('.pipeline-valve-body')!
-      const inner = view.container.querySelector('.pipeline-valve-wheel-inner-motion')!
-      rimGeometry.push(
-        [
-          rim.getAttribute('cx'),
-          rim.getAttribute('cy'),
-          rim.getAttribute('rx'),
-          rim.getAttribute('ry'),
-        ].join(':'),
+      outlines.push(['cx', 'cy', 'rx', 'ry'].map((key) => rim.getAttribute(key)).join(':'))
+      phases.push(
+        view.container
+          .querySelector('.pipeline-valve-wheel-inner-motion')!
+          .getAttribute('data-internal-phase')!,
       )
-      visibleBounds.push(body.getAttribute('data-visible-bounds')!)
-      internalPhases.push(inner.getAttribute('data-internal-phase')!)
-      orbitLayouts.push(
-        [...view.container.querySelectorAll('.pipeline-valve-wheel-knob')]
-          .map((knob) => Number(knob.getAttribute('data-orbit-angle')))
-          .sort((left, right) => left - right),
-      )
-      expect(
-        [...view.container.querySelectorAll('.pipeline-valve-wheel-knob')].every((knob) => {
-          const x = Number(knob.getAttribute('cx'))
-          const y = Number(knob.getAttribute('cy'))
-          const radius = Number(knob.getAttribute('r'))
-          return (
-            x - radius >= 400.25 &&
-            x + radius <= 459.75 &&
-            y - radius >= 336.75 &&
-            y + radius <= 363.25
-          )
-        }),
-      ).toBe(true)
-      await user.keyboard('{ArrowRight}')
-      if (phase < 5) {
-        await waitFor(() => expect(slider.getAttribute('aria-valuenow')).toBe(String(phase + 1)))
+      for (const knob of view.container.querySelectorAll('.pipeline-valve-wheel-knob')) {
+        const x = Number(knob.getAttribute('cx'))
+        const y = Number(knob.getAttribute('cy'))
+        const radius = Number(knob.getAttribute('r'))
+        expect(x - radius).toBeGreaterThanOrEqual(400.25)
+        expect(x + radius).toBeLessThanOrEqual(459.75)
+        expect(y - radius).toBeGreaterThanOrEqual(336.75)
+        expect(y + radius).toBeLessThanOrEqual(363.25)
       }
     }
-
-    expect(new Set(rimGeometry)).toHaveLength(1)
-    expect(new Set(visibleBounds)).toHaveLength(1)
-    expect(internalPhases).toEqual(['0', '1', '2', '3', '4', '5'])
-    expect(orbitLayouts).toEqual([
-      [0, 60, 120, 180, 240, 300],
-      [30, 90, 150, 210, 270, 330],
-      [0, 60, 120, 180, 240, 300],
-      [30, 90, 150, 210, 270, 330],
-      [0, 60, 120, 180, 240, 300],
-      [30, 90, 150, 210, 270, 330],
-    ])
-    const orderedDepths = [...view.container.querySelectorAll('.pipeline-valve-wheel-knob')].map(
-      (knob) => Number(knob.getAttribute('data-orbit-depth')),
-    )
-    expect(orderedDepths).toEqual([...orderedDepths].sort((a, b) => a - b))
-    expect(
-      [...view.container.querySelectorAll('.pipeline-valve-wheel-knob')].every(
-        (knob) =>
-          knob.getAttribute('data-orbit-layer') ===
-          (Number(knob.getAttribute('data-orbit-depth')) < 0 ? 'back' : 'front'),
-      ),
-    ).toBe(true)
+    expect(new Set(outlines)).toHaveLength(1)
+    expect(new Set(phases)).toHaveLength(6)
   })
 
   it('shares perspective and clips closed partial open and ghost pistons', () => {

@@ -3,6 +3,25 @@ import { createPipelineGeometry } from './geometry'
 import { getCapacityLegCount, getChannelCapacityGeometryPresentation } from './channelCableGeometry'
 
 describe('channel cable capacity geometry', () => {
+  it('uses uniform rounded capacity turns and a direct path when no leg fits', () => {
+    const full = getChannelCapacityGeometryPresentation(
+      1_000,
+      { x: 150, y: 415 },
+      { x: 355, y: 415 },
+    )
+    const constrained = getChannelCapacityGeometryPresentation(
+      1_000,
+      { x: 150, y: 415 },
+      { x: 200, y: 415 },
+    )
+
+    expect(full.legCount).toBe(14)
+    expect(full.cablePath).toContain(' Q')
+    expect(full.cablePath).toMatch(/V/)
+    expect(constrained.legCount).toBe(0)
+    expect(constrained.cablePath).toBe('M150 415 L200 415')
+  })
+
   it('adds two legs for each absolute batch-capacity threshold', () => {
     const capacities = [null, 0, 1, 3, 4, 9, 10, 31, 32, 99, 100, 319, 320, 999, 1_000, 8_192]
     expect(capacities.map(getCapacityLegCount)).toEqual([
