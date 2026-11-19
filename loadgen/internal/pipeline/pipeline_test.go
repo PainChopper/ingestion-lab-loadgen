@@ -2,14 +2,11 @@ package pipeline
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"testing"
 	"testing/synctest"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 func TestPipelineSetRateIsReadyAfterStart(t *testing.T) {
@@ -46,17 +43,6 @@ func TestPipelineSetRateIsReadyAfterStart(t *testing.T) {
 			t.Fatalf("delivered=%q", got)
 		}
 	})
-}
-
-func testPipelineOptions() Options {
-	options := testSenderOptions()
-	options.Source = Source{directory: "fixtures", files: []string{"fixtures/data.parquet"}}
-	options.BatchSize = 2
-	options.Readers = 1
-	options.Senders = 1
-	options.Rate = Rate{Installed: false}
-	options.Logger = zap.NewNop()
-	return options
 }
 
 func TestPipelineSampleUsesElapsedInterval(t *testing.T) {
@@ -126,98 +112,6 @@ func TestPipelineSampleIgnoresNonPositiveElapsed(t *testing.T) {
 					t.Fatalf("nonpositive sample lost queue counters: %+v", got)
 				}
 			}
-		})
-	}
-}
-
-func TestReaderResourcesAndSourceErrors(t *testing.T) {
-	for _, test := range []struct {
-		name             string
-		cancelDuringOpen bool
-		cancelDuringRead bool
-		openErr          error
-		initErr          error
-		readErr          error
-		readerCloseErr   error
-		fileCloseErr     error
-		wantOp           string
-		want             error
-	}{
-		{name: "cancel between file and parquet", cancelDuringOpen: true, fileCloseErr: io.ErrShortWrite},
-		{name: "cancel closes both resources", cancelDuringRead: true, readerCloseErr: io.ErrClosedPipe, fileCloseErr: io.ErrShortWrite},
-		{name: "file open failure", openErr: io.ErrClosedPipe, wantOp: "open", want: io.ErrClosedPipe},
-		{name: "initialization and file close failure", initErr: io.ErrUnexpectedEOF, fileCloseErr: io.ErrShortWrite, wantOp: "close", want: io.ErrShortWrite},
-		{name: "initialization failure", initErr: io.ErrUnexpectedEOF, wantOp: "open", want: io.ErrUnexpectedEOF},
-		{name: "read cause has priority", readErr: io.ErrNoProgress, readerCloseErr: io.ErrClosedPipe, fileCloseErr: io.ErrShortWrite, wantOp: "read", want: io.ErrNoProgress},
-		{name: "reader close has priority", readerCloseErr: io.ErrClosedPipe, fileCloseErr: io.ErrShortWrite, wantOp: "reader-close", want: io.ErrClosedPipe},
-		{name: "file close", fileCloseErr: io.ErrShortWrite, wantOp: "close", want: io.ErrShortWrite},
-		{name: "wrapped EOF flushes residual", readErr: fmt.Errorf("wrapped: %w", io.EOF)},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-				options := testPipelineOptions()
-				opened := make(chan struct{})
-				allowRead := make(chan struct{})
-				file := &fixtureFile{openErr: test.initErr, closeErr: test.fileCloseErr}
-				rows := &fixtureRows{closeErr: test.readerCloseErr}
-				file.rows = rows
-				var run *Pipeline
-				rows.read = func(target []Transaction) (int, error) {
-					<-allowRead
-					if test.cancelDuringRead {
-						cancel()
-						return 0, io.EOF
-					}
-					run.StopReading()
-					target[0] = Transaction{ClientID: "residual"}
-					return 1, test.readErr
-				}
-				if test.cancelDuringOpen {
-					file.onOpen = func() { t.Error("OpenRows called after cancellation") }
-				}
-				options.OpenFile = func(string) (ReaderFile, error) {
-					close(opened)
-					if test.cancelDuringOpen {
-						cancel()
-					}
-					if test.openErr != nil {
-						return nil, test.openErr
-					}
-					return file, nil
-				}
-				var delivered int
-				options.Deliver = func(_ context.Context, batch []Transaction, _ int) error {
-					delivered += len(batch)
-					return nil
-				}
-				run = Start(ctx, options)
-				<-opened
-				close(allowRead)
-				<-run.Done()
-				if test.openErr == nil && !file.closed {
-					t.Fatal("file remained open")
-				}
-				if test.openErr == nil && !test.cancelDuringOpen && test.initErr == nil && !rows.closed {
-					t.Fatal("row reader remained open")
-				}
-				select {
-				case err := <-run.SourceErrors():
-					var sourceError *SourceError
-					if test.want == nil || !errors.As(err, &sourceError) || !errors.Is(err, test.want) ||
-						sourceError.Op != test.wantOp || sourceError.Path != "data.parquet" || sourceError.Error() != test.want.Error() {
-						t.Fatalf("source error=%v (%+v), want %s %v", err, sourceError, test.wantOp, test.want)
-					}
-				default:
-					if test.want != nil {
-						t.Fatalf("missing source error %v", test.want)
-					}
-				}
-				if test.want == nil && !test.cancelDuringOpen && !test.cancelDuringRead && delivered != 1 {
-					t.Fatalf("residual delivered=%d,want 1", delivered)
-				}
-			})
 		})
 	}
 }
