@@ -115,13 +115,10 @@ function capabilityIsFinite(capability: ValveCapability): boolean {
 export function getValveTargets(capability: ValveCapability): readonly number[] | null {
   if (!capabilityIsFinite(capability)) return null
 
-  const span = capability.max - capability.min
+  const maxSteps = Math.floor((capability.max - capability.min) / capability.step)
   const targets = Array.from({ length: OPENING_POSITION_COUNT }, (_, index) => {
-    const raw = capability.min + (span * index) / MAX_OPENING_INDEX
-    const stepsFromMin = Math.round((raw - capability.min) / capability.step)
-    return stabilize(
-      clamp(capability.min + stepsFromMin * capability.step, capability.min, capability.max),
-    )
+    const stepsFromMin = Math.min(maxSteps, Math.round((maxSteps * index) / MAX_OPENING_INDEX))
+    return capability.min + stepsFromMin * capability.step
   })
 
   return new Set(targets).size === OPENING_POSITION_COUNT ? Object.freeze(targets) : null

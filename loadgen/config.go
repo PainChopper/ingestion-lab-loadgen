@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
@@ -20,22 +21,9 @@ import (
 // Configuration location and supported schema version.
 const (
 	defaultConfigPath   = "config.toml"
-	configSchemaVersion = 3
-)
-
-const (
-	sourceUnit        = "glob-pattern"
-	batchSizeUnit     = "transactions"
-	unitBatches       = "batches"
-	requestedTPSUnit  = "transactions/s"
-	metricsWindowUnit = "milliseconds"
-	workersUnit       = "workers"
-)
-
-// Mutability values accepted by config fields.
-const (
-	startupOnly = "startup-only"
-	immediate   = "immediate"
+	configSchemaVersion = 4
+	// JSON numbers must stay exact in the browser's numeric controls and telemetry.
+	maxSnapshotInteger = 1<<53 - 1
 )
 
 type config struct {
@@ -56,72 +44,56 @@ type httpConfig struct {
 }
 
 type sourceConfig struct {
-	Path       string `mapstructure:"path" json:"path"`
-	Unit       string `mapstructure:"unit" json:"unit"`
-	Mutability string `mapstructure:"mutability" json:"mutability"`
+	Path string `mapstructure:"path" json:"path"`
 }
 
 type readerConfig struct {
-	ReadBatchSize rangeConfig `mapstructure:"read_batch_size"`
-	Workers       rangeConfig `mapstructure:"workers"`
+	ReadBatchSize int           `mapstructure:"read_batch_size"`
+	Workers       workersConfig `mapstructure:"workers"`
 }
 
 type channelConfig struct {
-	Capacity allowedConfig `mapstructure:"capacity"`
+	Capacity int `mapstructure:"capacity"`
 }
 
 type throttlerConfig struct {
-	RequestedTPS rangeConfig     `mapstructure:"requested_tps"`
-	Installed    installedConfig `mapstructure:"installed"`
+	RequestedTPS tpsConfig `mapstructure:"requested_tps"`
+	Installed    bool      `mapstructure:"installed"`
 }
 
 type metricsConfig struct {
-	WindowMS rangeConfig `mapstructure:"window_ms"`
+	WindowMS int `mapstructure:"window_ms"`
 }
 
 type loggingConfig struct {
-	Level      string `mapstructure:"level" json:"level"`
-	Mutability string `mapstructure:"mutability" json:"mutability"`
+	Level string `mapstructure:"level" json:"level"`
 }
 
 type senderConfig struct {
-	Workers rangeConfig       `mapstructure:"workers"`
+	Workers workersConfig     `mapstructure:"workers"`
 	API     senderAPIConfig   `mapstructure:"api"`
 	Retry   senderRetryConfig `mapstructure:"retry"`
 }
 
 type senderAPIConfig struct {
-	URL        string `mapstructure:"url"`
-	TimeoutMS  int64  `mapstructure:"timeout_ms"`
-	Mutability string `mapstructure:"mutability"`
+	URL       string `mapstructure:"url"`
+	TimeoutMS int64  `mapstructure:"timeout_ms"`
 }
 
 type senderRetryConfig struct {
-	DelaysMS      []int  `mapstructure:"delays_ms" json:"delaysMs"`
-	JitterPercent int    `mapstructure:"jitter_percent" json:"jitterPercent"`
-	Mutability    string `mapstructure:"mutability" json:"mutability"`
+	DelaysMS      []int `mapstructure:"delays_ms" json:"delaysMs"`
+	JitterPercent int   `mapstructure:"jitter_percent" json:"jitterPercent"`
 }
 
-type installedConfig struct {
-	Initial    bool   `mapstructure:"initial" json:"initial"`
-	Allowed    []bool `mapstructure:"allowed" json:"allowed"`
-	Mutability string `mapstructure:"mutability" json:"mutability"`
+type workersConfig struct {
+	Initial int `mapstructure:"initial" json:"initial"`
+	Max     int `mapstructure:"max" json:"max"`
 }
 
-type rangeConfig struct {
-	Initial    int    `mapstructure:"initial" json:"initial"`
-	Min        int    `mapstructure:"min" json:"min"`
-	Max        int    `mapstructure:"max" json:"max"`
-	Step       int    `mapstructure:"step" json:"step"`
-	Unit       string `mapstructure:"unit" json:"unit"`
-	Mutability string `mapstructure:"mutability" json:"mutability"`
-}
-
-type allowedConfig struct {
-	Initial    int    `mapstructure:"initial" json:"initial"`
-	Allowed    []int  `mapstructure:"allowed" json:"allowed"`
-	Unit       string `mapstructure:"unit" json:"unit"`
-	Mutability string `mapstructure:"mutability" json:"mutability"`
+type tpsConfig struct {
+	Initial int `mapstructure:"initial" json:"initial"`
+	Max     int `mapstructure:"max" json:"max"`
+	Step    int `mapstructure:"step" json:"step"`
 }
 
 func loadConfig(configPath string) (config, error) {
@@ -142,6 +114,9 @@ func loadConfig(configPath string) (config, error) {
 	}
 	if !viperConfig.IsSet("http.addr") {
 		return config{}, errors.New("http.addr is required")
+	}
+	if viperConfig.Get("schema_version") != int64(configSchemaVersion) {
+		return config{}, fmt.Errorf("schema_version must be %d", configSchemaVersion)
 	}
 	var cfg config
 	if err := viperConfig.UnmarshalExact(&cfg, func(decoderConfig *mapstructure.DecoderConfig) {
@@ -188,35 +163,36 @@ func (c config) validate() error {
 	if c.Source.Path == "" || !filepath.IsAbs(c.Source.Path) {
 		return errors.New("source.path must be an absolute path")
 	}
-	if c.Source.Unit != sourceUnit || c.Source.Mutability != startupOnly {
-		return fmt.Errorf("source must use unit %q and mutability %q", sourceUnit, startupOnly)
-	}
-	if err := c.Reader.ReadBatchSize.validateBatchSize(); err != nil {
-		return fmt.Errorf("reader.read_batch_size: %w", err)
+	if c.Reader.ReadBatchSize <= 0 || int64(c.Reader.ReadBatchSize) > math.MaxInt64/int64(time.Second) {
+		return errors.New("reader.read_batch_size must be positive and within the pacing duration limit")
 	}
 	if err := c.Reader.Workers.validateWorkers(); err != nil {
 		return fmt.Errorf("reader.workers: %w", err)
 	}
-	if err := c.ReaderChannel.Capacity.validate(); err != nil {
-		return fmt.Errorf("readerChannel.capacity: %w", err)
-	}
-	if err := c.SenderChannel.Capacity.validate(); err != nil {
-		return fmt.Errorf("senderChannel.capacity: %w", err)
-	}
-	if int64(c.Reader.ReadBatchSize.Max) > math.MaxInt64/int64(time.Second) {
-		return errors.New("reader.read_batch_size.max exceeds pacing duration limit")
+	maxCapacity := min(
+		int64(math.MaxInt)/int64(unsafe.Sizeof([]struct{}{})),
+		int64(math.MaxInt)/int64(c.Reader.ReadBatchSize),
+		maxSnapshotInteger/int64(c.Reader.ReadBatchSize),
+	)
+	for _, queue := range []struct {
+		name     string
+		capacity int
+	}{
+		{name: "readerChannel.capacity", capacity: c.ReaderChannel.Capacity},
+		{name: "senderChannel.capacity", capacity: c.SenderChannel.Capacity},
+	} {
+		if queue.capacity < 0 || int64(queue.capacity) > maxCapacity {
+			return fmt.Errorf("%s must be non-negative and its storage and buffered transactions must be representable", queue.name)
+		}
 	}
 	if err := c.Throttler.RequestedTPS.validateRequestedTPS(); err != nil {
 		return fmt.Errorf("throttler.requested_tps: %w", err)
 	}
-	if err := c.Throttler.Installed.validate(); err != nil {
-		return fmt.Errorf("throttler.installed: %w", err)
-	}
 	if err := c.Sender.validate(); err != nil {
 		return fmt.Errorf("sender: %w", err)
 	}
-	if err := c.Metrics.WindowMS.validateMetricsWindow(); err != nil {
-		return fmt.Errorf("metrics.window_ms: %w", err)
+	if c.Metrics.WindowMS < 100 || c.Metrics.WindowMS > 10000 {
+		return errors.New("metrics.window_ms must be within 100..10000 milliseconds")
 	}
 	if err := c.Logging.validate(); err != nil {
 		return fmt.Errorf("logging: %w", err)
@@ -240,9 +216,6 @@ func (c httpConfig) validate() error {
 }
 
 func (c loggingConfig) validate() error {
-	if c.Mutability != startupOnly {
-		return fmt.Errorf("mutability must be %q", startupOnly)
-	}
 	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Level) {
 		return errors.New("level must be debug, info, warn, or error")
 	}
@@ -260,9 +233,6 @@ func (c senderConfig) validate() error {
 }
 
 func (c senderRetryConfig) validate() error {
-	if c.Mutability != startupOnly {
-		return fmt.Errorf("mutability must be %q", startupOnly)
-	}
 	if c.JitterPercent < 0 || c.JitterPercent > 50 {
 		return errors.New("jitter_percent must be between 0 and 50")
 	}
@@ -295,9 +265,6 @@ func (c senderAPIConfig) validate() error {
 	if c.URL == "" {
 		return errors.New("url must not be empty")
 	}
-	if c.Mutability != startupOnly {
-		return fmt.Errorf("mutability must be %q", startupOnly)
-	}
 	const maxTimeoutMS = math.MaxInt64 / int64(time.Millisecond)
 	if c.TimeoutMS < 1 || c.TimeoutMS > maxTimeoutMS {
 		return fmt.Errorf("timeout_ms must be between 1 and %d", maxTimeoutMS)
@@ -319,111 +286,29 @@ func (c senderAPIConfig) validate() error {
 	return nil
 }
 
-func (c rangeConfig) validateWorkers() error {
-	if c.Unit != workersUnit || c.Mutability != immediate {
-		return fmt.Errorf("must use unit %q and mutability %q", workersUnit, immediate)
+func (c workersConfig) validateWorkers() error {
+	if c.Max < 1 || int64(c.Max) > maxSnapshotInteger || !c.contains(c.Initial) {
+		return errors.New("initial and max must be positive safe JSON integers, with initial <= max")
 	}
-	if c.Min < 1 || c.Max < c.Min || c.Step <= 0 {
-		return errors.New("min, max, and step must form a positive range")
+	return nil
+}
+
+func (c workersConfig) contains(value int) bool {
+	return value >= 1 && value <= c.Max
+}
+
+func (c tpsConfig) validateRequestedTPS() error {
+	validMax := c.Max > 0 && int64(c.Max) <= maxSnapshotInteger
+	validStep := c.Step > 0 && int64(c.Step) <= maxSnapshotInteger
+	if !validMax || !validStep {
+		return errors.New("max and step must be positive safe JSON integers")
 	}
 	if !c.contains(c.Initial) {
-		return errors.New("initial must be within the range and aligned to step from min")
+		return fmt.Errorf("initial=%d must be within 0..%d and aligned to step=%d", c.Initial, c.Max, c.Step)
 	}
 	return nil
 }
 
-func (c rangeConfig) validateMetricsWindow() error {
-	if c.Unit != metricsWindowUnit || c.Mutability != startupOnly {
-		return fmt.Errorf("must use unit %q and mutability %q", metricsWindowUnit, startupOnly)
-	}
-	if c.Min < 100 || c.Max > 10_000 || c.Max < c.Min || c.Step <= 0 {
-		return errors.New("must stay within 100..10000 milliseconds with a positive step")
-	}
-	if !c.contains(c.Initial) {
-		return errors.New("initial must be within the range and aligned to step")
-	}
-	return nil
-}
-
-func (c rangeConfig) validateRequestedTPS() error {
-	if c.Unit != requestedTPSUnit || c.Mutability != immediate {
-		return fmt.Errorf("must use unit %q and mutability %q", requestedTPSUnit, immediate)
-	}
-	if c.Min < 0 || c.Max <= c.Min || c.Step <= 0 {
-		return errors.New("min, max, and step must form a non-negative range")
-	}
-	if c.Initial < c.Min || c.Initial > c.Max {
-		return fmt.Errorf(
-			"initial=%d is outside range min=%d max=%d (step=%d)",
-			c.Initial,
-			c.Min,
-			c.Max,
-			c.Step,
-		)
-	}
-	if (c.Initial-c.Min)%c.Step != 0 {
-		return fmt.Errorf(
-			"initial=%d is not aligned to step=%d from min=%d (max=%d)",
-			c.Initial,
-			c.Step,
-			c.Min,
-			c.Max,
-		)
-	}
-	return nil
-}
-
-func (c installedConfig) validate() error {
-	if c.Mutability != immediate || len(c.Allowed) != 2 ||
-		!c.contains(true) || !c.contains(false) ||
-		!c.contains(c.Initial) {
-		return fmt.Errorf("allowed must be [true, false], initial must be allowed, and mutability must be %q", immediate)
-	}
-	return nil
-}
-
-func (c installedConfig) contains(value bool) bool {
-	return slices.Contains(c.Allowed, value)
-}
-
-func (c rangeConfig) validateBatchSize() error {
-	if c.Unit != batchSizeUnit || c.Mutability != startupOnly {
-		return fmt.Errorf("must use unit %q and mutability %q", batchSizeUnit, startupOnly)
-	}
-	if c.Min <= 0 || c.Max < c.Min || c.Step <= 0 {
-		return errors.New("min, max, and step must form a positive range")
-	}
-	if !c.contains(c.Initial) {
-		return errors.New("initial must be within the range and aligned to step")
-	}
-	return nil
-}
-
-func (c rangeConfig) contains(value int) bool {
-	return value >= c.Min && value <= c.Max && (value-c.Min)%c.Step == 0
-}
-
-func (c allowedConfig) validate() error {
-	if c.Unit != unitBatches || c.Mutability != startupOnly {
-		return fmt.Errorf("must use unit %q and mutability %q", unitBatches, startupOnly)
-	}
-	if len(c.Allowed) == 0 {
-		return errors.New("allowed must not be empty")
-	}
-	for index, value := range c.Allowed {
-		if value < 0 {
-			return fmt.Errorf("allowed[%d] must not be negative", index)
-		}
-		if index > 0 && value <= c.Allowed[index-1] {
-			return errors.New("allowed must be strictly increasing")
-		}
-	}
-	if !c.contains(c.Initial) {
-		return errors.New("initial must be one of allowed")
-	}
-	return nil
-}
-
-func (c allowedConfig) contains(value int) bool {
-	return slices.Contains(c.Allowed, value)
+func (c tpsConfig) contains(value int) bool {
+	return value >= 0 && value <= c.Max && c.Step > 0 && value%c.Step == 0
 }

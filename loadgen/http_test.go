@@ -457,7 +457,7 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 			if schema["additionalProperties"] != false {
 				t.Errorf("%s does not reject unknown fields", name)
 			}
-			if requiresValue {
+			if requiresValue && action != "set-throttler-installed" {
 				key, ok := schema["x-config-key"].(string)
 				if !ok || key == "" {
 					t.Errorf("%s has no config key for console", name)
@@ -569,6 +569,14 @@ func validateSchema(value any, schema map[string]any, schemas map[string]any) er
 	if value == nil && schema["nullable"] == true {
 		return nil
 	}
+	if value, ok := value.(float64); ok {
+		if minimum, ok := schema["minimum"].(float64); ok && value < minimum {
+			return errors.New("value below minimum")
+		}
+		if maximum, ok := schema["maximum"].(float64); ok && value > maximum {
+			return errors.New("value above maximum")
+		}
+	}
 	switch schema["type"] {
 	case "object":
 		object, ok := value.(map[string]any)
@@ -637,7 +645,7 @@ func checkSchemaKeywords(schema map[string]any) error {
 	keywords := map[string]bool{
 		"$ref": true, "type": true, "enum": true, "format": true, "description": true,
 		"nullable": true, "additionalProperties": true, "properties": true, "required": true,
-		"items": true, "oneOf": true, "discriminator": true, "x-config-key": true,
+		"minimum": true, "maximum": true, "items": true, "oneOf": true, "discriminator": true, "x-config-key": true,
 	}
 	for keyword := range schema {
 		if !keywords[keyword] {
@@ -689,10 +697,8 @@ func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 		"SenderStatus":      reflect.TypeOf(senderSnapshot{}),
 		"ChannelStatus":     reflect.TypeOf(channelSnapshot{}),
 		"ConfigStatus":      reflect.TypeOf(configSnapshot{}),
-		"RangeConfig":       reflect.TypeOf(rangeConfig{}),
-		"AllowedConfig":     reflect.TypeOf(allowedConfig{}),
-		"InstalledConfig":   reflect.TypeOf(installedConfig{}),
-		"LoggingConfig":     reflect.TypeOf(loggingConfig{}),
+		"WorkersConfig":     reflect.TypeOf(workersConfig{}),
+		"TPSConfig":         reflect.TypeOf(tpsConfig{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
@@ -790,17 +796,21 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 		t.Error("snapshot 200 must reference the handler's Snapshot DTO")
 	} else {
 		fixtures := map[string]runtimeSnapshot{
-			"zero": {Run: runSnapshot{State: runStateStarting}},
+			"zero": {
+				Run: runSnapshot{State: runStateStarting}, Reader: readerSnapshot{ReadBatchSize: 1000},
+				Config: snapshotConfig(testConfig(t)),
+			},
 			"populated": {
 				Run:       runSnapshot{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
-				Reader:    readerSnapshot{Workers: 1, LiveWorkers: 2, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
+				Reader:    readerSnapshot{Workers: 1, LiveWorkers: 2, ReadBatchSize: 1500, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
 				Throttler: throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, Installed: true},
 				Sender:    senderSnapshot{Workers: 32},
 				Config:    snapshotConfig(testConfig(t)),
 			},
 			"source error": {
 				Run:    runSnapshot{State: runStateFaulted},
-				Reader: readerSnapshot{SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
+				Config: snapshotConfig(testConfig(t)),
+				Reader: readerSnapshot{ReadBatchSize: 1000, SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}
 		for name, fixture := range fixtures {
@@ -1226,11 +1236,11 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if err := json.Unmarshal(root["config"], &config); err != nil {
 		t.Fatalf("decode config: %v", err)
 	}
-	var workers rangeConfig
+	var workers workersConfig
 	if err := json.Unmarshal(config["readerWorkers"], &workers); err != nil {
 		t.Fatal(err)
 	}
-	if want := (rangeConfig{Initial: 1, Min: 1, Max: 7, Step: 1, Unit: workersUnit, Mutability: immediate}); workers != want {
+	if want := (workersConfig{Initial: 1, Max: 7}); workers != want {
 		t.Errorf("Reader workers config = %+v, want %+v", workers, want)
 	}
 	var reader map[string]json.RawMessage

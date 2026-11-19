@@ -128,18 +128,18 @@ func commandsHandler(requests runtimeRequests, cfg config) http.Handler {
 
 func (r commandRequest) runtimeCommand(cfg config) (runtimeCommand, error) {
 	var command runtimeCommand
-	var limits rangeConfig
+	var contains func(int) bool
 	var invalid string
 	switch r.Action {
 	case "set-reader-workers":
-		command.kind, limits, invalid = setReaderWorkers, cfg.Reader.Workers, "invalid reader workers"
+		command.kind, contains, invalid = setReaderWorkers, cfg.Reader.Workers.contains, "invalid reader workers"
 	case "set-sender-workers":
-		command.kind, limits, invalid = setSenderWorkers, cfg.Sender.Workers, "invalid sender workers"
+		command.kind, contains, invalid = setSenderWorkers, cfg.Sender.Workers.contains, "invalid sender workers"
 	case "set-requested-tps":
-		command.kind, limits, invalid = setRequestedTPS, cfg.Throttler.RequestedTPS, "invalid requested tps"
+		command.kind, contains, invalid = setRequestedTPS, cfg.Throttler.RequestedTPS.contains, "invalid requested tps"
 	case "set-throttler-installed":
 		var value *bool
-		if err := json.Unmarshal(r.Value, &value); err != nil || value == nil || !cfg.Throttler.Installed.contains(*value) {
+		if err := json.Unmarshal(r.Value, &value); err != nil || value == nil {
 			return runtimeCommand{}, errors.New("invalid throttler installed value")
 		}
 		return runtimeCommand{kind: setThrottlerInstalled, installed: *value}, nil
@@ -147,7 +147,7 @@ func (r commandRequest) runtimeCommand(cfg config) (runtimeCommand, error) {
 		return runtimeCommand{}, errors.New("unknown command")
 	}
 	var value *int
-	if err := json.Unmarshal(r.Value, &value); err != nil || value == nil || !limits.contains(*value) {
+	if err := json.Unmarshal(r.Value, &value); err != nil || value == nil || !contains(*value) {
 		return runtimeCommand{}, errors.New(invalid)
 	}
 	command.value = *value

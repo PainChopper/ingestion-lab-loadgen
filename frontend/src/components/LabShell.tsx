@@ -180,7 +180,7 @@ function InspectorControls({
             control={snapshot.reader.workers}
             desiredControl={liveControls.readerWorkers}
           />
-          <p>Read batch size: {formatInteger(snapshot.reader.readBatchSize.applied)} tx</p>
+          <p>Read batch size: {formatInteger(snapshot.reader.readBatchSize)} tx</p>
         </div>
       )
     case 'throttler':

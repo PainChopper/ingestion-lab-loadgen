@@ -87,12 +87,12 @@ func pipelineOptions(cfg config, logger *zap.Logger) pipeline.Options {
 		delays[i] = time.Duration(delay) * time.Millisecond
 	}
 	return pipeline.Options{
-		BatchSize:          cfg.Reader.ReadBatchSize.Initial,
-		ReaderCapacity:     cfg.ReaderChannel.Capacity.Initial,
-		SenderCapacity:     cfg.SenderChannel.Capacity.Initial,
+		BatchSize:          cfg.Reader.ReadBatchSize,
+		ReaderCapacity:     cfg.ReaderChannel.Capacity,
+		SenderCapacity:     cfg.SenderChannel.Capacity,
 		Readers:            cfg.Reader.Workers.Initial,
 		Senders:            cfg.Sender.Workers.Initial,
-		Rate:               pipeline.Rate{TPS: cfg.Throttler.RequestedTPS.Initial, Installed: cfg.Throttler.Installed.Initial},
+		Rate:               pipeline.Rate{TPS: cfg.Throttler.RequestedTPS.Initial, Installed: cfg.Throttler.Installed},
 		SenderURL:          cfg.Sender.API.URL,
 		SenderTimeout:      time.Duration(cfg.Sender.API.TimeoutMS) * time.Millisecond,
 		SenderMaxConns:     cfg.Sender.Workers.Max,

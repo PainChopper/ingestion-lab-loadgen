@@ -52,11 +52,7 @@ function channelInput(
       blockedSenders: values.blockedSenders ?? snapshot.readerChannel.blockedSenders,
       oldestBlockedSenderMs:
         values.oldestBlockedSenderMs ?? snapshot.readerChannel.oldestBlockedSenderMs,
-      capacity: {
-        ...snapshot.readerChannel.capacity,
-        applied:
-          values.applied === undefined ? snapshot.readerChannel.capacity.applied : values.applied,
-      },
+      capacity: values.applied === undefined ? snapshot.readerChannel.capacity : values.applied,
     },
   }
 }
@@ -96,10 +92,7 @@ describe('channel flow state derivation', () => {
         depthBatches: 10,
         blockedSenders: 1,
         oldestBlockedSenderMs: 200,
-        capacity: {
-          ...telemetry.capacity,
-          applied: 20,
-        },
+        capacity: 20,
       }),
     ).toBe(0.5)
     expect(
@@ -108,10 +101,7 @@ describe('channel flow state derivation', () => {
         depthBatches: 10,
         blockedSenders: 0,
         oldestBlockedSenderMs: 0,
-        capacity: {
-          ...telemetry.capacity,
-          applied: 10,
-        },
+        capacity: 10,
       }),
     ).toBe(1)
     expect([channelPressureColor(0), channelPressureColor(0.5), channelPressureColor(1)]).toEqual([
@@ -319,10 +309,7 @@ describe('channel flow state derivation', () => {
         depthBatches: 100,
         blockedSenders: 1,
         oldestBlockedSenderMs: 500,
-        capacity: {
-          ...base.senderChannel.capacity,
-          applied: 100,
-        },
+        capacity: 100,
       },
     }
     deriver.derive(base, 0)

@@ -1,8 +1,5 @@
-import type { ChannelCapacitySnapshot } from '../../model/loadgen'
 import type { Point } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
-
-export type CapacityValues = readonly number[]
 
 export interface Box {
   readonly x: number
@@ -25,35 +22,11 @@ const PORTRAIT_LABEL_CLEARANCE = 8
 const SERPENTINE_MIN_LEG_GAP = 4
 const SERPENTINE_CORNER_RADIUS = 8
 
-export function getCapacityLegCount(
-  control: ChannelCapacitySnapshot,
-  values?: CapacityValues,
-): ChannelCableLegCount {
-  const applied = control.applied
-  if (applied === null || applied <= 0 || control.max <= 0) return 0
+const LOOP_CAPACITY_THRESHOLDS = [1, 4, 10, 32, 100, 320, 1_000] as const
 
-  const positiveValues = values?.filter(
-    (value) => Number.isFinite(value) && value > 0 && value <= control.max,
-  )
-  const minPositive =
-    positiveValues !== undefined && positiveValues.length > 0
-      ? Math.min(...positiveValues)
-      : control.min > 0
-        ? control.min
-        : control.step > 0
-          ? control.min + control.step
-          : control.max
-  const maxPositive =
-    positiveValues !== undefined && positiveValues.length > 0
-      ? Math.max(...positiveValues)
-      : control.max
-  if (minPositive <= 0 || maxPositive <= 0) return 0
-  if (maxPositive <= minPositive) return 2
-
-  const normalized = Math.min(maxPositive, Math.max(minPositive, applied))
-  const scale = Math.log(normalized / minPositive) / Math.log(maxPositive / minPositive)
-  const bucket = Math.floor(6 * Math.min(1, Math.max(0, scale)))
-  return (2 * (1 + bucket)) as ChannelCableLegCount
+export function getCapacityLegCount(capacityBatches: number | null): ChannelCableLegCount {
+  const loops = LOOP_CAPACITY_THRESHOLDS.filter((minimum) => minimum <= (capacityBatches ?? 0))
+  return (2 * loops.length) as ChannelCableLegCount
 }
 
 function fittedLegCount(
@@ -284,14 +257,13 @@ function buildPortraitCapacityPath(
 }
 
 export function getChannelCapacityGeometryPresentation(
-  control: ChannelCapacitySnapshot,
+  capacityBatches: number | null,
   start: Point,
   end: Point,
   orientation: PipelineOrientation = 'landscape',
-  values?: CapacityValues,
   hoseForbiddenBoxes: readonly Box[] = [],
 ): ChannelCapacityGeometryPresentation {
-  const desiredLegCount = getCapacityLegCount(control, values)
+  const desiredLegCount = getCapacityLegCount(capacityBatches)
   if (orientation === 'portrait') {
     const forbiddenRanges = mergeAxisRanges(
       start.y + 28,

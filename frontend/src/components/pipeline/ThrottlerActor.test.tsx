@@ -225,6 +225,18 @@ describe('ThrottlerActor valve control', () => {
     expect(onSelect).toHaveBeenCalledWith('throttler')
   })
 
+  it.each([
+    { max: 250_001, step: 5_000, last: 250_000 },
+    { max: 1_000_000_000_000_000, step: 3, last: 999_999_999_999_999 },
+  ])('sends the last legal TPS on End with off-grid max=$max', async ({ max, step, last }) => {
+    const onCommand = vi.fn()
+    renderHarness({ control: requestedControl({ applied: 0, max, step }), onCommand })
+    const slider = screen.getByRole('slider')
+    slider.focus()
+    await userEvent.setup().keyboard('{End}')
+    expect(onCommand).toHaveBeenCalledExactlyOnceWith(last)
+  })
+
   it('uses visible sides for the current config without issuing bypass commands', async () => {
     const onCommand = vi.fn()
     const onModeCommand = vi.fn()
