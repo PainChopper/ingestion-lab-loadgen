@@ -73,13 +73,7 @@ type channelSnapshot struct {
 	BlockedSenders                int     `json:"blockedSenders"`
 	OldestBlockedSenderMs         int64   `json:"oldestBlockedSenderMs"`
 	BlockedMs                     int64   `json:"blockedMs"`
-	SentBatchesTotal              int64   `json:"sentBatchesTotal"`
-	SentTransactionsTotal         int64   `json:"sentTransactionsTotal"`
-	ReceivedBatchesTotal          int64   `json:"receivedBatchesTotal"`
-	ReceivedTransactionsTotal     int64   `json:"receivedTransactionsTotal"`
-	SentBatchesPerSecond          float64 `json:"inputBatchesPerSecond"`
 	SentTransactionsPerSecond     float64 `json:"inputTransactionsPerSecond"`
-	ReceivedBatchesPerSecond      float64 `json:"outputBatchesPerSecond"`
 	ReceivedTransactionsPerSecond float64 `json:"outputTransactionsPerSecond"`
 }
 
@@ -97,13 +91,7 @@ func snapshotChannel(measurements pipeline.QueueSnapshot, capacity int) channelS
 		BlockedSenders:                measurements.BlockedSenders,
 		OldestBlockedSenderMs:         measurements.OldestBlockedSenderMS,
 		BlockedMs:                     measurements.BlockedMS,
-		SentBatchesTotal:              measurements.SentBatchesTotal,
-		SentTransactionsTotal:         measurements.SentTransactionsTotal,
-		ReceivedBatchesTotal:          measurements.ReceivedBatchesTotal,
-		ReceivedTransactionsTotal:     measurements.ReceivedTransactionsTotal,
-		SentBatchesPerSecond:          measurements.SentBatchesPerSecond,
 		SentTransactionsPerSecond:     measurements.SentTransactionsPerSecond,
-		ReceivedBatchesPerSecond:      measurements.ReceivedBatchesPerSecond,
 		ReceivedTransactionsPerSecond: measurements.ReceivedTransactionsPerSecond,
 	}
 }

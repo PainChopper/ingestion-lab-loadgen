@@ -101,18 +101,12 @@ export interface ChannelTelemetrySnapshot {
   readonly from: ActorId
   readonly to: ActorId
   readonly capacity: ChannelCapacitySnapshot
-  readonly sentBatchesTotal: number
-  readonly sentTransactionsTotal: number
-  readonly receivedBatchesTotal: number
-  readonly receivedTransactionsTotal: number
   readonly depthBatches: number | null
   readonly bufferedTransactions: number | null
   readonly handoffBatches: number
   readonly handoffBatchesTotal: number
   readonly blockedSenders: number
   readonly oldestBlockedSenderMs: number
-  readonly inputBatchesPerSecond: number
-  readonly outputBatchesPerSecond: number
   readonly inputTransactionsPerSecond: number
   readonly outputTransactionsPerSecond: number
   readonly inputTps: number | null
@@ -159,8 +153,8 @@ export interface SenderSnapshot {
 }
 
 export interface ReaderSourceErrorSnapshot {
-  readonly category: 'source'
-  readonly operation: 'glob' | 'open' | 'read' | 'close' | 'reader-close'
+  readonly category: string
+  readonly operation: string
   readonly relativePath: string
   readonly message: string
 }

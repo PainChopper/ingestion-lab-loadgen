@@ -188,11 +188,10 @@
       },
       "ChannelStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["capacity", "depthBatches", "bufferedTransactions", "blockedSenders", "oldestBlockedSenderMs", "blockedMs", "sentBatchesTotal", "sentTransactionsTotal", "receivedBatchesTotal", "receivedTransactionsTotal", "inputBatchesPerSecond", "inputTransactionsPerSecond", "outputBatchesPerSecond", "outputTransactionsPerSecond"],
+        "required": ["capacity", "depthBatches", "bufferedTransactions", "blockedSenders", "oldestBlockedSenderMs", "blockedMs", "inputTransactionsPerSecond", "outputTransactionsPerSecond"],
         "properties": {
           "capacity": { "type": "integer" }, "depthBatches": { "type": "integer" }, "bufferedTransactions": { "type": "integer" }, "blockedSenders": { "type": "integer" }, "oldestBlockedSenderMs": { "type": "integer", "format": "int64" }, "blockedMs": { "type": "integer", "format": "int64" },
-          "sentBatchesTotal": { "type": "integer", "format": "int64" }, "sentTransactionsTotal": { "type": "integer", "format": "int64" }, "receivedBatchesTotal": { "type": "integer", "format": "int64" }, "receivedTransactionsTotal": { "type": "integer", "format": "int64" },
-          "inputBatchesPerSecond": { "type": "number", "format": "double" }, "inputTransactionsPerSecond": { "type": "number", "format": "double" }, "outputBatchesPerSecond": { "type": "number", "format": "double" }, "outputTransactionsPerSecond": { "type": "number", "format": "double" }
+          "inputTransactionsPerSecond": { "type": "number", "format": "double" }, "outputTransactionsPerSecond": { "type": "number", "format": "double" }
         }
       },
       "ConfigStatus": {"type": "object", "additionalProperties": false, "required": ["readerWorkers", "senderWorkers", "throttlerRequestedTps"], "properties": {"readerWorkers": {"$ref": "#/components/schemas/WorkersConfig"}, "senderWorkers": {"$ref": "#/components/schemas/WorkersConfig"}, "throttlerRequestedTps": {"$ref": "#/components/schemas/TPSConfig"}}},

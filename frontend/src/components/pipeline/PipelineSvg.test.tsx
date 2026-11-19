@@ -388,10 +388,6 @@ function activeChannel<TChannel extends ChannelTelemetrySnapshot>(
     outputTps: 50_000,
     inputTransactionsPerSecond: 50_000,
     outputTransactionsPerSecond: 50_000,
-    inputBatchesPerSecond: 10,
-    outputBatchesPerSecond: 10,
-    sentBatchesTotal: 20,
-    receivedBatchesTotal: 18,
     capacity: applied,
   }
 }
@@ -1541,8 +1537,6 @@ describe('PipelineSvg rendering', () => {
         ...channel,
         depthBatches: 0,
         bufferedTransactions: 0,
-        inputBatchesPerSecond: 0,
-        outputBatchesPerSecond: 0,
         inputTransactionsPerSecond: 0,
         outputTransactionsPerSecond: 0,
         inputTps: 0,

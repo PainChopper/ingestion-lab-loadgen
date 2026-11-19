@@ -87,18 +87,12 @@ function neutralChannel(
     from,
     to,
     capacity: null,
-    sentBatchesTotal: 0,
-    sentTransactionsTotal: 0,
-    receivedBatchesTotal: 0,
-    receivedTransactionsTotal: 0,
     depthBatches: null,
     bufferedTransactions: null,
     handoffBatches: 0,
     handoffBatchesTotal: 0,
     blockedSenders: 0,
     oldestBlockedSenderMs: 0,
-    inputBatchesPerSecond: 0,
-    outputBatchesPerSecond: 0,
     inputTransactionsPerSecond: 0,
     outputTransactionsPerSecond: 0,
     inputTps: null,
@@ -125,13 +119,7 @@ function channelSnapshot(
     capacity: telemetry.capacity,
     depthBatches: telemetry.depthBatches,
     bufferedTransactions: telemetry.bufferedTransactions,
-    sentBatchesTotal: telemetry.sentBatchesTotal,
-    sentTransactionsTotal: telemetry.sentTransactionsTotal,
-    receivedBatchesTotal: telemetry.receivedBatchesTotal,
-    receivedTransactionsTotal: telemetry.receivedTransactionsTotal,
-    inputBatchesPerSecond: telemetry.inputBatchesPerSecond,
     inputTransactionsPerSecond: telemetry.inputTransactionsPerSecond,
-    outputBatchesPerSecond: telemetry.outputBatchesPerSecond,
     outputTransactionsPerSecond: telemetry.outputTransactionsPerSecond,
     inputTps: telemetry.inputTransactionsPerSecond,
     outputTps: telemetry.outputTransactionsPerSecond,
@@ -288,7 +276,6 @@ function isRangeValue(
 
 const wireInteger = z.int().check(z.nonnegative())
 const wireNumber = z.number().check(z.nonnegative())
-const nonemptyString = z.string().check(z.minLength(1))
 
 const workersConfigSchema = z
   .strictObject({
@@ -322,14 +309,10 @@ const configSchema = z.strictObject({
 })
 
 const sourceErrorSchema = z.object({
-  category: z.literal('source'),
-  operation: z.enum(['glob', 'open', 'read', 'close', 'reader-close']),
-  relativePath: nonemptyString.check(
-    z.refine((path) => !path.startsWith('/') && !path.startsWith('../'), {
-      error: 'Expected a relative source path',
-    }),
-  ),
-  message: nonemptyString,
+  category: z.string(),
+  operation: z.string(),
+  relativePath: z.string(),
+  message: z.string(),
 })
 
 const channelSchema = z.object({
@@ -339,109 +322,52 @@ const channelSchema = z.object({
   blockedSenders: wireInteger,
   oldestBlockedSenderMs: wireInteger,
   blockedMs: wireInteger,
-  sentBatchesTotal: wireInteger,
-  sentTransactionsTotal: wireInteger,
-  receivedBatchesTotal: wireInteger,
-  receivedTransactionsTotal: wireInteger,
-  inputBatchesPerSecond: wireNumber,
   inputTransactionsPerSecond: wireNumber,
-  outputBatchesPerSecond: wireNumber,
   outputTransactionsPerSecond: wireNumber,
 })
 
-const wireSnapshotSchema = z
-  .object({
-    run: z.object({
-      state: z.enum(['starting', 'running', 'stopping', 'faulted']),
-      elapsedMs: wireInteger,
-      totalTransactions: wireInteger,
-    }),
-    reader: z.object({
-      workers: wireInteger,
-      liveWorkers: wireInteger,
-      idleWorkers: wireInteger,
-      readingWorkers: wireInteger,
-      blockedWorkers: wireInteger,
-      drainingWorkers: wireInteger,
-      drainingIdleWorkers: wireInteger,
-      drainingReadingWorkers: wireInteger,
-      drainingBlockedWorkers: wireInteger,
-      readBatchSize: wireInteger.check(z.positive()),
-      readTps: wireNumber,
-      rowsRead: wireInteger,
-      sourceDirectory: nonemptyString,
-      sourceError: z.nullable(sourceErrorSchema),
-    }),
-    throttler: z.object({
-      requestedTps: wireInteger,
-      admittedTps: wireNumber,
-      installed: z.boolean(),
-    }),
-    sender: z.object({
-      workers: wireInteger,
-      liveWorkers: wireInteger,
-      idleWorkers: wireInteger,
-      inFlightWorkers: wireInteger,
-      backoffWorkers: wireInteger,
-      drainingWorkers: wireInteger,
-      drainingIdleWorkers: wireInteger,
-      drainingInFlightWorkers: wireInteger,
-      drainingBackoffWorkers: wireInteger,
-    }),
-    readerChannel: channelSchema,
-    senderChannel: channelSchema,
-    config: configSchema,
-  })
-  .check(
-    z.superRefine((wire, ctx) => {
-      const { run, reader, sender, throttler, config } = wire
-      const starting = run.state === 'starting'
-      for (const [path, value, range] of [
-        [['reader', 'workers'], reader.workers, { min: 1, max: config.readerWorkers.max, step: 1 }],
-        [
-          ['throttler', 'requestedTps'],
-          throttler.requestedTps,
-          { min: 0, ...config.throttlerRequestedTps },
-        ],
-        [['sender', 'workers'], sender.workers, { min: 1, max: config.senderWorkers.max, step: 1 }],
-      ] as const) {
-        if (!isRangeValue(value, range)) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [...path],
-            message: 'Value is outside the configured range or step grid',
-          })
-        }
-      }
-      if (
-        reader.liveWorkers !== reader.idleWorkers + reader.readingWorkers + reader.blockedWorkers ||
-        reader.drainingWorkers !==
-          reader.drainingIdleWorkers +
-            reader.drainingReadingWorkers +
-            reader.drainingBlockedWorkers ||
-        reader.drainingIdleWorkers > reader.idleWorkers ||
-        reader.drainingReadingWorkers > reader.readingWorkers ||
-        reader.drainingBlockedWorkers > reader.blockedWorkers ||
-        (starting && (reader.liveWorkers !== 0 || reader.drainingWorkers !== 0))
-      ) {
-        ctx.addIssue({ code: 'custom', path: ['reader'], message: 'Inconsistent worker counts' })
-      }
-      if (
-        sender.liveWorkers !==
-          sender.idleWorkers + sender.inFlightWorkers + sender.backoffWorkers ||
-        sender.drainingWorkers !==
-          sender.drainingIdleWorkers +
-            sender.drainingInFlightWorkers +
-            sender.drainingBackoffWorkers ||
-        sender.drainingIdleWorkers > sender.idleWorkers ||
-        sender.drainingInFlightWorkers > sender.inFlightWorkers ||
-        sender.drainingBackoffWorkers > sender.backoffWorkers ||
-        (starting && (sender.liveWorkers !== 0 || sender.drainingWorkers !== 0))
-      ) {
-        ctx.addIssue({ code: 'custom', path: ['sender'], message: 'Inconsistent worker counts' })
-      }
-    }),
-  )
+const wireSnapshotSchema = z.object({
+  run: z.object({
+    state: z.enum(['starting', 'running', 'stopping', 'faulted']),
+    elapsedMs: wireInteger,
+    totalTransactions: wireInteger,
+  }),
+  reader: z.object({
+    workers: wireInteger,
+    liveWorkers: wireInteger,
+    idleWorkers: wireInteger,
+    readingWorkers: wireInteger,
+    blockedWorkers: wireInteger,
+    drainingWorkers: wireInteger,
+    drainingIdleWorkers: wireInteger,
+    drainingReadingWorkers: wireInteger,
+    drainingBlockedWorkers: wireInteger,
+    readBatchSize: wireInteger.check(z.positive()),
+    readTps: wireNumber,
+    rowsRead: wireInteger,
+    sourceDirectory: z.string(),
+    sourceError: z.nullable(sourceErrorSchema),
+  }),
+  throttler: z.object({
+    requestedTps: wireInteger,
+    admittedTps: wireNumber,
+    installed: z.boolean(),
+  }),
+  sender: z.object({
+    workers: wireInteger,
+    liveWorkers: wireInteger,
+    idleWorkers: wireInteger,
+    inFlightWorkers: wireInteger,
+    backoffWorkers: wireInteger,
+    drainingWorkers: wireInteger,
+    drainingIdleWorkers: wireInteger,
+    drainingInFlightWorkers: wireInteger,
+    drainingBackoffWorkers: wireInteger,
+  }),
+  readerChannel: channelSchema,
+  senderChannel: channelSchema,
+  config: configSchema,
+})
 
 type WireSnapshot = z.infer<typeof wireSnapshotSchema>
 

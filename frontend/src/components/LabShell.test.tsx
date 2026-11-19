@@ -457,7 +457,7 @@ describe('LabShell', () => {
       applyMode: 'immediate',
     })
     expect(installed.throttler.requestedTps.applied).toBe(0)
-    expect(installed.senderChannel.sentBatchesTotal).toBe(0)
+    expect(installed.senderChannel.inputTransactionsPerSecond).toBe(0)
 
     await act(async () => {
       fireEvent.click(valveMode)
@@ -467,17 +467,17 @@ describe('LabShell', () => {
     expect(valveMode.checked).toBe(false)
     expect(bypassed.throttler.installed.applied).toBe(false)
     expect(bypassed.throttler.requestedTps.applied).toBe(0)
-    expect(bypassed.senderChannel.sentBatchesTotal).toBeGreaterThan(0)
+    expect(bypassed.senderChannel.inputTransactionsPerSecond).toBeGreaterThan(0)
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Reinsert throttler valve' }))
-      vi.advanceTimersByTime(500)
+      vi.advanceTimersByTime(1_000)
     })
     const reinstalled = simulation.getSnapshot()
     expect(valveMode.checked).toBe(true)
     expect(reinstalled.throttler.installed.applied).toBe(true)
     expect(reinstalled.throttler.requestedTps.applied).toBe(0)
-    expect(reinstalled.senderChannel.sentBatchesTotal).toBe(bypassed.senderChannel.sentBatchesTotal)
+    expect(reinstalled.senderChannel.inputTransactionsPerSecond).toBe(0)
     expect(dispatch.mock.calls.map(([command]) => command)).toEqual([
       { type: 'set-requested-tps', value: 0 },
       { type: 'set-throttler-installed', value: false },
