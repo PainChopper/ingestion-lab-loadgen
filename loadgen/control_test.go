@@ -550,19 +550,122 @@ func TestEventLoopDrainsAfterUnexpectedHTTPServerExit(t *testing.T) {
 		{name: "unexpected clean exit"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				state := newControlState(testConfig(t), zap.NewNop())
-				serverDone := make(chan error, 1)
-				serverDone <- test.err
-				started := time.Now()
-				deadline, err := state.runEventLoop(t.Context(), runtimeEvents{
-					serverDone: serverDone, metrics: newPrometheusMetrics(),
-				}, time.Second)
-				if err == nil || (test.err != nil && !errors.Is(err, test.err)) {
-					t.Fatalf("server exit error=%v, want cause %v", err, test.err)
+			cfg := testConfig(t)
+			cfg.Reader.Workers.Initial, cfg.Sender.Workers.Initial = 1, 1
+			cfg.Reader.ReadBatchSize = 1
+			cfg.ReaderChannel.Capacity, cfg.SenderChannel.Capacity = 0, 0
+			cfg.Throttler.Installed = false
+			directory := t.TempDir()
+			for _, name := range []string{"a.parquet", "b.parquet"} {
+				if err := os.WriteFile(filepath.Join(directory, name), nil, 0o600); err != nil {
+					t.Fatal(err)
 				}
-				if state.run.state != runStateFaulted || deadline != started.Add(time.Second) || time.Since(started) != time.Second {
-					t.Fatalf("state=%s deadline=%s elapsed=%s", state.run.state, deadline, time.Since(started))
+			}
+			source, err := pipeline.DiscoverSource(filepath.Join(directory, "*.parquet"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			synctest.Test(t, func(t *testing.T) {
+				const grace = time.Second
+				core, logs := observer.New(zap.InfoLevel)
+				state := newControlState(cfg, zap.New(core))
+				releaseRead, releaseDelivery, releaseExtraOpen := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				var readOnce, deliveryOnce sync.Once
+				unblockRead := func() { readOnce.Do(func() { close(releaseRead) }) }
+				unblockDelivery := func() { deliveryOnce.Do(func() { close(releaseDelivery) }) }
+				defer close(releaseExtraOpen)
+				defer unblockRead()
+				defer unblockDelivery()
+				opens, reads, delivered := 0, 0, 0
+				state.pipelineOptions.OpenFile = func(string) (pipeline.ReaderFile, error) {
+					opens++
+					if opens > 1 {
+						<-releaseExtraOpen
+						return nil, io.ErrUnexpectedEOF
+					}
+					return testReaderFile{rows: &testRowReader{read: func(rows []pipeline.Transaction) (int, error) {
+						reads++
+						if reads == 1 {
+							rows[0] = pipeline.Transaction{ClientID: "accepted-before-server-exit"}
+							return 1, nil
+						}
+						<-releaseRead
+						return 0, io.EOF
+					}}}, nil
+				}
+				state.pipelineOptions.Deliver = func(ctx context.Context, rows []pipeline.Transaction, _ int) error {
+					if len(rows) != 1 || rows[0].ClientID != "accepted-before-server-exit" {
+						return fmt.Errorf("unexpected delivery: %+v", rows)
+					}
+					select {
+					case <-releaseDelivery:
+						delivered += len(rows)
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				ready := make(chan sourceDiscovery, 1)
+				ready <- sourceDiscovery{source: source}
+				queue := make(chan runtimeRequest)
+				serverDone := make(chan error)
+				done := make(chan struct{})
+				metrics := newPrometheusMetrics()
+				var deadline time.Time
+				var runErr error
+				go func() {
+					defer close(done)
+					deadline, runErr = state.runEventLoop(ctx, runtimeEvents{
+						source: ready, requests: queue, serverDone: serverDone, metrics: metrics,
+					}, grace)
+				}()
+				synctest.Wait()
+				requests := runtimeRequests{queue: queue, done: done}
+				before, err := requestSnapshot(t.Context(), requests)
+				if err != nil || before.Run.State != runStateRunning || before.Sender.InFlightWorkers != 1 || reads != 2 {
+					t.Fatalf("pipeline not held in delivery/read: snapshot=%+v reads=%d error=%v", before, reads, err)
+				}
+				failedAt := time.Now()
+				serverDone <- test.err
+				synctest.Wait()
+				faulted, err := requestSnapshot(t.Context(), requests)
+				if err != nil || faulted.Run.State != runStateFaulted || faulted.Sender.InFlightWorkers != 1 {
+					t.Fatalf("fault lost in-flight batch: snapshot=%+v error=%v", faulted, err)
+				}
+				unblockRead()
+				synctest.Wait()
+				stoppedReader, err := requestSnapshot(t.Context(), requests)
+				if err != nil || stoppedReader.Reader.LiveWorkers != 0 || opens != 1 || reads != 2 {
+					t.Fatalf("reading/admission continued after server exit: snapshot=%+v opens=%d reads=%d error=%v", stoppedReader, opens, reads, err)
+				}
+				time.Sleep(grace - time.Nanosecond)
+				synctest.Wait()
+				select {
+				case <-done:
+					t.Fatal("loop exited before held delivery was released")
+				default:
+				}
+				if delivered != 0 || ctx.Err() != nil {
+					t.Fatalf("delivery=%d parent error=%v before release", delivered, ctx.Err())
+				}
+				unblockDelivery()
+				synctest.Wait()
+				select {
+				case <-done:
+				default:
+					t.Fatal("loop did not finish after accepted delivery")
+				}
+				if runErr == nil || (test.err != nil && !errors.Is(runErr, test.err)) ||
+					(test.err == nil && !strings.Contains(runErr.Error(), "http server stopped unexpectedly")) {
+					t.Fatalf("server exit error=%v, want cause %v", runErr, test.err)
+				}
+				if state.run.state != runStateFaulted || deadline != failedAt.Add(grace) || !time.Now().Before(deadline) || delivered != 1 {
+					t.Fatalf("state=%s deadline=%s now=%s delivered=%d", state.run.state, deadline, time.Now(), delivered)
+				}
+				if final := assertFinalTransactions(t, logs, 1, 0); final["partial"] != false {
+					t.Fatalf("accepted batch did not drain completely: %v", final)
 				}
 			})
 		})
@@ -646,8 +749,23 @@ func TestSamplingUsesElapsedIntervalForChannelRatesAndActualTPS(t *testing.T) {
 		run = pipeline.Start(t.Context(), options)
 		close(release)
 		<-run.Done()
-		time.Sleep(900 * time.Millisecond)
 		metrics := newPrometheusMetrics()
+		metrics.actualTPS.Set(17)
+		for _, now := range []time.Time{startedAt, startedAt.Add(-time.Second)} {
+			state.sample(run, metrics, now)
+			var actual, total dto.Metric
+			if err := metrics.actualTPS.Write(&actual); err != nil {
+				t.Fatal(err)
+			}
+			if err := metrics.transactionsTotal.Write(&total); err != nil {
+				t.Fatal(err)
+			}
+			if actual.GetGauge().GetValue() != 17 || total.GetCounter().GetValue() != 0 || state.run.totalTransactions != 0 {
+				t.Fatalf("nonpositive interval changed measurements: gauge=%v counter=%v transactions=%d",
+					actual.GetGauge().GetValue(), total.GetCounter().GetValue(), state.run.totalTransactions)
+			}
+		}
+		time.Sleep(900 * time.Millisecond)
 		state.sample(run, metrics, time.Now())
 		snapshot := state.snapshotAt(run, time.Now())
 		wantRate := 3 / time.Since(startedAt).Seconds()

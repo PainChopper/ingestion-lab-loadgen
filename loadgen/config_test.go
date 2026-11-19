@@ -54,6 +54,7 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 	}{
 		{name: "default", contents: contents, wantURL: testSenderURL},
 		{name: "external HTTPS", contents: strings.Replace(contents, testSenderURL, "https://ingest.example.test/v1/batches", 1), wantURL: "https://ingest.example.test/v1/batches"},
+		{name: "present empty URL", contents: strings.Replace(contents, testSenderURL, "", 1), wantErr: true},
 		{name: "malformed URL", contents: strings.Replace(contents, testSenderURL, "http://example.test/%invalid", 1), wantErr: true},
 		{name: "relative URL", contents: strings.Replace(contents, testSenderURL, "/internal/ingest", 1), wantErr: true},
 		{name: "unsupported scheme", contents: strings.Replace(contents, testSenderURL, "ftp://ingest.example.test/batches", 1), wantErr: true},
@@ -69,8 +70,8 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 			}
 			loaded, err := loadConfig(path)
 			if test.wantErr {
-				if err == nil {
-					t.Fatal("loadConfig error = nil")
+				if err == nil || !strings.Contains(err.Error(), "sender: api:") {
+					t.Fatalf("loadConfig error = %v, want sender API error", err)
 				}
 				return
 			}
@@ -79,6 +80,22 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 			}
 			if loaded.Sender.API.URL != test.wantURL {
 				t.Fatalf("sender API URL = %q, want %q", loaded.Sender.API.URL, test.wantURL)
+			}
+		})
+	}
+}
+
+func TestLoadConfigValidatesLoggingLevel(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warn", "error", "verbose"} {
+		t.Run(level, func(t *testing.T) {
+			input := strings.Replace(testConfigContents(), `level = "info"`, fmt.Sprintf("level = %q", level), 1)
+			loaded, err := loadConfig(writeConfigInput(t, input))
+			if level == "verbose" {
+				if err == nil || !strings.Contains(err.Error(), "logging: level must be debug, info, warn, or error") {
+					t.Fatalf("loadConfig error = %v, want logging level error", err)
+				}
+			} else if err != nil || loaded.Logging.Level != level {
+				t.Fatalf("logging level = %q, error = %v, want %q", loaded.Logging.Level, err, level)
 			}
 		})
 	}

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -274,10 +276,14 @@ func TestFormatSnapshotStartingSourceGolden(t *testing.T) {
 func TestRunRemoteCLIStatusFetchesOneSnapshot(t *testing.T) {
 	for _, test := range []struct {
 		name, body string
-		wantErr    bool
+		status     int
+		wantErr    string
+		shortBody  bool
 	}{
 		{name: "success", body: mustMarshalJSON(t, testRemoteSnapshot(t))},
-		{name: "invalid schema", body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: true},
+		{name: "invalid schema", body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: "decode snapshot"},
+		{name: "empty HTTP error", status: http.StatusServiceUnavailable, wantErr: "HTTP 503 Service Unavailable GET " + snapshotPath},
+		{name: "truncated response body", body: `{`, shortBody: true, wantErr: "read snapshot"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			requests := 0
@@ -288,14 +294,26 @@ func TestRunRemoteCLIStatusFetchesOneSnapshot(t *testing.T) {
 					http.Error(w, "unexpected request", http.StatusInternalServerError)
 					return
 				}
+				if test.shortBody {
+					w.Header().Set("Content-Length", "100")
+				}
+				if test.status != 0 {
+					w.WriteHeader(test.status)
+				}
 				_, _ = w.Write([]byte(test.body))
 			}))
 			defer server.Close()
 			var stdout bytes.Buffer
 			err := runRemoteCLI(t.Context(), cliCommand{remoteAction: "status", remoteURL: server.URL}, &stdout)
-			if test.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "decode snapshot") || stdout.Len() != 0 {
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) || stdout.Len() != 0 {
 					t.Fatalf("error=%v stdout=%q", err, stdout.String())
+				}
+				if test.shortBody && !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Fatalf("body read error = %v, want unexpected EOF", err)
+				}
+				if test.status != 0 && err.Error() != test.wantErr {
+					t.Fatalf("empty HTTP error = %q, want %q", err, test.wantErr)
 				}
 			} else if err != nil || !strings.HasPrefix(stdout.String(), "INGESTION LAB LOADGEN STATUS\n") {
 				t.Fatalf("error=%v stdout=%q", err, stdout.String())
@@ -304,5 +322,33 @@ func TestRunRemoteCLIStatusFetchesOneSnapshot(t *testing.T) {
 				t.Fatalf("requests=%d, want 1", requests)
 			}
 		})
+	}
+}
+
+func TestRunRemoteCLISetReportsPOSTTransportError(t *testing.T) {
+	received := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- r.Method + " " + r.URL.Path
+		connection, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack connection: %v", err)
+			return
+		}
+		if err := connection.Close(); err != nil {
+			t.Errorf("close connection: %v", err)
+		}
+	}))
+	defer server.Close()
+	command, err := parseCLI([]string{"set", "readers", "1", "--url", server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	err = runRemoteCLI(t.Context(), command, &stdout)
+	if !errors.Is(err, io.EOF) || !strings.Contains(err.Error(), "POST "+commandsPath) || stdout.Len() != 0 {
+		t.Fatalf("error=%v stdout=%q, want POST transport failure", err, stdout.String())
+	}
+	if got := <-received; got != "POST "+commandsPath {
+		t.Fatalf("request = %q, want POST %s", got, commandsPath)
 	}
 }
