@@ -1,4 +1,4 @@
-package receiver
+package ingest
 
 import (
 	"bytes"
@@ -66,7 +66,7 @@ func NewHandler(config Config) (*Handler, error) {
 
 	handler := &Handler{
 		config:         config,
-		responseStatus: config.Lab.responseStatus(),
+		responseStatus: config.responseStatus(),
 		state: handlerState{
 			startedAt: time.Now().UTC(),
 		},
@@ -88,7 +88,7 @@ func (h *Handler) handleIngest(writer http.ResponseWriter, request *http.Request
 		return
 	}
 
-	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, h.config.Ingest.MaxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(writer, request.Body, h.config.MaxBodyBytes))
 	if err != nil {
 		var limit *http.MaxBytesError
 		if errors.As(err, &limit) {
@@ -104,7 +104,7 @@ func (h *Handler) handleIngest(writer http.ResponseWriter, request *http.Request
 		return
 	}
 
-	if !waitForDelay(request, h.config.Lab.ResponseDelay) {
+	if !waitForDelay(request, h.config.ResponseDelay) {
 		return
 	}
 	if h.responseStatus != http.StatusNoContent {
@@ -117,7 +117,7 @@ func (h *Handler) handleIngest(writer http.ResponseWriter, request *http.Request
 }
 
 func (h *Handler) handleStatus(writer http.ResponseWriter, request *http.Request) {
-	status := h.state.snapshot(h.config.Lab, h.responseStatus)
+	status := h.state.snapshot(h.config.ResponseDelay, h.responseStatus)
 	writer.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(writer).Encode(status)
 }
@@ -149,7 +149,7 @@ func (s *handlerState) accept(transactionCount int) {
 	s.lastAcceptedAt = &acceptedAt
 }
 
-func (s *handlerState) snapshot(lab LabConfig, responseStatus int) statusResponse {
+func (s *handlerState) snapshot(responseDelay time.Duration, responseStatus int) statusResponse {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -165,7 +165,7 @@ func (s *handlerState) snapshot(lab LabConfig, responseStatus int) statusRespons
 		AcceptedTransactionsTotal: s.acceptedTransactionsTotal,
 		LastAcceptedAt:            lastAcceptedAt,
 		Lab: labStatusResponse{
-			ResponseDelayMS: lab.ResponseDelay.Milliseconds(),
+			ResponseDelayMS: responseDelay.Milliseconds(),
 			ResponseStatus:  responseStatus,
 		},
 	}

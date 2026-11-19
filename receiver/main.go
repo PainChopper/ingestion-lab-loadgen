@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"receiver/internal/receiver"
+	"receiver/internal/ingest"
 )
 
 func main() {
@@ -49,7 +49,7 @@ func main() {
 }
 
 func run(ctx context.Context, configPath string, output io.Writer) error {
-	cfg, err := receiver.LoadConfig(configPath)
+	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config %q: %w", configPath, err)
 	}
@@ -57,7 +57,7 @@ func run(ctx context.Context, configPath string, output io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("create logger: %w", err)
 	}
-	handler, err := receiver.NewHandler(cfg)
+	handler, err := ingest.NewHandler(cfg.Ingest)
 	if err != nil {
 		return fmt.Errorf("create handler: %w", err)
 	}

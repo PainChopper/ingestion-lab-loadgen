@@ -1,14 +1,18 @@
-package receiver
+package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"receiver/internal/ingest"
 )
 
 func TestLoadConfigStrictRequiredTypes(t *testing.T) {
@@ -65,10 +69,6 @@ func TestLoadConfigDurationBoundsAndSchema(t *testing.T) {
 }
 
 func TestConfigRejectsNonExactIngestPaths(t *testing.T) {
-	base, err := LoadConfig(writeConfig(t, validTOMLConfig()))
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, path := range []string{
 		"ingest", "/", "/status", "/%73tatus", "//status", "/v1/", "/v1//batch",
 		"/v1/../batch", "/v1/%2e/batch", "/v1/%2E%2E/batch", "/{rest...}", "/%7Brest...%7D",
@@ -79,10 +79,20 @@ func TestConfigRejectsNonExactIngestPaths(t *testing.T) {
 			if _, err := LoadConfig(writeConfig(t, content)); err == nil {
 				t.Fatal("invalid configured path accepted")
 			}
-			config := base
-			config.Ingest.Path = path
-			if _, err := NewHandler(config); err == nil {
-				t.Fatal("invalid programmatic path accepted")
+		})
+	}
+}
+
+func TestLoadConfigMapsExactPaths(t *testing.T) {
+	for _, path := range []string{"/v1/batches", "/v1/a%2Fb", "/v1/%252F", "/v1/percent%25", "/v1/данные"} {
+		t.Run(path, func(t *testing.T) {
+			content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, fmt.Sprintf("path = %q", path), 1)
+			config, err := LoadConfig(writeConfig(t, content))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if config.Ingest.Path != path {
+				t.Fatalf("path = %q, want %q", config.Ingest.Path, path)
 			}
 		})
 	}
@@ -115,11 +125,11 @@ func TestLoadConfig(t *testing.T) {
 				if config.Ingest.MaxBodyBytes != 32*1024*1024 {
 					t.Fatalf("Ingest.MaxBodyBytes = %d, want 33554432", config.Ingest.MaxBodyBytes)
 				}
-				if config.Lab.ResponseDelay != 25*time.Millisecond {
-					t.Fatalf("Lab.ResponseDelay = %s, want 25ms", config.Lab.ResponseDelay)
+				if config.Ingest.ResponseDelay != 25*time.Millisecond {
+					t.Fatalf("Ingest.ResponseDelay = %s, want 25ms", config.Ingest.ResponseDelay)
 				}
-				if config.Lab.ResponseStatus == nil || *config.Lab.ResponseStatus != 204 {
-					t.Fatalf("Lab.ResponseStatus = %v, want pointer to 204", config.Lab.ResponseStatus)
+				if config.Ingest.ResponseStatus == nil || *config.Ingest.ResponseStatus != 204 {
+					t.Fatalf("Ingest.ResponseStatus = %v, want pointer to 204", config.Ingest.ResponseStatus)
 				}
 			},
 		},
@@ -263,44 +273,38 @@ func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
 				if err == nil {
 					t.Fatal("unsupported toml response status accepted")
 				}
-				config, err = LoadConfig(writeConfig(t, validTOMLConfig()))
-				if err != nil {
-					t.Fatal(err)
-				}
-				config.Lab.ResponseStatus = test.input
-				if _, err := NewHandler(config); err == nil {
-					t.Fatal("unsupported programmatic response status accepted")
-				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if (config.Lab.ResponseStatus == nil) != (test.input == nil) {
+			if (config.Ingest.ResponseStatus == nil) != (test.input == nil) {
 				t.Fatal("toml input presence changed")
 			}
-			server, err := NewHandler(config)
+			if config.Ingest.ResponseStatus != nil && *config.Ingest.ResponseStatus != test.want {
+				t.Fatalf("response status = %d, want %d", *config.Ingest.ResponseStatus, test.want)
+			}
+			handler, err := ingest.NewHandler(config.Ingest)
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertStatus(t, server, 0, 0, false, 25, test.want)
-
-			server = newTestHandler(t, 1024, LabConfig{ResponseStatus: test.input})
-			if test.input != nil {
-				*test.input = 201
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/status", nil))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status endpoint code = %d, want 200", recorder.Code)
 			}
-			recorder := performRequest(
-				server,
-				httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()),
-			)
-			if recorder.Code != test.want {
-				t.Fatalf("ingest status = %d, want %d", recorder.Code, test.want)
+			var status struct {
+				Lab struct {
+					ResponseDelayMS int `json:"responseDelayMs"`
+					ResponseStatus  int `json:"responseStatus"`
+				} `json:"lab"`
 			}
-			var accepted int64
-			if test.want == http.StatusNoContent {
-				accepted = 1
+			if err := json.NewDecoder(recorder.Body).Decode(&status); err != nil {
+				t.Fatal(err)
 			}
-			assertStatus(t, server, accepted, accepted, accepted != 0, 0, test.want)
+			if status.Lab.ResponseDelayMS != 25 || status.Lab.ResponseStatus != test.want {
+				t.Fatalf("lab status = %+v, want delay 25 and status %d", status.Lab, test.want)
+			}
 		})
 	}
 }

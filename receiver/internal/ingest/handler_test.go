@@ -1,9 +1,8 @@
-package receiver
+package ingest
 
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,13 +22,7 @@ func TestHandlerExactConfiguredPaths(t *testing.T) {
 		{path: "/v1/данные", other: "/v1/данные/extra"},
 	} {
 		t.Run(test.path, func(t *testing.T) {
-			content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, fmt.Sprintf("path = %q", test.path), 1)
-			content = strings.Replace(content, "response_delay_ms = 25", "response_delay_ms = 0", 1)
-			cfg, err := LoadConfig(writeConfig(t, content))
-			if err != nil {
-				t.Fatal(err)
-			}
-			handler, err := NewHandler(cfg)
+			handler, err := NewHandler(Config{Path: test.path, MaxBodyBytes: 1024})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -45,7 +38,7 @@ func TestHandlerExactConfiguredPaths(t *testing.T) {
 }
 
 func TestHandlerHEADAndMethodResponses(t *testing.T) {
-	handler := newTestHandler(t, 1024, LabConfig{})
+	handler := newTestHandler(t, 1024, Config{})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	for _, test := range []struct {
@@ -84,7 +77,7 @@ func TestHandlerHEADAndMethodResponses(t *testing.T) {
 }
 
 func TestHandlerStatusWireShape(t *testing.T) {
-	handler := newTestHandler(t, 1024, LabConfig{})
+	handler := newTestHandler(t, 1024, Config{})
 	recorder := performRequest(handler, httpRequest(http.MethodGet, "/status", "", ""))
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
@@ -227,7 +220,7 @@ func TestHandlerIngest(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := newTestHandler(t, test.maxBody, LabConfig{})
+			server := newTestHandler(t, test.maxBody, Config{})
 			recorder := performRequest(
 				server,
 				httpRequest(test.method, "/internal/ingest", test.contentType, test.body),
@@ -314,7 +307,7 @@ func TestHandlerLabModes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				server := newTestHandler(t, test.maxBody, LabConfig{
+				server := newTestHandler(t, test.maxBody, Config{
 					ResponseDelay:  250 * time.Millisecond,
 					ResponseStatus: new(http.StatusInternalServerError),
 				})
@@ -340,7 +333,7 @@ func TestHandlerLabModes(t *testing.T) {
 
 	t.Run("delays validated success before acknowledgement", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			handler := newTestHandler(t, 1024, LabConfig{ResponseDelay: 25 * time.Millisecond, ResponseStatus: new(http.StatusNoContent)})
+			handler := newTestHandler(t, 1024, Config{ResponseDelay: 25 * time.Millisecond, ResponseStatus: new(http.StatusNoContent)})
 			returned := make(chan *httptest.ResponseRecorder, 1)
 			started := time.Now()
 			go func() {
@@ -365,7 +358,7 @@ func TestHandlerLabModes(t *testing.T) {
 	})
 
 	t.Run("forced status does not acknowledge batch", func(t *testing.T) {
-		server := newTestHandler(t, 1024, LabConfig{ResponseStatus: new(http.StatusInternalServerError)})
+		server := newTestHandler(t, 1024, Config{ResponseStatus: new(http.StatusInternalServerError)})
 
 		recorder := performRequest(server, httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()))
 		if recorder.Code != http.StatusInternalServerError {
@@ -377,7 +370,7 @@ func TestHandlerLabModes(t *testing.T) {
 	for _, when := range []string{"already canceled", "during delay"} {
 		t.Run(when, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				handler := newTestHandler(t, 1024, LabConfig{ResponseDelay: time.Second})
+				handler := newTestHandler(t, 1024, Config{ResponseDelay: time.Second})
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				if when == "already canceled" {
@@ -407,7 +400,7 @@ func TestHandlerLabModes(t *testing.T) {
 }
 
 func TestHandlerIngestMultiTransactionBatch(t *testing.T) {
-	server := newTestHandler(t, 2048, LabConfig{})
+	server := newTestHandler(t, 2048, Config{})
 
 	recorder := performRequest(server, httpRequest(
 		http.MethodPost,
@@ -424,7 +417,7 @@ func TestHandlerIngestMultiTransactionBatch(t *testing.T) {
 func TestHandlerIngestConcurrent(t *testing.T) {
 	const requestCount = 16
 
-	server := newTestHandler(t, 1024, LabConfig{})
+	server := newTestHandler(t, 1024, Config{})
 	statuses := make(chan int, requestCount)
 
 	var requests sync.WaitGroup
@@ -451,22 +444,12 @@ func TestHandlerIngestConcurrent(t *testing.T) {
 	assertStatus(t, server, requestCount, requestCount, true, 0, http.StatusNoContent)
 }
 
-func newTestHandler(t *testing.T, maxBodyBytes int64, lab LabConfig) *Handler {
+func newTestHandler(t *testing.T, maxBodyBytes int64, config Config) *Handler {
 	t.Helper()
 
-	server, err := NewHandler(Config{
-		SchemaVersion: 2,
-		Server: ServerConfig{
-			Address:         "127.0.0.1:0",
-			ShutdownTimeout: time.Second,
-		},
-		Ingest: IngestConfig{
-			Path:         "/internal/ingest",
-			MaxBodyBytes: maxBodyBytes,
-		},
-		Logging: LoggingConfig{Level: "info"},
-		Lab:     lab,
-	})
+	config.Path = "/internal/ingest"
+	config.MaxBodyBytes = maxBodyBytes
+	server, err := NewHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)
 	}
