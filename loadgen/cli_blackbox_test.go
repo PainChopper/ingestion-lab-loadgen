@@ -73,27 +73,33 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 			return
 		}
 		if err := json.NewEncoder(writer).Encode(snapshot); err != nil {
-			t.Fatalf("encode snapshot: %v", err)
+			t.Errorf("encode snapshot: %v", err)
 		}
 	}))
 	defer snapshotServer.Close()
 
-	result := runCLIBinary(t, binary, "status", "--url", snapshotServer.URL)
-	if result.exitCode != cliExitSuccess || !strings.Contains(result.stdout, "State:                    running") || result.stderr != "" {
-		t.Fatalf("success stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
-	}
+	t.Run("success", func(t *testing.T) {
+		result := runCLIBinary(t, binary, "status", "--url", snapshotServer.URL)
+		if result.exitCode != cliExitSuccess || !strings.Contains(result.stdout, "State:                    running") || result.stderr != "" {
+			t.Fatalf("success stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
+		}
+	})
 
 	httpFailure := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		http.Error(writer, "conflict", http.StatusConflict)
 	}))
 	defer httpFailure.Close()
-	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", httpFailure.URL), cliExitHTTP, "HTTP 409", "")
+	t.Run("HTTP conflict", func(t *testing.T) {
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", httpFailure.URL), cliExitHTTP, "HTTP 409", "")
+	})
 
 	malformed := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = writer.Write([]byte(`{"unexpected":true}`))
 	}))
 	defer malformed.Close()
-	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", malformed.URL), cliExitRemote, "decode snapshot", "")
+	t.Run("invalid schema", func(t *testing.T) {
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", malformed.URL), cliExitRemote, "decode snapshot", "")
+	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -103,7 +109,9 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatalf("release network failure address: %v", err)
 	}
-	assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", networkURL), cliExitRemote, "GET /api/loadgen/snapshot", "")
+	t.Run("network failure", func(t *testing.T) {
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", networkURL), cliExitRemote, "GET /api/loadgen/snapshot", "")
+	})
 }
 
 func TestCLIBinaryServeStartsDeliveryAutomatically(t *testing.T) {

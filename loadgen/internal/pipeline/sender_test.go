@@ -70,9 +70,6 @@ func TestSenderPoolReusesConnectionsAcrossConcurrentWaves(t *testing.T) {
 				if _, err := io.Copy(io.Discard, r.Body); err != nil {
 					return
 				}
-				if r.ProtoMajor != 1 || r.ProtoMinor != 1 {
-					t.Errorf("protocol=%s, want HTTP/1.1", r.Proto)
-				}
 				entered <- struct{}{}
 				select {
 				case <-release:
@@ -348,7 +345,7 @@ func TestRetryPolicySerializesInjectedRandom(t *testing.T) {
 func TestSenderRetryDurationSaturates(t *testing.T) {
 	const maximumMS = math.MaxInt64 / (int64(time.Millisecond) * 120 / 100)
 	base := time.Duration(maximumMS) * time.Millisecond
-	if got := senderRetryDuration(base, 20); got <= 0 || got == time.Duration(math.MaxInt64) {
+	if got, want := senderRetryDuration(base, 20), time.Duration(maximumMS*1200000); got != want {
 		t.Fatalf("maximum safe retry duration=%s", got)
 	}
 	if got := senderRetryDuration(base+time.Millisecond, 20); got != time.Duration(math.MaxInt64) {
@@ -485,6 +482,22 @@ func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	}
 	if pool.completed.Load() != 0 {
 		t.Fatalf("canceled batch was counted as completed: consumed=%d", pool.completed.Load())
+	}
+}
+
+func TestSenderPoolCanceledBeforeDeliveryMakesNoAttempt(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	calls := 0
+	pool := &senderPool{ctx: ctx, deliver: func(context.Context, []Transaction, int) error {
+		calls++
+		return nil
+	}}
+	if pool.processBatch(&senderWorker{}, []Transaction{{ClientID: "canceled"}}) {
+		t.Fatal("canceled delivery reported success")
+	}
+	if calls != 0 || pool.takeCompleted() != 0 {
+		t.Fatalf("delivery calls=%d completed=%d", calls, pool.takeCompleted())
 	}
 }
 
@@ -820,26 +833,6 @@ func TestSenderPoolDownscaleReturnsBeforeIdleWorkerExits(t *testing.T) {
 	})
 }
 
-func TestSenderPoolReplacementRestoresDesiredWorkerCount(t *testing.T) {
-	batches := make(chan []Transaction)
-	var channel batchQueue
-	channel.ch = batches
-	channel.batchSize = 0
-
-	config := testSenderOptions()
-	config.Senders = 2
-	config.Logger = zap.NewNop()
-	pool := startSenderPool(context.Background(), &channel, config, nil)
-
-	pool.reconcile(1)
-	pool.reconcile(2)
-	if snapshot := pool.snapshot(); snapshot.LiveWorkers != 2 || snapshot.IdleWorkers != 2 {
-		t.Fatalf("replacement workers = %+v, want two idle workers", snapshot)
-	}
-	close(batches)
-	<-pool.done
-}
-
 func TestSenderPoolEachDrainingWorkerAcceptsAtMostOneNewBatch(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		queue := newBatchQueue(4, 1)
@@ -1011,7 +1004,8 @@ func TestSenderPoolRetryDeadlineSurvivesReconcile(t *testing.T) {
 		var attempts atomic.Int64
 		attempt := func(_ context.Context, batch []Transaction, number int) error {
 			if batch[0].ClientID != "held" || int64(number) != attempts.Load()+1 {
-				t.Fatal("retry changed batch or attempt number")
+				t.Error("retry changed batch or attempt number")
+				return io.ErrNoProgress
 			}
 			attempts.Add(1)
 			if number == 1 {

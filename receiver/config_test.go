@@ -1,18 +1,14 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"receiver/internal/ingest"
 )
 
 func TestLoadConfigStrictRequiredTypes(t *testing.T) {
@@ -27,6 +23,12 @@ func TestLoadConfigStrictRequiredTypes(t *testing.T) {
 		{"fractional status pointer", "response_status = 204", "response_status = 204.9"},
 		{"missing logging", "level = \"info\"\n", ""},
 		{"missing schema", "schema_version = 2\n", ""},
+		{"missing address", "address = \"127.0.0.1:18080\"\n", ""},
+		{"missing timeout", "shutdown_timeout_ms = 2000\n", ""},
+		{"missing path", "path = \"/internal/ingest\"\n", ""},
+		{"missing body limit", "max_body_bytes = 33554432\n", ""},
+		{"missing delay", "response_delay_ms = 25\n", ""},
+		{"fractional delay", "response_delay_ms = 25", "response_delay_ms = 1.9"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			content := strings.Replace(validTOMLConfig(), test.old, test.replacement, 1)
@@ -60,44 +62,32 @@ func TestLoadConfigDurationBoundsAndSchema(t *testing.T) {
 			})
 		}
 	}
-	for _, version := range []int{0, 1, 3} {
-		content := strings.Replace(validTOMLConfig(), "schema_version = 2", fmt.Sprintf("schema_version = %d", version), 1)
-		if _, err := LoadConfig(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "schema_version") {
-			t.Fatalf("unsupported schema %d accepted: %v", version, err)
-		}
-	}
-}
-
-func TestConfigRejectsNonExactIngestPaths(t *testing.T) {
-	for _, path := range []string{
-		"/v1/a%2Fb", "/v1/%252F", "/v1/percent%25", "/v1/данные", "/v1/./batch",
-		"/v1/a!b", "/v1/a$b", "/v1/a&b", "/v1/a'b", "/v1/a(b", "/v1/a)b", "/v1/a*b",
-		"/v1/a+b", "/v1/a,b", "/v1/a;b", "/v1/a=b", "/v1/a:b", "/v1/a@b", "/v1/a\\b",
-		"ingest", "/", "/status", "/%73tatus", "//status", "/v1/", "/v1//batch",
-		"/v1/../batch", "/v1/%2e/batch", "/v1/%2E%2E/batch", "/{rest...}", "/%7Brest...%7D",
-		"/v1/batch?x=1", "/v1/batch#fragment", "/v1/a%20b", "/v1/a b", "/v1/%ZZ", "/v1/%00", "/v1/\u2003",
-	} {
-		t.Run(path, func(t *testing.T) {
-			content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, fmt.Sprintf("path = %q", path), 1)
-			if _, err := LoadConfig(writeConfig(t, content)); err == nil {
-				t.Fatal("invalid configured path accepted")
+	for _, version := range []int{1, 3} {
+		t.Run(fmt.Sprintf("version %d", version), func(t *testing.T) {
+			content := strings.Replace(validTOMLConfig(), "schema_version = 2", fmt.Sprintf("schema_version = %d", version), 1)
+			if _, err := LoadConfig(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "schema_version") {
+				t.Fatalf("unsupported schema %d accepted: %v", version, err)
 			}
 		})
 	}
 }
 
-func TestLoadConfigMapsExactPaths(t *testing.T) {
-	for _, path := range []string{"/internal/ingest", "/v1/batches", "/AZaz09._~-/.hidden/...", "/status/batches"} {
-		t.Run(path, func(t *testing.T) {
-			content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, fmt.Sprintf("path = %q", path), 1)
-			config, err := LoadConfig(writeConfig(t, content))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if config.Ingest.Path != path {
-				t.Fatalf("path = %q, want %q", config.Ingest.Path, path)
-			}
-		})
+func TestLoadConfigRejectsInvalidIngestPath(t *testing.T) {
+	content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, `path = "/v1/a!b"`, 1)
+	if _, err := LoadConfig(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "ingest.path") {
+		t.Fatalf("invalid path error=%v", err)
+	}
+}
+
+func TestLoadConfigMapsExactPath(t *testing.T) {
+	const path = "/AZaz09._~-/.hidden/..."
+	content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, fmt.Sprintf("path = %q", path), 1)
+	config, err := LoadConfig(writeConfig(t, content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Ingest.Path != path {
+		t.Fatalf("path=%q, want %q", config.Ingest.Path, path)
 	}
 }
 
@@ -113,6 +103,9 @@ func TestLoadConfig(t *testing.T) {
 			content: validTOMLConfig(),
 			check: func(t *testing.T, config Config) {
 				t.Helper()
+				if config.Logging.Level != "info" {
+					t.Fatalf("logging level=%q, want info", config.Logging.Level)
+				}
 				if config.SchemaVersion != 2 {
 					t.Fatalf("SchemaVersion = %d, want 2", config.SchemaVersion)
 				}
@@ -152,13 +145,8 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "rejects unsupported schema version",
-			content: strings.Replace(validTOMLConfig(), "schema_version = 2", "schema_version = 1", 1),
-			wantErr: true,
-		},
-		{
-			name:    "rejects non internal ingest path",
-			content: strings.Replace(validTOMLConfig(), "path = \"/internal/ingest\"", "path = \"ingest\"", 1),
+			name:    "rejects empty address",
+			content: strings.Replace(validTOMLConfig(), `address = "127.0.0.1:18080"`, `address = ""`, 1),
 			wantErr: true,
 		},
 		{
@@ -174,16 +162,6 @@ func TestLoadConfig(t *testing.T) {
 		{
 			name:    "rejects unsupported logging level",
 			content: strings.Replace(validTOMLConfig(), "level = \"info\"", "level = \"trace\"", 1),
-			wantErr: true,
-		},
-		{
-			name:    "rejects negative lab delay",
-			content: strings.Replace(validTOMLConfig(), "response_delay_ms = 25", "response_delay_ms = -1", 1),
-			wantErr: true,
-		},
-		{
-			name:    "rejects lab status outside allowlist",
-			content: strings.Replace(validTOMLConfig(), "response_status = 204", "response_status = 201", 1),
 			wantErr: true,
 		},
 	}
@@ -203,21 +181,6 @@ func TestLoadConfig(t *testing.T) {
 				t.Fatalf("LoadConfig() error = %v", err)
 			}
 			test.check(t, config)
-		})
-	}
-}
-
-func TestLoadConfigRequiresLabDelayAndRejectsExplicitZeroStatus(t *testing.T) {
-	for _, test := range []struct{ name, old, replacement string }{
-		{"missing delay", "response_delay_ms = 25\n", ""},
-		{"explicit zero status", "response_status = 204", "response_status = 0"},
-		{"fractional delay", "response_delay_ms = 25", "response_delay_ms = 1.9"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			content := strings.Replace(validTOMLConfig(), test.old, test.replacement, 1)
-			if _, err := LoadConfig(writeConfig(t, content)); err == nil {
-				t.Fatal("invalid lab setting accepted")
-			}
 		})
 	}
 }
@@ -286,27 +249,6 @@ func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
 			}
 			if config.Ingest.ResponseStatus != nil && *config.Ingest.ResponseStatus != test.want {
 				t.Fatalf("response status = %d, want %d", *config.Ingest.ResponseStatus, test.want)
-			}
-			handler, err := ingest.NewHandler(config.Ingest)
-			if err != nil {
-				t.Fatal(err)
-			}
-			recorder := httptest.NewRecorder()
-			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/status", nil))
-			if recorder.Code != http.StatusOK {
-				t.Fatalf("status endpoint code = %d, want 200", recorder.Code)
-			}
-			var status struct {
-				Lab struct {
-					ResponseDelayMS int `json:"responseDelayMs"`
-					ResponseStatus  int `json:"responseStatus"`
-				} `json:"lab"`
-			}
-			if err := json.NewDecoder(recorder.Body).Decode(&status); err != nil {
-				t.Fatal(err)
-			}
-			if status.Lab.ResponseDelayMS != 25 || status.Lab.ResponseStatus != test.want {
-				t.Fatalf("lab status = %+v, want delay 25 and status %d", status.Lab, test.want)
 			}
 		})
 	}

@@ -38,7 +38,6 @@ func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertStatus(t, server, 0, 0, false, 0, test.want)
-			server = newTestHandler(t, 1024, Config{ResponseStatus: test.input})
 			if test.input != nil {
 				*test.input = 201
 			}

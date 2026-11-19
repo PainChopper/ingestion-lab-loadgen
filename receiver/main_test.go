@@ -18,6 +18,14 @@ type logWriterFunc func([]byte) (int, error)
 
 func (f logWriterFunc) Write(data []byte) (int, error) { return f(data) }
 
+func TestRunPreservesMissingConfigCause(t *testing.T) {
+	var output bytes.Buffer
+	err := run(t.Context(), filepath.Join(t.TempDir(), "missing.toml"), &output)
+	if !errors.Is(err, os.ErrNotExist) || output.Len() != 0 {
+		t.Fatalf("run error=%v output=%q, want missing config without startup", err, output.String())
+	}
+}
+
 func TestRunLogsLifecycleAndReleasesListener(t *testing.T) {
 	configPath := receiverConfigAt(t, "127.0.0.1:0")
 	var output bytes.Buffer

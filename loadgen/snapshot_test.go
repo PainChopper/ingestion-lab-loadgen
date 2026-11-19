@@ -2,9 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"reflect"
 	"testing"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
@@ -54,5 +58,52 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 	}
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("wire snapshot = %+v, want %+v", actual, expected)
+	}
+}
+
+func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
+	data, err := os.ReadFile("testdata/snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot runtimeSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"event": "runtime_summary", "state": "stopping",
+		"elapsed_ms": int64(102), "total_transactions": int64(101),
+		"reader_read_tps": 21.5, "reader_rows_read": int64(22),
+		"reader_workers": int64(11), "reader_live_workers": int64(12),
+		"reader_reading_workers": int64(14), "reader_blocked_workers": int64(15), "reader_draining_workers": int64(16),
+		"throttler_requested_tps": int64(31), "throttler_admitted_tps": 32.5, "installed": false,
+		"reader_channel_capacity": int64(51), "reader_channel_depth_batches": int64(52),
+		"reader_channel_buffered_transactions": int64(53), "reader_channel_blocked_senders": int64(54),
+		"reader_channel_oldest_blocked_ms": int64(55), "reader_channel_blocked_ms": int64(56),
+		"reader_channel_input_tps": 62.5, "reader_channel_output_tps": 64.5,
+		"sender_channel_capacity": int64(71), "sender_channel_depth_batches": int64(72),
+		"sender_channel_buffered_transactions": int64(73), "sender_channel_blocked_senders": int64(74),
+		"sender_channel_oldest_blocked_ms": int64(75), "sender_channel_blocked_ms": int64(76),
+		"sender_channel_input_tps": 82.5, "sender_channel_output_tps": 84.5,
+		"sender_workers": int64(41), "sender_live_workers": int64(42),
+		"sender_in_flight_workers": int64(44), "sender_backoff_workers": int64(45), "sender_draining_workers": int64(46),
+		"source_error_category": "reader-category", "source_error_operation": "reader-operation", "source_error_relative_path": "reader-path",
+	}
+	for _, name := range []string{"source error", "no source error"} {
+		t.Run(name, func(t *testing.T) {
+			snapshot := snapshot
+			want := maps.Clone(want)
+			if name == "no source error" {
+				snapshot.Reader.SourceError = nil
+				want["source_error_category"] = ""
+				want["source_error_operation"] = ""
+				want["source_error_relative_path"] = ""
+			}
+			core, entries := observer.New(zap.InfoLevel)
+			zap.New(core).Info("summary", snapshotLogFields(snapshot)...)
+			if got := entries.All()[0].ContextMap(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("log fields = %#v, want %#v", got, want)
+			}
+		})
 	}
 }

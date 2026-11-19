@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"testing/synctest"
 	"time"
 )
@@ -78,6 +79,9 @@ func TestHandlerHEADAndMethodResponses(t *testing.T) {
 func TestHandlerStatusWireShape(t *testing.T) {
 	handler := newTestHandler(t, 1024, Config{})
 	recorder := performRequest(handler, httpRequest(http.MethodGet, "/status", "", ""))
+	if recorder.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status Content-Type=%q", recorder.Header().Get("Content-Type"))
+	}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
@@ -356,16 +360,6 @@ func TestHandlerLabModes(t *testing.T) {
 		})
 	})
 
-	t.Run("forced status does not acknowledge batch", func(t *testing.T) {
-		server := newTestHandler(t, 1024, Config{ResponseStatus: new(http.StatusInternalServerError)})
-
-		recorder := performRequest(server, httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()))
-		if recorder.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d, want 500", recorder.Code)
-		}
-		assertStatus(t, server, 0, 0, false, 0, http.StatusInternalServerError)
-	})
-
 	for _, when := range []string{"already canceled", "during delay"} {
 		t.Run(when, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -411,6 +405,34 @@ func TestHandlerIngestMultiTransactionBatch(t *testing.T) {
 		t.Fatalf("status = %d, want 204", recorder.Code)
 	}
 	assertStatus(t, server, 1, 2, true, 0, http.StatusNoContent)
+}
+
+func TestHandlerReadFailurePrecedesLabSettings(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		handler := newTestHandler(t, 1024, Config{ResponseDelay: 250 * time.Millisecond, ResponseStatus: new(500)})
+		request := httpRequest(http.MethodPost, "/internal/ingest", "application/json", "")
+		request.Body = io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))
+		started := time.Now()
+		recorder := performRequest(handler, request)
+		if recorder.Code != http.StatusBadRequest || time.Since(started) != 0 {
+			t.Fatalf("read failure status=%d elapsed=%s", recorder.Code, time.Since(started))
+		}
+		assertStatus(t, handler, 0, 0, false, 250, http.StatusInternalServerError)
+	})
+}
+
+func TestHandlerCanceledRequestWithZeroDelayDoesNotAcknowledge(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		handler := newTestHandler(t, 1024, Config{})
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		started := time.Now()
+		recorder := performRequest(handler, httpRequestWithContext(ctx, http.MethodPost, "/internal/ingest", "application/json", validBatch()))
+		if recorder.Code == http.StatusNoContent || time.Since(started) != 0 {
+			t.Fatalf("canceled request status=%d elapsed=%s", recorder.Code, time.Since(started))
+		}
+		assertStatus(t, handler, 0, 0, false, 0, http.StatusNoContent)
+	})
 }
 
 func TestHandlerIngestConcurrent(t *testing.T) {

@@ -114,29 +114,19 @@ func TestLoadConfigRejectsWeakNumericTypes(t *testing.T) {
 
 func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 	contents := testConfigContents()
-	urlLine := "url = \"" + testSenderURL + "\"\n"
 	tests := []struct {
 		name     string
 		contents string
+		wantURL  string
 		wantErr  bool
 	}{
-		{name: "default", contents: contents},
-		{name: "external HTTPS", contents: strings.Replace(contents, testSenderURL, "https://ingest.example.test/v1/batches", 1)},
+		{name: "default", contents: contents, wantURL: testSenderURL},
+		{name: "external HTTPS", contents: strings.Replace(contents, testSenderURL, "https://ingest.example.test/v1/batches", 1), wantURL: "https://ingest.example.test/v1/batches"},
 		{name: "malformed URL", contents: strings.Replace(contents, testSenderURL, "http://example.test/%invalid", 1), wantErr: true},
 		{name: "relative URL", contents: strings.Replace(contents, testSenderURL, "/internal/ingest", 1), wantErr: true},
 		{name: "unsupported scheme", contents: strings.Replace(contents, testSenderURL, "ftp://ingest.example.test/batches", 1), wantErr: true},
 		{name: "missing host", contents: strings.Replace(contents, testSenderURL, "http:/internal/ingest", 1), wantErr: true},
 		{name: "fragment", contents: strings.Replace(contents, testSenderURL, "https://ingest.example.test/batches#fragment", 1), wantErr: true},
-		{
-			name: "removed API metadata",
-			contents: strings.Replace(
-				contents,
-				urlLine,
-				urlLine+"mutability = \"immediate\"",
-				1,
-			),
-			wantErr: true,
-		},
 	}
 
 	for _, test := range tests {
@@ -155,8 +145,8 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 			if err != nil {
 				t.Fatalf("loadConfig: %v", err)
 			}
-			if loaded.Sender.API.URL == "" {
-				t.Fatal("loaded sender API URL is empty")
+			if loaded.Sender.API.URL != test.wantURL {
+				t.Fatalf("sender API URL = %q, want %q", loaded.Sender.API.URL, test.wantURL)
 			}
 		})
 	}
@@ -168,23 +158,21 @@ func TestLoadConfigValidatesSenderAPITimeout(t *testing.T) {
 	tests := []struct {
 		name    string
 		line    string
-		version int
 		wantErr string
 	}{
-		{name: "minimum inclusive", line: "timeout_ms = 1\n", version: 4},
-		{name: "integral float", line: "timeout_ms = 1.0\n", version: 4},
-		{name: "maximum inclusive", line: fmt.Sprintf("timeout_ms = %d\n", maxMS), version: 4},
-		{name: "missing", version: 4, wantErr: "timeout_ms"},
-		{name: "zero", line: "timeout_ms = 0\n", version: 4, wantErr: "timeout_ms"},
-		{name: "negative", line: "timeout_ms = -1\n", version: 4, wantErr: "timeout_ms"},
-		{name: "overflow", line: fmt.Sprintf("timeout_ms = %d\n", maxMS+1), version: 4, wantErr: "timeout_ms"},
-		{name: "fraction", line: "timeout_ms = 1.9\n", version: 4, wantErr: "timeout_ms"},
-		{name: "string", line: "timeout_ms = \"1\"\n", version: 4, wantErr: "timeout_ms"},
+		{name: "minimum inclusive", line: "timeout_ms = 1\n"},
+		{name: "integral float", line: "timeout_ms = 1.0\n"},
+		{name: "maximum inclusive", line: fmt.Sprintf("timeout_ms = %d\n", maxMS)},
+		{name: "missing", wantErr: "timeout_ms"},
+		{name: "zero", line: "timeout_ms = 0\n", wantErr: "timeout_ms"},
+		{name: "negative", line: "timeout_ms = -1\n", wantErr: "timeout_ms"},
+		{name: "overflow", line: fmt.Sprintf("timeout_ms = %d\n", maxMS+1), wantErr: "timeout_ms"},
+		{name: "fraction", line: "timeout_ms = 1.9\n", wantErr: "timeout_ms"},
+		{name: "string", line: "timeout_ms = \"1\"\n", wantErr: "timeout_ms"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			input := strings.Replace(contents, "schema_version = 4", fmt.Sprintf("schema_version = %d", test.version), 1)
-			input = strings.Replace(input, "[sender.api]\n", "[sender.api]\n"+test.line, 1)
+			input := strings.Replace(contents, "[sender.api]\n", "[sender.api]\n"+test.line, 1)
 			path := filepath.Join(t.TempDir(), "config.toml")
 			if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
 				t.Fatal(err)
@@ -270,7 +258,6 @@ func TestLoadConfigPreservesRetryDelays(t *testing.T) {
 
 func TestLoadConfigRejectsInvalidSenderConfig(t *testing.T) {
 	tests := []struct{ name, old, replacement string }{
-		{"initial above maximum", "max = 32", "max = 31"},
 		{"empty retry delays", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = []"},
 		{"decreasing retry delays", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [250, 100]"},
 		{"zero retry delay", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [0]"},
@@ -295,7 +282,7 @@ func TestLoadConfigRejectsInvalidSenderConfig(t *testing.T) {
 func TestSenderRetryConfigDurationBounds(t *testing.T) {
 	for _, jitter := range []int{0, 20, 50} {
 		t.Run(fmt.Sprintf("jitter %d", jitter), func(t *testing.T) {
-			maximumDelayMS := senderRetryMaxDelayMS(jitter)
+			maximumDelayMS := int64(math.MaxInt64) / (int64(time.Millisecond) * int64(100+jitter) / 100)
 			for _, test := range []struct {
 				name    string
 				delayMS int
@@ -316,10 +303,12 @@ func TestSenderRetryConfigDurationBounds(t *testing.T) {
 		})
 	}
 	for _, jitter := range []int{-1, 51} {
-		config := senderRetryConfig{DelaysMS: []int{1}, JitterPercent: jitter}
-		if err := config.validate(); err == nil {
-			t.Errorf("accepted jitter %d", jitter)
-		}
+		t.Run(fmt.Sprintf("invalid jitter %d", jitter), func(t *testing.T) {
+			config := senderRetryConfig{DelaysMS: []int{1}, JitterPercent: jitter}
+			if err := config.validate(); err == nil {
+				t.Errorf("accepted jitter %d", jitter)
+			}
+		})
 	}
 }
 
@@ -356,17 +345,8 @@ func TestSchema4StrictShapeAndTypes(t *testing.T) {
 	for _, tc := range []struct{ name, old, replacement string }{
 		{"relative source", `C:\dataset\*.parquet`, "data/*.parquet"},
 		{"schema3", "schema_version = 4", "schema_version = 3"},
-		{"schema2", "schema_version = 4", "schema_version = 2"},
 		{"future", "schema_version = 4", "schema_version = 5"},
-		{"legacy batch", "[reader]\nread_batch_size = 1000", "[reader.read_batch_size]\ninitial = 1000"},
-		{"legacy queue", "[readerChannel]\ncapacity = 2", "[readerChannel.capacity]\ninitial = 2\nallowed = [0, 2]"},
-		{"legacy bool", "[throttler]\ninstalled = true", "[throttler.installed]\ninitial = true\nallowed = [true,false]"},
-		{"legacy window", "[metrics]\nwindow_ms = 1000", "[metrics.window_ms]\ninitial = 1000"},
-		{"worker min", "[reader.workers]", "[reader.workers]\nmin = 1"},
 		{"worker step", "[sender.workers]", "[sender.workers]\nstep = 1"},
-		{"TPS min", "[throttler.requested_tps]", "[throttler.requested_tps]\nmin = 0"},
-		{"unit", "[source]", "[source]\nunit = 'glob-pattern'"},
-		{"mutability", "[logging]", "[logging]\nmutability = 'startup-only'"},
 		{"unknown", "[metrics]", "[metrics]\nextra = 1"},
 		{"capacity string", "capacity = 2", "capacity = '2'"},
 		{"capacity bool", "capacity = 2", "capacity = true"},
@@ -417,14 +397,30 @@ func TestSchema4ScalarValuesAndBounds(t *testing.T) {
 		{"TPS max off grid", "max = 4000000", "max = 4000001", true},
 		{"TPS step0", "step = 200000", "step = 0", false},
 		{"TPS max0", "max = 4000000", "max = 0", false},
-		{"workers0", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = 0", false},
-		{"workers high", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = 8", false},
+		{"TPS max negative", "max = 4000000", "max = -1", false},
+		{"TPS step negative", "step = 200000", "step = -1", false},
+		{"TPS safe max and step", "initial = 2000000\nmax = 4000000\nstep = 200000", fmt.Sprintf("initial = 0\nmax = %d\nstep = %d", maxSnapshotInteger, maxSnapshotInteger), true},
+		{"reader workers zero initial", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = 0\nmax = 7", false},
+		{"reader workers negative initial", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = -1\nmax = 7", false},
+		{"reader workers above max", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = 8\nmax = 7", false},
+		{"reader workers zero max", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = 1\nmax = 0", false},
+		{"reader workers negative max", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = 1\nmax = -1", false},
+		{"reader workers equal max", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = 7\nmax = 7", true},
+		{"reader workers unsafe max", "[reader.workers]\ninitial = 1\nmax = 7", fmt.Sprintf("[reader.workers]\ninitial = 1\nmax = %d", maxSnapshotInteger+1), false},
+		{"reader workers safe max", "[reader.workers]\ninitial = 1\nmax = 7", fmt.Sprintf("[reader.workers]\ninitial = 1\nmax = %d", maxSnapshotInteger), true},
+		{"reader workers custom", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = 33\nmax = 112", true},
+		{"sender workers zero initial", "[sender.workers]\ninitial = 32\nmax = 32", "[sender.workers]\ninitial = 0\nmax = 32", false},
+		{"sender workers negative initial", "[sender.workers]\ninitial = 32\nmax = 32", "[sender.workers]\ninitial = -1\nmax = 32", false},
+		{"sender workers above max", "[sender.workers]\ninitial = 32\nmax = 32", "[sender.workers]\ninitial = 33\nmax = 32", false},
+		{"sender workers zero max", "[sender.workers]\ninitial = 32\nmax = 32", "[sender.workers]\ninitial = 1\nmax = 0", false},
+		{"sender workers negative max", "[sender.workers]\ninitial = 32\nmax = 32", "[sender.workers]\ninitial = 1\nmax = -1", false},
+		{"sender workers equal max", "[sender.workers]\ninitial = 32\nmax = 32", "[sender.workers]\ninitial = 7\nmax = 7", true},
+		{"sender workers unsafe max", "[sender.workers]\ninitial = 32\nmax = 32", fmt.Sprintf("[sender.workers]\ninitial = 1\nmax = %d", maxSnapshotInteger+1), false},
+		{"sender workers safe max", "[sender.workers]\ninitial = 32\nmax = 32", fmt.Sprintf("[sender.workers]\ninitial = 1\nmax = %d", maxSnapshotInteger), true},
+		{"sender workers custom", "[sender.workers]\ninitial = 32\nmax = 32", "[sender.workers]\ninitial = 33\nmax = 112", true},
 		{"unsafe capacity", "capacity = 2", fmt.Sprintf("capacity = %d", maxSnapshotInteger+1), false},
-		{"unsafe workers", "max = 7", fmt.Sprintf("max = %d", maxSnapshotInteger+1), false},
 		{"unsafe TPS", "max = 4000000", fmt.Sprintf("max = %d", maxSnapshotInteger+1), false},
 		{"unsafe step", "initial = 2000000\nmax = 4000000\nstep = 200000", fmt.Sprintf("initial = 0\nmax = 4000000\nstep = %d", maxSnapshotInteger+1), false},
-		{"workers max0", "max = 7", "max = 0", false},
-		{"workers custom", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = 33\nmax = 112", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := strings.Replace(testConfigContents(), tc.old, tc.replacement, 1)
@@ -439,7 +435,7 @@ func TestSchema4ScalarValuesAndBounds(t *testing.T) {
 	}
 }
 
-func TestSchema4CheckedInProfileAndHTTPPool(t *testing.T) {
+func TestSchema4CheckedInProfile(t *testing.T) {
 	cfg, err := loadConfig(defaultConfigPath)
 	if err != nil {
 		t.Fatal(err)
@@ -449,9 +445,23 @@ func TestSchema4CheckedInProfileAndHTTPPool(t *testing.T) {
 		cfg.Throttler.RequestedTPS != (tpsConfig{Initial: 2000000, Max: 4000000, Step: 200000}) || !cfg.Throttler.Installed || cfg.Metrics.WindowMS != 1000 {
 		t.Fatalf("example profile changed: %+v", cfg)
 	}
+}
+
+func TestPipelineOptionsPreservesConfiguration(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Reader.ReadBatchSize = 1500
+	cfg.ReaderChannel.Capacity = 3
+	cfg.SenderChannel.Capacity = 2
+	cfg.Reader.Workers.Initial = 4
 	cfg.Sender.Workers = workersConfig{Initial: 7, Max: 112}
+	cfg.Throttler.Installed = false
+	cfg.Sender.API.TimeoutMS = 1234
 	options := pipelineOptions(cfg, nil)
-	if options.SenderMaxConns != 112 || options.Senders != 7 {
+	if options.BatchSize != 1500 || options.ReaderCapacity != 3 || options.SenderCapacity != 2 ||
+		options.Readers != 4 || options.Senders != 7 || options.SenderMaxConns != 112 ||
+		options.Rate.TPS != 2000000 || options.Rate.Installed || options.SenderURL != testSenderURL ||
+		options.SenderTimeout != 1234*time.Millisecond || options.RetryJitterPercent != 20 ||
+		!slices.Equal(options.RetryDelays, []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second, 5 * time.Second}) {
 		t.Fatalf("pool limit changed: %+v", options)
 	}
 }

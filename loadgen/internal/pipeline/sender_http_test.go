@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,20 +16,30 @@ func TestSenderClientPostsJSONBatch(t *testing.T) {
 	batch := []Transaction{{ClientID: "client-1"}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s, want POST", r.Method)
+			t.Errorf("method = %s, want POST", r.Method)
+			http.Error(w, "unexpected method", http.StatusInternalServerError)
+			return
 		}
 		if r.URL.Path != "/internal/ingest" {
-			t.Fatalf("path = %q", r.URL.Path)
+			t.Errorf("path = %q", r.URL.Path)
+			http.Error(w, "unexpected path", http.StatusInternalServerError)
+			return
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
-			t.Fatalf("Content-Type = %q", r.Header.Get("Content-Type"))
+			t.Errorf("Content-Type = %q", r.Header.Get("Content-Type"))
+			http.Error(w, "unexpected content type", http.StatusInternalServerError)
+			return
 		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			t.Fatalf("read request: %v", err)
+			t.Errorf("read request: %v", err)
+			http.Error(w, "read failed", http.StatusInternalServerError)
+			return
 		}
 		if string(body) != "[{\"client_id\":\"client-1\",\"event_time\":\"0001-01-01T00:00:00Z\",\"amount\":0,\"event_type\":0,\"event_subtype\":0,\"currency\":0,\"src_type11\":0,\"src_type12\":0,\"dst_type11\":0,\"dst_type12\":0,\"src_type21\":0,\"src_type22\":0,\"src_type31\":0,\"src_type32\":0,\"fold\":0}]" {
-			t.Fatalf("JSON body = %s", body)
+			t.Errorf("JSON body = %s", body)
+			http.Error(w, "unexpected body", http.StatusInternalServerError)
+			return
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -89,7 +100,7 @@ func TestSenderClientClassifiesResponseStatuses(t *testing.T) {
 	}
 }
 
-func TestSenderClientRetriesNetworkFailureAndClosesResponse(t *testing.T) {
+func TestSenderClientRejectsFailuresAndClosesBoundedResponse(t *testing.T) {
 	closed := atomic.Bool{}
 	body := &closeTrackingBody{Reader: strings.NewReader(strings.Repeat("x", 128<<10)), closed: &closed}
 	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
@@ -110,11 +121,49 @@ func TestSenderClientRetriesNetworkFailureAndClosesResponse(t *testing.T) {
 		t.Errorf("bytes left unread = %d, want %d", got, 64<<10)
 	}
 
+	cause := errors.New("network failure")
 	client.Transport = roundTripperFunc(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("network failure")
+		return nil, cause
 	})
-	if err := sender.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); err == nil {
-		t.Fatal("network error accepted")
+	if err := sender.deliver(context.Background(), []Transaction{{ClientID: "client"}}, 1); !errors.Is(err, cause) {
+		t.Fatalf("network error=%v, want preserved cause", err)
+	}
+}
+
+func TestSenderClientRejectsInvalidPayloadAndRequest(t *testing.T) {
+	for _, test := range []struct {
+		name, url string
+		amount    float32
+	}{
+		{name: "JSON marshal", url: "http://example.test/ingest", amount: float32(math.NaN())},
+		{name: "invalid URL", url: "://invalid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				return nil, io.ErrUnexpectedEOF
+			})}
+			sender := newSenderClient(test.url, client)
+			if err := sender.deliver(t.Context(), []Transaction{{Amount: test.amount}}, 1); err == nil || calls != 0 {
+				t.Fatalf("error=%v transport calls=%d", err, calls)
+			}
+		})
+	}
+}
+
+func TestSenderClientPreservesResponseReadFailureAndClosesBody(t *testing.T) {
+	closed := atomic.Bool{}
+	body := &closeTrackingBody{Reader: strings.NewReader(""), closed: &closed, readErr: io.ErrUnexpectedEOF}
+	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusNoContent, Body: body, Header: make(http.Header)}, nil
+	})}
+	sender := newSenderClient("http://example.test/ingest", client)
+	if err := sender.deliver(t.Context(), []Transaction{{}}, 1); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("response read error=%v, want preserved cause", err)
+	}
+	if !closed.Load() {
+		t.Fatal("response body remained open after read failure")
 	}
 }
 
@@ -138,7 +187,15 @@ func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, erro
 
 type closeTrackingBody struct {
 	*strings.Reader
-	closed *atomic.Bool
+	closed  *atomic.Bool
+	readErr error
+}
+
+func (b *closeTrackingBody) Read(p []byte) (int, error) {
+	if b.readErr != nil {
+		return 0, b.readErr
+	}
+	return b.Reader.Read(p)
 }
 
 func (b *closeTrackingBody) Close() error {

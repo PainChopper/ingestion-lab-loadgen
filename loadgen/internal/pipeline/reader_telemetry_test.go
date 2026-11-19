@@ -11,9 +11,29 @@ func TestReaderTelemetryMeasuresElapsedIntervals(t *testing.T) {
 	if got := telemetry.snapshot(); got.ReadTPS != 0 || got.RowsRead != 0 {
 		t.Fatalf("initial measurements = %+v", got)
 	}
+	telemetry.sample(start)
+	telemetry.recordRead(0)
+	telemetry.recordRead(-1)
+	if got := telemetry.snapshot(); got != (readerMeasurements{}) {
+		t.Fatalf("unstarted sample or nonpositive read changed measurements: %+v", got)
+	}
 
 	telemetry.startInterval(start)
 	telemetry.recordRead(3)
+	for _, test := range []struct {
+		name string
+		now  time.Time
+	}{
+		{name: "same time", now: start},
+		{name: "earlier time", now: start.Add(-time.Second)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			telemetry.sample(test.now)
+			if got := telemetry.snapshot(); got.RowsRead != 3 || got.ReadTPS != 0 {
+				t.Fatalf("nonpositive interval changed measurements: %+v", got)
+			}
+		})
+	}
 	telemetry.sample(start.Add(1500 * time.Millisecond))
 	got := telemetry.snapshot()
 	if got.ReadTPS != 2 || got.RowsRead != 3 {

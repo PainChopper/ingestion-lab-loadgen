@@ -11,6 +11,11 @@ import (
 
 func TestRunCLIExitCodes(t *testing.T) {
 	var stdout, stderr bytes.Buffer
+	if code := runCLI([]string{"--help"}, &stdout, &stderr); code != cliExitSuccess || stdout.String() != cliUsage+"\n" || stderr.Len() != 0 {
+		t.Fatalf("help exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
 	if got := runCLI([]string{"status", "--url", "ftp://example.test"}, &stdout, &stderr); got != cliExitUsage {
 		t.Fatalf("invalid URL exit = %d, want %d", got, cliExitUsage)
 	}
@@ -22,14 +27,15 @@ func TestRunCLIExitCodes(t *testing.T) {
 	}))
 	defer server.Close()
 	for _, args := range [][]string{{"status", "--url", server.URL}, {"set", "tps", "0", "--url", server.URL}} {
-		stdout.Reset()
-		stderr.Reset()
-		if got := runCLI(args, &stdout, &stderr); got != cliExitHTTP {
-			t.Fatalf("HTTP exit = %d, want %d", got, cliExitHTTP)
-		}
-		if stdout.Len() != 0 || !strings.Contains(stderr.String(), "HTTP 409") {
-			t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
-		}
+		t.Run(args[0]+" HTTP conflict", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := runCLI(args, &stdout, &stderr); got != cliExitHTTP {
+				t.Fatalf("HTTP exit = %d, want %d", got, cliExitHTTP)
+			}
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "HTTP 409") {
+				t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
+			}
+		})
 	}
 	stdout.Reset()
 	stderr.Reset()

@@ -25,7 +25,7 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		{target: "throttle", requestAction: "set-throttler-installed", value: false, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.Installed = false }},
 		{target: "throttle", requestAction: "set-throttler-installed", value: true, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.Installed = true }},
 	} {
-		t.Run(test.target, func(t *testing.T) {
+		t.Run(test.target+"/"+fmt.Sprint(test.value), func(t *testing.T) {
 			snapshot := testRemoteSnapshot(t)
 			test.update(&snapshot)
 			var requestBody commandRequest
@@ -33,14 +33,18 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 				switch request.URL.Path {
 				case commandsPath:
 					if request.Method != http.MethodPost {
-						t.Fatalf("method = %s, want POST", request.Method)
+						t.Errorf("method = %s, want POST", request.Method)
+						http.Error(writer, "unexpected method", http.StatusInternalServerError)
+						return
 					}
 					if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
-						t.Fatalf("decode command: %v", err)
+						t.Errorf("decode command: %v", err)
+						http.Error(writer, "invalid command", http.StatusInternalServerError)
+						return
 					}
 				case snapshotPath:
 					if err := json.NewEncoder(writer).Encode(snapshot); err != nil {
-						t.Fatalf("encode snapshot: %v", err)
+						t.Errorf("encode snapshot: %v", err)
 					}
 				default:
 					http.NotFound(writer, request)
@@ -48,7 +52,7 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 			}))
 			defer server.Close()
 
-			command, err := parseCLI([]string{"set", test.target, mustFormatValue(test.value), "--url", server.URL})
+			command, err := parseCLI([]string{"set", test.target, fmt.Sprint(test.value), "--url", server.URL})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -59,34 +63,11 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 			if requestBody.Action != test.requestAction || string(requestBody.Value) != mustMarshalJSON(t, test.value) {
 				t.Fatalf("request = %+v", requestBody)
 			}
-			wantOutput := "action=set target=" + test.target + " value=" + mustFormatValue(test.value) + " state=running\n"
+			wantOutput := "action=set target=" + test.target + " value=" + fmt.Sprint(test.value) + " state=running\n"
 			if output.String() != wantOutput {
 				t.Fatalf("stdout = %q, want %q", output.String(), wantOutput)
 			}
 		})
-	}
-}
-
-func TestRunRemoteCLISetRejectsMismatchedVerificationSnapshot(t *testing.T) {
-	snapshot := testRemoteSnapshot(t)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == snapshotPath {
-			_ = json.NewEncoder(writer).Encode(snapshot)
-		}
-	}))
-	defer server.Close()
-
-	var output bytes.Buffer
-	command, err := parseCLI([]string{"set", "readers", "3", "--url", server.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = runRemoteCLI(context.Background(), command, &output)
-	if err == nil || !strings.Contains(err.Error(), "verification snapshot reader.workers") {
-		t.Fatalf("runRemoteCLI error = %v", err)
-	}
-	if output.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", output.String())
 	}
 }
 
@@ -150,39 +131,12 @@ func TestRunCLISetRequiresExplicitTargetValue(t *testing.T) {
 					} else if code != cliExitRemote || stdout.Len() != 0 || stderr.Len() == 0 {
 						t.Fatalf("invalid target field: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 					}
+					if shape == "mismatch" && command.target == "readers" && !strings.Contains(stderr.String(), "verification snapshot reader.workers") {
+						t.Fatalf("missing mismatch field diagnostic: %q", stderr.String())
+					}
 				})
 			}
 		})
-	}
-}
-
-func TestRunRemoteCLIStatusStrictlyValidatesSchema(t *testing.T) {
-	snapshot := testRemoteSnapshot(t)
-	encoded, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var root map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &root); err != nil {
-		t.Fatal(err)
-	}
-	root["unexpected"] = json.RawMessage(`true`)
-	invalid, err := json.Marshal(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		_, _ = writer.Write(invalid)
-	}))
-	defer server.Close()
-
-	var output bytes.Buffer
-	err = runRemoteCLI(context.Background(), cliCommand{remoteAction: "status", remoteURL: server.URL}, &output)
-	if err == nil || !strings.Contains(err.Error(), "decode snapshot") {
-		t.Fatalf("runRemoteCLI error = %v", err)
-	}
-	if output.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", output.String())
 	}
 }
 
@@ -225,10 +179,6 @@ func mustMarshalJSON(t *testing.T, value any) string {
 		t.Fatalf("marshal %v: %v", value, err)
 	}
 	return string(encoded)
-}
-
-func mustFormatValue(value any) string {
-	return fmt.Sprint(value)
 }
 
 func testRemoteSnapshot(t *testing.T) runtimeSnapshot {
@@ -281,9 +231,6 @@ func TestFormatSnapshot(t *testing.T) {
 	if got != want {
 		t.Fatalf("card = %q, want %q", got, want)
 	}
-	if strings.Contains(got, "\x1b") || !strings.HasSuffix(got, "\n") {
-		t.Fatalf("card contains ANSI or has no final newline: %q", got)
-	}
 }
 
 func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
@@ -333,28 +280,37 @@ func TestFormatSnapshotStartingSourceGolden(t *testing.T) {
 }
 
 func TestRunRemoteCLIStatusFetchesOneSnapshot(t *testing.T) {
-	snapshot := testRemoteSnapshot(t)
-	snapshot.Run.ElapsedMs = 1000
-	encoded, err := json.Marshal(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requests++
-		if request.Method != http.MethodGet || request.URL.Path != snapshotPath {
-			t.Fatalf("request = %s %s, want GET %s", request.Method, request.URL.Path, snapshotPath)
-		}
-		_, _ = writer.Write(encoded)
-	}))
-	defer server.Close()
-
-	var stdout bytes.Buffer
-	if err := runRemoteCLI(context.Background(), cliCommand{remoteAction: "status", remoteURL: server.URL}, &stdout); err != nil {
-		t.Fatalf("runRemoteCLI: %v", err)
-	}
-	if requests != 1 || !strings.HasPrefix(stdout.String(), "INGESTION LAB LOADGEN STATUS\n") {
-		t.Fatalf("requests=%d stdout=%q", requests, stdout.String())
+	for _, test := range []struct {
+		name, body string
+		wantErr    bool
+	}{
+		{name: "success", body: mustMarshalJSON(t, testRemoteSnapshot(t))},
+		{name: "invalid schema", body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if r.Method != http.MethodGet || r.URL.Path != snapshotPath {
+					t.Errorf("request = %s %s, want GET %s", r.Method, r.URL.Path, snapshotPath)
+					http.Error(w, "unexpected request", http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			var stdout bytes.Buffer
+			err := runRemoteCLI(t.Context(), cliCommand{remoteAction: "status", remoteURL: server.URL}, &stdout)
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "decode snapshot") || stdout.Len() != 0 {
+					t.Fatalf("error=%v stdout=%q", err, stdout.String())
+				}
+			} else if err != nil || !strings.HasPrefix(stdout.String(), "INGESTION LAB LOADGEN STATUS\n") {
+				t.Fatalf("error=%v stdout=%q", err, stdout.String())
+			}
+			if requests != 1 {
+				t.Fatalf("requests=%d, want 1", requests)
+			}
+		})
 	}
 }
