@@ -48,7 +48,7 @@ describe('WorkerActor layout', () => {
       const layouts = LANDSCAPE_CASES.map((testCase) => ({
         count: testCase.count,
         expected: testCase[actor],
-        layout: getWorkerActorLayout(actor, bounds, workers(testCase.count)),
+        layout: getWorkerActorLayout(bounds, workers(testCase.count)),
       }))
 
       expect(
@@ -103,7 +103,7 @@ describe('WorkerActor layout', () => {
     for (const actor of ['reader', 'sender'] as const) {
       const bounds = ACTOR_GEOMETRY[actor].bounds
       const lastChipY = [1, 2, 3, 7].map(
-        (count) => getWorkerActorLayout(actor, bounds, workers(count)).chips.at(-1)?.y,
+        (count) => getWorkerActorLayout(bounds, workers(count)).chips.at(-1)?.y,
       )
 
       expect(lastChipY).toEqual([416, 416, 416, 416])
@@ -114,10 +114,10 @@ describe('WorkerActor layout', () => {
     'preserves the approved seven-worker footprint in compact %s mode',
     (actor) => {
       const bounds = ACTOR_GEOMETRY[actor].bounds
-      const seven = getWorkerActorLayout(actor, bounds, workers(7))
+      const seven = getWorkerActorLayout(bounds, workers(7))
 
       for (const count of [8, 16, 32]) {
-        const compact = getWorkerActorLayout(actor, bounds, workers(count))
+        const compact = getWorkerActorLayout(bounds, workers(count))
 
         expect(compact.top).toBe(seven.top)
         expect(compact.height).toBe(seven.height)
@@ -128,12 +128,50 @@ describe('WorkerActor layout', () => {
 
   it('keeps the reader on the detailed one-to-seven layout', () => {
     const readerWorkers = { ...workers(7), max: 7 }
-    const layout = getWorkerActorLayout('reader', ACTOR_GEOMETRY.reader.bounds, readerWorkers)
+    const layout = getWorkerActorLayout(ACTOR_GEOMETRY.reader.bounds, readerWorkers)
 
     expect(layout.mode).toBe('detailed')
     expect(layout.rows).toBe(7)
     expect(layout.chips.every((chip) => chip.scale === 1)).toBe(true)
   })
+
+  it.each(['landscape', 'portrait'] as const)(
+    'bounds the %s grid by the space available for live chips',
+    (orientation) => {
+      const geometry = createPipelineGeometry({
+        orientation,
+        readerWorkers: 50_000,
+        senderWorkers: 50_000,
+      })
+      for (const side of ['reader', 'sender'] as const) {
+        const { bounds, metrics } = geometry.actors[side]
+        const layout = (desired: number, live: number) =>
+          getWorkerActorLayout(bounds, workers(desired), orientation, live, desired)
+        const full = layout(1, 50_000)
+        const capacity = full.chips.length
+        expect(capacity).toBeGreaterThan(32)
+        expect(capacity).toBe(full.rows * full.columns)
+        expect(layout(capacity - 1, capacity - 1).chips).toHaveLength(capacity - 1)
+        expect(layout(capacity, capacity).chips).toHaveLength(capacity)
+        expect(layout(1, capacity + 1).chips).toEqual(full.chips)
+        expect(layout(50_000, 3).chips).toHaveLength(3)
+        expect(layout(50_000, 0).chips).toHaveLength(0)
+        for (let count = 32; count <= capacity; count++) {
+          expect(layout(count, count).height).toBeGreaterThanOrEqual(
+            layout(count - 1, count - 1).height,
+          )
+        }
+        const last = full.chips.at(-1)!
+        const occupiedBottom = last.y + last.height
+        expect(occupiedBottom).toBeGreaterThan(full.top + full.height / 2)
+        expect(occupiedBottom).toBeLessThan(
+          orientation === 'portrait' ? metrics.primary.y - 15 : bounds.bottom - 22,
+        )
+        expect(full.chips[0]!.x).toBeGreaterThan(bounds.x + 7)
+        expect(last.x + last.width).toBeLessThan(bounds.x + bounds.width - 7)
+      }
+    },
+  )
 
   it.each([
     { actor: 'reader', count: 0, displayed: 1, mode: 'detailed', columns: 1, rows: 1, height: 113 },
@@ -194,7 +232,7 @@ describe('WorkerActor layout', () => {
       })
       const actorGeometry = geometry.actors[actor]
       const bounds = actorGeometry.bounds
-      const layout = getWorkerActorLayout(actor, bounds, workers(count), 'portrait')
+      const layout = getWorkerActorLayout(bounds, workers(count), 'portrait')
 
       expect(bounds).not.toHaveProperty('minHeight')
       expect(layout).toMatchObject({

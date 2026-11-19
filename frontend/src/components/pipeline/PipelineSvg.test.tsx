@@ -1818,31 +1818,40 @@ describe('PipelineSvg rendering', () => {
   )
 
   it.each(['landscape', 'portrait'] as const)(
-    'shows overflow only beyond 32 aggregate sender markers in %s',
+    'fills the available room for large live pools and centers their overflow in %s',
     (orientation) => {
       const base = activeSnapshot()
+      const live = 1_234
+      const pool = {
+        workers: { ...base.sender.workers, max: 10_000, applied: 10_000 },
+        liveWorkers: live,
+        idleWorkers: live,
+      }
       const view = renderPipeline(
         {
           ...base,
-          sender: {
-            ...base.sender,
-            workers: { ...base.sender.workers, applied: 32 },
-            liveWorkers: 33,
-            idleWorkers: 26,
-            inFlightWorkers: 4,
-            backoffWorkers: 3,
-          },
+          reader: { ...base.reader, ...pool },
+          sender: { ...base.sender, ...pool },
         },
         orientation,
       )
-      const sender = view.container.querySelector('#sender-actor')!
-
-      expect(sender.querySelectorAll('[class*="pipeline-worker--"]')).toHaveLength(32)
-      expect(sender.textContent).toContain('+1 workers')
-      expect(sender.getAttribute('data-worker-columns')).toBe(
-        orientation === 'portrait' ? '5' : '4',
-      )
-      expect(sender.getAttribute('data-worker-rows')).toBe(orientation === 'portrait' ? '7' : '8')
+      for (const id of ['reader', 'sender']) {
+        const actor = view.container.querySelector(`#${id}-actor`)!
+        const box = actor.querySelector('.pipeline-actor-box')!
+        const drawn = actor.querySelectorAll('.pipeline-worker-chip').length
+        expect(drawn).toBeGreaterThan(32)
+        expect(drawn).toBeLessThan(live)
+        expect(Number(box.getAttribute('height'))).toBeLessThanOrEqual(305)
+        const overflow = actor.querySelector('.pipeline-worker-overflow')!
+        expect(overflow.textContent).toBe(`+${live - drawn} workers`)
+        expect(overflow.getAttribute('text-anchor')).toBe('middle')
+        expect(Number(overflow.getAttribute('x'))).toBe(
+          Number(box.getAttribute('x')) + Number(box.getAttribute('width')) / 2,
+        )
+        const bottom = Number(box.getAttribute('y')) + Number(box.getAttribute('height'))
+        expect(bottom - Number(overflow.getAttribute('y'))).toBeGreaterThanOrEqual(7)
+        expect(bottom - Number(overflow.getAttribute('y'))).toBeLessThanOrEqual(22)
+      }
       view.unmount()
     },
   )

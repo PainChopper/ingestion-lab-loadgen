@@ -168,6 +168,13 @@
   font-weight: 750;
 }
 
+.pipeline-worker-overflow {
+  fill: var(--cyan);
+  font-size: 13px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
 .pipeline-divider {
   stroke: var(--line);
   vector-effect: non-scaling-stroke;

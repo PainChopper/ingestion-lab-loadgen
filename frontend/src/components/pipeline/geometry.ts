@@ -1,6 +1,6 @@
 import type { ChannelId } from '../../model/loadgen'
 import { PIPELINE_LANDSCAPE_MIN_WIDTH, type PipelineOrientation } from './pipelineLayout'
-import { getPortraitWorkerGridMetrics } from './workerActorLayout'
+import { getPortraitWorkerGridMetrics, PORTRAIT_WORKER_BOUNDS } from './workerActorLayout'
 
 export interface Point {
   readonly x: number
@@ -403,8 +403,8 @@ function landscapeGeometry(contentWidth: number) {
 }
 
 function portraitGeometry(readerWorkers: number, senderWorkers: number) {
-  const readerGrid = getPortraitWorkerGridMetrics('reader', readerWorkers)
-  const senderGrid = getPortraitWorkerGridMetrics('sender', senderWorkers)
+  const readerGrid = getPortraitWorkerGridMetrics(readerWorkers)
+  const senderGrid = getPortraitWorkerGridMetrics(senderWorkers)
   const readerTop = 88
   const readerBottom = readerTop + readerGrid.height
   const throttlerTop = readerBottom + 480
@@ -416,10 +416,9 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
   const reader = {
     bounds: {
       x: 60,
-      width: 360,
+      ...PORTRAIT_WORKER_BOUNDS,
       bottom: readerBottom,
       rowHeight: 45,
-      padding: 18,
     } satisfies WorkerActorBounds,
     ports: { output: { x: 240, y: readerBottom } satisfies Point },
     title: { x: 240, y: 34, anchor: 'middle' } satisfies TextPlacement,
@@ -526,10 +525,9 @@ function portraitGeometry(readerWorkers: number, senderWorkers: number) {
   const sender = {
     bounds: {
       x: 60,
-      width: 360,
+      ...PORTRAIT_WORKER_BOUNDS,
       bottom: senderBottom,
       rowHeight: 45,
-      padding: 18,
     } satisfies WorkerActorBounds,
     ports: {
       input: { x: 240, y: senderTop } satisfies Point,

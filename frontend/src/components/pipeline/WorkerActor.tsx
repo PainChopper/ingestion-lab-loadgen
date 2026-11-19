@@ -13,11 +13,7 @@ import type { InspectorRowSegment } from '../inspectorViewModel'
 import type { NumericControlSnapshot, RunState, SelectableId } from '../../model/loadgen'
 import type { Point, TextPlacement, WorkerActorBounds } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
-import {
-  getWorkerActorLayout,
-  MAX_VISIBLE_WORKER_MARKERS,
-  type WorkerChipLayout,
-} from './workerActorLayout'
+import { getWorkerActorLayout, type WorkerChipLayout } from './workerActorLayout'
 
 export type WorkerActorId = 'reader' | 'sender'
 
@@ -136,16 +132,14 @@ export function WorkerActor({
   useLayoutEffect(() => {
     desiredRef.current = desiredWorkers
   })
-  const visibleWorkers = Math.min(liveWorkers ?? 0, MAX_VISIBLE_WORKER_MARKERS)
-  const overflowWorkers = Math.max(0, (liveWorkers ?? 0) - visibleWorkers)
   const layout = getWorkerActorLayout(
-    actor,
     bounds,
     workers,
     orientation,
-    visibleWorkers,
-    Math.min(desiredWorkers, MAX_VISIBLE_WORKER_MARKERS),
+    liveWorkers ?? 0,
+    desiredWorkers,
   )
+  const overflowWorkers = (liveWorkers ?? 0) - layout.chips.length
   const workerMin = Math.round(workers.min)
   const workerStep = Math.max(1, Math.round(workers.step))
   const workerMax =
@@ -155,19 +149,18 @@ export function WorkerActor({
     actor === 'reader'
       ? (['blocked', 'reading', 'idle'] as const)
       : (['backoff', 'in-flight', 'idle'] as const)
-  const visibleStates = states.flatMap((state) =>
-    Array.from({ length: activityCounts[state] }, (_, index) => ({
-      state,
-      draining: index < drainingActivityCounts[state],
-    })),
-  )
-  const chipState = (index: number) =>
-    muted
-      ? { state: 'inactive' as const, draining: false }
-      : (visibleStates[index] ?? {
-          state: (active ?? runState === 'running') ? ('active' as const) : ('inactive' as const),
-          draining: false,
-        })
+  const chipState = (index: number) => {
+    if (muted) return { state: 'inactive' as const, draining: false }
+    for (const state of states) {
+      if (index < activityCounts[state])
+        return { state, draining: index < drainingActivityCounts[state] }
+      index -= activityCounts[state]
+    }
+    return {
+      state: (active ?? runState === 'running') ? ('active' as const) : ('inactive' as const),
+      draining: false,
+    }
+  }
   const actorAriaLabel =
     actor === 'reader' || liveWorkers === undefined
       ? `Inspect ${actor}`
@@ -295,17 +288,17 @@ export function WorkerActor({
           rx="5"
           className="pipeline-actor-box"
         />
-        {layout.chips.slice(0, visibleWorkers).map((chip, index) => (
+        {layout.chips.map((chip, index) => (
           <WorkerChip key={index} {...chip} {...chipState(index)} />
         ))}
         {overflowWorkers > 0 && (
           <text
-            x={bounds.x + bounds.width - 8}
-            y={layout.top + 16}
-            textAnchor="end"
-            className="pipeline-small"
+            x={bounds.x + bounds.width / 2}
+            y={bounds.bottom - (orientation === 'portrait' ? 13 : 9)}
+            textAnchor="middle"
+            className="pipeline-worker-overflow"
           >
-            +{overflowWorkers} workers
+            +{overflowWorkers} {overflowWorkers === 1 ? 'worker' : 'workers'}
           </text>
         )}
         {sourceErrorOperation !== undefined && (

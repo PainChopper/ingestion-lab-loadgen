@@ -11,7 +11,6 @@ import { NumericControl } from './NumericControl'
 import { formatInteger } from './pipeline/formatters'
 import { PipelineSvg } from './pipeline/PipelineSvg'
 import { createPipelineGeometry } from './pipeline/geometry'
-import { getWorkerGeometryCount } from './pipeline/workerActorLayout'
 import {
   PIPELINE_LANDSCAPE_MIN_WIDTH,
   usePipelineLayout,
@@ -114,14 +113,8 @@ function PipelineViewport({
       createPipelineGeometry({
         orientation,
         landscapeContentWidth,
-        readerWorkers: getWorkerGeometryCount(
-          liveControls.readerWorkers.desired,
-          snapshot.reader.liveWorkers,
-        ),
-        senderWorkers: getWorkerGeometryCount(
-          liveControls.senderWorkers.desired,
-          snapshot.sender.liveWorkers,
-        ),
+        readerWorkers: Math.max(liveControls.readerWorkers.desired, snapshot.reader.liveWorkers),
+        senderWorkers: Math.max(liveControls.senderWorkers.desired, snapshot.sender.liveWorkers),
       }),
     [
       landscapeContentWidth,
