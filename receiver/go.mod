@@ -1,4 +1,4 @@
-module ingestion-lab-receiver
+module receiver
 
 go 1.27.0
 

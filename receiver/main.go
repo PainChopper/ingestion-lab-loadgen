@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"ingestion-lab-receiver/internal/receiver"
+	"receiver/internal/receiver"
 )
 
 func main() {
