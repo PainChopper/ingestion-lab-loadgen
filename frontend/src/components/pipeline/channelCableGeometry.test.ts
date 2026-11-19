@@ -1,14 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ChannelCapacitySnapshot } from '../../model/loadgen'
 import { createPipelineGeometry } from './geometry'
-import {
-  getCapacityLegCount,
-  getChannelCapacityGeometryPresentation,
-  normalizeCapacity,
-} from './channelCableGeometry'
+import { getCapacityLegCount, getChannelCapacityGeometryPresentation } from './channelCableGeometry'
 
 const smallRange = { min: 0, max: 12, step: 1 }
-const largeRange = { min: 0, max: 160, step: 10 }
 const readerChannelRange = { min: 0, max: 8_192, step: 1 }
 const configAllowed = [0, 1, 2, 8, 64, 512, 8_192] as const
 
@@ -36,7 +31,7 @@ describe('channel cable capacity geometry', () => {
   })
 
   it.each(['landscape', 'portrait'] as const)(
-    'builds one continuous max-capacity %s serpentine outside the scale box',
+    'distributes max-capacity %s turns evenly across the free span',
     (orientation) => {
       const start = orientation === 'landscape' ? { x: 150, y: 415 } : { x: 240, y: 260 }
       const end = orientation === 'landscape' ? { x: 355, y: 415 } : { x: 240, y: 520 }
@@ -61,8 +56,17 @@ describe('channel cable capacity geometry', () => {
       expect(
         geometry.cablePath.endsWith(orientation === 'landscape' ? `H${end.x}` : `V${end.y}`),
       ).toBe(true)
-      expect(geometry.scaleForbiddenBox.width).toBeGreaterThan(0)
-      expect(geometry.scaleForbiddenBox.height).toBeGreaterThan(0)
+      const landscape = orientation === 'landscape'
+      const entryCorners = geometry.cablePath.matchAll(/Q([\d.]+) ([\d.]+) [\d.]+ [\d.]+ ([VH])/g)
+      const turns = Array.from(entryCorners)
+        .filter((corner) => corner[3] === (landscape ? 'V' : 'H'))
+        .map((corner) => Number(corner[landscape ? 1 : 2]))
+      const first = landscape ? start.x + 24 : start.y + 28
+      const last = landscape ? end.x - 24 : end.y - 28
+      expect(turns).toHaveLength(geometry.legCount)
+      turns.forEach((turn, index) => {
+        expect(turn).toBeCloseTo(first + ((last - first) * index) / (turns.length - 1), 1)
+      })
     },
   )
 
@@ -84,36 +88,15 @@ describe('channel cable capacity geometry', () => {
       ).legCount
 
     expect([
-      legCount(186),
-      legCount(178),
-      legCount(170),
-      legCount(162),
-      legCount(154),
-      legCount(146),
-      legCount(138),
-      legCount(134),
+      legCount(100),
+      legCount(92),
+      legCount(84),
+      legCount(76),
+      legCount(68),
+      legCount(60),
+      legCount(52),
+      legCount(48),
     ]).toEqual([14, 12, 10, 8, 6, 4, 2, 0])
-  })
-
-  it('preserves the landscape hose path around the center', () => {
-    const geometry = getChannelCapacityGeometryPresentation(
-      capacityControl(64, readerChannelRange),
-      { x: 150, y: 415 },
-      { x: 505, y: 415 },
-      'landscape',
-      configAllowed,
-    )
-
-    expect(geometry.legCount).toBe(6)
-    expect(geometry.scaleForbiddenBox).toEqual({
-      x: 301.5,
-      y: 210,
-      width: 86,
-      height: 40,
-    })
-    expect(geometry.cablePath).toContain('210')
-    expect(geometry.cablePath).not.toContain('459')
-    expect(geometry.cablePath).toMatch(/^M150 415.*H505$/)
   })
 
   it('uses a direct path for zero capacity in both orientations', () => {
@@ -138,15 +121,6 @@ describe('channel cable capacity geometry', () => {
 
     expect(landscape).toMatchObject({ legCount: 0, cablePath: 'M150 415 L355 415' })
     expect(portrait).toMatchObject({ legCount: 0, cablePath: 'M240 260 L240 520' })
-  })
-
-  it('clamps and snaps values on both configured scales', () => {
-    expect([
-      normalizeCapacity(-4, smallRange),
-      normalizeCapacity(5.6, smallRange),
-      normalizeCapacity(147, largeRange),
-      normalizeCapacity(999, largeRange),
-    ]).toEqual([0, 6, 150, 160])
   })
 
   it('builds portrait channels from exact vertical endpoints without overflow', () => {
@@ -204,7 +178,6 @@ describe('channel cable capacity geometry', () => {
         expect(presentation.legCount).toBe(
           applied === 0 ? 0 : applied === 8 ? 4 : applied === 64 ? 6 : 14,
         )
-        const paintBounds = [presentation.scaleForbiddenBox]
         const tokens = presentation.cablePath.match(/[MLHVQ]|-?\d+(?:\.\d+)?/g)!
         let point = channel.start
         const assertPoint = (x: number, y: number) => {
@@ -215,14 +188,6 @@ describe('channel cable capacity geometry', () => {
           expect(
             x > guard.x && x < guard.x + guard.width && y > guard.y && y < guard.y + guard.height,
           ).toBe(false)
-          for (const bounds of paintBounds) {
-            expect(
-              Math.hypot(
-                Math.max(bounds.x - x, 0, x - bounds.x - bounds.width),
-                Math.max(bounds.y - y, 0, y - bounds.y - bounds.height),
-              ),
-            ).toBeGreaterThanOrEqual(5)
-          }
         }
         while (tokens.length > 0) {
           const command = tokens.shift()

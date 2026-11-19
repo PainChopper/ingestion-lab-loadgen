@@ -22,7 +22,7 @@ import {
   PIPELINE_VIEW_BOX,
   type TextPlacement,
 } from './geometry'
-import { CHANNEL_CAPACITY_SCALE_OFFSET, CHANNEL_CABLE_MAX_LIFT } from './channelCableGeometry'
+import { LANDSCAPE_CHANNEL_CABLE_HEIGHT } from './channelCableGeometry'
 import type { PipelineOrientation } from './pipelineLayout'
 import { PipelineSvg } from './PipelineSvg'
 import { VALVE_FLANGES, VALVE_INSTALLATION_CONTROL, VALVE_OPENING_CONTROLS } from './throttlerValve'
@@ -83,13 +83,8 @@ describe('responsive pipeline geometry', () => {
       width: 192,
       height: 56,
     })
-    const guardRight = geometry.batchLabel.guard.x + geometry.batchLabel.guard.width
-    const scaleCenters = Object.values(geometry.channels).map(
-      (channel) => (channel.start.x + channel.end.x) / 2,
-    )
-    expect(scaleCenters.every((x) => x < geometry.batchLabel.guard.x || x > guardRight)).toBe(true)
     expect(geometry.batchLabel.guard.y + geometry.batchLabel.guard.height).toBeLessThan(
-      FLOW_BASELINE - CHANNEL_CAPACITY_SCALE_OFFSET - CHANNEL_CABLE_MAX_LIFT,
+      FLOW_BASELINE - LANDSCAPE_CHANNEL_CABLE_HEIGHT,
     )
     expect(geometry.actors.reader.bounds.width).toBe(120)
     expect(geometry.actors.throttler.bounds.width).toBe(150)
