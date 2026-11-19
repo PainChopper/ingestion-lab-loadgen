@@ -1,15 +1,13 @@
-package receiver
+package main
 
 import (
 	"errors"
 	"fmt"
 	"math"
-	"net/url"
-	"path"
 	"reflect"
-	"strings"
 	"time"
-	"unicode"
+
+	"receiver/internal/ingest"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
@@ -20,9 +18,8 @@ const currentSchemaVersion = 2
 type Config struct {
 	SchemaVersion int
 	Server        ServerConfig
-	Ingest        IngestConfig
+	Ingest        ingest.Config
 	Logging       LoggingConfig
-	Lab           LabConfig
 }
 
 type ServerConfig struct {
@@ -30,26 +27,21 @@ type ServerConfig struct {
 	ShutdownTimeout time.Duration
 }
 
-type IngestConfig struct {
-	Path         string `mapstructure:"path"`
-	MaxBodyBytes int64  `mapstructure:"max_body_bytes"`
-}
-
 type LoggingConfig struct {
 	Level string `mapstructure:"level"`
-}
-
-type LabConfig struct {
-	ResponseDelay  time.Duration
-	ResponseStatus *int
 }
 
 type fileConfig struct {
 	SchemaVersion int              `mapstructure:"schema_version"`
 	Server        fileServerConfig `mapstructure:"server"`
-	Ingest        IngestConfig     `mapstructure:"ingest"`
+	Ingest        fileIngestConfig `mapstructure:"ingest"`
 	Logging       LoggingConfig    `mapstructure:"logging"`
 	Lab           fileLabConfig    `mapstructure:"lab"`
+}
+
+type fileIngestConfig struct {
+	Path         string `mapstructure:"path"`
+	MaxBodyBytes int64  `mapstructure:"max_body_bytes"`
 }
 
 type fileServerConfig struct {
@@ -106,14 +98,15 @@ func (c fileConfig) config() (Config, error) {
 			Address:         c.Server.Address,
 			ShutdownTimeout: shutdownTimeout,
 		},
-		Ingest:  c.Ingest,
 		Logging: c.Logging,
-		Lab: LabConfig{
+		Ingest: ingest.Config{
+			Path:           c.Ingest.Path,
+			MaxBodyBytes:   c.Ingest.MaxBodyBytes,
 			ResponseDelay:  responseDelay,
 			ResponseStatus: c.Lab.ResponseStatus,
 		},
 	}
-	if _, err := validateConfig(result); err != nil {
+	if err := validateConfig(result); err != nil {
 		return Config{}, err
 	}
 
@@ -147,34 +140,20 @@ func rejectFractionalInt(from, to reflect.Type, data any) (any, error) {
 	return data, nil
 }
 
-func validateConfig(config Config) (string, error) {
+func validateConfig(config Config) error {
 	if config.SchemaVersion != currentSchemaVersion {
-		return "", fmt.Errorf("schema_version must be %d", currentSchemaVersion)
+		return fmt.Errorf("schema_version must be %d", currentSchemaVersion)
 	}
 	if config.Server.Address == "" {
-		return "", errors.New("server.address must not be empty")
+		return errors.New("server.address must not be empty")
 	}
 	if config.Server.ShutdownTimeout <= 0 {
-		return "", errors.New("server.shutdown_timeout_ms must be positive")
-	}
-	pattern, err := ingestPattern(config.Ingest.Path)
-	if err != nil {
-		return "", fmt.Errorf("ingest.path: %w", err)
-	}
-	if config.Ingest.MaxBodyBytes <= 0 || config.Ingest.MaxBodyBytes == math.MaxInt64 {
-		return "", errors.New("ingest.max_body_bytes must be positive and bounded")
+		return errors.New("server.shutdown_timeout_ms must be positive")
 	}
 	if !supportedLoggingLevel(config.Logging.Level) {
-		return "", errors.New("logging.level is unsupported")
+		return errors.New("logging.level is unsupported")
 	}
-	if config.Lab.ResponseDelay < 0 {
-		return "", errors.New("lab.response_delay_ms must not be negative")
-	}
-	if !supportedResponseStatus(config.Lab.responseStatus()) {
-		return "", errors.New("lab.response_status is unsupported")
-	}
-
-	return pattern, nil
+	return config.Ingest.Validate()
 }
 
 func supportedLoggingLevel(level string) bool {
@@ -184,47 +163,4 @@ func supportedLoggingLevel(level string) bool {
 	default:
 		return false
 	}
-}
-
-func (c LabConfig) responseStatus() int {
-	if c.ResponseStatus == nil {
-		return 204
-	}
-	return *c.ResponseStatus
-}
-
-func supportedResponseStatus(status int) bool {
-	switch status {
-	case 204, 400, 500:
-		return true
-	default:
-		return false
-	}
-}
-
-func ingestPattern(raw string) (string, error) {
-	invalidRune := func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }
-	if !strings.HasPrefix(raw, "/") || raw == "/" || strings.HasSuffix(raw, "/") ||
-		path.Clean(raw) != raw || strings.ContainsAny(raw, "{}?#") || strings.IndexFunc(raw, invalidRune) >= 0 {
-		return "", errors.New("must be a clean exact path without patterns, query, fragment, or trailing slash")
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host != "" || parsed.Scheme != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", errors.New("must be a valid URL path")
-	}
-	segments := strings.Split(strings.TrimPrefix(raw, "/"), "/")
-	for index, segment := range segments {
-		decoded, err := url.PathUnescape(segment)
-		if err != nil {
-			return "", fmt.Errorf("invalid escaped segment: %w", err)
-		}
-		if decoded == "." || decoded == ".." || strings.ContainsAny(decoded, "{}") || strings.IndexFunc(decoded, invalidRune) >= 0 {
-			return "", errors.New("must not contain dot segments, whitespace, or patterns")
-		}
-		if len(segments) == 1 && decoded == "status" {
-			return "", errors.New("must not use the status endpoint")
-		}
-		segments[index] = url.PathEscape(decoded)
-	}
-	return "/" + strings.Join(segments, "/"), nil
 }
