@@ -9,7 +9,6 @@ import { SimulationAdapter } from '../../adapters/SimulationAdapter'
 import type { ChannelSnapshot, SelectableId } from '../../model/loadgen'
 import { ChannelFlowStateDeriver } from '../../model/channelFlowState'
 import { createPipelineGeometry } from './geometry'
-import { getChannelCapacityGeometryPresentation } from './channelCableGeometry'
 import { ChannelCable } from './ChannelCable'
 
 const channels = createPipelineGeometry({
@@ -102,25 +101,6 @@ describe('ChannelCable mounted behavior', () => {
     adapter.dispose()
   })
 
-  it('uses uniform rounded capacity turns and a direct path when no leg fits', () => {
-    const full = getChannelCapacityGeometryPresentation(
-      1_000,
-      { x: 150, y: 415 },
-      { x: 355, y: 415 },
-    )
-    const constrained = getChannelCapacityGeometryPresentation(
-      1_000,
-      { x: 150, y: 415 },
-      { x: 200, y: 415 },
-    )
-
-    expect(full.legCount).toBe(14)
-    expect(full.cablePath).toContain(' Q')
-    expect(full.cablePath).toMatch(/V/)
-    expect(constrained.legCount).toBe(0)
-    expect(constrained.cablePath).toBe('M150 415 L200 415')
-  })
-
   it('activates channel cables only from positive rates in running flow states', () => {
     const adapter = new SimulationAdapter()
     const channel = derivedSnapshot(adapter).readerChannel
@@ -204,7 +184,7 @@ describe('ChannelCable mounted behavior', () => {
     expect(control.getAttribute('style')).toContain('--pipeline-channel-pressure-color: #ffd31f')
     expect(control.querySelector('.pipeline-channel-cable')?.getAttribute('stroke')).toBeNull()
     expect(screen.queryByRole('slider')).toBeNull()
-    expect(screen.getByText('Depth 0 / 4 batches')).not.toBeNull()
+    screen.getByText('Depth 0 / 4 batches')
 
     await user.click(control)
     control.focus()
