@@ -186,11 +186,17 @@ func TestSignalKeepsZeroTPSUntilGraceExpires(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		state := newControlState(cfg, zap.New(core))
 		loop := startTestEventLoop(t, &state, gracefulShutdownTimeout)
-		loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.ReaderChannel.ReceivedBatchesTotal > 0 })
+		// Each batch has one row; rows beyond the queue and active Readers have reached the Throttler.
+		loop.awaitSnapshot(t, func(s runtimeSnapshot) bool {
+			return s.Reader.RowsRead > int64(cfg.ReaderChannel.Capacity+cfg.Reader.Workers.Initial)
+		})
 		loop.cancel()
 		synctest.Wait()
 		stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
-		if !stopping.Throttler.Installed || stopping.Throttler.RequestedTps != 0 || stopping.SenderChannel.SentBatchesTotal != 0 {
+		throttlerChanged := !stopping.Throttler.Installed || stopping.Throttler.RequestedTps != 0
+		senderHasWork := stopping.SenderChannel.DepthBatches != 0 ||
+			stopping.Sender.InFlightWorkers != 0 || stopping.Sender.BackoffWorkers != 0
+		if throttlerChanged || senderHasWork || stopping.Run.TotalTransactions != 0 {
 			t.Fatalf("shutdown changed the zero-rate throttler: %+v", stopping)
 		}
 

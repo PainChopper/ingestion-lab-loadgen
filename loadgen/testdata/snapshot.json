@@ -1,0 +1,61 @@
+{
+  "run": { "state": "stopping", "totalTransactions": 101, "elapsedMs": 102 },
+  "reader": {
+    "workers": 11,
+    "liveWorkers": 12,
+    "idleWorkers": 13,
+    "readingWorkers": 14,
+    "blockedWorkers": 15,
+    "drainingWorkers": 16,
+    "drainingIdleWorkers": 17,
+    "drainingReadingWorkers": 18,
+    "drainingBlockedWorkers": 19,
+    "readBatchSize": 20,
+    "readTps": 21.5,
+    "rowsRead": 22,
+    "sourceDirectory": "reader-source",
+    "sourceError": {
+      "category": "reader-category",
+      "operation": "reader-operation",
+      "relativePath": "reader-path",
+      "message": "reader-message"
+    }
+  },
+  "throttler": { "requestedTps": 31, "admittedTps": 32.5, "installed": false },
+  "sender": {
+    "workers": 41,
+    "liveWorkers": 42,
+    "idleWorkers": 43,
+    "inFlightWorkers": 44,
+    "backoffWorkers": 45,
+    "drainingWorkers": 46,
+    "drainingIdleWorkers": 47,
+    "drainingInFlightWorkers": 48,
+    "drainingBackoffWorkers": 49
+  },
+  "readerChannel": {
+    "capacity": 51,
+    "depthBatches": 52,
+    "bufferedTransactions": 53,
+    "blockedSenders": 54,
+    "oldestBlockedSenderMs": 55,
+    "blockedMs": 56,
+    "inputTransactionsPerSecond": 62.5,
+    "outputTransactionsPerSecond": 64.5
+  },
+  "senderChannel": {
+    "capacity": 71,
+    "depthBatches": 72,
+    "bufferedTransactions": 73,
+    "blockedSenders": 74,
+    "oldestBlockedSenderMs": 75,
+    "blockedMs": 76,
+    "inputTransactionsPerSecond": 82.5,
+    "outputTransactionsPerSecond": 84.5
+  },
+  "config": {
+    "readerWorkers": { "initial": 1, "max": 7 },
+    "senderWorkers": { "initial": 32, "max": 32 },
+    "throttlerRequestedTps": { "initial": 2000000, "max": 4000000, "step": 200000 }
+  }
+}

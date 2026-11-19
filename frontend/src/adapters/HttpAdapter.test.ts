@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChannelFlowStateDeriver } from '../model/channelFlowState'
 import type {
@@ -32,8 +33,8 @@ interface TestWireSnapshot {
     readonly rowsRead: number
     readonly sourceDirectory: string
     readonly sourceError: {
-      readonly category: 'source'
-      readonly operation: 'glob' | 'open' | 'read' | 'close' | 'reader-close'
+      readonly category: string
+      readonly operation: string
       readonly relativePath: string
       readonly message: string
     } | null
@@ -61,18 +62,12 @@ interface TestWireSnapshot {
 
 interface TestWireChannel {
   readonly capacity: number
-  readonly sentBatchesTotal: number
-  readonly sentTransactionsTotal: number
-  readonly receivedBatchesTotal: number
-  readonly receivedTransactionsTotal: number
   readonly depthBatches: number
   readonly bufferedTransactions: number
   readonly blockedSenders: number
   readonly oldestBlockedSenderMs: number
   readonly blockedMs: number
-  readonly inputBatchesPerSecond: number
   readonly inputTransactionsPerSecond: number
-  readonly outputBatchesPerSecond: number
   readonly outputTransactionsPerSecond: number
 }
 
@@ -114,34 +109,22 @@ const VALID_WIRE: TestWireSnapshot = {
   },
   readerChannel: {
     capacity: 8,
-    sentBatchesTotal: 11,
-    sentTransactionsTotal: 550_000,
-    receivedBatchesTotal: 5,
-    receivedTransactionsTotal: 250_000,
     depthBatches: 6,
     bufferedTransactions: 300_000,
     blockedSenders: 1,
     oldestBlockedSenderMs: 450,
     blockedMs: 1_600,
-    inputBatchesPerSecond: 2.5,
     inputTransactionsPerSecond: 125_000.5,
-    outputBatchesPerSecond: 1.25,
     outputTransactionsPerSecond: 62_500.25,
   },
   senderChannel: {
     capacity: 0,
-    sentBatchesTotal: 7,
-    sentTransactionsTotal: 350_000,
-    receivedBatchesTotal: 7,
-    receivedTransactionsTotal: 350_000,
     depthBatches: 0,
     bufferedTransactions: 0,
     blockedSenders: 1,
     oldestBlockedSenderMs: 450,
     blockedMs: 1_600,
-    inputBatchesPerSecond: 1.5,
     inputTransactionsPerSecond: 75_000.5,
-    outputBatchesPerSecond: 1.25,
     outputTransactionsPerSecond: 62_500.25,
   },
   config: {
@@ -311,18 +294,12 @@ function neutralChannel(
     from,
     to,
     capacity: null,
-    sentBatchesTotal: 0,
-    sentTransactionsTotal: 0,
-    receivedBatchesTotal: 0,
-    receivedTransactionsTotal: 0,
     depthBatches: null,
     bufferedTransactions: null,
     handoffBatches: 0,
     handoffBatchesTotal: 0,
     blockedSenders: 0,
     oldestBlockedSenderMs: 0,
-    inputBatchesPerSecond: 0,
-    outputBatchesPerSecond: 0,
     inputTransactionsPerSecond: 0,
     outputTransactionsPerSecond: 0,
     inputTps: null,
@@ -342,13 +319,7 @@ function readerChannel(wire: TestWireSnapshot | null): ChannelTelemetrySnapshot 
     capacity: wire.readerChannel.capacity,
     depthBatches: wire.readerChannel.depthBatches,
     bufferedTransactions: wire.readerChannel.bufferedTransactions,
-    sentBatchesTotal: wire.readerChannel.sentBatchesTotal,
-    sentTransactionsTotal: wire.readerChannel.sentTransactionsTotal,
-    receivedBatchesTotal: wire.readerChannel.receivedBatchesTotal,
-    receivedTransactionsTotal: wire.readerChannel.receivedTransactionsTotal,
-    inputBatchesPerSecond: wire.readerChannel.inputBatchesPerSecond,
     inputTransactionsPerSecond: wire.readerChannel.inputTransactionsPerSecond,
-    outputBatchesPerSecond: wire.readerChannel.outputBatchesPerSecond,
     outputTransactionsPerSecond: wire.readerChannel.outputTransactionsPerSecond,
     inputTps: wire.readerChannel.inputTransactionsPerSecond,
     outputTps: wire.readerChannel.outputTransactionsPerSecond,
@@ -368,13 +339,7 @@ function senderChannel(wire: TestWireSnapshot | null): ChannelTelemetrySnapshot 
     capacity: wire.senderChannel.capacity,
     depthBatches: wire.senderChannel.depthBatches,
     bufferedTransactions: wire.senderChannel.bufferedTransactions,
-    sentBatchesTotal: wire.senderChannel.sentBatchesTotal,
-    sentTransactionsTotal: wire.senderChannel.sentTransactionsTotal,
-    receivedBatchesTotal: wire.senderChannel.receivedBatchesTotal,
-    receivedTransactionsTotal: wire.senderChannel.receivedTransactionsTotal,
-    inputBatchesPerSecond: wire.senderChannel.inputBatchesPerSecond,
     inputTransactionsPerSecond: wire.senderChannel.inputTransactionsPerSecond,
-    outputBatchesPerSecond: wire.senderChannel.outputBatchesPerSecond,
     outputTransactionsPerSecond: wire.senderChannel.outputTransactionsPerSecond,
     inputTps: wire.senderChannel.inputTransactionsPerSecond,
     outputTps: wire.senderChannel.outputTransactionsPerSecond,
@@ -538,15 +503,6 @@ const malformedCases: ReadonlyArray<{
         reader: { ...VALID_WIRE.reader, readingWorkers: -1 },
       }),
   },
-  ...[
-    { liveWorkers: 2 },
-    { drainingWorkers: 1 },
-    { drainingBlockedWorkers: 1, drainingWorkers: 1 },
-  ].map((reader) => ({
-    name: `invalid Reader partition ${JSON.stringify(reader)}`,
-    result: async () =>
-      mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, ...reader } }),
-  })),
   {
     name: 'missing key',
     result: async () =>
@@ -612,6 +568,16 @@ const malformedCases: ReadonlyArray<{
         },
       }),
   },
+  ...[
+    { initial: 0, max: 400, step: 0 },
+    { initial: 0, max: 0, step: 25 },
+    { initial: 425, max: 400, step: 25 },
+    { initial: 201, max: 400, step: 25 },
+  ].map((throttlerRequestedTps) => ({
+    name: `invalid TPS config ${JSON.stringify(throttlerRequestedTps)}`,
+    result: async () =>
+      mockResponse({ ...VALID_WIRE, config: { ...VALID_WIRE.config, throttlerRequestedTps } }),
+  })),
   {
     name: 'aggregate sender count has wrong type',
     result: async () =>
@@ -620,40 +586,15 @@ const malformedCases: ReadonlyArray<{
         sender: { ...VALID_WIRE.sender, inFlightWorkers: 'one' },
       }),
   },
-  ...(['starting'] as const).map((state) => ({
-    name: `live Sender in ${state}`,
-    result: async () =>
-      mockResponse({
-        ...withRunState('starting'),
-        run: { ...VALID_WIRE.run, state },
-        sender: {
-          ...VALID_WIRE.sender,
-          liveWorkers: 1,
-          idleWorkers: 1,
-          drainingWorkers: 1,
-          drainingIdleWorkers: 1,
-        },
-      }),
-  })),
-  ...(
-    [
-      { liveWorkers: 31 },
-      { drainingWorkers: 2 },
-      { idleWorkers: -1 },
-      { inFlightWorkers: 0.5 },
-      { backoffWorkers: 'one' },
-      { drainingIdleWorkers: 29, drainingWorkers: 31 },
-      { drainingInFlightWorkers: 4, drainingWorkers: 6 },
-      { drainingBackoffWorkers: 2, drainingWorkers: 4 },
-    ] as const
-  ).map((sender, index) => ({
-    name: `invalid stopping Sender partition ${index}`,
-    result: async () => {
-      const wire = withRunState('stopping')
-      return mockResponse({ ...wire, sender: { ...wire.sender, ...sender } })
-    },
-  })),
-
+  ...([{ idleWorkers: -1 }, { inFlightWorkers: 0.5 }, { backoffWorkers: 'one' }] as const).map(
+    (sender, index) => ({
+      name: `invalid stopping Sender field ${index}`,
+      result: async () => {
+        const wire = withRunState('stopping')
+        return mockResponse({ ...wire, sender: { ...wire.sender, ...sender } })
+      },
+    }),
+  ),
   {
     name: 'wrong-type requested TPS value',
     result: async () =>
@@ -779,33 +720,38 @@ const malformedCases: ReadonlyArray<{
         run: { ...VALID_WIRE.run, elapsedMs: Number.MAX_SAFE_INTEGER + 1 },
       }),
   },
-  {
-    name: 'empty Reader source error message',
-    result: async () =>
-      mockResponse({
-        ...VALID_WIRE,
-        reader: {
-          ...VALID_WIRE.reader,
-          sourceError: {
-            category: 'source',
-            operation: 'read',
-            relativePath: 'broken.parquet',
-            message: '',
+  ...(['category', 'operation', 'relativePath', 'message'] as const).flatMap((field) => [
+    {
+      name: `missing Reader source error ${field}`,
+      result: async () => {
+        const sourceError: Record<string, unknown> = {
+          category: 'source',
+          operation: 'read',
+          relativePath: 'broken.parquet',
+          message: 'error',
+        }
+        delete sourceError[field]
+        return mockResponse({ ...VALID_WIRE, reader: { ...VALID_WIRE.reader, sourceError } })
+      },
+    },
+    {
+      name: `wrong-type Reader source error ${field}`,
+      result: async () =>
+        mockResponse({
+          ...VALID_WIRE,
+          reader: {
+            ...VALID_WIRE.reader,
+            sourceError: {
+              category: 'source',
+              operation: 'read',
+              relativePath: 'broken.parquet',
+              message: 'error',
+              [field]: null,
+            },
           },
-        },
-      }),
-  },
-  ...['', '/absolute.parquet', '../outside.parquet'].map((relativePath) => ({
-    name: `invalid Reader source path ${JSON.stringify(relativePath)}`,
-    result: async () =>
-      mockResponse({
-        ...VALID_WIRE,
-        reader: {
-          ...VALID_WIRE.reader,
-          sourceError: { category: 'source', operation: 'read', relativePath, message: 'error' },
-        },
-      }),
-  })),
+        }),
+    },
+  ]),
   {
     name: 'negative integer',
     result: async () =>
@@ -948,6 +894,76 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
+  it.each(['starting', 'running', 'stopping', 'faulted'] as const)(
+    'decodes the complete Go fixture with independent measurements in %s',
+    async (state) => {
+      const wire = JSON.parse(readFileSync('../loadgen/testdata/snapshot.json', 'utf8'))
+      wire.run.state = state
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+      fetchMock.mockResolvedValueOnce(mockResponse(wire))
+      const adapter = new HttpAdapter()
+      await flushPoll()
+
+      expect(adapter.getSnapshot()).toMatchObject({
+        connectionState: 'connected',
+        runState: state,
+        elapsedMs: 102,
+        totalTransactions: 101,
+        config: wire.config,
+        reader: {
+          workers: { applied: 11 },
+          liveWorkers: 12,
+          readingWorkers: 14,
+          drainingWorkers: 16,
+          sourceError: wire.reader.sourceError,
+        },
+        sender: { workers: { applied: 41 }, liveWorkers: 42, drainingWorkers: 46 },
+        throttler: { requestedTps: { applied: 31 } },
+        readerChannel: { inputTransactionsPerSecond: 62.5, outputTransactionsPerSecond: 64.5 },
+        senderChannel: { inputTransactionsPerSecond: 82.5, outputTransactionsPerSecond: 84.5 },
+      })
+      expect(warn).not.toHaveBeenCalled()
+      fetchMock.mockResolvedValue(mockCommandResponse())
+      for (const command of [
+        { type: 'set-reader-workers', value: 11 },
+        { type: 'set-sender-workers', value: 41 },
+        { type: 'set-requested-tps', value: 31 },
+      ] as const) {
+        expect((await adapter.dispatch(command)).accepted).toBe(false)
+      }
+      expect(commandFetchCalls()).toHaveLength(0)
+      if (state === 'running') {
+        expect((await adapter.dispatch({ type: 'set-reader-workers', value: 7 })).accepted).toBe(
+          true,
+        )
+        expect(commandFetchCalls()).toHaveLength(1)
+      }
+      adapter.dispose()
+    },
+  )
+
+  it('accepts source error strings without imposing category, operation or path conventions', async () => {
+    const sourceError = {
+      category: '',
+      operation: 'future-operation',
+      relativePath: '',
+      message: '',
+    }
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({
+        ...VALID_WIRE,
+        reader: { ...VALID_WIRE.reader, sourceDirectory: '', sourceError },
+      }),
+    )
+    const adapter = new HttpAdapter()
+    await flushPoll()
+    expect(adapter.getSnapshot()).toMatchObject({
+      connectionState: 'connected',
+      reader: { sourceDirectory: '', sourceError },
+    })
+    adapter.dispose()
+  })
+
   it('uses the Sender worker range from the snapshot', async () => {
     const senderWorkers = { initial: 5, max: 35 }
     fetchMock.mockResolvedValueOnce(
@@ -1067,13 +1083,7 @@ describe('HttpAdapter', () => {
       capacity: 8,
       depthBatches: 6,
       bufferedTransactions: 300_000,
-      sentBatchesTotal: 11,
-      sentTransactionsTotal: 550_000,
-      receivedBatchesTotal: 5,
-      receivedTransactionsTotal: 250_000,
-      inputBatchesPerSecond: 2.5,
       inputTransactionsPerSecond: 125_000.5,
-      outputBatchesPerSecond: 1.25,
       outputTransactionsPerSecond: 62_500.25,
       inputTps: 125_000.5,
       outputTps: 62_500.25,
@@ -1087,13 +1097,7 @@ describe('HttpAdapter', () => {
       capacity: 0,
       depthBatches: 0,
       bufferedTransactions: 0,
-      sentBatchesTotal: 7,
-      sentTransactionsTotal: 350_000,
-      receivedBatchesTotal: 7,
-      receivedTransactionsTotal: 350_000,
-      inputBatchesPerSecond: 1.5,
       inputTransactionsPerSecond: 75_000.5,
-      outputBatchesPerSecond: 1.25,
       outputTransactionsPerSecond: 62_500.25,
       inputTps: 75_000.5,
       outputTps: 62_500.25,
@@ -1142,16 +1146,10 @@ describe('HttpAdapter', () => {
       throttler: { ...VALID_WIRE.throttler, admittedTps: 0 },
       senderChannel: {
         ...VALID_WIRE.senderChannel,
-        sentBatchesTotal: 0,
-        sentTransactionsTotal: 0,
-        receivedBatchesTotal: 0,
-        receivedTransactionsTotal: 0,
         blockedSenders: 0,
         oldestBlockedSenderMs: 0,
         blockedMs: 0,
-        inputBatchesPerSecond: 0,
         inputTransactionsPerSecond: 0,
-        outputBatchesPerSecond: 0,
         outputTransactionsPerSecond: 0,
       },
     }
@@ -1170,10 +1168,6 @@ describe('HttpAdapter', () => {
       capacity: 0,
       depthBatches: 0,
       bufferedTransactions: 0,
-      sentBatchesTotal: 0,
-      sentTransactionsTotal: 0,
-      receivedBatchesTotal: 0,
-      receivedTransactionsTotal: 0,
       blockedSenders: 0,
       oldestBlockedSenderMs: 0,
       blockedMs: 0,

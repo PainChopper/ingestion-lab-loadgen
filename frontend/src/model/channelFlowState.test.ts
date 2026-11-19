@@ -318,7 +318,6 @@ describe('channel flow state derivation', () => {
       displayedPressure: 1,
       flowState: 'backpressure',
       depthBatches: 100,
-      receivedBatchesTotal: base.senderChannel.receivedBatchesTotal,
     })
 
     const retryCountersOnly: LoadgenTelemetrySnapshot = {
