@@ -54,11 +54,6 @@ export function PipelineSvg({
         selected={selectedId === snapshot.readerChannel.id}
         onSelect={onSelect}
         orientation={orientation}
-        capacityValues={
-          snapshot.adapterKind === 'http'
-            ? snapshot.config?.readerChannelCapacity.allowed
-            : undefined
-        }
         hoseForbiddenBoxes={
           orientation === 'portrait'
             ? [
@@ -75,11 +70,6 @@ export function PipelineSvg({
         selected={selectedId === snapshot.senderChannel.id}
         onSelect={onSelect}
         orientation={orientation}
-        capacityValues={
-          snapshot.adapterKind === 'http'
-            ? snapshot.config?.senderChannelCapacity.allowed
-            : undefined
-        }
         hoseForbiddenBoxes={
           orientation === 'portrait'
             ? [{ x: 70, y: senderChannelGeometry.end.y - 196, width: 340, height: 188 }]
@@ -124,7 +114,7 @@ export function PipelineSvg({
         y={geometry.batchLabel.anchor.y + 5}
         textAnchor="middle"
       >
-        Batch {formatInteger(snapshot.reader.readBatchSize.applied)} tx
+        Batch {formatInteger(snapshot.reader.readBatchSize)} tx
       </text>
       <SenderActor
         snapshot={snapshot.sender}

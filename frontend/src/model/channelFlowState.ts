@@ -54,14 +54,14 @@ export function blockingPressure(blockedSenders: number, oldestBlockedSenderMs: 
 }
 
 function hasRendezvousWaiter(channel: ChannelTelemetrySnapshot): boolean {
-  return channel.capacity.applied === 0 && channel.blockedSenders > 0
+  return channel.capacity === 0 && channel.blockedSenders > 0
 }
 
 export function effectiveChannelPressure(channel: ChannelTelemetrySnapshot): number {
   if (hasRendezvousWaiter(channel)) return 1
 
   return Math.max(
-    occupancyPressure(channel.depthBatches, channel.capacity.applied),
+    occupancyPressure(channel.depthBatches, channel.capacity),
     blockingPressure(channel.blockedSenders, channel.oldestBlockedSenderMs),
   )
 }
@@ -84,7 +84,7 @@ function channelMode(
 ): Extract<ChannelFlowState, 'stopped' | 'connection-error'> | null {
   const missingTelemetry =
     channel.depthBatches === null ||
-    channel.capacity.applied === null ||
+    channel.capacity === null ||
     !Number.isFinite(channel.blockedSenders) ||
     !Number.isFinite(channel.oldestBlockedSenderMs)
 

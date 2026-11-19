@@ -45,15 +45,15 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 	for _, name := range []string{"nonzero initial values", "zero initial values"} {
 		t.Run(name, func(t *testing.T) {
 			loaded := testConfig(t)
-			loaded.Reader.ReadBatchSize.Initial = 2000
+			loaded.Reader.ReadBatchSize = 2000
 			loaded.Reader.Workers.Initial = 3
 			loaded.Sender.Workers.Initial = 7
-			loaded.SenderChannel.Capacity.Initial = 4
-			loaded.Throttler.Installed.Initial = false
-			loaded.Metrics.WindowMS.Initial = 300
+			loaded.SenderChannel.Capacity = 4
+			loaded.Throttler.Installed = false
+			loaded.Metrics.WindowMS = 300
 			if name == "zero initial values" {
-				loaded.ReaderChannel.Capacity.Initial = 0
-				loaded.SenderChannel.Capacity.Initial = 0
+				loaded.ReaderChannel.Capacity = 0
+				loaded.SenderChannel.Capacity = 0
 				loaded.Throttler.RequestedTPS.Initial = 0
 			}
 			state := newControlState(loaded, zap.NewNop())
@@ -63,7 +63,7 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 			if state.config.Source.Path != loaded.Source.Path {
 				t.Fatal("control state did not retain loaded source config")
 			}
-			if want := time.Duration(loaded.Metrics.WindowMS.Initial) * time.Millisecond; state.metricsWindow != want {
+			if want := time.Duration(loaded.Metrics.WindowMS) * time.Millisecond; state.metricsWindow != want {
 				t.Fatalf("metrics window = %s, want %s", state.metricsWindow, want)
 			}
 			snapshot := state.snapshotAt(nil, time.Now())
@@ -73,15 +73,15 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 				snapshot.Throttler.RequestedTps, snapshot.Sender.Workers,
 			}
 			want := []int{
-				loaded.Reader.ReadBatchSize.Initial, loaded.Reader.Workers.Initial,
-				loaded.ReaderChannel.Capacity.Initial, loaded.SenderChannel.Capacity.Initial,
+				loaded.Reader.ReadBatchSize, loaded.Reader.Workers.Initial,
+				loaded.ReaderChannel.Capacity, loaded.SenderChannel.Capacity,
 				loaded.Throttler.RequestedTPS.Initial, loaded.Sender.Workers.Initial,
 			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("initial controls = %v, want %v", got, want)
 			}
-			if got := state.controls.installed; got != loaded.Throttler.Installed.Initial {
-				t.Fatalf("initial installed = %t, want %t", got, loaded.Throttler.Installed.Initial)
+			if got := state.controls.installed; got != loaded.Throttler.Installed {
+				t.Fatalf("initial installed = %t, want %t", got, loaded.Throttler.Installed)
 			}
 		})
 	}
@@ -89,10 +89,10 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 
 func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.ReaderChannel.Capacity.Initial = 0
-	cfg.SenderChannel.Capacity.Initial = 0
+	cfg.ReaderChannel.Capacity = 0
+	cfg.SenderChannel.Capacity = 0
 	cfg.Sender.Workers.Initial = 1
-	cfg.Throttler.Installed.Initial = false
+	cfg.Throttler.Installed = false
 	cfg.Source.Path = filepath.Join(t.TempDir(), "input.parquet")
 	if err := parquet.WriteFile(cfg.Source.Path, []pipeline.Transaction{{}, {}, {}}); err != nil {
 		t.Fatal(err)
@@ -213,8 +213,8 @@ func TestSignalDeadlineCancelsInFlightHTTP(t *testing.T) {
 	if err := parquet.WriteFile(cfg.Source.Path, []pipeline.Transaction{{}}); err != nil {
 		t.Fatal(err)
 	}
-	cfg.ReaderChannel.Capacity.Initial = 0
-	cfg.SenderChannel.Capacity.Initial = 0
+	cfg.ReaderChannel.Capacity = 0
+	cfg.SenderChannel.Capacity = 0
 	cfg.Sender.Workers.Initial = 1
 
 	entered := make(chan struct{})
@@ -384,12 +384,12 @@ func assertExitAtDeadline(t *testing.T, loop testEventLoop) {
 }
 
 func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
-	const batchSize = 2_000
+	const batchSize = 1_500
 	for _, tc := range []struct {
 		name                           string
 		readerCapacity, senderCapacity int
 	}{
-		{name: "buffered", readerCapacity: 4, senderCapacity: 2},
+		{name: "buffered", readerCapacity: 3, senderCapacity: 2},
 		{name: "unbuffered", readerCapacity: 0, senderCapacity: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -422,10 +422,10 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 			conf := strings.NewReplacer(
 				"C:\\dataset\\*.parquet", filepath.ToSlash(parquetPath),
 				testSenderURL, receiver.URL,
-				"[reader.read_batch_size]\ninitial = 1000", fmt.Sprintf("[reader.read_batch_size]\ninitial = %d", batchSize),
-				"[readerChannel.capacity]\ninitial = 2", fmt.Sprintf("[readerChannel.capacity]\ninitial = %d", tc.readerCapacity),
-				"[senderChannel.capacity]\ninitial = 0", fmt.Sprintf("[senderChannel.capacity]\ninitial = %d", tc.senderCapacity),
-				"[throttler.installed]\ninitial = true", "[throttler.installed]\ninitial = false",
+				"[reader]\nread_batch_size = 1000", fmt.Sprintf("[reader]\nread_batch_size = %d", batchSize),
+				"[readerChannel]\ncapacity = 2", fmt.Sprintf("[readerChannel]\ncapacity = %d", tc.readerCapacity),
+				"[senderChannel]\ncapacity = 0", fmt.Sprintf("[senderChannel]\ncapacity = %d", tc.senderCapacity),
+				"[throttler]\ninstalled = true", "[throttler]\ninstalled = false",
 			).Replace(testConfigContents())
 			configPath := filepath.Join(dir, "config.toml")
 			if err := os.WriteFile(configPath, []byte(conf), 0o600); err != nil {
@@ -435,6 +435,9 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			cfg.Reader.Workers = workersConfig{Initial: 1, Max: 13}
+			cfg.Sender.Workers = workersConfig{Initial: 2, Max: 19}
+			cfg.Throttler.RequestedTPS = tpsConfig{Initial: 200_000, Max: 400_001, Step: 200_000}
 			core, events := observer.New(zap.InfoLevel)
 			state := newControlState(cfg, zap.New(core))
 			loop := startTestEventLoop(t, &state, gracefulShutdownTimeout)
@@ -468,6 +471,34 @@ func TestPipelineAppliesStartupBatchSizeAndQueueCapacities(t *testing.T) {
 					t.Errorf("%s did not report its filled channel: %+v", queue.name, q)
 				}
 			}
+
+			mux := newServeMux(loop.requests, loop.metrics, cfg, zap.NewNop())
+			for _, body := range []string{
+				`{"action":"set-reader-workers","value":3}`,
+				`{"action":"set-sender-workers","value":4}`,
+				`{"action":"set-requested-tps","value":0}`,
+				`{"action":"set-throttler-installed","value":true}`,
+			} {
+				assertCommandHTTP(t, mux, body, http.StatusOK)
+			}
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+			var updated runtimeSnapshot
+			if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
+				t.Fatal(err)
+			}
+			wantConfig := configSnapshot{
+				ReaderWorkers:         workersConfig{Initial: 1, Max: 13},
+				SenderWorkers:         workersConfig{Initial: 2, Max: 19},
+				ThrottlerRequestedTPS: tpsConfig{Initial: 200_000, Max: 400_001, Step: 200_000},
+			}
+			if updated.Config != wantConfig || updated.Reader.Workers != 3 ||
+				updated.Sender.Workers != 4 || updated.Throttler.RequestedTps != 0 || !updated.Throttler.Installed {
+				t.Fatalf("runtime commands lost initial profiles or applied values: %+v", updated)
+			}
+			// The cross-client smoke reads this real handler response from the verbose run log.
+			t.Logf("schema4 snapshot: %s", response.Body.String())
+			assertCommandHTTP(t, mux, `{"action":"set-throttler-installed","value":false}`, http.StatusOK)
 
 			loop.cancel()
 			loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
@@ -509,7 +540,7 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "b.parquet"), []byte("invalid parquet"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg.ReaderChannel.Capacity.Initial = 0
+	cfg.ReaderChannel.Capacity = 0
 	cfg.Sender.Workers.Initial = 1
 
 	entered := make(chan struct{})

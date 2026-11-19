@@ -32,10 +32,6 @@ const RANGES = Object.freeze({
   readerWorkers: Object.freeze({ min: 1, max: 7, step: 1 }),
   senderWorkers: Object.freeze({ min: 1, max: 32, step: 1 }),
   requestedTps: Object.freeze({ min: 0, max: 250_000, step: 5_000 }),
-  readerChannelCapacity: Object.freeze({ min: 0, max: 12, step: 1 }),
-  senderChannelCapacity: Object.freeze({ min: 0, max: 160, step: 10 }),
-  readBatchSize: Object.freeze({ min: 1_000, max: 100_000, step: 1_000 }),
-  httpTimeoutMs: Object.freeze({ min: 10, max: 5_000, step: 10 }),
 })
 
 interface NumericRange {
@@ -74,18 +70,13 @@ function freezeChannelSnapshot(
     readonly id: 'reader-to-throttler' | 'throttler-to-sender'
     readonly from: 'reader' | 'throttler'
     readonly to: 'throttler' | 'sender'
-    readonly range: NumericRange
   },
 ) {
   return Object.freeze({
     id: identity.id,
     from: identity.from,
     to: identity.to,
-    capacity: Object.freeze({
-      applied: channel.capacity,
-      ...identity.range,
-      unit: 'batches',
-    }),
+    capacity: channel.capacity,
     sentBatchesTotal: channel.sentBatchesTotal,
     sentTransactionsTotal: channel.sentTransactionsTotal,
     receivedBatchesTotal: channel.receivedBatchesTotal,
@@ -146,12 +137,7 @@ function freezeSnapshot(
       drainingIdleWorkers: 0,
       drainingReadingWorkers: 0,
       drainingBlockedWorkers: 0,
-      readBatchSize: numericControl(
-        config.readBatchSize,
-        RANGES.readBatchSize,
-        'tx',
-        'unavailable',
-      ),
+      readBatchSize: config.readBatchSize,
       readTps: readerReadTps,
       configuredCapacityTps: readerCapacityTps,
       limitationReason: readerLimitationReason,
@@ -177,13 +163,11 @@ function freezeSnapshot(
       id: 'reader-to-throttler',
       from: 'reader',
       to: 'throttler',
-      range: RANGES.readerChannelCapacity,
     }),
     senderChannel: freezeChannelSnapshot(telemetry.senderChannel, {
       id: 'throttler-to-sender',
       from: 'throttler',
       to: 'sender',
-      range: RANGES.senderChannelCapacity,
     }),
     sender: Object.freeze({
       id: 'sender',
@@ -196,7 +180,7 @@ function freezeSnapshot(
       drainingIdleWorkers: drainingSenderWorkerStates.idle,
       drainingInFlightWorkers: drainingSenderWorkerStates.inFlight,
       drainingBackoffWorkers: drainingSenderWorkerStates.backoff,
-      timeoutMs: numericControl(config.httpTimeoutMs, RANGES.httpTimeoutMs, 'ms', 'unavailable'),
+      timeoutMs: config.httpTimeoutMs,
       retryPolicy: RETRY_POLICY,
       attemptedTps: Math.round(telemetry.attemptedTransactionsPerSecond),
       retryAttemptedTps: Math.round(telemetry.sender.retryAttemptedTransactionsPerSecond),

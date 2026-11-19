@@ -38,7 +38,7 @@
       "post": {
         "operationId": "executeCommand",
         "summary": "Change a live setting",
-        "description": "Choose one action in the request body. Allowed setting values come from GET /api/loadgen/snapshot under config. Commands are only accepted while the pipeline is running. Unknown fields and trailing JSON are rejected. The server does not check Content-Type or Accept request headers.",
+        "description": "Choose one action in the request body. Workers accept integers 1..max (step 1); TPS accepts 0..max aligned to step from zero. The three runtime profiles come from GET /api/loadgen/snapshot under config. Installed accepts true or false. Commands are only accepted while the pipeline is running. Unknown fields and trailing JSON are rejected. The server does not check Content-Type or Accept request headers.",
         "requestBody": {
           "required": true,
           "content": {
@@ -130,7 +130,6 @@
       },
       "InstalledCommand": {
         "type": "object", "additionalProperties": false,
-        "x-config-key": "throttlerInstalled",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-throttler-installed"] },
@@ -165,7 +164,7 @@
         "properties": {
           "workers": { "type": "integer" }, "liveWorkers": { "type": "integer" }, "idleWorkers": { "type": "integer" }, "readingWorkers": { "type": "integer" }, "blockedWorkers": { "type": "integer" },
           "drainingWorkers": { "type": "integer" }, "drainingIdleWorkers": { "type": "integer" }, "drainingReadingWorkers": { "type": "integer" }, "drainingBlockedWorkers": { "type": "integer" },
-          "readBatchSize": { "type": "integer" }, "readTps": { "type": "number", "format": "double" }, "rowsRead": { "type": "integer", "format": "int64" },
+          "readBatchSize": { "type": "integer", "minimum": 1, "maximum": 9223372036, "description": "Applied startup batch size; bounded by Go int and safe batch pacing duration arithmetic." }, "readTps": { "type": "number", "format": "double" }, "rowsRead": { "type": "integer", "format": "int64" },
           "sourceDirectory": { "type": "string" }, "sourceError": { "$ref": "#/components/schemas/ReaderSourceError" }
         }
       },
@@ -196,33 +195,9 @@
           "inputBatchesPerSecond": { "type": "number", "format": "double" }, "inputTransactionsPerSecond": { "type": "number", "format": "double" }, "outputBatchesPerSecond": { "type": "number", "format": "double" }, "outputTransactionsPerSecond": { "type": "number", "format": "double" }
         }
       },
-      "ConfigStatus": {
-        "type": "object", "additionalProperties": false,
-        "required": ["readerReadBatchSize", "readerWorkers", "readerChannelCapacity", "senderChannelCapacity", "throttlerRequestedTps", "throttlerInstalled", "metricsWindowMs", "senderWorkers", "logging"],
-        "properties": {
-          "readerReadBatchSize": { "$ref": "#/components/schemas/RangeConfig" }, "readerWorkers": { "$ref": "#/components/schemas/RangeConfig" }, "readerChannelCapacity": { "$ref": "#/components/schemas/AllowedConfig" }, "senderChannelCapacity": { "$ref": "#/components/schemas/AllowedConfig" }, "throttlerRequestedTps": { "$ref": "#/components/schemas/RangeConfig" }, "throttlerInstalled": { "$ref": "#/components/schemas/InstalledConfig" }, "metricsWindowMs": { "$ref": "#/components/schemas/RangeConfig" }, "senderWorkers": { "$ref": "#/components/schemas/RangeConfig" }, "logging": { "$ref": "#/components/schemas/LoggingConfig" }
-        }
-      },
-      "RangeConfig": {
-        "type": "object", "additionalProperties": false,
-        "required": ["initial", "min", "max", "step", "unit", "mutability"],
-        "properties": { "initial": { "type": "integer" }, "min": { "type": "integer" }, "max": { "type": "integer" }, "step": { "type": "integer" }, "unit": { "type": "string" }, "mutability": { "type": "string" } }
-      },
-      "AllowedConfig": {
-        "type": "object", "additionalProperties": false,
-        "required": ["initial", "allowed", "unit", "mutability"],
-        "properties": { "initial": { "type": "integer" }, "allowed": { "type": "array", "nullable": true, "items": { "type": "integer" } }, "unit": { "type": "string" }, "mutability": { "type": "string" } }
-      },
-      "InstalledConfig": {
-        "type": "object", "additionalProperties": false,
-        "required": ["initial", "allowed", "mutability"],
-        "properties": { "initial": { "type": "boolean" }, "allowed": { "type": "array", "nullable": true, "items": { "type": "boolean" } }, "mutability": { "type": "string" } }
-      },
-      "LoggingConfig": {
-        "type": "object", "additionalProperties": false,
-        "required": ["level", "mutability"],
-        "properties": { "level": { "type": "string" }, "mutability": { "type": "string" } }
-      }
+      "ConfigStatus": {"type": "object", "additionalProperties": false, "required": ["readerWorkers", "senderWorkers", "throttlerRequestedTps"], "properties": {"readerWorkers": {"$ref": "#/components/schemas/WorkersConfig"}, "senderWorkers": {"$ref": "#/components/schemas/WorkersConfig"}, "throttlerRequestedTps": {"$ref": "#/components/schemas/TPSConfig"}}},
+      "WorkersConfig": {"type": "object", "additionalProperties": false, "required": ["initial", "max"], "description": "Worker commands accept integers 1..max with step 1. Initial is the configured startup count.", "properties": {"initial": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}, "max": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}},
+      "TPSConfig": {"type": "object", "additionalProperties": false, "required": ["initial", "max", "step"], "description": "TPS commands accept 0..max on the step grid from zero. An off-grid max is a bound, not an allowed command.", "properties": {"initial": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "max": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}, "step": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}}
     }
   }
 }

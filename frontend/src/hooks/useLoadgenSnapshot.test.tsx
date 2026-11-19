@@ -63,7 +63,7 @@ it('preserves the pressure history across rerenders and starts fresh on adapter 
         runState: 'running',
         readerChannel: {
           ...base.readerChannel,
-          capacity: { ...base.readerChannel.capacity, applied: 4 },
+          capacity: 4,
           depthBatches,
           blockedSenders: 0,
           oldestBlockedSenderMs: 0,

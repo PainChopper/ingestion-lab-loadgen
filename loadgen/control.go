@@ -44,13 +44,13 @@ type runtimeEvents struct {
 
 func newControlState(cfg config, logger *zap.Logger) controlState {
 	return controlState{
-		metricsWindow: time.Duration(cfg.Metrics.WindowMS.Initial) * time.Millisecond,
+		metricsWindow: time.Duration(cfg.Metrics.WindowMS) * time.Millisecond,
 		run:           controlRunState{state: runStateStarting},
 		config:        cfg,
 		controls: configuredControls{
 			readerWorkers: cfg.Reader.Workers.Initial,
 			requestedTPS:  cfg.Throttler.RequestedTPS.Initial,
-			installed:     cfg.Throttler.Installed.Initial,
+			installed:     cfg.Throttler.Installed,
 			senderWorkers: cfg.Sender.Workers.Initial,
 		},
 		logger:          logger,
@@ -210,9 +210,6 @@ func (s *controlState) applyCommand(run *pipeline.Pipeline, command runtimeComma
 				zap.String("event", "throttler_rate_changed"), zap.Int("requested_tps", command.value))
 		}
 	case setThrottlerInstalled:
-		if !s.config.Throttler.Installed.contains(command.installed) {
-			return false
-		}
 		if s.controls.installed != command.installed {
 			s.controls.installed = command.installed
 			run.SetRate(s.rate())
@@ -285,7 +282,7 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 			DrainingIdleWorkers:    readerPool.DrainingIdleWorkers,
 			DrainingReadingWorkers: readerPool.DrainingReadingWorkers,
 			DrainingBlockedWorkers: readerPool.DrainingBlockedWorkers,
-			ReadBatchSize:          s.config.Reader.ReadBatchSize.Initial, ReadTps: readerPool.ReadTPS,
+			ReadBatchSize:          s.config.Reader.ReadBatchSize, ReadTps: readerPool.ReadTPS,
 			RowsRead:        readerPool.RowsRead,
 			SourceDirectory: pipeline.SourceDirectory(s.config.Source.Path),
 			SourceError:     s.run.sourceError,
@@ -303,8 +300,8 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 			DrainingInFlightWorkers: senderPool.DrainingInFlightWorkers,
 			DrainingBackoffWorkers:  senderPool.DrainingBackoffWorkers,
 		},
-		ReaderChannel: snapshotChannel(readerChannel, s.config.ReaderChannel.Capacity.Initial),
-		SenderChannel: snapshotChannel(senderChannel, s.config.SenderChannel.Capacity.Initial),
+		ReaderChannel: snapshotChannel(readerChannel, s.config.ReaderChannel.Capacity),
+		SenderChannel: snapshotChannel(senderChannel, s.config.SenderChannel.Capacity),
 		Config:        snapshotConfig(s.config),
 	}
 }

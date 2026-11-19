@@ -18,10 +18,7 @@ function withChannelCapacity(
     readerChannel: {
       ...snapshot.readerChannel,
       depthBatches,
-      capacity: {
-        ...snapshot.readerChannel.capacity,
-        applied,
-      },
+      capacity: applied,
     },
   }
 }
@@ -141,20 +138,14 @@ describe('inspector view model', () => {
 
   it('only shows the HTTP Sender pool and neutral placeholders for the connection and Target', () => {
     const adapter = new SimulationAdapter()
-    const range = { initial: 1, min: 1, max: 1, step: 1, unit: 'workers', mutability: 'immediate' }
-    const capacity = { initial: 0, allowed: [0], unit: 'batches', mutability: 'startup-only' }
+    const range = { initial: 1, max: 1 }
     const snapshot: LoadgenSnapshot = {
       ...derivedSnapshot(adapter),
       adapterKind: 'http',
       config: {
-        readerReadBatchSize: range,
-        readerChannelCapacity: capacity,
-        senderChannelCapacity: capacity,
-        metricsWindowMs: range,
-        throttlerRequestedTps: range,
-        throttlerInstalled: { initial: true, allowed: [true, false], mutability: 'immediate' },
+        readerWorkers: range,
         senderWorkers: range,
-        logging: { level: 'info', mutability: 'startup-only' },
+        throttlerRequestedTps: { initial: 0, max: 1, step: 1 },
       },
     }
 
@@ -419,10 +410,7 @@ describe('inspector view model', () => {
           depthBatches: 0,
           blockedSenders: 1,
           oldestBlockedSenderMs: 10,
-          capacity: {
-            ...base.readerChannel.capacity,
-            applied: 0,
-          },
+          capacity: 0,
         },
       },
       0,

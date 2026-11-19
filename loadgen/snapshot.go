@@ -84,15 +84,9 @@ type channelSnapshot struct {
 }
 
 type configSnapshot struct {
-	ReaderReadBatchSize   rangeConfig     `json:"readerReadBatchSize"`
-	ReaderWorkers         rangeConfig     `json:"readerWorkers"`
-	ReaderChannelCapacity allowedConfig   `json:"readerChannelCapacity"`
-	SenderChannelCapacity allowedConfig   `json:"senderChannelCapacity"`
-	ThrottlerRequestedTPS rangeConfig     `json:"throttlerRequestedTps"`
-	ThrottlerInstalled    installedConfig `json:"throttlerInstalled"`
-	MetricsWindowMS       rangeConfig     `json:"metricsWindowMs"`
-	SenderWorkers         rangeConfig     `json:"senderWorkers"`
-	Logging               loggingConfig   `json:"logging"`
+	ReaderWorkers         workersConfig `json:"readerWorkers"`
+	SenderWorkers         workersConfig `json:"senderWorkers"`
+	ThrottlerRequestedTPS tpsConfig     `json:"throttlerRequestedTps"`
 }
 
 func snapshotChannel(measurements pipeline.QueueSnapshot, capacity int) channelSnapshot {
@@ -116,15 +110,9 @@ func snapshotChannel(measurements pipeline.QueueSnapshot, capacity int) channelS
 
 func snapshotConfig(config config) configSnapshot {
 	return configSnapshot{
-		ReaderReadBatchSize:   config.Reader.ReadBatchSize,
 		ReaderWorkers:         config.Reader.Workers,
-		ReaderChannelCapacity: config.ReaderChannel.Capacity,
-		SenderChannelCapacity: config.SenderChannel.Capacity,
-		ThrottlerRequestedTPS: config.Throttler.RequestedTPS,
-		ThrottlerInstalled:    config.Throttler.Installed,
-		MetricsWindowMS:       config.Metrics.WindowMS,
 		SenderWorkers:         config.Sender.Workers,
-		Logging:               config.Logging,
+		ThrottlerRequestedTPS: config.Throttler.RequestedTPS,
 	}
 }
 

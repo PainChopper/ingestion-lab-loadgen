@@ -5,11 +5,7 @@ import { channelPressureColor } from '../../model/channelFlowState'
 import { formatInteger, formatMilliseconds, formatRate } from './formatters'
 import type { PipelineChannelGeometry } from './geometry'
 import type { PipelineOrientation } from './pipelineLayout'
-import {
-  type Box,
-  type CapacityValues,
-  getChannelCapacityGeometryPresentation,
-} from './channelCableGeometry'
+import { type Box, getChannelCapacityGeometryPresentation } from './channelCableGeometry'
 
 interface ChannelCableProps {
   snapshot: ChannelSnapshot
@@ -18,7 +14,6 @@ interface ChannelCableProps {
   selected: boolean
   onSelect: (id: SelectableId) => void
   orientation?: PipelineOrientation
-  capacityValues?: CapacityValues
   hoseForbiddenBoxes?: readonly Box[]
 }
 
@@ -29,7 +24,6 @@ export function ChannelCable({
   selected,
   onSelect,
   orientation = 'landscape',
-  capacityValues,
   hoseForbiddenBoxes,
 }: ChannelCableProps) {
   const { start, end, metrics } = geometry
@@ -38,7 +32,6 @@ export function ChannelCable({
     start,
     end,
     orientation,
-    capacityValues,
     hoseForbiddenBoxes,
   )
   const portrait = orientation === 'portrait'
@@ -52,15 +45,10 @@ export function ChannelCable({
   const channelStyle = {
     '--pipeline-channel-pressure-color': channelPressureColor(snapshot.displayedPressure),
   } as CSSProperties
+  // Presentation scale: 1,000 tx is the narrow hose, 100,000 tx the widest.
+  // These visual anchors are independent of the operator's control budgets.
   const batchStrokeWidth =
-    2.5 +
-    7.5 *
-      (batchSize.applied === null || batchSize.max <= batchSize.min
-        ? 0
-        : Math.min(
-            1,
-            Math.max(0, (batchSize.applied - batchSize.min) / (batchSize.max - batchSize.min)),
-          ))
+    2.5 + 7.5 * Math.min(1, Math.max(0, ((batchSize ?? 1_000) - 1_000) / 99_000))
 
   const handleSelectionKeyDown = (event: KeyboardEvent<SVGGElement>) => {
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -111,8 +99,7 @@ export function ChannelCable({
         textAnchor="middle"
         className="pipeline-small pipeline-channel-metric"
       >
-        Depth {formatInteger(snapshot.depthBatches)} / {formatInteger(snapshot.capacity.applied)}{' '}
-        batches
+        Depth {formatInteger(snapshot.depthBatches)} / {formatInteger(snapshot.capacity)} batches
       </text>
       {snapshot.blockedSenders > 0 && (
         <text

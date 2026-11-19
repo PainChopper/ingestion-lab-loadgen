@@ -191,12 +191,12 @@ describe('LabShell', () => {
       },
       reader: {
         ...initial.reader,
-        readBatchSize: { ...initial.reader.readBatchSize, applied: 1_000 },
+        readBatchSize: 1_000,
       },
       readerChannel: {
         ...initial.readerChannel,
         depthBatches: 1,
-        capacity: { ...initial.readerChannel.capacity, applied: 2 },
+        capacity: 2,
       },
     }
     const dispatch = vi.fn()

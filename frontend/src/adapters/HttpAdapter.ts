@@ -4,10 +4,10 @@ import type {
   CommandReceipt,
   ConnectionState,
   LoadgenCommand,
-  LoadgenConfigSnapshot,
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
-  RangeControlConfigSnapshot,
+  WorkersConfigSnapshot,
+  TpsConfigSnapshot,
   ChannelTelemetrySnapshot,
 } from '../model/loadgen'
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
@@ -60,19 +60,19 @@ function unavailableControl(unit: string): NumericControlSnapshot {
 
 function numericControl(
   value: number | null,
-  config: RangeControlConfigSnapshot | null,
+  config: WorkersConfigSnapshot | TpsConfigSnapshot | null,
   applyMode: NumericControlSnapshot['applyMode'],
-  unavailableUnit: string,
+  unit: string,
 ): NumericControlSnapshot {
-  if (config === null) return unavailableControl(unavailableUnit)
+  if (config === null) return unavailableControl(unit)
   return {
     applied: value,
     preview: null,
     pending: null,
-    min: config.min,
+    min: 'step' in config ? 0 : 1,
     max: config.max,
-    step: config.step,
-    unit: config.unit,
+    step: 'step' in config ? config.step : 1,
+    unit,
     applyMode,
   }
 }
@@ -86,7 +86,7 @@ function neutralChannel(
     id,
     from,
     to,
-    capacity: { applied: null, min: 0, max: 0, step: 1, unit: 'batches' },
+    capacity: null,
     sentBatchesTotal: 0,
     sentTransactionsTotal: 0,
     receivedBatchesTotal: 0,
@@ -109,19 +109,6 @@ function neutralChannel(
   }
 }
 
-function channelCapacity(
-  value: number,
-  config: LoadgenConfigSnapshot['readerChannelCapacity'],
-): ChannelTelemetrySnapshot['capacity'] {
-  return {
-    applied: value,
-    min: config.allowed[0]!,
-    max: config.allowed.at(-1)!,
-    step: 1,
-    unit: config.unit,
-  }
-}
-
 function channelSnapshot(
   wire: WireSnapshot | null,
   side: 'reader' | 'sender',
@@ -133,10 +120,9 @@ function channelSnapshot(
   if (wire === null) return channel
 
   const telemetry = wire[`${side}Channel`]
-  const config = wire.config[`${side}ChannelCapacity`]
   return {
     ...channel,
-    capacity: channelCapacity(telemetry.capacity, config),
+    capacity: telemetry.capacity,
     depthBatches: telemetry.depthBatches,
     bufferedTransactions: telemetry.bufferedTransactions,
     sentBatchesTotal: telemetry.sentBatchesTotal,
@@ -189,12 +175,7 @@ function createSnapshot(
       drainingIdleWorkers: wire?.reader.drainingIdleWorkers ?? 0,
       drainingReadingWorkers: wire?.reader.drainingReadingWorkers ?? 0,
       drainingBlockedWorkers: wire?.reader.drainingBlockedWorkers ?? 0,
-      readBatchSize: numericControl(
-        wire?.reader.readBatchSize ?? null,
-        wire?.config.readerReadBatchSize ?? null,
-        'unavailable',
-        'transactions',
-      ),
+      readBatchSize: wire?.reader.readBatchSize ?? null,
       readTps: wire?.reader.readTps ?? null,
       configuredCapacityTps: null,
       limitationReason: null,
@@ -234,7 +215,7 @@ function createSnapshot(
       ),
       liveWorkers: wire?.sender.liveWorkers ?? 0,
       drainingWorkers: wire?.sender.drainingWorkers ?? 0,
-      timeoutMs: unavailableControl('ms'),
+      timeoutMs: null,
       idleWorkers: wire?.sender.idleWorkers ?? 0,
       inFlightWorkers: wire?.sender.inFlightWorkers ?? 0,
       backoffWorkers: wire?.sender.backoffWorkers ?? 0,
@@ -293,7 +274,10 @@ function isWireInteger(value: unknown): value is number {
   )
 }
 
-function isRangeValue(value: unknown, config: RangeControlConfigSnapshot): value is number {
+function isRangeValue(
+  value: unknown,
+  config: { min: number; max: number; step: number },
+): value is number {
   return (
     isWireInteger(value) &&
     value >= config.min &&
@@ -306,70 +290,35 @@ const wireInteger = z.int().check(z.nonnegative())
 const wireNumber = z.number().check(z.nonnegative())
 const nonemptyString = z.string().check(z.minLength(1))
 
-function rangeConfigSchema(unit: string, mutability: string, min: number, max?: number) {
-  return z
-    .object({
-      initial: wireInteger,
-      min: wireInteger.check(z.gte(min)),
-      max: max === undefined ? wireInteger : wireInteger.check(z.lte(max)),
-      step: wireInteger.check(z.positive()),
-      unit: z.literal(unit),
-      mutability: z.literal(mutability),
-    })
-    .check(
-      z.refine((config) => isRangeValue(config.initial, config), {
-        path: ['initial'],
-        error: 'Expected an initial value within the range and on the step grid',
-      }),
-    )
-}
-
-const channelCapacityConfigSchema = z
-  .object({
-    initial: wireInteger,
-    allowed: z.array(wireInteger).check(
-      z.minLength(1),
-      z.refine(
-        (values) => values.every((entry, index) => index === 0 || entry > values[index - 1]!),
-        {
-          error: 'Expected strictly increasing capacities',
-        },
-      ),
-    ),
-    unit: z.literal('batches'),
-    mutability: z.literal('startup-only'),
+const workersConfigSchema = z
+  .strictObject({
+    initial: wireInteger.check(z.positive()),
+    max: wireInteger.check(z.positive()),
   })
   .check(
-    z.refine((config) => config.allowed.includes(config.initial), {
+    z.refine(({ initial, max }) => initial <= max, {
       path: ['initial'],
-      error: 'Expected an allowed capacity',
+      error: 'Expected initial within 1..max',
     }),
   )
 
-const configSchema = z.object({
-  readerReadBatchSize: rangeConfigSchema('transactions', 'startup-only', 1),
-  readerWorkers: rangeConfigSchema('workers', 'immediate', 1),
-  metricsWindowMs: rangeConfigSchema('milliseconds', 'startup-only', 100, 10_000),
-  readerChannelCapacity: channelCapacityConfigSchema,
-  senderChannelCapacity: channelCapacityConfigSchema,
-  throttlerRequestedTps: rangeConfigSchema('transactions/s', 'immediate', 0).check(
-    z.refine(({ min, max }) => max > min, { path: ['max'], error: 'Expected a value above min' }),
-  ),
-  throttlerInstalled: z
-    .object({
-      initial: z.boolean(),
-      allowed: z.array(z.boolean()).check(
-        z.length(2),
-        z.refine(([first, second]) => first !== second),
-      ),
-      mutability: z.literal('immediate'),
-    })
-    .check(z.refine(({ initial, allowed }) => allowed.includes(initial), { path: ['initial'] })),
-  senderWorkers: rangeConfigSchema('workers', 'immediate', 1),
-  logging: z.object({
-    level: z.enum(['debug', 'info', 'warn', 'error']),
-    mutability: z.literal('startup-only'),
-  }),
+const tpsConfigSchema = z
+  .strictObject({
+    initial: wireInteger,
+    max: wireInteger.check(z.positive()),
+    step: wireInteger.check(z.positive()),
+  })
+  .check(
+    z.refine(({ initial, max, step }) => initial <= max && initial % step === 0, {
+      path: ['initial'],
+      error: 'Expected initial within 0..max and on the step grid',
+    }),
+  )
+
+const configSchema = z.strictObject({
+  readerWorkers: workersConfigSchema,
+  senderWorkers: workersConfigSchema,
+  throttlerRequestedTps: tpsConfigSchema,
 })
 
 const sourceErrorSchema = z.object({
@@ -417,7 +366,7 @@ const wireSnapshotSchema = z
       drainingIdleWorkers: wireInteger,
       drainingReadingWorkers: wireInteger,
       drainingBlockedWorkers: wireInteger,
-      readBatchSize: wireInteger,
+      readBatchSize: wireInteger.check(z.positive()),
       readTps: wireNumber,
       rowsRead: wireInteger,
       sourceDirectory: nonemptyString,
@@ -445,13 +394,16 @@ const wireSnapshotSchema = z
   })
   .check(
     z.superRefine((wire, ctx) => {
-      const { run, reader, sender, throttler, readerChannel, senderChannel, config } = wire
+      const { run, reader, sender, throttler, config } = wire
       const starting = run.state === 'starting'
       for (const [path, value, range] of [
-        [['reader', 'workers'], reader.workers, config.readerWorkers],
-        [['reader', 'readBatchSize'], reader.readBatchSize, config.readerReadBatchSize],
-        [['throttler', 'requestedTps'], throttler.requestedTps, config.throttlerRequestedTps],
-        [['sender', 'workers'], sender.workers, config.senderWorkers],
+        [['reader', 'workers'], reader.workers, { min: 1, max: config.readerWorkers.max, step: 1 }],
+        [
+          ['throttler', 'requestedTps'],
+          throttler.requestedTps,
+          { min: 0, ...config.throttlerRequestedTps },
+        ],
+        [['sender', 'workers'], sender.workers, { min: 1, max: config.senderWorkers.max, step: 1 }],
       ] as const) {
         if (!isRangeValue(value, range)) {
           ctx.addIssue({
@@ -460,27 +412,6 @@ const wireSnapshotSchema = z
             message: 'Value is outside the configured range or step grid',
           })
         }
-      }
-      if (!config.throttlerInstalled.allowed.includes(throttler.installed)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['throttler', 'installed'],
-          message: 'Value is not allowed by config',
-        })
-      }
-      if (!config.readerChannelCapacity.allowed.includes(readerChannel.capacity)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['readerChannel', 'capacity'],
-          message: 'Capacity is not allowed by config',
-        })
-      }
-      if (!config.senderChannelCapacity.allowed.includes(senderChannel.capacity)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['senderChannel', 'capacity'],
-          message: 'Capacity is not allowed by config',
-        })
       }
       if (
         reader.liveWorkers !== reader.idleWorkers + reader.readingWorkers + reader.blockedWorkers ||
@@ -552,13 +483,13 @@ function canDispatchConfigCommand(
     return false
   switch (command.type) {
     case 'set-requested-tps':
-      return isRangeValue(command.value, config.throttlerRequestedTps)
+      return isRangeValue(command.value, { min: 0, ...config.throttlerRequestedTps })
     case 'set-throttler-installed':
-      return config.throttlerInstalled.allowed.includes(command.value)
+      return typeof command.value === 'boolean'
     case 'set-sender-workers':
-      return isRangeValue(command.value, config.senderWorkers)
+      return isRangeValue(command.value, { min: 1, max: config.senderWorkers.max, step: 1 })
     case 'set-reader-workers':
-      return config.readerWorkers !== undefined && isRangeValue(command.value, config.readerWorkers)
+      return isRangeValue(command.value, { min: 1, max: config.readerWorkers.max, step: 1 })
   }
 }
 

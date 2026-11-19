@@ -392,10 +392,7 @@ function activeChannel<TChannel extends ChannelTelemetrySnapshot>(
     outputBatchesPerSecond: 10,
     sentBatchesTotal: 20,
     receivedBatchesTotal: 18,
-    capacity: {
-      ...channel.capacity,
-      applied,
-    },
+    capacity: applied,
   }
 }
 
@@ -547,7 +544,7 @@ describe('PipelineSvg rendering', () => {
       expect(controls[0]?.getAttribute('y')).toBe(String(geometry.batchLabel.anchor.y + 5))
       expect(geometry.batchLabel.anchor.y).toBeLessThan(geometry.actors.throttler.ports.input.y)
       expect(controls[0]?.textContent).toBe(
-        `Batch ${snapshot.reader.readBatchSize.applied?.toLocaleString('en-US')} tx`,
+        `Batch ${snapshot.reader.readBatchSize?.toLocaleString('en-US')} tx`,
       )
       expect(
         view.container.querySelector('#channel-reader-to-throttler .pipeline-batch-size'),
@@ -1111,46 +1108,42 @@ describe('PipelineSvg rendering', () => {
     }
   })
 
-  it('uses configured uneven capacity steps without showing backend channel controls', () => {
-    const base = activeSnapshot()
-    const capacity = {
-      initial: 1_024,
-      allowed: [0, 1_024, 8_192],
-      unit: 'batches',
-      mutability: 'startup-only',
-    }
-    const range = { initial: 1, min: 1, max: 1, step: 1, unit: 'workers', mutability: 'immediate' }
-    const readerChannel = activeChannel(base.readerChannel, capacity.initial)
-    const senderChannel = activeChannel(base.senderChannel, capacity.initial)
-    const snapshot: LoadgenSnapshot = {
-      ...base,
-      adapterKind: 'http',
-      config: {
-        readerReadBatchSize: range,
-        readerChannelCapacity: capacity,
-        senderChannelCapacity: capacity,
-        metricsWindowMs: range,
-        throttlerRequestedTps: range,
-        throttlerInstalled: { initial: true, allowed: [true, false], mutability: 'immediate' },
-        senderWorkers: range,
-      },
-      readerChannel: {
-        ...readerChannel,
-        capacity: { ...readerChannel.capacity, min: 0, max: 8_192, step: 1 },
-      },
-      senderChannel: {
-        ...senderChannel,
-        capacity: { ...senderChannel.capacity, min: 0, max: 8_192, step: 1 },
-      },
-    }
-    const view = renderPipeline(snapshot)
-    for (const channel of [snapshot.readerChannel, snapshot.senderChannel]) {
-      const group = view.container.querySelector(`#channel-${channel.id}`)!
-      expect(group.getAttribute('data-leg-count')).toBe('2')
-      expect(group.querySelector('[role="slider"]')).toBeNull()
-      expect(group.textContent).toContain('Depth 4 / 1,024 batches')
-    }
-  })
+  it.each(['simulation', 'http'] as const)(
+    'uses one capacity scale for both %s hoses',
+    (adapterKind) => {
+      const base = activeSnapshot()
+      const readerChannel = activeChannel(base.readerChannel, 100)
+      const senderChannel = activeChannel(base.senderChannel, 100)
+      const snapshot: LoadgenSnapshot = {
+        ...base,
+        adapterKind,
+        config:
+          adapterKind === 'http'
+            ? {
+                readerWorkers: { initial: 1, max: 7 },
+                senderWorkers: { initial: 1, max: 32 },
+                throttlerRequestedTps: { initial: 0, max: 250_000, step: 5_000 },
+              }
+            : null,
+        readerChannel: {
+          ...readerChannel,
+          capacity: 100,
+        },
+        senderChannel: {
+          ...senderChannel,
+          depthBatches: 75,
+          capacity: 100,
+        },
+      }
+      const view = renderPipeline(snapshot)
+      for (const channel of [snapshot.readerChannel, snapshot.senderChannel]) {
+        const group = view.container.querySelector(`#channel-${channel.id}`)!
+        expect(group.getAttribute('data-leg-count')).toBe('10')
+        expect(group.querySelector('[role="slider"]')).toBeNull()
+        expect(group.textContent).toContain(`Depth ${channel.depthBatches} / 100 batches`)
+      }
+    },
+  )
 
   it('keeps one uniform vacuum and an empty green senderChannel projection at drain end', () => {
     const base = activeSnapshot()
@@ -1202,10 +1195,7 @@ describe('PipelineSvg rendering', () => {
         oldestBlockedSenderMs: 10,
         displayedPressure: 1,
         flowState: 'backpressure',
-        capacity: {
-          ...base.readerChannel.capacity,
-          applied: 0,
-        },
+        capacity: 0,
       },
       senderChannel: {
         ...base.senderChannel,
@@ -1544,16 +1534,9 @@ describe('PipelineSvg rendering', () => {
   })
 
   it.each(['idle', 'stopping'] as const)(
-    'keeps known empty pools and zero-batch channel state visible in %s',
+    'keeps known empty pools and zero-flow channel state visible in %s',
     (state) => {
       const base = activeSnapshot()
-      const zeroBatch = (control: typeof base.reader.readBatchSize) => ({
-        ...control,
-        applied: 0,
-        min: 0,
-        preview: null,
-        pending: null,
-      })
       const zeroFlowChannel = (channel: typeof base.readerChannel) => ({
         ...channel,
         depthBatches: 0,
@@ -1582,7 +1565,7 @@ describe('PipelineSvg rendering', () => {
           drainingIdleWorkers: 0,
           drainingReadingWorkers: 0,
           drainingBlockedWorkers: 0,
-          readBatchSize: zeroBatch(base.reader.readBatchSize),
+          readBatchSize: 1_500,
         },
         sender: {
           ...base.sender,
@@ -1614,7 +1597,7 @@ describe('PipelineSvg rendering', () => {
       expect(
         view.container.querySelectorAll('#sender-actor .pipeline-worker--inactive'),
       ).toHaveLength(0)
-      expect(view.getAllByText('Batch 0 tx')).toHaveLength(1)
+      expect(view.getAllByText('Batch 1,500 tx')).toHaveLength(1)
     },
   )
 

@@ -54,8 +54,6 @@ Before starting, edit `config.toml` and set `[source].path` to an absolute glob 
 ```toml
 [source]
 path = '/home/user/datasets/transactions/fold=*/*.parquet'
-unit = "glob-pattern"
-mutability = "startup-only"
 ```
 
 Then start the server:
@@ -108,7 +106,7 @@ go run . set throttle true --url http://127.0.0.1:8080
 
 ## Configuration and delivery
 
-See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. Unknown or missing fields are rejected at startup. Explicit zero values are supported where valid.
+See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. LoadGen accepts only schema 4; old or mixed configurations are rejected. Startup batch size, capacities and metrics window are scalars; workers use initial/max, TPS uses initial/max/step with a server-defined zero minimum, and installed is a boolean. Unknown or missing fields are rejected at startup. Explicit zero values are supported where valid.
 
 | Setting | Purpose | When it can be changed |
 | --- | --- | --- |
@@ -120,7 +118,7 @@ See [loadgen/config.toml](loadgen/config.toml) for the current configuration exa
 | `throttler.requested_tps` | Requested transaction rate | At runtime |
 | `throttler.installed` | Enable or disable rate limiting | At runtime |
 | `sender.api.url` | HTTP delivery endpoint | At startup |
-| `sender.api.timeout_ms` | HTTP timeout per delivery attempt (default 30,000 ms in schema 3) | At startup |
+| `sender.api.timeout_ms` | HTTP timeout per delivery attempt (default 30,000 ms in schema 4) | At startup |
 | `sender.retry` | Positive, nondecreasing retry delays; jitter from 0% to 50% (example: 20%) | At startup |
 
 A capacity of `0` means an unbuffered Go channel. With the Throttler enabled, `0 TPS` holds batches; disabling the Throttler removes the rate limit. Rate limiting operates on whole batches: the delay is calculated from the batch size and requested TPS.
@@ -131,7 +129,7 @@ The HTTP Sender posts a JSON array with `Content-Type: application/json` and tre
 
 ## HTTP API and observability
 
-- `GET /api/loadgen/snapshot`: run status, stage and queue telemetry, and configuration.
+- `GET /api/loadgen/snapshot`: run status, stage and queue telemetry, and the three runtime control profiles (workers initial/max, TPS initial/max/step). Batch size and capacities appear only in stage/queue telemetry.
 - `HEAD /api/loadgen/snapshot`: the same response headers without a body.
 - `POST /api/loadgen/commands`: change live settings while the pipeline is running.
 - `GET /metrics`: Prometheus metrics.

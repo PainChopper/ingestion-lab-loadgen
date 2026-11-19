@@ -106,7 +106,7 @@ describe('SimulationAdapter', () => {
     try {
       const initial = adapter.getSnapshot()
       expect(initial.reader.workers.applied).toBe(5)
-      expect(initial.reader.readBatchSize.applied).toBe(1_000)
+      expect(initial.reader.readBatchSize).toBe(1_000)
       expect(initial.sender.workers.applied).toBe(3)
       expect(initial.throttler.requestedTps.max).toBe(250_000)
       expect(initial.sender.workers.max).toBe(32)
@@ -120,7 +120,7 @@ describe('SimulationAdapter', () => {
         const after = adapter.getSnapshot()
         const deliveredTps =
           ((after.sender.successfulResponses! - before.sender.successfulResponses!) *
-            initial.reader.readBatchSize.applied!) /
+            initial.reader.readBatchSize!) /
           30
 
         expect(after.sender.timeoutsTotal).toBe(0)
@@ -128,7 +128,7 @@ describe('SimulationAdapter', () => {
         if (workers < 32) {
           expect(deliveredTps).toBeLessThan(250_000)
           expect(after.senderChannel.depthBatches).toBeGreaterThanOrEqual(
-            after.senderChannel.capacity.applied! - 1,
+            after.senderChannel.capacity! - 1,
           )
           expect(after.senderChannel.blockedMs).toBeGreaterThan(before.senderChannel.blockedMs!)
           expect(after.reader.limitationReason).toBe('downstream-backpressure')

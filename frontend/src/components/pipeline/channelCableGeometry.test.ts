@@ -1,33 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import type { ChannelCapacitySnapshot } from '../../model/loadgen'
 import { createPipelineGeometry } from './geometry'
 import { getCapacityLegCount, getChannelCapacityGeometryPresentation } from './channelCableGeometry'
 
-const smallRange = { min: 0, max: 12, step: 1 }
-const readerChannelRange = { min: 0, max: 8_192, step: 1 }
-const configAllowed = [0, 1, 2, 8, 64, 512, 8_192] as const
-
-function capacityControl(applied: number, range = smallRange): ChannelCapacitySnapshot {
-  return {
-    applied,
-    ...range,
-    unit: 'batches',
-  }
-}
-
 describe('channel cable capacity geometry', () => {
-  it('maps confirmed HTTP capacity to logarithmic leg buckets', () => {
-    const capacity = (applied: number) => ({
-      applied,
-      min: 0,
-      max: 8_192,
-      step: 1,
-      unit: 'batches',
-    })
-
-    expect(
-      configAllowed.map((value) => getCapacityLegCount(capacity(value), configAllowed)),
-    ).toEqual([0, 2, 2, 4, 6, 10, 14])
+  it('adds two legs for each absolute batch-capacity threshold', () => {
+    const capacities = [null, 0, 1, 3, 4, 9, 10, 31, 32, 99, 100, 319, 320, 999, 1_000, 8_192]
+    expect(capacities.map(getCapacityLegCount)).toEqual([
+      0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14,
+    ])
   })
 
   it.each(['landscape', 'portrait'] as const)(
@@ -35,20 +15,7 @@ describe('channel cable capacity geometry', () => {
     (orientation) => {
       const start = orientation === 'landscape' ? { x: 150, y: 415 } : { x: 240, y: 260 }
       const end = orientation === 'landscape' ? { x: 355, y: 415 } : { x: 240, y: 520 }
-      const control = {
-        applied: 8_192,
-        min: 0,
-        max: 8_192,
-        step: 1,
-        unit: 'batches',
-      }
-      const geometry = getChannelCapacityGeometryPresentation(
-        control,
-        start,
-        end,
-        orientation,
-        configAllowed,
-      )
+      const geometry = getChannelCapacityGeometryPresentation(8_192, start, end, orientation)
 
       expect(geometry.legCount).toBe(14)
       expect(geometry.cablePath.match(orientation === 'landscape' ? /V/g : /H/g)).toHaveLength(14)
@@ -71,20 +38,12 @@ describe('channel cable capacity geometry', () => {
   )
 
   it('fits dense landscape geometry down only by even leg counts', () => {
-    const control = {
-      applied: 8_192,
-      min: 0,
-      max: 8_192,
-      step: 1,
-      unit: 'batches',
-    }
     const legCount = (width: number) =>
       getChannelCapacityGeometryPresentation(
-        control,
+        8_192,
         { x: 0, y: 415 },
         { x: width, y: 415 },
         'landscape',
-        configAllowed,
       ).legCount
 
     expect([
@@ -100,20 +59,13 @@ describe('channel cable capacity geometry', () => {
   })
 
   it('uses a direct path for zero capacity in both orientations', () => {
-    const control = {
-      applied: 0,
-      min: 0,
-      max: 12,
-      step: 1,
-      unit: 'batches',
-    }
     const landscape = getChannelCapacityGeometryPresentation(
-      control,
+      0,
       { x: 150, y: 415 },
       { x: 355, y: 415 },
     )
     const portrait = getChannelCapacityGeometryPresentation(
-      control,
+      0,
       { x: 240, y: 260 },
       { x: 240, y: 520 },
       'portrait',
@@ -126,8 +78,8 @@ describe('channel cable capacity geometry', () => {
   it('builds portrait channels from exact vertical endpoints without overflow', () => {
     const start = { x: 240, y: 268 }
     const end = { x: 240, y: 515 }
-    const zero = getChannelCapacityGeometryPresentation(capacityControl(0), start, end, 'portrait')
-    const full = getChannelCapacityGeometryPresentation(capacityControl(12), start, end, 'portrait')
+    const zero = getChannelCapacityGeometryPresentation(0, start, end, 'portrait')
+    const full = getChannelCapacityGeometryPresentation(1_000, start, end, 'portrait')
 
     expect(zero.cablePath).toBe('M240 268 L240 515')
     expect(full.cablePath.startsWith('M240 268')).toBe(true)
@@ -142,11 +94,10 @@ describe('channel cable capacity geometry', () => {
     })
     const channel = geometry.channels['reader-to-throttler']
     const presentation = getChannelCapacityGeometryPresentation(
-      capacityControl(applied),
+      applied,
       channel.start,
       channel.end,
       'portrait',
-      undefined,
       [geometry.batchLabel.guard],
     )
     const bypassX = geometry.batchLabel.guard.x + geometry.batchLabel.guard.width + 8
@@ -164,19 +115,17 @@ describe('channel cable capacity geometry', () => {
         readerWorkers: 7,
         senderWorkers: 32,
       })
-      const values = [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]
       for (const channel of Object.values(geometry.channels)) {
         const guard = { x: 70, y: channel.end.y - 196, width: 340, height: 188 }
         const presentation = getChannelCapacityGeometryPresentation(
-          capacityControl(applied, readerChannelRange),
+          applied,
           channel.start,
           channel.end,
           'portrait',
-          values,
           [guard],
         )
         expect(presentation.legCount).toBe(
-          applied === 0 ? 0 : applied === 8 ? 4 : applied === 64 ? 6 : 14,
+          applied === 0 ? 0 : applied === 8 ? 4 : applied === 64 ? 8 : 14,
         )
         const tokens = presentation.cablePath.match(/[MLHVQ]|-?\d+(?:\.\d+)?/g)!
         let point = channel.start

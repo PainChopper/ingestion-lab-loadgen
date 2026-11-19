@@ -41,43 +41,19 @@ export interface NumericControlSnapshot {
   readonly applyMode: ApplyMode
 }
 
-export interface RangeControlConfigSnapshot {
+export interface WorkersConfigSnapshot {
   readonly initial: number
-  readonly min: number
   readonly max: number
-  readonly step: number
-  readonly unit: string
-  readonly mutability: string
 }
 
-export interface AllowedControlConfigSnapshot {
-  readonly initial: number
-  readonly allowed: readonly number[]
-  readonly unit: string
-  readonly mutability: string
+export interface TpsConfigSnapshot extends WorkersConfigSnapshot {
+  readonly step: number
 }
 
 export interface LoadgenConfigSnapshot {
-  readonly readerReadBatchSize: RangeControlConfigSnapshot
-  readonly readerWorkers?: RangeControlConfigSnapshot
-  readonly readerChannelCapacity: AllowedControlConfigSnapshot
-  readonly senderChannelCapacity: AllowedControlConfigSnapshot
-  readonly metricsWindowMs: RangeControlConfigSnapshot
-  readonly throttlerRequestedTps: RangeControlConfigSnapshot
-  readonly throttlerInstalled: InstalledConfigSnapshot
-  readonly senderWorkers: RangeControlConfigSnapshot
-  readonly logging?: LoggingConfigSnapshot
-}
-
-export interface LoggingConfigSnapshot {
-  readonly level: 'debug' | 'info' | 'warn' | 'error'
-  readonly mutability: 'startup-only'
-}
-
-export interface InstalledConfigSnapshot {
-  readonly initial: boolean
-  readonly allowed: readonly boolean[]
-  readonly mutability: string
+  readonly readerWorkers: WorkersConfigSnapshot
+  readonly senderWorkers: WorkersConfigSnapshot
+  readonly throttlerRequestedTps: TpsConfigSnapshot
 }
 
 export interface InstalledControlSnapshot {
@@ -99,7 +75,7 @@ export interface ReaderSnapshot {
   readonly drainingIdleWorkers: number
   readonly drainingReadingWorkers: number
   readonly drainingBlockedWorkers: number
-  readonly readBatchSize: NumericControlSnapshot
+  readonly readBatchSize: number | null
   readonly readTps: number | null
   readonly configuredCapacityTps: number | null
   readonly limitationReason: ReaderLimitationReason | null
@@ -118,10 +94,7 @@ export interface ThrottlerSnapshot {
   readonly state: RunState
 }
 
-export type ChannelCapacitySnapshot = Pick<
-  NumericControlSnapshot,
-  'applied' | 'min' | 'max' | 'step' | 'unit'
->
+export type ChannelCapacitySnapshot = number | null
 
 export interface ChannelTelemetrySnapshot {
   readonly id: ChannelId
@@ -165,7 +138,7 @@ export interface SenderSnapshot {
   readonly drainingIdleWorkers: number
   readonly drainingInFlightWorkers: number
   readonly drainingBackoffWorkers: number
-  readonly timeoutMs: NumericControlSnapshot
+  readonly timeoutMs: number | null
   readonly retryPolicy: RetryPolicySnapshot | null
   readonly attemptedTps: number | null
   readonly retryAttemptedTps: number | null

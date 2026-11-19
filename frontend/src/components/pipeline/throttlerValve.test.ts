@@ -47,6 +47,30 @@ describe('throttler valve mapping', () => {
     expect(effectiveValveOpeningIndex(null, control({ applied: 25_000 }))).toBe(1)
   })
 
+  it.each([
+    { max: 400_001, step: 200_000, last: null },
+    { max: 400_001, step: 25_000, last: 400_000 },
+    { max: Number.MAX_SAFE_INTEGER, step: 3, last: 9_007_199_254_740_990 },
+    { max: 250_001, step: 5_000, last: 250_000 },
+    { max: 1_000_000_000_000_000, step: 3, last: 999_999_999_999_999 },
+  ])('uses only legal grid targets below off-grid max=$max', ({ max, step, last }) => {
+    const capability = control({ max, step })
+    const targets = getValveTargets(capability)
+    if (last === null) {
+      expect(targets).toBeNull()
+      expect(valveIsAdjustable(capability)).toBe(false)
+    } else {
+      expect(targets).toHaveLength(12)
+      expect(targets!.at(-1)).toBe(last)
+      expect(
+        targets!.every(
+          (target) =>
+            Number.isSafeInteger(target) && target >= 0 && target <= max && target % step === 0,
+        ),
+      ).toBe(true)
+    }
+  })
+
   it('keeps the 12-stop current TPS config mapping', () => {
     const currentConfig = control({
       applied: 2_000_000,

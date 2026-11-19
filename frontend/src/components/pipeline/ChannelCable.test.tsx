@@ -41,10 +41,7 @@ function channelSnapshot(channel: ChannelSnapshot, applied: number): ChannelSnap
   return {
     ...channel,
     depthBatches: applied,
-    capacity: {
-      ...channel.capacity,
-      applied,
-    },
+    capacity: applied,
   }
 }
 
@@ -52,7 +49,6 @@ function renderCable(
   snapshot: ChannelSnapshot,
   options: {
     onSelect?: (id: SelectableId) => void
-    capacityValues?: readonly number[]
     batchSize?: ChannelSnapshot['capacity']
   } = {},
 ) {
@@ -63,13 +59,7 @@ function renderCable(
         geometry={channels[snapshot.id]}
         selected={false}
         onSelect={options.onSelect ?? (() => undefined)}
-        capacityValues={options.capacityValues}
-        batchSize={
-          options.batchSize ?? {
-            ...snapshot.capacity,
-            applied: snapshot.capacity.min,
-          }
-        }
+        batchSize={options.batchSize ?? 1_000}
       />
     </svg>,
   )
@@ -79,9 +69,8 @@ describe('ChannelCable mounted behavior', () => {
   it('keeps batch thickness and capacity path independent', () => {
     const adapter = new SimulationAdapter()
     const channel = derivedSnapshot(adapter).readerChannel
-    const sourceBatch = adapter.getSnapshot().reader.readBatchSize
-    const lowBatch = { ...sourceBatch, applied: sourceBatch.min }
-    const highBatch = { ...sourceBatch, applied: sourceBatch.max }
+    const lowBatch = 1_000
+    const highBatch = 100_000
     const lowView = renderCable(channelSnapshot(channel, 1), {
       batchSize: lowBatch,
     })
@@ -108,24 +97,19 @@ describe('ChannelCable mounted behavior', () => {
       capacityView.container
         .querySelector('#channel-reader-to-throttler')
         ?.getAttribute('data-leg-count'),
-    ).toBe('14')
+    ).toBe('6')
     capacityView.unmount()
     adapter.dispose()
   })
 
   it('uses uniform rounded capacity turns and a direct path when no leg fits', () => {
-    const adapter = new SimulationAdapter()
-    const control = {
-      ...derivedSnapshot(adapter).readerChannel.capacity,
-      applied: derivedSnapshot(adapter).readerChannel.capacity.max,
-    }
     const full = getChannelCapacityGeometryPresentation(
-      control,
+      1_000,
       { x: 150, y: 415 },
       { x: 355, y: 415 },
     )
     const constrained = getChannelCapacityGeometryPresentation(
-      control,
+      1_000,
       { x: 150, y: 415 },
       { x: 200, y: 415 },
     )
@@ -135,7 +119,6 @@ describe('ChannelCable mounted behavior', () => {
     expect(full.cablePath).toMatch(/V/)
     expect(constrained.legCount).toBe(0)
     expect(constrained.cablePath).toBe('M150 415 L200 415')
-    adapter.dispose()
   })
 
   it('activates channel cables only from positive rates in running flow states', () => {
@@ -257,7 +240,7 @@ describe('ChannelCable mounted behavior', () => {
           geometry={channels[base.id]}
           selected={false}
           onSelect={() => undefined}
-          batchSize={{ ...base.capacity, applied: base.capacity.min }}
+          batchSize={1_000}
         />
       </svg>,
     )

@@ -40,9 +40,9 @@ export interface InspectorViewModel {
   readonly sections?: ReadonlyArray<InspectorSection>
 }
 
-function formatControl(control: ChannelCapacitySnapshot, unit = control.unit): string {
-  const value = formatInteger(control.applied)
-  return value === '—' ? value : `${value} ${unit}`
+function formatControl(control: ChannelCapacitySnapshot): string {
+  const value = formatInteger(control)
+  return value === '—' ? value : `${value} batches`
 }
 
 function unavailableRow(): InspectorRow {
