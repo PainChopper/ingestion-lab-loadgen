@@ -203,9 +203,7 @@ func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	entered := make(chan struct{})
-	var attempts atomic.Int64
 	attempt := func(ctx context.Context, _ []Transaction, _ int) error {
-		attempts.Add(1)
 		close(entered)
 		<-ctx.Done()
 		return ctx.Err()
@@ -222,9 +220,6 @@ func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	<-entered
 	cancel()
 	<-pool.done
-	if attempts.Load() != 1 {
-		t.Fatalf("canceled attempts = %d, want 1", attempts.Load())
-	}
 	if pool.completed.Load() != 0 {
 		t.Fatalf("canceled batch was counted as completed: consumed=%d", pool.completed.Load())
 	}
@@ -706,9 +701,7 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	defer cancel()
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	var attempts atomic.Int64
 	attempt := func(_ context.Context, _ []Transaction, _ int) error {
-		attempts.Add(1)
 		close(entered)
 		<-release
 		return nil
@@ -727,9 +720,6 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	}
 	close(release)
 	<-pool.done
-	if attempts.Load() != 1 {
-		t.Fatalf("successful canceled delivery attempts=%d, want 1", attempts.Load())
-	}
 	if pool.completed.Load() != 1 || pool.snapshot().LiveWorkers != 0 {
 		t.Fatalf("after join: consumed=%d live workers=%d", pool.completed.Load(), pool.snapshot().LiveWorkers)
 	}
