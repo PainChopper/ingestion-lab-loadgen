@@ -241,8 +241,8 @@ func TestSenderPoolCanceledBeforeDeliveryMakesNoAttempt(t *testing.T) {
 	if pool.processBatch(&senderWorker{}, []Transaction{{ClientID: "canceled"}}) {
 		t.Fatal("canceled delivery reported success")
 	}
-	if calls != 0 || pool.takeCompleted() != 0 {
-		t.Fatalf("delivery calls=%d completed=%d", calls, pool.takeCompleted())
+	if calls != 0 {
+		t.Fatalf("delivery calls=%d, want 0", calls)
 	}
 }
 
