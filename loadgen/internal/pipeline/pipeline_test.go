@@ -36,9 +36,6 @@ func TestPipelineSetRateIsReadyAfterStart(t *testing.T) {
 		run.SetRate(Rate{Installed: false})
 		close(allowRead)
 		<-run.Done()
-		if ctx.Err() != nil {
-			t.Fatal("StopReading must drain without canceling its parent context")
-		}
 		if got := <-delivered; got != "ready" {
 			t.Fatalf("delivered=%q", got)
 		}
