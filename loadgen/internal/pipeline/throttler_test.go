@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"reflect"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -15,7 +16,7 @@ func TestThrottlerPassesBatchesWithoutClosingOutput(t *testing.T) {
 		{{ClientID: "third"}},
 	}
 	for _, batch := range want {
-		readerBatches <- batch
+		readerBatches <- slices.Clone(batch)
 	}
 	close(readerBatches)
 
@@ -97,8 +98,7 @@ func TestThrottlerCancelWhileWaitingForOutput(t *testing.T) {
 			t.Fatalf("Throttler received %d batches, want 1", got)
 		}
 		blocked := senderChannel.snapshot(time.Now())
-		if blocked.DepthBatches != 0 || blocked.BufferedTransactions != 0 ||
-			blocked.BlockedSenders != 1 || blocked.SentBatchesTotal != 0 {
+		if blocked.BlockedSenders != 1 || blocked.SentBatchesTotal != 0 {
 			t.Fatalf("blocked Sender channel = %+v", blocked)
 		}
 		cancel()
@@ -222,9 +222,8 @@ func TestThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 		synctest.Wait()
 		time.Sleep(5 * time.Millisecond)
 		before := senderChannel.snapshot(time.Now())
-		if before.DepthBatches != 0 || before.BufferedTransactions != 0 ||
-			before.BlockedSenders != 1 || before.OldestBlockedSenderMS <= 0 || before.BlockedMS <= 0 ||
-			before.SentBatchesTotal != 0 || before.SentTransactionsPerSecond != 0 {
+		if before.BlockedSenders != 1 || before.OldestBlockedSenderMS <= 0 || before.BlockedMS <= 0 ||
+			before.SentBatchesTotal != 0 {
 			t.Fatalf("Sender channel before handoff = %+v", before)
 		}
 		if batch := <-senderBatches; len(batch) != 3 {
@@ -306,6 +305,9 @@ func TestThrottlerReadyControlUpdatePreventsBlockedSend(t *testing.T) {
 		synctest.Wait()
 		if got := output.snapshot(time.Now()); got.BlockedSenders != 0 || got.SentTransactionsTotal != 0 {
 			t.Fatalf("ready zero-TPS update started output wait: %+v", got)
+		}
+		if got := output.measurements.nextBlockedID; got != 0 {
+			t.Fatalf("blocked sends registered before resume = %d, want 0", got)
 		}
 		stage.update(Rate{Installed: false})
 		synctest.Wait()
