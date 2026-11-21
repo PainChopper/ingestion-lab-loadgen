@@ -18,6 +18,69 @@ const CONFIG: SimulationConfig = {
 }
 
 describe('FixedStepSimulation pipeline batch', () => {
+  it.each([0, 2])('reuses the first idle Sender at capacity %i', (capacity) => {
+    const simulation = new FixedStepSimulation(
+      { ...CONFIG, senderWorkers: 2, readBatchSize: 500 },
+      0,
+      capacity,
+      () => ({ kind: 'http-response', statusCode: 200, latencyMs: 0 }),
+    )
+
+    simulation.advanceStep()
+    simulation.advanceStep()
+
+    expect(simulation.telemetry().sender.workerStates).toEqual([
+      { activity: 'inFlight', draining: false },
+      { activity: 'idle', draining: false },
+    ])
+    expect(simulation.telemetry().senderChannel.outputTransactionsTotal).toBe(1_000)
+  })
+
+  it.each([0, 2])('waits for an active Sender at capacity %i during scale-down', (capacity) => {
+    const attempts: SimulationAttemptContext[] = []
+    const simulation = new FixedStepSimulation(
+      {
+        ...CONFIG,
+        readerWorkers: 4,
+        senderWorkers: 4,
+        readBatchSize: 500,
+        throttlerInstalled: false,
+      },
+      0,
+      capacity,
+      (context) => {
+        attempts.push(context)
+        return {
+          kind: 'http-response',
+          statusCode: 200,
+          latencyMs: context.batch.sequence === 0 ? 30 : context.batch.sequence === 1 ? 100 : 0,
+        }
+      },
+    )
+
+    simulation.advanceStep()
+    simulation.updateConfig({ readerWorkers: 1, senderWorkers: 1 })
+    simulation.advanceStep()
+    const waiting = simulation.telemetry()
+
+    expect(waiting.sender.workerStates).toEqual([
+      { activity: 'inFlight', draining: false },
+      { activity: 'inFlight', draining: true },
+      { activity: 'idle', draining: true },
+      { activity: 'idle', draining: true },
+    ])
+    expect(attempts).toHaveLength(4)
+    expect(waiting.senderChannel.outputTransactionsTotal).toBe(2_000)
+    expect(waiting.senderChannel.depthBatches).toBe(capacity === 0 ? 0 : 1)
+
+    simulation.advanceStep()
+    expect(attempts).toHaveLength(4)
+    expect(simulation.telemetry().senderChannel.outputTransactionsTotal).toBe(2_000)
+    simulation.advanceStep()
+    expect(attempts[4].batch.sequence).toBe(4)
+    expect(simulation.telemetry().senderChannel.outputTransactionsTotal).toBe(2_500)
+  })
+
   it.each([
     { name: 'success', kind: 'http-response', statusCode: 204, confirmed: 5_000 },
     { name: 'permanent rejection', kind: 'http-response', statusCode: 400, confirmed: 0 },

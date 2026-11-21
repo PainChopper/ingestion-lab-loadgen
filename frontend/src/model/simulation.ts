@@ -100,7 +100,6 @@ interface ReaderProductionResult extends AdmissionResult {
 type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
 
 interface SenderWorker {
-  readonly workerId: number
   retiring: boolean
   state: SenderWorkerState
   batch: SimulationBatch | null
@@ -124,9 +123,8 @@ function createStepActivity(): StepActivity {
   }
 }
 
-function createWorker(workerId: number): SenderWorker {
+function createWorker(): SenderWorker {
   return {
-    workerId,
     retiring: false,
     state: 'idle',
     batch: null,
@@ -245,7 +243,6 @@ export class FixedStepSimulation {
   private readonly senderChannel: StatefulChannel<SimulationBatch>
   private readonly attemptOutcomeSource: SimulationAttemptOutcomeSource | undefined
   private workers: SenderWorker[]
-  private nextWorkerIndex = 0
   private readerTransactionCredit = 0
   private throttlerTokens = 0
   private pendingThrottledBatch: {
@@ -269,10 +266,7 @@ export class FixedStepSimulation {
     this.readerChannel = new StatefulChannel(readerChannelCapacity, (batch) => batch.transactions)
     this.senderChannel = new StatefulChannel(senderChannelCapacity, (batch) => batch.transactions)
     this.attemptOutcomeSource = attemptOutcomeSource
-    this.workers = Array.from({ length: config.senderWorkers }, (_, ordinal) =>
-      createWorker(ordinal),
-    )
-    this.nextWorkerIndex = 0
+    this.workers = Array.from({ length: config.senderWorkers }, () => createWorker())
   }
 
   advanceStep(): void {
@@ -626,11 +620,8 @@ export class FixedStepSimulation {
   }
 
   private nextIdleWorker(): SenderWorker | null {
-    for (let offset = 0; offset < this.workers.length; offset += 1) {
-      const index = (this.nextWorkerIndex + offset) % this.workers.length
-      const worker = this.workers[index]
+    for (const worker of this.workers) {
       if (worker.retiring || worker.state !== 'idle') continue
-      this.nextWorkerIndex = (index + 1) % this.workers.length
       return worker
     }
     return null
@@ -643,7 +634,7 @@ export class FixedStepSimulation {
     if (requested > this.workers.length) {
       const firstOrdinal = this.workers.length
       for (let ordinal = firstOrdinal; ordinal < requested; ordinal += 1) {
-        this.workers.push(createWorker(ordinal))
+        this.workers.push(createWorker())
       }
       return
     }
@@ -662,6 +653,5 @@ export class FixedStepSimulation {
       return
     }
     this.workers = this.workers.filter((worker) => !worker.retiring)
-    this.nextWorkerIndex %= this.workers.length
   }
 }
