@@ -224,7 +224,6 @@ func TestSenderPoolRetriesHTTPInputErrorsUntilSuccess(t *testing.T) {
 			batches := make(chan []Transaction)
 			var channel batchQueue
 			channel.ch = batches
-			channel.batchSize = 0
 
 			config := testSenderOptions()
 			config.RetryDelays = []time.Duration{1 * time.Millisecond}
@@ -276,7 +275,6 @@ func TestSenderPoolReusesConnectionsAcrossConcurrentWaves(t *testing.T) {
 			batches := make(chan []Transaction)
 			var telemetry batchQueue
 			telemetry.ch = batches
-			telemetry.batchSize = 0
 
 			config := testSenderOptions()
 			config.SenderURL = server.URL
@@ -346,7 +344,6 @@ func TestSenderPoolEntersBackoffWhenReceiverTimesOut(t *testing.T) {
 	batches := make(chan []Transaction)
 	var telemetry batchQueue
 	telemetry.ch = batches
-	telemetry.batchSize = 0
 
 	config := testSenderOptions()
 	config.SenderURL = server.URL

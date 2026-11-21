@@ -38,7 +38,7 @@
       "post": {
         "operationId": "executeCommand",
         "summary": "Change a live setting",
-        "description": "Choose one action in the request body. Workers accept integers 1..max (step 1); TPS accepts 0..max aligned to step from zero. The three runtime profiles come from GET /api/loadgen/snapshot under config. Installed accepts true or false. Commands are only accepted while the pipeline is running. Unknown fields and trailing JSON are rejected. The server does not check Content-Type or Accept request headers.",
+        "description": "Choose one action in the request body. Workers accept integers 1..max; TPS accepts any integer 0..max inclusive. Limits and immutable startup settings come from GET /api/loadgen/snapshot under config. Installed accepts true or false. Commands are only accepted while the pipeline is running. Unknown fields and trailing JSON are rejected. The server does not check Content-Type or Accept request headers.",
         "requestBody": {
           "required": true,
           "content": {
@@ -46,7 +46,7 @@
               "schema": { "$ref": "#/components/schemas/Command" },
               "examples": {
                 "readerWorkers": { "value": { "action": "set-reader-workers", "value": 2 } },
-                "requestedTPS": { "value": { "action": "set-requested-tps", "value": 2000000 } },
+                "requestedTPS": { "value": { "action": "set-requested-tps", "value": 2000001 } },
                 "installed": { "value": { "action": "set-throttler-installed", "value": true } },
                 "senderWorkers": { "value": { "action": "set-sender-workers", "value": 32 } }
               }
@@ -103,29 +103,29 @@
       },
       "ReaderWorkersCommand": {
         "type": "object", "additionalProperties": false,
-        "x-config-key": "readerWorkers",
+        "x-config-key": "readerWorkersMax",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-reader-workers"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.readerWorkers." }
+          "value": { "type": "integer", "format": "int64", "description": "Any integer from 1 through snapshot.config.readerWorkersMax." }
         }
       },
       "RequestedTPSCommand": {
         "type": "object", "additionalProperties": false,
-        "x-config-key": "throttlerRequestedTps",
+        "x-config-key": "requestedTpsMax",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-requested-tps"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.throttlerRequestedTps." }
+          "value": { "type": "integer", "format": "int64", "description": "Any integer from 0 through snapshot.config.requestedTpsMax inclusive." }
         }
       },
       "SenderWorkersCommand": {
         "type": "object", "additionalProperties": false,
-        "x-config-key": "senderWorkers",
+        "x-config-key": "senderWorkersMax",
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-sender-workers"] },
-          "value": { "type": "integer", "format": "int64", "description": "Allowed values are published in snapshot.config.senderWorkers." }
+          "value": { "type": "integer", "format": "int64", "description": "Any integer from 1 through snapshot.config.senderWorkersMax." }
         }
       },
       "InstalledCommand": {
@@ -161,12 +161,12 @@
       },
       "ReaderStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["workers", "workerStates", "readBatchSize", "rowsRead", "sourceDirectory", "sourceError"],
+        "required": ["workers", "workerStates", "rowsRead", "sourceError"],
         "properties": {
           "workers": { "type": "integer" },
           "workerStates": { "type": "array", "items": { "$ref": "#/components/schemas/ReaderWorkerState" }, "description": "Live workers in unspecified order; repeated states are allowed. workers remains the configured target." },
-          "readBatchSize": { "type": "integer", "minimum": 1, "maximum": 9223372036, "description": "Applied startup batch size; bounded by Go int and safe batch pacing duration arithmetic." }, "rowsRead": { "type": "integer", "format": "int64" },
-          "sourceDirectory": { "type": "string" }, "sourceError": { "$ref": "#/components/schemas/ReaderSourceError" }
+          "rowsRead": { "type": "integer", "format": "int64" },
+          "sourceError": { "$ref": "#/components/schemas/ReaderSourceError" }
         }
       },
       "ReaderWorkerState": {
@@ -179,8 +179,8 @@
       },
       "ReaderSourceError": {
         "type": "object", "nullable": true, "additionalProperties": false,
-        "required": ["category", "operation", "relativePath", "message"],
-        "properties": { "category": { "type": "string" }, "operation": { "type": "string" }, "relativePath": { "type": "string" }, "message": { "type": "string" } }
+        "required": ["operation", "path", "message"],
+        "properties": { "operation": { "type": "string" }, "path": { "type": "string", "description": "Exact path passed to the file opener, or the original glob pattern for discovery failures." }, "message": { "type": "string" } }
       },
       "ThrottlerStatus": {
         "type": "object", "additionalProperties": false,
@@ -205,15 +205,26 @@
       },
       "ChannelStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["capacity", "depthBatches", "bufferedTransactions", "blockedSenders", "oldestBlockedSenderMs", "blockedMs", "inputTransactionsTotal", "outputTransactionsTotal"],
+        "required": ["depthBatches", "blockedSenders", "oldestBlockedSenderMs", "blockedMs", "inputTransactionsTotal", "outputTransactionsTotal"],
         "properties": {
-          "capacity": { "type": "integer" }, "depthBatches": { "type": "integer" }, "bufferedTransactions": { "type": "integer" }, "blockedSenders": { "type": "integer" }, "oldestBlockedSenderMs": { "type": "integer", "format": "int64" }, "blockedMs": { "type": "integer", "format": "int64" },
+          "depthBatches": { "type": "integer" }, "blockedSenders": { "type": "integer" }, "oldestBlockedSenderMs": { "type": "integer", "format": "int64" }, "blockedMs": { "type": "integer", "format": "int64" },
           "inputTransactionsTotal": { "type": "integer", "format": "int64", "minimum": 0 }, "outputTransactionsTotal": { "type": "integer", "format": "int64", "minimum": 0 }
         }
       },
-      "ConfigStatus": {"type": "object", "additionalProperties": false, "required": ["readerWorkers", "senderWorkers", "throttlerRequestedTps"], "properties": {"readerWorkers": {"$ref": "#/components/schemas/WorkersConfig"}, "senderWorkers": {"$ref": "#/components/schemas/WorkersConfig"}, "throttlerRequestedTps": {"$ref": "#/components/schemas/TPSConfig"}}},
-      "WorkersConfig": {"type": "object", "additionalProperties": false, "required": ["initial", "max"], "description": "Worker commands accept integers 1..max with step 1. Initial is the configured startup count.", "properties": {"initial": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}, "max": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}},
-      "TPSConfig": {"type": "object", "additionalProperties": false, "required": ["initial", "max", "step"], "description": "TPS commands accept 0..max on the step grid from zero. An off-grid max is a bound, not an allowed command.", "properties": {"initial": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}, "max": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}, "step": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}}}
+      "ConfigStatus": {
+        "type": "object", "additionalProperties": false,
+        "description": "Immutable startup settings and runtime limits; live values remain in stage telemetry.",
+        "required": ["readerWorkersMax", "senderWorkersMax", "requestedTpsMax", "readBatchSize", "readerChannelCapacity", "senderChannelCapacity", "sourcePath"],
+        "properties": {
+          "readerWorkersMax": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+          "senderWorkersMax": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+          "requestedTpsMax": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+          "readBatchSize": {"type": "integer", "minimum": 1, "maximum": 9223372036, "description": "Startup batch size; bounded by Go int and safe batch pacing duration arithmetic."},
+          "readerChannelCapacity": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+          "senderChannelCapacity": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+          "sourcePath": {"type": "string", "description": "Configured source.path glob exactly as supplied; relative paths resolve from the server working directory."}
+        }
+      }
     }
   }
 }

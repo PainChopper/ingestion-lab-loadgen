@@ -20,8 +20,8 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 				{Activity: readerWireReading}, {Activity: readerWireReading},
 				{Activity: readerWireBlocked, Draining: true}, {Activity: readerWireIdle},
 			},
-			ReadBatchSize: 20, RowsRead: 22, SourceDirectory: "reader-source",
-			SourceError: &readerSourceError{Category: "reader-category", Operation: "reader-operation", RelativePath: "reader-path", Message: "reader-message"},
+			RowsRead:    22,
+			SourceError: &readerSourceError{Operation: "reader-operation", Path: "reader-path", Message: "reader-message"},
 		},
 		Throttler: throttlerSnapshot{RequestedTps: 31, Installed: false},
 		Sender: senderSnapshot{
@@ -32,18 +32,22 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 			},
 		},
 		ReaderChannel: channelSnapshot{
-			Capacity: 51, DepthBatches: 52, BufferedTransactions: 53, BlockedSenders: 54, OldestBlockedSenderMs: 55,
+			DepthBatches: 52, BlockedSenders: 54, OldestBlockedSenderMs: 55,
 			BlockedMs:               56,
 			InputTransactionsTotal:  62,
 			OutputTransactionsTotal: 64,
 		},
 		SenderChannel: channelSnapshot{
-			Capacity: 71, DepthBatches: 72, BufferedTransactions: 73, BlockedSenders: 74, OldestBlockedSenderMs: 75,
+			DepthBatches: 72, BlockedSenders: 74, OldestBlockedSenderMs: 75,
 			BlockedMs:               76,
 			InputTransactionsTotal:  82,
 			OutputTransactionsTotal: 84,
 		},
-		Config: snapshotConfig(testConfig(t)),
+		Config: configSnapshot{
+			ReaderWorkersMax: 7, SenderWorkersMax: 32, RequestedTpsMax: 4000000,
+			ReadBatchSize: 20, ReaderChannelCapacity: 51, SenderChannelCapacity: 71,
+			SourcePath: "reader-source",
+		},
 	}
 
 	encoded, err := json.Marshal(want)
@@ -85,15 +89,15 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 		"reader_workers":   int64(11), "reader_live_workers": int64(4),
 		"throttler_requested_tps": int64(31), "installed": false,
 		"reader_channel_capacity": int64(51), "reader_channel_depth_batches": int64(52),
-		"reader_channel_buffered_transactions": int64(53), "reader_channel_blocked_senders": int64(54),
+		"reader_channel_blocked_senders":   int64(54),
 		"reader_channel_oldest_blocked_ms": int64(55), "reader_channel_blocked_ms": int64(56),
 		"reader_channel_input_transactions_total": int64(62), "reader_channel_output_transactions_total": int64(64),
 		"sender_channel_capacity": int64(71), "sender_channel_depth_batches": int64(72),
-		"sender_channel_buffered_transactions": int64(73), "sender_channel_blocked_senders": int64(74),
+		"sender_channel_blocked_senders":   int64(74),
 		"sender_channel_oldest_blocked_ms": int64(75), "sender_channel_blocked_ms": int64(76),
 		"sender_channel_input_transactions_total": int64(82), "sender_channel_output_transactions_total": int64(84),
 		"sender_workers": int64(41), "sender_live_workers": int64(5),
-		"source_error_category": "reader-category", "source_error_operation": "reader-operation", "source_error_relative_path": "reader-path",
+		"source_error_operation": "reader-operation", "source_error_path": "reader-path",
 	}
 	for _, name := range []string{"source error", "no source error"} {
 		t.Run(name, func(t *testing.T) {
@@ -101,9 +105,8 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 			want := maps.Clone(want)
 			if name == "no source error" {
 				snapshot.Reader.SourceError = nil
-				want["source_error_category"] = ""
 				want["source_error_operation"] = ""
-				want["source_error_relative_path"] = ""
+				want["source_error_path"] = ""
 			}
 			core, entries := observer.New(zap.InfoLevel)
 			zap.New(core).Info("summary", snapshotLogFields(snapshot)...)

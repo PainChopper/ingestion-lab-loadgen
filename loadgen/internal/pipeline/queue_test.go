@@ -7,16 +7,15 @@ import (
 	"time"
 )
 
-func TestBatchQueueReportsBufferedBatchesAndTransactions(t *testing.T) {
+func TestBatchQueueReportsDepthBatches(t *testing.T) {
 	batches := make(chan []Transaction, 3)
 	batches <- make([]Transaction, 3)
 	batches <- make([]Transaction, 3)
 
 	var telemetry batchQueue
 	telemetry.ch = batches
-	telemetry.batchSize = 3
 	measurements := telemetry.snapshot(time.Now())
-	if measurements.Capacity != 3 || measurements.DepthBatches != 2 || measurements.BufferedTransactions != 6 {
+	if measurements.DepthBatches != 2 {
 		t.Fatalf("readerChannel measurements = %+v", measurements)
 	}
 }
@@ -28,7 +27,6 @@ func TestBatchQueueMeasuresBlockedSendUntilQueueReceives(t *testing.T) {
 
 		var telemetry batchQueue
 		telemetry.ch = batches
-		telemetry.batchSize = 1
 		ctx := t.Context()
 		sent := make(chan bool, 1)
 		go func() {
@@ -37,7 +35,7 @@ func TestBatchQueueMeasuresBlockedSendUntilQueueReceives(t *testing.T) {
 
 		assertBlockedSender(t, &telemetry)
 		blocked := telemetry.snapshot(time.Now())
-		if blocked.DepthBatches != 1 || blocked.BufferedTransactions != 1 ||
+		if blocked.DepthBatches != 1 ||
 			blocked.SentBatchesTotal != 0 || blocked.SentTransactionsTotal != 0 {
 			t.Fatalf("blocked readerChannel measurements = %+v", blocked)
 		}
@@ -110,7 +108,6 @@ func TestBatchQueueConcurrentSendsKeepSecondWriterBlocked(t *testing.T) {
 		batches <- []Transaction{{}}
 		var telemetry batchQueue
 		telemetry.ch = batches
-		telemetry.batchSize = 1
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		sent := make(chan bool, 2)
@@ -137,7 +134,6 @@ func TestBatchQueueCountsSuccessfulTransfers(t *testing.T) {
 	batches := make(chan []Transaction, 2)
 	var telemetry batchQueue
 	telemetry.ch = batches
-	telemetry.batchSize = 2
 	if !telemetry.trySend(make([]Transaction, 3)) {
 		t.Fatal("first send failed")
 	}
@@ -160,7 +156,6 @@ func TestBatchQueueUnbufferedHandoffCountsOnlyAfterSend(t *testing.T) {
 		batches := make(chan []Transaction)
 		var telemetry batchQueue
 		telemetry.ch = batches
-		telemetry.batchSize = 2
 		ctx := t.Context()
 		sent := make(chan bool, 1)
 		go func() {

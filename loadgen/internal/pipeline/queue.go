@@ -8,9 +8,7 @@ import (
 )
 
 type QueueSnapshot struct {
-	Capacity                  int
 	DepthBatches              int
-	BufferedTransactions      int
 	BlockedSenders            int
 	OldestBlockedSenderMS     int64
 	BlockedMS                 int64
@@ -35,7 +33,6 @@ type batchQueue struct {
 	mu sync.Mutex
 
 	ch           chan []Transaction
-	batchSize    int
 	measurements queueMeasurements
 }
 
@@ -45,8 +42,8 @@ type blockedChannelSend struct {
 	blockedID uint64
 }
 
-func newBatchQueue(capacity, batchSize int) *batchQueue {
-	return &batchQueue{ch: make(chan []Transaction, capacity), batchSize: batchSize}
+func newBatchQueue(capacity int) *batchQueue {
+	return &batchQueue{ch: make(chan []Transaction, capacity)}
 }
 
 func (q *batchQueue) trySend(batch []Transaction) bool {
@@ -81,14 +78,12 @@ func (send blockedChannelSend) wait(ctx context.Context) bool {
 
 func (q *batchQueue) snapshot(now time.Time) QueueSnapshot {
 	measurements := QueueSnapshot{
-		Capacity:                  cap(q.ch),
 		DepthBatches:              len(q.ch),
 		SentBatchesTotal:          q.measurements.sentBatchesTotal.Load(),
 		SentTransactionsTotal:     q.measurements.sentTransactionsTotal.Load(),
 		ReceivedBatchesTotal:      q.measurements.receivedBatchesTotal.Load(),
 		ReceivedTransactionsTotal: q.measurements.receivedTransactionsTotal.Load(),
 	}
-	measurements.BufferedTransactions = measurements.DepthBatches * q.batchSize
 
 	q.mu.Lock()
 	defer q.mu.Unlock()

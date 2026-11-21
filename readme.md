@@ -49,7 +49,7 @@ From the repository root:
 cd loadgen
 ```
 
-Before starting, edit `config.toml` and set `[source].path` to an absolute glob pattern for your dataset, for example:
+The example `[source].path` is `../data/MBD-mini/trx/fold=*/*.parquet`, resolved from the server working directory (`loadgen/` for the commands below). Set it to your dataset; an absolute glob also works, for example:
 
 ```toml
 [source]
@@ -100,18 +100,18 @@ From the `loadgen/` directory, with the backend already running:
 go run . status --url http://127.0.0.1:8080
 go run . set readers 2 --url http://127.0.0.1:8080
 go run . set senders 4 --url http://127.0.0.1:8080
-go run . set tps 200000 --url http://127.0.0.1:8080
+go run . set tps 2000001 --url http://127.0.0.1:8080
 go run . set throttle true --url http://127.0.0.1:8080
 ```
 
 ## Configuration and delivery
 
-See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. Configuration is unversioned. Startup batch size and capacities are scalars; workers use initial/max, TPS uses initial/max/step with a server-defined zero minimum, and installed is a boolean. Section and key names are case-sensitive; unknown keys and sections, including empty sections, and missing fields are rejected at startup. Explicit zero values are supported where valid. Changes to a key's meaning, units or allowed values require a new key name, including for optional keys; the old name is rejected as unknown.
+See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. Configuration is unversioned. Startup batch size and capacities are scalars; workers use initial/max, TPS uses initial/max and accepts any integer from zero to max inclusive, and installed is a boolean. Section and key names are case-sensitive; unknown keys and sections, including empty sections, and missing fields are rejected at startup. Explicit zero values are supported where valid. Changes to a key's meaning, units or allowed values require a new key name, including for optional keys; the old name is rejected as unknown.
 
 | Setting | Purpose | When it can be changed |
 | --- | --- | --- |
 | `http.addr` | HTTP server address | At startup |
-| `source.path` | Absolute glob pattern for Parquet files | At startup |
+| `source.path` | Glob pattern for Parquet files, relative to the server working directory or absolute | At startup |
 | `reader.read_batch_size` | Transactions per Reader batch | At startup |
 | `reader.workers`, `sender.workers` | Worker counts | At runtime |
 | `readerChannel.capacity`, `senderChannel.capacity` | Queue capacity in batches | At startup |
@@ -129,7 +129,7 @@ The HTTP Sender posts a JSON array with `Content-Type: application/json` and tre
 
 ## HTTP API and observability
 
-- `GET /api/loadgen/snapshot`: run status, stage and queue telemetry, and the three runtime control profiles (workers initial/max, TPS initial/max/step). Batch size and capacities appear only in stage/queue telemetry.
+- `GET /api/loadgen/snapshot`: run status and live stage/queue telemetry. The immutable `config` object contains `readerWorkersMax`, `senderWorkersMax`, `requestedTpsMax`, `readBatchSize`, `readerChannelCapacity`, `senderChannelCapacity`, and `sourcePath`.
 - `HEAD /api/loadgen/snapshot`: the same response headers without a body.
 - `POST /api/loadgen/commands`: change live settings while the pipeline is running.
 - `GET /metrics`: Prometheus metrics.
@@ -137,14 +137,16 @@ The HTTP Sender posts a JSON array with `Content-Type: application/json` and tre
 
 Snapshots expose cumulative `reader.rowsRead`, channel `inputTransactionsTotal`/`outputTransactionsTotal`, channel `blockedMs`, and confirmed `run.totalTransactions`. They never reset during the process, including retries, pool downscale and shutdown. The root `capturedAtMs` uses the server's monotonic clock from one service startup origin. All observations use one capture time and are read sequentially; brief differences between counters are possible while workers make progress. Clients calculate rates from counter differences and server capture-time differences. The first observation, a repeated capture time, or a decreased counter/time after restart gives no rate for that interval and establishes the next baseline.
 
+Source errors expose `operation`, the exact file `path` (or glob pattern for discovery failures), and `message`. CLI displays the configured source glob and labels queued transactions as an approximation of `depthBatches × config.readBatchSize`; partial batches can contain fewer transactions.
+
 CLI `status` makes one snapshot request and shows explicitly labelled average TPS since the run started (total divided by `run.elapsedMs`), including admitted TPS from the Sender channel's input total. Before the run starts, averages are zero. Prometheus `loadgen_transactions_total` reads current confirmations at every scrape; `loadgen_target_tps` remains the configured target. Runtime summaries have their own one-minute timer and log cumulative channel totals.
 
 Reader and Sender snapshots expose `workerStates`: a list of live workers, each with `activity` and `draining`. Reader activities are `idle`, `reading`, and `blocked`; Sender activities are `idle`, `inFlight`, and `backoff`. A blocked Reader still owns its file, and a Sender in backoff still owns its batch. The independent `draining` flag prevents new work after current work finishes. Lists are empty (`[]`) before startup, allow repeated states, and have no ordering guarantee. `workers` remains the configured target; during downscale it can be smaller than the list length. CLI displays counts derived from these lists; runtime summaries log only the target and live count for each pool.
 
-Example command body:
+Example command body (accepted with the example maximum of 4000000):
 
 ```json
-{"action":"set-requested-tps","value":200000}
+{"action":"set-requested-tps","value":2000001}
 ```
 
 Supported actions: `set-reader-workers`, `set-sender-workers`, `set-requested-tps`, and `set-throttler-installed`.

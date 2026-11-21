@@ -222,10 +222,10 @@ func (s *controlState) recordSourceFault(err error) {
 		return
 	}
 	s.run.state = runStateFaulted
-	s.run.sourceError = &readerSourceError{Category: "source", Operation: sourceError.Op,
-		RelativePath: sourceError.Path, Message: sourceError.Error()}
+	s.run.sourceError = &readerSourceError{Operation: sourceError.Op,
+		Path: sourceError.Path, Message: sourceError.Error()}
 	s.logger.Error("reader source failed", zap.String("event", "reader_source_failed"),
-		zap.String("operation", sourceError.Op), zap.String("relative_path", sourceError.Path), zap.Error(sourceError))
+		zap.String("operation", sourceError.Op), zap.String("path", sourceError.Path), zap.Error(sourceError))
 }
 
 func (s *controlState) finishRun(run *pipeline.Pipeline, partial bool) {
@@ -259,10 +259,8 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 		},
 		Reader: readerSnapshot{
 			Workers: s.controls.readerWorkers, WorkerStates: snapshotReaderWorkers(readerPool.WorkerStates),
-			ReadBatchSize:   s.config.Reader.ReadBatchSize,
-			RowsRead:        readerPool.RowsRead,
-			SourceDirectory: pipeline.SourceDirectory(s.config.Source.Path),
-			SourceError:     s.run.sourceError,
+			RowsRead:    readerPool.RowsRead,
+			SourceError: s.run.sourceError,
 		},
 		Throttler: throttlerSnapshot{
 			RequestedTps: s.controls.requestedTPS,
@@ -271,8 +269,8 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 		Sender: senderSnapshot{
 			Workers: s.controls.senderWorkers, WorkerStates: snapshotSenderWorkers(senderPool.WorkerStates),
 		},
-		ReaderChannel: snapshotChannel(readerChannel, s.config.ReaderChannel.Capacity),
-		SenderChannel: snapshotChannel(senderChannel, s.config.SenderChannel.Capacity),
+		ReaderChannel: snapshotChannel(readerChannel),
+		SenderChannel: snapshotChannel(senderChannel),
 		Config:        snapshotConfig(s.config),
 	}
 }

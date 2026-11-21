@@ -22,7 +22,7 @@ import (
 // Configuration location.
 const (
 	defaultConfigPath = "config.toml"
-	// JSON numbers must stay exact in the browser's numeric controls and telemetry.
+	// Keep integers exact for consumers that represent JSON numbers as IEEE 754 doubles.
 	maxSnapshotInteger = 1<<53 - 1
 )
 
@@ -42,7 +42,7 @@ type httpConfig struct {
 }
 
 type sourceConfig struct {
-	Path string `mapstructure:"path" json:"path"`
+	Path string `mapstructure:"path"`
 }
 
 type readerConfig struct {
@@ -60,7 +60,7 @@ type throttlerConfig struct {
 }
 
 type loggingConfig struct {
-	Level string `mapstructure:"level" json:"level"`
+	Level string `mapstructure:"level"`
 }
 
 type senderConfig struct {
@@ -75,19 +75,18 @@ type senderAPIConfig struct {
 }
 
 type senderRetryConfig struct {
-	DelaysMS      []int `mapstructure:"delays_ms" json:"delaysMs"`
-	JitterPercent int   `mapstructure:"jitter_percent" json:"jitterPercent"`
+	DelaysMS      []int `mapstructure:"delays_ms"`
+	JitterPercent int   `mapstructure:"jitter_percent"`
 }
 
 type workersConfig struct {
-	Initial int `mapstructure:"initial" json:"initial"`
-	Max     int `mapstructure:"max" json:"max"`
+	Initial int `mapstructure:"initial"`
+	Max     int `mapstructure:"max"`
 }
 
 type tpsConfig struct {
-	Initial int `mapstructure:"initial" json:"initial"`
-	Max     int `mapstructure:"max" json:"max"`
-	Step    int `mapstructure:"step" json:"step"`
+	Initial int `mapstructure:"initial"`
+	Max     int `mapstructure:"max"`
 }
 
 func loadConfig(configPath string) (config, error) {
@@ -157,8 +156,8 @@ func (c config) validate() error {
 	if err := c.HTTP.validate(); err != nil {
 		return fmt.Errorf("http.addr: %w", err)
 	}
-	if c.Source.Path == "" || !filepath.IsAbs(c.Source.Path) {
-		return errors.New("source.path must be an absolute path")
+	if c.Source.Path == "" {
+		return errors.New("source.path must not be empty")
 	}
 	if c.Reader.ReadBatchSize <= 0 || int64(c.Reader.ReadBatchSize) > math.MaxInt64/int64(time.Second) {
 		return errors.New("reader.read_batch_size must be positive and within the pacing duration limit")
@@ -293,16 +292,15 @@ func (c workersConfig) contains(value int) bool {
 
 func (c tpsConfig) validateRequestedTPS() error {
 	validMax := c.Max > 0 && int64(c.Max) <= maxSnapshotInteger
-	validStep := c.Step > 0 && int64(c.Step) <= maxSnapshotInteger
-	if !validMax || !validStep {
-		return errors.New("max and step must be positive safe JSON integers")
+	if !validMax {
+		return errors.New("max must be a positive safe JSON integer")
 	}
 	if !c.contains(c.Initial) {
-		return fmt.Errorf("initial=%d must be within 0..%d and aligned to step=%d", c.Initial, c.Max, c.Step)
+		return fmt.Errorf("initial=%d must be within 0..%d", c.Initial, c.Max)
 	}
 	return nil
 }
 
 func (c tpsConfig) contains(value int) bool {
-	return value >= 0 && value <= c.Max && c.Step > 0 && value%c.Step == 0
+	return value >= 0 && value <= c.Max
 }

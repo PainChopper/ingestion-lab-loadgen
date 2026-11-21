@@ -300,7 +300,7 @@ func TestLoadConfigRequiredFields(t *testing.T) {
 
 func TestLoadConfigStrictShapeAndTypes(t *testing.T) {
 	for _, tc := range []struct{ name, old, replacement string }{
-		{"relative source", `C:\dataset\*.parquet`, "data/*.parquet"},
+		{"empty source", `C:\dataset\*.parquet`, ""},
 		{"worker step", "[sender.workers]", "[sender.workers]\nstep = 1"},
 		{"unknown", "[logging]", "[logging]\nextra = 1"},
 		{"capacity string", "capacity = 2", "capacity = '2'"},
@@ -340,15 +340,15 @@ func TestLoadConfigScalarValuesAndBounds(t *testing.T) {
 		{"depth overflow", "capacity = 2", fmt.Sprintf("capacity = %d", maxSnapshotInteger/1000+1), false},
 		{"false", "installed = true", "installed = false", true},
 		{"TPS0", "initial = 2000000", "initial = 0", true},
-		{"TPS off grid", "initial = 2000000", "initial = 2000001", false},
+		{"TPS arbitrary integer", "initial = 2000000", "initial = 2000001", true},
+		{"TPS maximum initial", "initial = 2000000", "initial = 4000000", true},
+		{"relative source", `C:\dataset\*.parquet`, "../data/MBD-mini/trx/fold=*/*.parquet", true},
 		{"TPS negative", "initial = 2000000", "initial = -200000", false},
 		{"TPS high", "initial = 2000000", "initial = 4200000", false},
-		{"TPS max off grid", "max = 4000000", "max = 4000001", true},
-		{"TPS step0", "step = 200000", "step = 0", false},
+		{"TPS arbitrary max", "max = 4000000", "max = 4000001", true},
 		{"TPS max0", "max = 4000000", "max = 0", false},
 		{"TPS max negative", "max = 4000000", "max = -1", false},
-		{"TPS step negative", "step = 200000", "step = -1", false},
-		{"TPS safe max and step", "initial = 2000000\nmax = 4000000\nstep = 200000", fmt.Sprintf("initial = 0\nmax = %d\nstep = %d", maxSnapshotInteger, maxSnapshotInteger), true},
+		{"TPS safe max", "initial = 2000000\nmax = 4000000", fmt.Sprintf("initial = 0\nmax = %d", maxSnapshotInteger), true},
 		{"reader workers zero initial", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = 0\nmax = 7", false},
 		{"reader workers negative initial", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = -1\nmax = 7", false},
 		{"reader workers above max", "[reader.workers]\ninitial = 1\nmax = 7", "[reader.workers]\ninitial = 8\nmax = 7", false},
@@ -369,7 +369,6 @@ func TestLoadConfigScalarValuesAndBounds(t *testing.T) {
 		{"sender workers custom", "[sender.workers]\ninitial = 32\nmax = 32", "[sender.workers]\ninitial = 33\nmax = 112", true},
 		{"unsafe capacity", "capacity = 2", fmt.Sprintf("capacity = %d", maxSnapshotInteger+1), false},
 		{"unsafe TPS", "max = 4000000", fmt.Sprintf("max = %d", maxSnapshotInteger+1), false},
-		{"unsafe step", "initial = 2000000\nmax = 4000000\nstep = 200000", fmt.Sprintf("initial = 0\nmax = 4000000\nstep = %d", maxSnapshotInteger+1), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := strings.Replace(testConfigContents(), tc.old, tc.replacement, 1)
@@ -391,7 +390,8 @@ func TestLoadConfigCheckedInProfile(t *testing.T) {
 	}
 	if cfg.Reader.ReadBatchSize != 1000 || cfg.ReaderChannel.Capacity != 2 || cfg.SenderChannel.Capacity != 0 ||
 		cfg.Reader.Workers != (workersConfig{Initial: 1, Max: 7}) || cfg.Sender.Workers != (workersConfig{Initial: 32, Max: 32}) ||
-		cfg.Throttler.RequestedTPS != (tpsConfig{Initial: 2000000, Max: 4000000, Step: 200000}) || !cfg.Throttler.Installed {
+		cfg.Throttler.RequestedTPS != (tpsConfig{Initial: 2000000, Max: 4000000}) || !cfg.Throttler.Installed ||
+		cfg.Source.Path != "../data/MBD-mini/trx/fold=*/*.parquet" {
 		t.Fatalf("example profile changed: %+v", cfg)
 	}
 }

@@ -66,8 +66,8 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 				t.Fatalf("before Start worker states must be []: %+v / %+v", snapshot.Reader, snapshot.Sender)
 			}
 			got := []int{
-				snapshot.Reader.ReadBatchSize, snapshot.Reader.Workers,
-				snapshot.ReaderChannel.Capacity, snapshot.SenderChannel.Capacity,
+				snapshot.Config.ReadBatchSize, snapshot.Reader.Workers,
+				snapshot.Config.ReaderChannelCapacity, snapshot.Config.SenderChannelCapacity,
 				snapshot.Throttler.RequestedTps, snapshot.Sender.Workers,
 			}
 			want := []int{
@@ -78,11 +78,18 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 			if !slices.Equal(got, want) {
 				t.Fatalf("initial controls = %v, want %v", got, want)
 			}
-			if snapshot.Reader.SourceDirectory != pipeline.SourceDirectory(loaded.Source.Path) {
-				t.Fatalf("source directory = %q", snapshot.Reader.SourceDirectory)
+			if snapshot.Config.SourcePath != loaded.Source.Path {
+				t.Fatalf("source path = %q", snapshot.Config.SourcePath)
 			}
 			if got := snapshot.Throttler.Installed; got != loaded.Throttler.Installed {
 				t.Fatalf("initial installed = %t, want %t", got, loaded.Throttler.Installed)
+			}
+			core, entries := observer.New(zap.InfoLevel)
+			zap.New(core).Info("summary", snapshotLogFields(snapshot)...)
+			fields := entries.All()[0].ContextMap()
+			if fields["reader_channel_capacity"] != int64(loaded.ReaderChannel.Capacity) ||
+				fields["sender_channel_capacity"] != int64(loaded.SenderChannel.Capacity) {
+				t.Fatalf("startup log lost configured channel capacities: %v", fields)
 			}
 		})
 	}
@@ -288,9 +295,9 @@ func TestSignalDuringSourceDiscoveryPreventsReaderStart(t *testing.T) {
 				}
 				loop := startTestEventLoopWithSource(t, &state, gracefulShutdownTimeout, ready)
 				starting := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStarting })
-				if starting.Reader.SourceDirectory != pipeline.SourceDirectory(cfg.Source.Path) ||
+				if starting.Config.SourcePath != cfg.Source.Path ||
 					starting.Reader.SourceError != nil {
-					t.Fatalf("source directory or initial source error unavailable before Start: %+v", starting.Reader)
+					t.Fatalf("source path or initial source error unavailable before Start: %+v", starting.Reader)
 				}
 
 				loop.cancel()
@@ -448,7 +455,7 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 			}
 			cfg.Reader.Workers = workersConfig{Initial: 1, Max: 13}
 			cfg.Sender.Workers = workersConfig{Initial: 2, Max: 19}
-			cfg.Throttler.RequestedTPS = tpsConfig{Initial: 200_000, Max: 400_001, Step: 200_000}
+			cfg.Throttler.RequestedTPS = tpsConfig{Initial: 200_001, Max: 400_001}
 			core, events := observer.New(zap.InfoLevel)
 			state := newControlState(cfg, zap.New(core))
 			loop := startTestEventLoop(t, &state, gracefulShutdownTimeout)
@@ -464,8 +471,8 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 			status := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool {
 				return s.ReaderChannel.BlockedSenders > 0 && s.SenderChannel.BlockedSenders > 0
 			})
-			if status.Reader.ReadBatchSize != batchSize {
-				t.Fatalf("snapshot batch size = %d, want %d", status.Reader.ReadBatchSize, batchSize)
+			if status.Config.ReadBatchSize != batchSize {
+				t.Fatalf("snapshot batch size = %d, want %d", status.Config.ReadBatchSize, batchSize)
 			}
 
 			for _, queue := range []struct {
@@ -477,8 +484,7 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 				{name: "Sender", snapshot: status.SenderChannel, capacity: tc.senderCapacity},
 			} {
 				q := queue.snapshot
-				if q.Capacity != queue.capacity || q.DepthBatches != queue.capacity ||
-					q.BufferedTransactions != queue.capacity*batchSize {
+				if q.DepthBatches != queue.capacity {
 					t.Errorf("%s did not report its filled channel: %+v", queue.name, q)
 				}
 			}
@@ -499,13 +505,13 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantConfig := configSnapshot{
-				ReaderWorkers:         workersConfig{Initial: 1, Max: 13},
-				SenderWorkers:         workersConfig{Initial: 2, Max: 19},
-				ThrottlerRequestedTPS: tpsConfig{Initial: 200_000, Max: 400_001, Step: 200_000},
+				ReaderWorkersMax: 13, SenderWorkersMax: 19, RequestedTpsMax: 400_001,
+				ReadBatchSize: batchSize, ReaderChannelCapacity: tc.readerCapacity, SenderChannelCapacity: tc.senderCapacity,
+				SourcePath: cfg.Source.Path,
 			}
 			if updated.Config != wantConfig || updated.Reader.Workers != 3 ||
 				updated.Sender.Workers != 4 || updated.Throttler.RequestedTps != 0 || !updated.Throttler.Installed {
-				t.Fatalf("runtime commands lost initial profiles or applied values: %+v", updated)
+				t.Fatalf("runtime commands changed immutable config or lost applied values: %+v", updated)
 			}
 			// The cross-client smoke reads this real handler response from the verbose run log.
 			t.Logf("snapshot: %s", response.Body.String())
@@ -537,6 +543,16 @@ func TestRunStartupSourceErrorReturnsWithoutSignal(t *testing.T) {
 	}
 	if state.run.state != runStateFaulted || state.run.sourceError == nil {
 		t.Fatalf("startup fault state = %+v", state.run)
+	}
+	if got := state.run.sourceError; got.Operation != "glob" || got.Path != cfg.Source.Path || got.Message != sourceError.Error() {
+		t.Fatalf("startup source diagnostic = %+v, want original glob and cause", got)
+	}
+	faults := events.FilterField(zap.String("event", "reader_source_failed")).All()
+	if len(faults) != 1 {
+		t.Fatalf("source fault log count = %d, want 1", len(faults))
+	}
+	if fields := faults[0].ContextMap(); fields["operation"] != "glob" || fields["path"] != cfg.Source.Path || fields["error"] != sourceError.Error() {
+		t.Fatalf("source fault log = %v", fields)
 	}
 	snapshot := state.snapshotAt(nil, time.Now())
 	if snapshot.Reader.WorkerStates == nil || len(snapshot.Reader.WorkerStates) != 0 ||
@@ -713,7 +729,7 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 		t.Fatal("valid source never reached receiver")
 	}
 	faulted := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateFaulted })
-	if faulted.Reader.SourceError == nil || faulted.Reader.SourceError.RelativePath != "b.parquet" || countSenderWorkers(faulted.Sender.WorkerStates).InFlightWorkers != 1 {
+	if faulted.Reader.SourceError == nil || faulted.Reader.SourceError.Path != filepath.Join(directory, "b.parquet") || countSenderWorkers(faulted.Sender.WorkerStates).InFlightWorkers != 1 {
 		t.Fatalf("runtime fault lost source or in-flight diagnostic: %+v", faulted)
 	}
 	unblock()

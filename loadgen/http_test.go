@@ -118,7 +118,6 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "TPS fractional", body: `{"action":"set-requested-tps","value":100.5}`, want: http.StatusBadRequest},
 		{name: "TPS string", body: `{"action":"set-requested-tps","value":"100"}`, want: http.StatusBadRequest},
 		{name: "TPS negative", body: `{"action":"set-requested-tps","value":-100}`, want: http.StatusBadRequest},
-		{name: "TPS off step", body: `{"action":"set-requested-tps","value":101}`, want: http.StatusBadRequest},
 		{name: "TPS over max", body: `{"action":"set-requested-tps","value":4100000}`, want: http.StatusBadRequest},
 		{name: "TPS extra field", body: `{"action":"set-requested-tps","value":2000000,"other":1}`, want: http.StatusBadRequest},
 		{name: "TPS trailing JSON", body: `{"action":"set-requested-tps","value":2000000}{}`, want: http.StatusBadRequest},
@@ -129,7 +128,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "installed trailing JSON", body: `{"action":"set-throttler-installed","value":false}{}`, want: http.StatusBadRequest},
 		{name: "mode extra field", body: `{"action":"set-throttler-installed","value":false,"other":1}`, want: http.StatusBadRequest},
 		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: setRequestedTPS},
-		{name: "TPS initial", body: `{"action":"set-requested-tps","value":2000000}`, want: http.StatusOK, kind: setRequestedTPS, value: 2000000},
+		{name: "TPS arbitrary integer", body: `{"action":"set-requested-tps","value":2000001}`, want: http.StatusOK, kind: setRequestedTPS, value: 2000001},
 		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: setRequestedTPS, value: 4000000},
 		{name: "mode installed", body: `{"action":"set-throttler-installed","value":true}`, want: http.StatusOK, kind: setThrottlerInstalled, installed: true},
 		{name: "mode bypass", body: `{"action":"set-throttler-installed","value":false}`, want: http.StatusOK, kind: setThrottlerInstalled},
@@ -617,13 +616,13 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 			Workers: 1, WorkerStates: []readerWorkerState{
 				{Activity: readerWireReading}, {Activity: readerWireReading, Draining: true},
 			},
-			ReadBatchSize: 50000, RowsRead: 47,
-			SourceDirectory: "data/part", SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"},
+			RowsRead:    47,
+			SourceError: &readerSourceError{Operation: "read", Path: "input.parquet", Message: "corrupt parquet"},
 		},
 		Throttler:     throttlerSnapshot{RequestedTps: 200, Installed: true},
 		Sender:        senderSnapshot{Workers: 32, WorkerStates: []senderWorkerState{}},
-		ReaderChannel: channelSnapshot{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, InputTransactionsTotal: 3, OutputTransactionsTotal: 1},
-		SenderChannel: channelSnapshot{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, InputTransactionsTotal: 4, OutputTransactionsTotal: 2},
+		ReaderChannel: channelSnapshot{DepthBatches: 6, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, InputTransactionsTotal: 3, OutputTransactionsTotal: 1},
+		SenderChannel: channelSnapshot{DepthBatches: 4, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, InputTransactionsTotal: 4, OutputTransactionsTotal: 2},
 		Config:        snapshotConfig(testConfig(t)),
 	}
 	rec := httptest.NewRecorder()
@@ -684,7 +683,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	if string(reader["workerStates"]) != "[]" || string(sender["workerStates"]) != "[]" {
 		t.Fatalf("starting worker lists = %s / %s", reader["workerStates"], sender["workerStates"])
 	}
-	if string(run["elapsedMs"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["sourceDirectory"]) != "\"\"" || string(reader["sourceError"]) != "null" {
+	if string(run["elapsedMs"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["sourceError"]) != "null" {
 		t.Errorf("starting snapshot body = %v", root)
 	}
 	var throttler map[string]json.RawMessage

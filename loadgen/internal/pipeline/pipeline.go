@@ -52,8 +52,8 @@ func Start(ctx context.Context, options Options) *Pipeline {
 	}
 	p := &Pipeline{
 		done:        make(chan struct{}),
-		readerQueue: newBatchQueue(options.ReaderCapacity, options.BatchSize),
-		senderQueue: newBatchQueue(options.SenderCapacity, options.BatchSize),
+		readerQueue: newBatchQueue(options.ReaderCapacity),
+		senderQueue: newBatchQueue(options.SenderCapacity),
 	}
 	p.reader = startReaderPool(ctx, options.Source, options.BatchSize, options.Readers,
 		p.readerQueue, &p.readerTelemetry, options.OpenFile, nil, options.Logger)

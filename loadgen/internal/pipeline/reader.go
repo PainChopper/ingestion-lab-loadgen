@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/parquet-go/parquet-go"
@@ -43,8 +42,7 @@ type ReaderSnapshot struct {
 }
 
 type Source struct {
-	directory string
-	files     []string
+	files []string
 }
 
 type SourceError struct {
@@ -80,21 +78,20 @@ func openReaderFile(path string) (ReaderFile, error) {
 }
 
 func DiscoverSource(dataPath string) (Source, error) {
-	directory := SourceDirectory(dataPath)
 	files, err := filepath.Glob(dataPath)
 	if err != nil {
 		return Source{}, &SourceError{
-			Op: "glob", Path: relativeSourcePath(directory, dataPath), Err: err,
+			Op: "glob", Path: dataPath, Err: err,
 		}
 	}
 	if len(files) == 0 {
 		return Source{}, &SourceError{
-			Op: "glob", Path: relativeSourcePath(directory, dataPath),
+			Op: "glob", Path: dataPath,
 			Err: errors.New("no files found matching pattern"),
 		}
 	}
 	sort.Strings(files)
-	return Source{directory: directory, files: files}, nil
+	return Source{files: files}, nil
 }
 
 // readerPool owns file admission. A file is assigned once to exactly one worker;
@@ -410,27 +407,9 @@ func (p *readerPool) closeResources(
 func (p *readerPool) sourceError(operation, sourcePath string, err error) *SourceError {
 	return &SourceError{
 		Op:   operation,
-		Path: relativeSourcePath(p.source.directory, sourcePath),
+		Path: sourcePath,
 		Err:  err,
 	}
-}
-
-func SourceDirectory(sourcePath string) string {
-	directory := filepath.Dir(sourcePath)
-	for current := directory; current != filepath.Dir(current); current = filepath.Dir(current) {
-		if strings.ContainsAny(filepath.Base(current), "*?[") {
-			directory = filepath.Dir(current)
-		}
-	}
-	return filepath.ToSlash(directory)
-}
-
-func relativeSourcePath(sourceDirectory, sourcePath string) string {
-	relative, err := filepath.Rel(filepath.FromSlash(sourceDirectory), sourcePath)
-	if err != nil || relative == "." || relative == "" || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return filepath.ToSlash(filepath.Base(sourcePath))
-	}
-	return filepath.ToSlash(relative)
 }
 
 func (p *readerPool) appendRows(worker *readerWorker, batch, rows []Transaction) ([]Transaction, bool) {

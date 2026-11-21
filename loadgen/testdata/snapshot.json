@@ -9,13 +9,10 @@
       { "activity": "blocked", "draining": true },
       { "activity": "idle", "draining": false }
     ],
-    "readBatchSize": 20,
     "rowsRead": 22,
-    "sourceDirectory": "reader-source",
     "sourceError": {
-      "category": "reader-category",
       "operation": "reader-operation",
-      "relativePath": "reader-path",
+      "path": "reader-path",
       "message": "reader-message"
     }
   },
@@ -31,9 +28,7 @@
     ]
   },
   "readerChannel": {
-    "capacity": 51,
     "depthBatches": 52,
-    "bufferedTransactions": 53,
     "blockedSenders": 54,
     "oldestBlockedSenderMs": 55,
     "blockedMs": 56,
@@ -41,9 +36,7 @@
     "outputTransactionsTotal": 64
   },
   "senderChannel": {
-    "capacity": 71,
     "depthBatches": 72,
-    "bufferedTransactions": 73,
     "blockedSenders": 74,
     "oldestBlockedSenderMs": 75,
     "blockedMs": 76,
@@ -51,8 +44,12 @@
     "outputTransactionsTotal": 84
   },
   "config": {
-    "readerWorkers": { "initial": 1, "max": 7 },
-    "senderWorkers": { "initial": 32, "max": 32 },
-    "throttlerRequestedTps": { "initial": 2000000, "max": 4000000, "step": 200000 }
+    "readerWorkersMax": 7,
+    "senderWorkersMax": 32,
+    "requestedTpsMax": 4000000,
+    "readBatchSize": 20,
+    "readerChannelCapacity": 51,
+    "senderChannelCapacity": 71,
+    "sourcePath": "reader-source"
   }
 }
