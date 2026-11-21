@@ -114,6 +114,32 @@ function expectDeepFrozen(value: unknown, seen = new Set<object>()): void {
 }
 
 const malformedCases = [
+  ...[
+    ['reader', 'readTps'],
+    ['throttler', 'admittedTps'],
+    ['readerChannel', 'inputTransactionsPerSecond'],
+    ['readerChannel', 'outputTransactionsPerSecond'],
+    ['senderChannel', 'inputTransactionsPerSecond'],
+    ['senderChannel', 'outputTransactionsPerSecond'],
+  ].map(([side, field]) => ({
+    name: `removed rate ${side}.${field}`,
+    result: async () => mockResponse({ ...WIRE, [side]: { ...WIRE[side], [field]: 0 } }),
+  })),
+  ...[
+    ['capturedAtMs'],
+    ['readerChannel', 'inputTransactionsTotal'],
+    ['readerChannel', 'outputTransactionsTotal'],
+    ['senderChannel', 'inputTransactionsTotal'],
+    ['senderChannel', 'outputTransactionsTotal'],
+  ].map(([side, field]) => ({
+    name: `required monotonic field ${side}.${field ?? ''}`,
+    result: async () => {
+      const body = structuredClone(WIRE)
+      if (field === undefined) delete body[side]
+      else delete body[side][field]
+      return mockResponse(body)
+    },
+  })),
   ...(['reader', 'sender'] as const).flatMap((pool) =>
     [
       { activity: pool === 'reader' ? 'inFlight' : 'reading', draining: false },
@@ -153,7 +179,7 @@ const malformedCases = [
   },
   {
     name: 'nonnegative number',
-    result: async () => mockResponse({ ...WIRE, reader: { ...WIRE.reader, readTps: -1 } }),
+    result: async () => mockResponse({ ...WIRE, reader: { ...WIRE.reader, rowsRead: -1 } }),
   },
   {
     name: 'integer',
@@ -166,7 +192,7 @@ const malformedCases = [
   },
   {
     name: 'finite number',
-    result: async () => mockResponse({ ...WIRE, reader: { ...WIRE.reader, readTps: Infinity } }),
+    result: async () => mockResponse({ ...WIRE, reader: { ...WIRE.reader, rowsRead: Infinity } }),
   },
   {
     name: 'run enum',
@@ -317,7 +343,7 @@ describe('HttpAdapter', () => {
       })
       expect(snapshot.reader).toMatchObject({
         readBatchSize: 20,
-        readTps: 21.5,
+        readTps: null,
         rowsRead: 22,
         sourceDirectory: 'reader-source',
       })
@@ -346,7 +372,7 @@ describe('HttpAdapter', () => {
       expect(snapshot.sender.workers).toMatchObject({ applied: 41, min: 1, max: 32, step: 1 })
       expect(snapshot.throttler).toMatchObject({
         requestedTps: { applied: 31, min: 0, max: 4_000_000, step: 200_000 },
-        admittedTps: 32.5,
+        admittedTps: null,
         installed: { applied: false },
       })
       expect(snapshot.readerChannel).toMatchObject({
@@ -357,8 +383,8 @@ describe('HttpAdapter', () => {
         depthBatches: 52,
         blockedSenders: 54,
         oldestBlockedSenderMs: 55,
-        inputTransactionsPerSecond: 62.5,
-        outputTransactionsPerSecond: 64.5,
+        inputTransactionsPerSecond: null,
+        outputTransactionsPerSecond: null,
       })
       expect(snapshot.senderChannel).toMatchObject({
         id: 'throttler-to-sender',
@@ -368,8 +394,8 @@ describe('HttpAdapter', () => {
         depthBatches: 72,
         blockedSenders: 74,
         oldestBlockedSenderMs: 75,
-        inputTransactionsPerSecond: 82.5,
-        outputTransactionsPerSecond: 84.5,
+        inputTransactionsPerSecond: null,
+        outputTransactionsPerSecond: null,
       })
       expectDeepFrozen(snapshot)
       const displayed = new ChannelFlowStateDeriver().derive(snapshot, NOW_MS)
@@ -405,16 +431,51 @@ describe('HttpAdapter', () => {
     fetchMock.mockResolvedValueOnce(
       mockResponse({
         ...WIRE,
-        reader: { ...WIRE.reader, readTps: 0, rowsRead: 0, sourceError: null },
+        reader: { ...WIRE.reader, rowsRead: 0, sourceError: null },
       }),
     )
     const adapter = new HttpAdapter()
     await flushPoll()
     expect(adapter.getSnapshot().reader).toMatchObject({
-      readTps: 0,
+      readTps: null,
       rowsRead: 0,
       sourceError: null,
     })
+    adapter.dispose()
+  })
+
+  it('computes rates only for new polls using server intervals and preserves real zero', async () => {
+    const first = {
+      ...WIRE,
+      capturedAtMs: 100,
+      reader: { ...WIRE.reader, rowsRead: 0 },
+    }
+    const second = {
+      ...first,
+      capturedAtMs: 2_600,
+      reader: { ...first.reader, rowsRead: 250 },
+      senderChannel: {
+        ...first.senderChannel,
+        inputTransactionsTotal: first.senderChannel.inputTransactionsTotal + 50,
+      },
+    }
+    fetchMock
+      .mockResolvedValueOnce(mockResponse(first))
+      .mockResolvedValueOnce(mockResponse(second))
+      .mockResolvedValueOnce(mockResponse({ ...second, capturedAtMs: 3_100 }))
+    const adapter = new HttpAdapter()
+    await flushPoll()
+    expect(adapter.getSnapshot().reader.readTps).toBeNull()
+    await vi.advanceTimersByTimeAsync(1_000)
+    const snapshot = adapter.getSnapshot()
+    expect(snapshot.reader.readTps).toBe(100)
+    expect(snapshot.throttler.admittedTps).toBe(20)
+    expect(adapter.getSnapshot()).toBe(snapshot)
+    adapter.subscribe(() => adapter.getSnapshot())()
+    expect(adapter.getSnapshot()).toBe(snapshot)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(adapter.getSnapshot().reader.readTps).toBe(0)
+    expect(adapter.getSnapshot().throttler.admittedTps).toBe(0)
     adapter.dispose()
   })
 
@@ -525,7 +586,7 @@ describe('HttpAdapter', () => {
 
   it.each([
     { path: 'extra', wire: { ...WIRE, extra: true } },
-    { path: 'reader.extra', wire: { ...WIRE, reader: { ...WIRE.reader, extra: true } } },
+    { path: 'sender.extra', wire: { ...WIRE, sender: { ...WIRE.sender, extra: true } } },
   ])('accepts and strips $path with a warning', async ({ path, wire }) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     fetchMock.mockResolvedValueOnce(mockResponse(wire))
@@ -545,13 +606,13 @@ describe('HttpAdapter', () => {
     const extraFields = { [futureA]: { initial: 10 }, [futureB]: { initial: 2 } }
     const first = {
       ...WIRE,
-      reader: { ...WIRE.reader, ...extraFields },
+      sender: { ...WIRE.sender, ...extraFields },
       extra: true,
     }
     const reordered = {
       extra: false,
       ...WIRE,
-      reader: { [futureB]: null, ...WIRE.reader, [futureA]: null },
+      sender: { [futureB]: null, ...WIRE.sender, [futureA]: null },
     }
     const sourceError = {
       category: 'source',
@@ -572,7 +633,7 @@ describe('HttpAdapter', () => {
     const adapter = new HttpAdapter()
 
     await flushPoll()
-    const firstWarning = expect.stringContaining(`extra, reader.${futureA}, reader.${futureB}`)
+    const firstWarning = expect.stringContaining(`extra, sender.${futureA}, sender.${futureB}`)
     expect(warn).toHaveBeenCalledExactlyOnceWith(firstWarning)
     await vi.advanceTimersByTimeAsync(1_000)
     expect(warn).toHaveBeenCalledTimes(1)
@@ -614,8 +675,9 @@ describe('HttpAdapter', () => {
   it('retains decoded telemetry on failure, disables controls and recovers on success', async () => {
     const recoveredWire = {
       ...WIRE,
+      capturedAtMs: WIRE.capturedAtMs + 2_000,
       run: { ...WIRE.run, elapsedMs: 67_890, totalTransactions: 84_000 },
-      reader: { ...WIRE.reader, readTps: 2_000 },
+      reader: { ...WIRE.reader, rowsRead: WIRE.reader.rowsRead + 4_000 },
     }
     fetchMock
       .mockResolvedValueOnce(mockResponse(WIRE))
@@ -709,7 +771,7 @@ describe('HttpAdapter', () => {
         revision: 1,
         connectionState: 'connected',
         runState: state,
-        reader: { workers: { applied: 11 }, readTps: 21.5 },
+        reader: { workers: { applied: 11 }, readTps: null },
         sender: { workers: { applied: 41 } },
         throttler: { requestedTps: { applied: 31 } },
       })

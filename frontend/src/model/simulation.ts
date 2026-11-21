@@ -1,4 +1,9 @@
-import type { SenderWorkerState as SenderWorkerSnapshot } from './loadgen'
+import type {
+  ReaderActivity,
+  ReaderWorkerState as ReaderWorkerSnapshot,
+  SenderWorkerState as SenderWorkerSnapshot,
+} from './loadgen'
+import type { WireSnapshot } from './wireSnapshot'
 
 export const FIXED_STEP_MS = 10
 export const SNAPSHOT_INTERVAL_MS = 100
@@ -7,7 +12,6 @@ export const RETRY_BACKOFF_BASE_MS = 250
 export const RETRY_BACKOFF_MULTIPLIER = 2
 export const RETRYABLE_STATUS_CODES = Object.freeze([408, 425, 429, 500, 502, 503, 504])
 
-const RATE_WINDOW_STEPS = 100
 const READER_TRANSACTIONS_PER_WORKER_SECOND = 50_000
 const RETRY_JITTER_FACTORS = [0.8, 0.9, 1, 1.1, 1.2] as const
 
@@ -22,25 +26,19 @@ export interface SimulationConfig {
   targetErrorRatePercent: number
 }
 
-export interface ChannelTelemetry {
-  readonly capacity: number
-  readonly depthBatches: number
-  readonly blockedSenders: number
-  readonly oldestBlockedSenderMs: number
-  readonly inputTransactionsPerSecond: number
-  readonly outputTransactionsPerSecond: number
-}
+export type ChannelTelemetry = Readonly<WireSnapshot['readerChannel']>
 
 export interface SenderTelemetry {
   readonly workerStates: readonly SenderWorkerSnapshot[]
 }
 
 export interface SimulationTelemetry {
-  readonly elapsedMs: number
-  readonly totalTransactions: number
-  readonly rowsRead: number
-  readonly readerTransactionsPerSecond: number
-  readonly admittedTransactionsPerSecond: number
+  readonly capturedAtMs: WireSnapshot['capturedAtMs']
+  readonly run: Pick<WireSnapshot['run'], 'elapsedMs' | 'totalTransactions'>
+  readonly reader: {
+    readonly rowsRead: number
+    readonly workerStates: readonly ReaderWorkerSnapshot[]
+  }
   readonly readerChannel: ChannelTelemetry
   readonly senderChannel: ChannelTelemetry
   readonly sender: SenderTelemetry
@@ -157,6 +155,7 @@ class StatefulChannel<TItem> {
   private readonly transactionsOf: (item: TItem) => number
   readonly capacity: number
   private blockedForMs = 0
+  private blockedMs = 0
   sentTransactionsTotal = 0
   receivedTransactionsTotal = 0
   blockedSenders = 0
@@ -202,24 +201,26 @@ class StatefulChannel<TItem> {
   observeBlocked(blocked: boolean, senderProgressed: boolean): void {
     this.blockedSenders = blocked ? 1 : 0
     if (blocked) {
+      this.blockedMs += FIXED_STEP_MS
       this.blockedForMs = senderProgressed ? FIXED_STEP_MS : this.blockedForMs + FIXED_STEP_MS
     } else {
       this.blockedForMs = 0
     }
   }
 
-  telemetry(activity: ChannelActivity, rateSeconds: number): ChannelTelemetry {
-    const inputTransactionsPerSecond =
-      rateSeconds === 0 ? 0 : activity.inputTransactions / rateSeconds
-    const outputTransactionsPerSecond =
-      rateSeconds === 0 ? 0 : activity.outputTransactions / rateSeconds
+  telemetry(): ChannelTelemetry {
     return {
       capacity: this.capacity,
       depthBatches: this.depthBatches,
       blockedSenders: this.blockedSenders,
       oldestBlockedSenderMs: this.oldestBlockedSenderMs,
-      inputTransactionsPerSecond: inputTransactionsPerSecond,
-      outputTransactionsPerSecond: outputTransactionsPerSecond,
+      bufferedTransactions: this.items.reduce(
+        (total, item) => total + this.transactionsOf(item),
+        0,
+      ),
+      blockedMs: this.blockedMs,
+      inputTransactionsTotal: this.sentTransactionsTotal,
+      outputTransactionsTotal: this.receivedTransactionsTotal,
     }
   }
 
@@ -238,10 +239,10 @@ class StatefulChannel<TItem> {
 
 export class FixedStepSimulation {
   readonly config: SimulationConfig
+  readonly initialConfig: Readonly<SimulationConfig>
 
   private readonly readerChannel: StatefulChannel<SimulationBatch>
   private readonly senderChannel: StatefulChannel<SimulationBatch>
-  private readonly activities: StepActivity[] = []
   private readonly attemptOutcomeSource: SimulationAttemptOutcomeSource | undefined
   private workers: SenderWorker[]
   private nextWorkerIndex = 0
@@ -254,6 +255,8 @@ export class FixedStepSimulation {
   private nextBatchSequence = 0
   private failureCredit = 0
   private elapsedMs = 0
+  private confirmedTransactions = 0
+  private readerActivity: ReaderActivity = 'idle'
 
   constructor(
     config: Omit<SimulationConfig, 'throttlerInstalled'> & { throttlerInstalled?: boolean },
@@ -262,6 +265,7 @@ export class FixedStepSimulation {
     attemptOutcomeSource?: SimulationAttemptOutcomeSource,
   ) {
     this.config = { ...config, throttlerInstalled: config.throttlerInstalled ?? true }
+    this.initialConfig = Object.freeze({ ...this.config })
     this.readerChannel = new StatefulChannel(readerChannelCapacity, (batch) => batch.transactions)
     this.senderChannel = new StatefulChannel(senderChannelCapacity, (batch) => batch.transactions)
     this.attemptOutcomeSource = attemptOutcomeSource
@@ -285,6 +289,11 @@ export class FixedStepSimulation {
       admission = this.receiveReaderChannel(activity)
     }
     const production = this.produceReaderBatches(activity)
+    this.readerActivity = production.readerChannelBlocked
+      ? 'blocked'
+      : activity.readerChannel.inputTransactions > 0
+        ? 'reading'
+        : 'idle'
 
     this.readerChannel.observeBlocked(
       production.readerChannelBlocked,
@@ -294,9 +303,6 @@ export class FixedStepSimulation {
       admission.senderChannelBlocked || production.senderChannelBlocked,
       activity.senderChannel.inputTransactions > 0,
     )
-
-    this.activities.push(activity)
-    if (this.activities.length > RATE_WINDOW_STEPS) this.activities.shift()
   }
 
   updateConfig(
@@ -325,19 +331,19 @@ export class FixedStepSimulation {
   }
 
   telemetry(): SimulationTelemetry {
-    const aggregate = this.aggregateActivity()
-    const rateSeconds = (RATE_WINDOW_STEPS * FIXED_STEP_MS) / 1_000
-    const readerChannel = this.readerChannel.telemetry(aggregate.readerChannel, rateSeconds)
-    const senderChannel = this.senderChannel.telemetry(aggregate.senderChannel, rateSeconds)
-
     return {
-      elapsedMs: this.elapsedMs,
-      totalTransactions: this.readerChannel.receivedTransactionsTotal,
-      rowsRead: this.readerChannel.sentTransactionsTotal,
-      readerTransactionsPerSecond: readerChannel.inputTransactionsPerSecond,
-      admittedTransactionsPerSecond: readerChannel.outputTransactionsPerSecond,
-      readerChannel,
-      senderChannel,
+      capturedAtMs: this.elapsedMs,
+      run: { elapsedMs: this.elapsedMs, totalTransactions: this.confirmedTransactions },
+      reader: {
+        rowsRead: this.readerChannel.sentTransactionsTotal,
+        workerStates: Object.freeze(
+          Array.from({ length: this.config.readerWorkers }, (): ReaderWorkerSnapshot =>
+            Object.freeze({ activity: this.readerActivity, draining: false }),
+          ),
+        ),
+      },
+      readerChannel: this.readerChannel.telemetry(),
+      senderChannel: this.senderChannel.telemetry(),
       sender: {
         workerStates: Object.freeze(
           this.workers.map((worker): SenderWorkerSnapshot =>
@@ -373,6 +379,7 @@ export class FixedStepSimulation {
 
     if (outcome.kind === 'http-response') {
       if (outcome.statusCode >= 200 && outcome.statusCode < 300) {
+        this.confirmedTransactions += batch.transactions
         this.releaseWorker(worker)
         return
       }
@@ -656,16 +663,5 @@ export class FixedStepSimulation {
     }
     this.workers = this.workers.filter((worker) => !worker.retiring)
     this.nextWorkerIndex %= this.workers.length
-  }
-
-  private aggregateActivity(): StepActivity {
-    const aggregate = createStepActivity()
-    for (const activity of this.activities) {
-      aggregate.readerChannel.inputTransactions += activity.readerChannel.inputTransactions
-      aggregate.readerChannel.outputTransactions += activity.readerChannel.outputTransactions
-      aggregate.senderChannel.inputTransactions += activity.senderChannel.inputTransactions
-      aggregate.senderChannel.outputTransactions += activity.senderChannel.outputTransactions
-    }
-    return aggregate
   }
 }

@@ -114,9 +114,7 @@ export function PipelineSvg({
       <SenderActor
         snapshot={snapshot.sender}
         runState={snapshot.runState}
-        outputTps={
-          snapshot.elapsedMs === 0 ? null : snapshot.senderChannel.outputTransactionsPerSecond
-        }
+        outputTps={snapshot.senderChannel.outputTransactionsPerSecond}
         selected={selectedId === snapshot.sender.id}
         onSelect={onSelect}
         desiredControl={liveControls.senderWorkers}

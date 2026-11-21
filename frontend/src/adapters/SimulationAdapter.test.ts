@@ -1,9 +1,67 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SimulationAdapter } from './SimulationAdapter'
+import { createSimulationWireSnapshot, SimulationAdapter } from './SimulationAdapter'
+import { FixedStepSimulation } from '../model/simulation'
+import { wireSnapshotSchema } from '../model/wireSnapshot'
 
 describe('SimulationAdapter', () => {
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('builds a full HTTP wire snapshot from simulation state and retains startup config', () => {
+    const simulation = new FixedStepSimulation(
+      {
+        readerWorkers: 1,
+        senderWorkers: 1,
+        requestedTps: 50_000,
+        readBatchSize: 1_000,
+        httpTimeoutMs: 500,
+        targetDelayMs: 100,
+        targetErrorRatePercent: 0,
+      },
+      2,
+      2,
+    )
+    const first = createSimulationWireSnapshot(simulation)
+    expect(wireSnapshotSchema.parse(first)).toEqual(first)
+    expect(first).toMatchObject({
+      capturedAtMs: 0,
+      run: { state: 'running', elapsedMs: 0, totalTransactions: 0 },
+      reader: {
+        workers: 1,
+        readBatchSize: 1_000,
+        rowsRead: 0,
+        sourceDirectory: '',
+        sourceError: null,
+        workerStates: [{ activity: 'idle', draining: false }],
+      },
+      throttler: { installed: true, requestedTps: 50_000 },
+      sender: { workers: 1, workerStates: [{ activity: 'idle', draining: false }] },
+      config: {
+        readerWorkers: { initial: 1, max: 7 },
+        senderWorkers: { initial: 1, max: 32 },
+        throttlerRequestedTps: { initial: 50_000, max: 250_000, step: 5_000 },
+      },
+    })
+    simulation.updateConfig({
+      readerWorkers: 3,
+      senderWorkers: 2,
+      requestedTps: 0,
+      throttlerInstalled: false,
+    })
+    for (let step = 0; step < 50; step += 1) simulation.advanceStep()
+    const wire = createSimulationWireSnapshot(simulation)
+    expect(wireSnapshotSchema.parse(wire)).toEqual(wire)
+    expect(wire.config).toEqual(first.config)
+    expect(wire.reader.workers).toBe(3)
+    expect(wire.reader.workerStates).toHaveLength(3)
+    expect(wire.sender.workers).toBe(2)
+    expect(wire.sender.workerStates).toHaveLength(2)
+    expect(wire.throttler).toEqual({ installed: false, requestedTps: 0 })
+    expect(wire.run.totalTransactions).toBeGreaterThan(0)
+    expect(wire.senderChannel.inputTransactionsTotal).toBeGreaterThan(0)
+    expect(wire.readerChannel.blockedMs).toBeGreaterThan(0)
+    expect(wire.capturedAtMs).toBe(wire.run.elapsedMs)
   })
 
   it('publishes an immutable Sender worker list snapshot with retained controls', () => {
@@ -30,6 +88,8 @@ describe('SimulationAdapter', () => {
     vi.useFakeTimers()
     const adapter = new SimulationAdapter()
     expect(adapter.getSnapshot()).toMatchObject({ revision: 0, runState: 'running' })
+    expect(adapter.getSnapshot().reader.readTps).toBeNull()
+    expect(adapter.getSnapshot().throttler.admittedTps).toBeNull()
 
     const listener = vi.fn()
     adapter.subscribe(listener)()
@@ -42,6 +102,8 @@ describe('SimulationAdapter', () => {
     expect(snapshot).toMatchObject({ revision: 2, elapsedMs: 200 })
     expect(snapshot.totalTransactions).toBeGreaterThan(0)
     expect(snapshot.senderChannel.outputTransactionsPerSecond).toBeGreaterThan(0)
+    expect(snapshot.throttler.admittedTps).toBe(snapshot.senderChannel.inputTransactionsPerSecond)
+    expect(adapter.getSnapshot()).toBe(snapshot)
     expect(listener).toHaveBeenCalledTimes(4)
 
     unsubscribe()

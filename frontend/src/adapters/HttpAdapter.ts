@@ -1,4 +1,5 @@
-import { z } from 'zod/mini'
+import { CounterRateCalculator, type CounterRates } from '../model/counterRates'
+import { wireSnapshotSchema, type WireSnapshot } from '../model/wireSnapshot'
 import type { LoadgenAdapter, LoadgenSnapshotListener } from './LoadgenAdapter'
 import type {
   CommandReceipt,
@@ -95,6 +96,7 @@ function neutralChannel(
 function channelSnapshot(
   wire: WireSnapshot | null,
   side: 'reader' | 'sender',
+  rates: CounterRates | null,
 ): ChannelTelemetrySnapshot {
   const channel =
     side === 'reader'
@@ -107,8 +109,8 @@ function channelSnapshot(
     ...channel,
     capacity: telemetry.capacity,
     depthBatches: telemetry.depthBatches,
-    inputTransactionsPerSecond: telemetry.inputTransactionsPerSecond,
-    outputTransactionsPerSecond: telemetry.outputTransactionsPerSecond,
+    inputTransactionsPerSecond: rates?.[`${side}Channel`].inputTransactionsPerSecond ?? null,
+    outputTransactionsPerSecond: rates?.[`${side}Channel`].outputTransactionsPerSecond ?? null,
     blockedSenders: telemetry.blockedSenders,
     oldestBlockedSenderMs: telemetry.oldestBlockedSenderMs,
   }
@@ -118,6 +120,7 @@ function createSnapshot(
   revision: number,
   connectionState: ConnectionState,
   wire: WireSnapshot | null,
+  rates: CounterRates | null = null,
 ): LoadgenTelemetrySnapshot {
   const runState = wire?.run.state ?? null
   const writable = connectionState === 'connected' && runState === 'running'
@@ -140,7 +143,7 @@ function createSnapshot(
       ),
       workerStates: wire?.reader.workerStates ?? [],
       readBatchSize: wire?.reader.readBatchSize ?? null,
-      readTps: wire?.reader.readTps ?? null,
+      readTps: rates?.readTps ?? null,
       rowsRead: wire?.reader.rowsRead ?? null,
       sourceDirectory: wire?.reader.sourceDirectory,
       sourceError: wire?.reader.sourceError ?? null,
@@ -157,10 +160,10 @@ function createSnapshot(
         applied: wire?.throttler.installed ?? null,
         applyMode,
       },
-      admittedTps: wire?.throttler.admittedTps ?? null,
+      admittedTps: rates?.admittedTps ?? null,
     },
-    readerChannel: channelSnapshot(wire, 'reader'),
-    senderChannel: channelSnapshot(wire, 'sender'),
+    readerChannel: channelSnapshot(wire, 'reader', rates),
+    senderChannel: channelSnapshot(wire, 'sender', rates),
     sender: {
       id: 'sender',
       workers: numericControl(
@@ -191,99 +194,6 @@ function isRangeValue(
     (value - config.min) % config.step === 0
   )
 }
-
-const wireInteger = z.int().check(z.nonnegative())
-const wireNumber = z.number().check(z.nonnegative())
-
-const workersConfigSchema = z
-  .strictObject({
-    initial: wireInteger.check(z.positive()),
-    max: wireInteger.check(z.positive()),
-  })
-  .check(
-    z.refine(({ initial, max }) => initial <= max, {
-      path: ['initial'],
-      error: 'Expected initial within 1..max',
-    }),
-  )
-
-const tpsConfigSchema = z
-  .strictObject({
-    initial: wireInteger,
-    max: wireInteger.check(z.positive()),
-    step: wireInteger.check(z.positive()),
-  })
-  .check(
-    z.refine(({ initial, max, step }) => initial <= max && initial % step === 0, {
-      path: ['initial'],
-      error: 'Expected initial within 0..max and on the step grid',
-    }),
-  )
-
-const configSchema = z.strictObject({
-  readerWorkers: workersConfigSchema,
-  senderWorkers: workersConfigSchema,
-  throttlerRequestedTps: tpsConfigSchema,
-})
-
-const sourceErrorSchema = z.object({
-  category: z.string(),
-  operation: z.string(),
-  relativePath: z.string(),
-  message: z.string(),
-})
-
-const channelSchema = z.object({
-  capacity: wireInteger,
-  depthBatches: wireInteger,
-  bufferedTransactions: wireInteger,
-  blockedSenders: wireInteger,
-  oldestBlockedSenderMs: wireInteger,
-  blockedMs: wireInteger,
-  inputTransactionsPerSecond: wireNumber,
-  outputTransactionsPerSecond: wireNumber,
-})
-
-const wireSnapshotSchema = z.object({
-  run: z.object({
-    state: z.enum(['starting', 'running', 'stopping', 'faulted']),
-    elapsedMs: wireInteger,
-    totalTransactions: wireInteger,
-  }),
-  reader: z.object({
-    workers: wireInteger,
-    workerStates: z.array(
-      z.strictObject({
-        activity: z.enum(['idle', 'reading', 'blocked']),
-        draining: z.boolean(),
-      }),
-    ),
-    readBatchSize: wireInteger.check(z.positive()),
-    readTps: wireNumber,
-    rowsRead: wireInteger,
-    sourceDirectory: z.string(),
-    sourceError: z.nullable(sourceErrorSchema),
-  }),
-  throttler: z.object({
-    requestedTps: wireInteger,
-    admittedTps: wireNumber,
-    installed: z.boolean(),
-  }),
-  sender: z.object({
-    workers: wireInteger,
-    workerStates: z.array(
-      z.strictObject({
-        activity: z.enum(['idle', 'inFlight', 'backoff']),
-        draining: z.boolean(),
-      }),
-    ),
-  }),
-  readerChannel: channelSchema,
-  senderChannel: channelSchema,
-  config: configSchema,
-})
-
-type WireSnapshot = z.infer<typeof wireSnapshotSchema>
 
 function appendFieldPath(path: string, key: PropertyKey): string {
   if (typeof key === 'string' && /^[a-z_$][\w$]*$/i.test(key)) {
@@ -377,6 +287,8 @@ export class HttpAdapter implements LoadgenAdapter {
 
   private readonly listeners = new Set<LoadgenSnapshotListener>()
   private readonly warnedUnknownPathSets = new Set<string>()
+  private readonly rateCalculator = new CounterRateCalculator()
+  private rates: CounterRates | null = null
   private snapshot: LoadgenTelemetrySnapshot = createSnapshot(0, 'connecting', null)
   private timer: ReturnType<typeof setInterval> | null
   private activePoll: ActiveRequest | null = null
@@ -478,12 +390,13 @@ export class HttpAdapter implements LoadgenAdapter {
 
     const revision = this.snapshot.revision + 1
     if (decoded === null || request.signal.aborted) {
-      this.publish(createSnapshot(revision, 'error', this.lastWire))
+      this.publish(createSnapshot(revision, 'error', this.lastWire, this.rates))
       return
     }
 
     const { wire, unknownPaths } = decoded
     this.lastWire = wire
+    this.rates = this.rateCalculator.observe(wire)
     this.lastDecodeError = null
     if (unknownPaths.length !== 0) {
       const key = JSON.stringify(unknownPaths.sort())
@@ -492,7 +405,7 @@ export class HttpAdapter implements LoadgenAdapter {
         console.warn(`LoadGen snapshot unknown fields: ${unknownPaths.join(', ')}`)
       }
     }
-    this.publish(createSnapshot(revision, 'connected', wire))
+    this.publish(createSnapshot(revision, 'connected', wire, this.rates))
   }
 
   private sendCommand = async (command: SupportedCommand): Promise<CommandReceipt> => {

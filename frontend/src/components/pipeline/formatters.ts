@@ -9,7 +9,7 @@ export function formatInteger(value: number | null): string {
 }
 
 export function formatRate(value: number | null): string {
-  return value === null ? '—' : `${integerFormatter.format(value)} tx/s`
+  return value === null ? 'No data' : `${integerFormatter.format(value)} tx/s`
 }
 
 export function formatMilliseconds(value: number | null): string {
