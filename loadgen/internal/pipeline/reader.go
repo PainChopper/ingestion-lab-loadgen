@@ -30,7 +30,6 @@ type ReaderWorkerState struct {
 
 // readerWorker holds the per-worker lifecycle state.
 type readerWorker struct {
-	id   int
 	wake chan struct{}
 	// Prevents the worker from accepting new work.
 	draining bool
@@ -133,7 +132,6 @@ type readerPool struct {
 	logger          *zap.Logger
 	openFile        func(string) (ReaderFile, error)
 	beforeClaim     func(*readerWorker)
-	nextWorkerID    int
 }
 
 func startReaderPool(
@@ -282,8 +280,7 @@ func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
 }
 
 func (p *readerPool) startWorkerLocked() {
-	worker := &readerWorker{id: p.nextWorkerID, wake: make(chan struct{}, 1)}
-	p.nextWorkerID++
+	worker := &readerWorker{wake: make(chan struct{}, 1)}
 	p.workers = append(p.workers, worker)
 	p.wg.Add(1)
 	go p.runWorker(worker)

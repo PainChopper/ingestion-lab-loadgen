@@ -14,6 +14,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestReaderResourcesAndSourceErrors(t *testing.T) {
@@ -646,25 +647,38 @@ func TestReaderPoolReleaseWakesAllIdleWorkersBeforeDownscale(t *testing.T) {
 			}}}, nil
 		}
 		var blockClaims atomic.Bool
-		claims := make(chan int, 3)
+		claims := make(chan *readerWorker, 3)
 		releaseClaims := make(chan struct{})
 		beforeClaim := func(worker *readerWorker) {
 			if blockClaims.Load() {
-				claims <- worker.id
+				claims <- worker
 				<-releaseClaims
 			}
 		}
 		queue := newBatchQueue(1, 2)
+		var started atomic.Int64
+		logger := zap.New(zapcore.NewCore(
+			zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
+			zapcore.AddSync(io.Discard), zap.DebugLevel,
+		), zap.Hooks(func(entry zapcore.Entry) error {
+			if entry.Message == "reader worker started" {
+				started.Add(1)
+			}
+			return nil
+		}))
 		pool := startReaderPool(ctx, Source{files: []string{"one"}}, 2, 1,
-			queue, &readerTelemetry{}, openFile, beforeClaim, zap.NewNop())
+			queue, &readerTelemetry{}, openFile, beforeClaim, logger)
 		<-firstRead
 		pool.reconcile(3)
 		synctest.Wait()
+		pool.mu.Lock()
+		lastWorker := pool.workers[2]
+		pool.mu.Unlock()
 		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, readerActivity),
 			[]ReaderActivity{ReaderReading, ReaderIdle, ReaderIdle})
 		blockClaims.Store(true)
 		close(releaseFirst)
-		seen := map[int]bool{}
+		seen := map[*readerWorker]bool{}
 		for range 3 {
 			seen[<-claims] = true
 		}
@@ -679,7 +693,7 @@ func TestReaderPoolReleaseWakesAllIdleWorkersBeforeDownscale(t *testing.T) {
 		synctest.Wait()
 		got := pool.snapshot().WorkerStates
 		pool.mu.Lock()
-		survivor := len(pool.workers) == 1 && pool.workers[0].id == 2
+		survivor := len(pool.workers) == 1 && pool.workers[0] == lastWorker
 		pool.mu.Unlock()
 		if !survivor {
 			t.Fatalf("W2 did not claim the released file without another command: %+v", got)
@@ -689,8 +703,9 @@ func TestReaderPoolReleaseWakesAllIdleWorkersBeforeDownscale(t *testing.T) {
 		close(releaseSecond)
 		<-pool.done
 		pool.reconcile(3)
-		if got := pool.snapshot().WorkerStates; len(got) != 0 {
-			t.Fatalf("workers started after cancellation: %+v", got)
+		synctest.Wait()
+		if got := pool.snapshot().WorkerStates; len(got) != 0 || started.Load() != 3 {
+			t.Fatalf("workers started after cancellation: %+v started=%d", got, started.Load())
 		}
 	})
 }

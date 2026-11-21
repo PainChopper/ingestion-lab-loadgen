@@ -27,7 +27,6 @@ type SenderWorkerState struct {
 }
 
 type senderWorker struct {
-	id   int
 	wake chan struct{}
 	// Prevents the worker from accepting new work.
 	draining bool
@@ -49,7 +48,6 @@ type senderPool struct {
 	workers       []*senderWorker
 	stopping      bool
 	stopped       chan struct{}
-	nextWorkerID  int
 	beforeReceive func(*senderWorker)
 	retry         *retryPolicy
 	queue         *batchQueue
@@ -170,10 +168,8 @@ func (p *senderPool) supervise() {
 
 func (p *senderPool) startWorkerLocked() {
 	worker := &senderWorker{
-		id:   p.nextWorkerID,
 		wake: make(chan struct{}, 1),
 	}
-	p.nextWorkerID++
 	p.workers = append(p.workers, worker)
 	p.wg.Add(1)
 	go p.runWorker(worker)
