@@ -34,7 +34,7 @@ describe('LabShell', () => {
     }
     expect(
       view.container.querySelector('#sender-actor .pipeline-worker-primary')?.textContent,
-    ).toBe('—')
+    ).toBe('No data')
     for (const name of ['Add reader worker', 'Add sender worker']) {
       expect(screen.getByRole<HTMLButtonElement>('button', { name }).disabled).toBe(true)
     }
@@ -96,7 +96,7 @@ describe('LabShell', () => {
     ).toBe(false)
     expect(
       view.container.querySelector('#sender-actor .pipeline-worker-primary')?.textContent,
-    ).toBe('85 tx/s')
+    ).toBe('No data')
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000)
@@ -110,7 +110,7 @@ describe('LabShell', () => {
     expect(view.container.querySelector('#run-state')?.textContent).toBe('running')
     expect(
       view.container.querySelector('#sender-actor .pipeline-worker-primary')?.textContent,
-    ).toBe('85 tx/s')
+    ).toBe('No data')
     for (const channel of view.container.querySelectorAll('.pipeline-channel')) {
       expect(channel.classList.contains('pipeline-channel--connection-error')).toBe(true)
     }

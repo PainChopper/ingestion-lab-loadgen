@@ -5,10 +5,11 @@ import type {
   LoadgenCommand,
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
-  ReaderWorkerState,
 } from '../model/loadgen'
 import { FIXED_STEP_MS, FixedStepSimulation, SNAPSHOT_INTERVAL_MS } from '../model/simulation'
-import type { ChannelTelemetry, SimulationConfig, SimulationTelemetry } from '../model/simulation'
+import { CounterRateCalculator, type CounterRates } from '../model/counterRates'
+import type { ChannelTelemetry, SimulationConfig } from '../model/simulation'
+import type { WireSnapshot } from '../model/wireSnapshot'
 
 const RANGES = Object.freeze({
   readerWorkers: Object.freeze({ min: 1, max: 7, step: 1 }),
@@ -44,8 +45,40 @@ function normalizeNumericValue(value: number, range: NumericRange): number {
   return Math.min(range.max, Math.max(range.min, stepped))
 }
 
+export function createSimulationWireSnapshot(simulation: FixedStepSimulation): WireSnapshot {
+  const telemetry = simulation.telemetry()
+  const config = simulation.config
+  const initial = simulation.initialConfig
+  return {
+    capturedAtMs: telemetry.capturedAtMs,
+    run: { state: 'running', ...telemetry.run },
+    reader: {
+      workers: config.readerWorkers,
+      workerStates: [...telemetry.reader.workerStates],
+      readBatchSize: config.readBatchSize,
+      rowsRead: telemetry.reader.rowsRead,
+      sourceDirectory: '',
+      sourceError: null,
+    },
+    throttler: { requestedTps: config.requestedTps, installed: config.throttlerInstalled },
+    sender: { workers: config.senderWorkers, workerStates: [...telemetry.sender.workerStates] },
+    readerChannel: telemetry.readerChannel,
+    senderChannel: telemetry.senderChannel,
+    config: {
+      readerWorkers: { initial: initial.readerWorkers, max: RANGES.readerWorkers.max },
+      senderWorkers: { initial: initial.senderWorkers, max: RANGES.senderWorkers.max },
+      throttlerRequestedTps: {
+        initial: initial.requestedTps,
+        max: RANGES.requestedTps.max,
+        step: RANGES.requestedTps.step,
+      },
+    },
+  }
+}
+
 function freezeChannelSnapshot(
   channel: ChannelTelemetry,
+  rates: CounterRates['readerChannel'],
   identity: {
     readonly id: 'reader-to-throttler' | 'throttler-to-sender'
     readonly from: 'reader' | 'throttler'
@@ -60,65 +93,57 @@ function freezeChannelSnapshot(
     depthBatches: channel.depthBatches,
     blockedSenders: channel.blockedSenders,
     oldestBlockedSenderMs: channel.oldestBlockedSenderMs,
-    inputTransactionsPerSecond: Math.round(channel.inputTransactionsPerSecond),
-    outputTransactionsPerSecond: Math.round(channel.outputTransactionsPerSecond),
+    ...rates,
   })
 }
 
 function freezeSnapshot(
   revision: number,
   simulation: FixedStepSimulation,
+  calculator: CounterRateCalculator,
 ): LoadgenTelemetrySnapshot {
-  const telemetry: SimulationTelemetry = simulation.telemetry()
-  const config = simulation.config
-  const readerReadTps = Math.round(telemetry.readerTransactionsPerSecond)
+  const wire = createSimulationWireSnapshot(simulation)
+  const rates = calculator.observe(wire)
 
   return Object.freeze({
     revision,
     adapterKind: 'simulation',
     connectionState: 'connected',
-    runState: 'running',
-    elapsedMs: telemetry.elapsedMs,
-    totalTransactions: telemetry.totalTransactions,
+    runState: wire.run.state,
+    elapsedMs: wire.run.elapsedMs,
+    totalTransactions: wire.run.totalTransactions,
     reader: Object.freeze({
       id: 'reader',
-      workers: numericControl(config.readerWorkers, RANGES.readerWorkers, 'workers'),
-      workerStates: Object.freeze(
-        Array.from({ length: config.readerWorkers }, (): ReaderWorkerState =>
-          Object.freeze({
-            activity: readerReadTps === 0 ? 'idle' : 'reading',
-            draining: false,
-          }),
-        ),
-      ),
-      readBatchSize: config.readBatchSize,
-      readTps: readerReadTps,
-      rowsRead: telemetry.rowsRead,
-      sourceError: null,
+      workers: numericControl(wire.reader.workers, RANGES.readerWorkers, 'workers'),
+      workerStates: Object.freeze(wire.reader.workerStates),
+      readBatchSize: wire.reader.readBatchSize,
+      readTps: rates.readTps,
+      rowsRead: wire.reader.rowsRead,
+      sourceError: wire.reader.sourceError,
     }),
     throttler: Object.freeze({
       id: 'throttler',
-      requestedTps: numericControl(config.requestedTps, RANGES.requestedTps, 'tx/s'),
+      requestedTps: numericControl(wire.throttler.requestedTps, RANGES.requestedTps, 'tx/s'),
       installed: Object.freeze({
-        applied: config.throttlerInstalled,
+        applied: wire.throttler.installed,
         applyMode: 'immediate',
       }),
-      admittedTps: Math.round(telemetry.admittedTransactionsPerSecond),
+      admittedTps: rates.admittedTps,
     }),
-    readerChannel: freezeChannelSnapshot(telemetry.readerChannel, {
+    readerChannel: freezeChannelSnapshot(wire.readerChannel, rates.readerChannel, {
       id: 'reader-to-throttler',
       from: 'reader',
       to: 'throttler',
     }),
-    senderChannel: freezeChannelSnapshot(telemetry.senderChannel, {
+    senderChannel: freezeChannelSnapshot(wire.senderChannel, rates.senderChannel, {
       id: 'throttler-to-sender',
       from: 'throttler',
       to: 'sender',
     }),
     sender: Object.freeze({
       id: 'sender',
-      workers: numericControl(config.senderWorkers, RANGES.senderWorkers, 'workers'),
-      workerStates: telemetry.sender.workerStates,
+      workers: numericControl(wire.sender.workers, RANGES.senderWorkers, 'workers'),
+      workerStates: Object.freeze(wire.sender.workerStates),
     }),
   })
 }
@@ -127,6 +152,7 @@ export class SimulationAdapter implements LoadgenAdapter {
   readonly kind = 'simulation' as const
 
   private readonly listeners = new Set<LoadgenSnapshotListener>()
+  private readonly rateCalculator = new CounterRateCalculator()
   private readonly simulation = new FixedStepSimulation(
     {
       readerWorkers: 5,
@@ -147,7 +173,7 @@ export class SimulationAdapter implements LoadgenAdapter {
   private disposed = false
 
   constructor() {
-    this.snapshot = freezeSnapshot(0, this.simulation)
+    this.snapshot = freezeSnapshot(0, this.simulation, this.rateCalculator)
     this.lastTickMs = Date.now()
     this.timer = setInterval(this.tick, SNAPSHOT_INTERVAL_MS)
   }
@@ -262,7 +288,7 @@ export class SimulationAdapter implements LoadgenAdapter {
   }
 
   private publish(): void {
-    this.snapshot = freezeSnapshot(this.snapshot.revision + 1, this.simulation)
+    this.snapshot = freezeSnapshot(this.snapshot.revision + 1, this.simulation, this.rateCalculator)
     this.listeners.forEach((listener) => listener(this.snapshot))
   }
 

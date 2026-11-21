@@ -8,9 +8,9 @@ describe('pipeline formatters', () => {
     expect(formatMilliseconds(1250)).toBe('1,250 ms')
   })
 
-  it('uses an em dash for unavailable values while preserving zero', () => {
+  it('labels unavailable rates while preserving zero', () => {
     expect(formatInteger(null)).toBe('—')
-    expect(formatRate(null)).toBe('—')
+    expect(formatRate(null)).toBe('No data')
     expect(formatMilliseconds(null)).toBe('—')
     expect(formatRate(0)).toBe('0 tx/s')
   })

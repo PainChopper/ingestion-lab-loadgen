@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   FixedStepSimulation,
   type SimulationAttemptContext,
+  type SimulationAttemptOutcome,
   type SimulationConfig,
 } from './simulation'
 
@@ -17,6 +18,44 @@ const CONFIG: SimulationConfig = {
 }
 
 describe('FixedStepSimulation pipeline batch', () => {
+  it.each([
+    { name: 'success', kind: 'http-response', statusCode: 204, confirmed: 5_000 },
+    { name: 'permanent rejection', kind: 'http-response', statusCode: 400, confirmed: 0 },
+    { name: 'exhausted retry', kind: 'http-response', statusCode: 503, confirmed: 0 },
+    { name: 'timeout', kind: 'timeout', statusCode: 0, confirmed: 0 },
+    { name: 'network failure', kind: 'network-error', statusCode: 0, confirmed: 0 },
+    { name: 'successful retry', kind: 'http-response', statusCode: 503, confirmed: 5_000 },
+  ] as const)('counts confirmations only after $name, without recounting retries', (scenario) => {
+    const simulation = new FixedStepSimulation(
+      CONFIG,
+      0,
+      0,
+      ({ attempt }) =>
+        ({
+          kind: scenario.kind,
+          statusCode:
+            scenario.name === 'successful retry' && attempt > 1 ? 204 : scenario.statusCode,
+          latencyMs: 10,
+        }) as SimulationAttemptOutcome,
+    )
+    for (let step = 0; step < 10; step += 1) simulation.advanceStep()
+    const inFlight = simulation.telemetry()
+    expect(inFlight.run.totalTransactions).toBe(0)
+    expect(inFlight.senderChannel.inputTransactionsTotal).toBe(5_000)
+    simulation.updateConfig({ requestedTps: 0 })
+    for (let step = 0; step < 200; step += 1) simulation.advanceStep()
+    const completed = simulation.telemetry()
+    expect(completed.run.totalTransactions).toBe(scenario.confirmed)
+    expect(completed.reader.rowsRead).toBe(5_000)
+    for (const channel of [completed.readerChannel, completed.senderChannel]) {
+      expect(channel.inputTransactionsTotal).toBe(5_000)
+      expect(channel.outputTransactionsTotal).toBe(5_000)
+      expect(channel.bufferedTransactions).toBe(0)
+    }
+    expect(completed.readerChannel.blockedMs).toBeGreaterThan(inFlight.readerChannel.blockedMs)
+    expect(completed.capturedAtMs).toBe(completed.run.elapsedMs)
+  })
+
   it.each([0, 2])(
     'bypasses the token bucket and preserves backpressure at capacity %i',
     (capacity) => {
@@ -28,33 +67,40 @@ describe('FixedStepSimulation pipeline batch', () => {
 
       for (let step = 0; step < 50; step += 1) simulation.advanceStep()
       const installed = simulation.telemetry()
-      expect(installed.senderChannel.inputTransactionsPerSecond).toBe(0)
+      expect(installed.senderChannel.inputTransactionsTotal).toBe(0)
       expect(installed.readerChannel.blockedSenders).toBeGreaterThan(0)
 
       simulation.updateConfig({ throttlerInstalled: false })
       for (let step = 0; step < 50; step += 1) simulation.advanceStep()
       const bypassed = simulation.telemetry()
-      expect(bypassed.senderChannel.inputTransactionsPerSecond).toBeGreaterThan(0)
+      expect(bypassed.senderChannel.inputTransactionsTotal).toBeGreaterThan(0)
       expect(bypassed.senderChannel.blockedSenders).toBeGreaterThan(0)
       expect(bypassed.senderChannel.oldestBlockedSenderMs).toBeGreaterThan(0)
       expect(bypassed.senderChannel.depthBatches).toBe(capacity)
-      expect(bypassed.readerChannel.outputTransactionsPerSecond).toBeGreaterThan(0)
-      expect(bypassed.senderChannel.outputTransactionsPerSecond).toBeGreaterThan(0)
+      expect(bypassed.readerChannel.outputTransactionsTotal).toBeGreaterThan(0)
+      expect(bypassed.senderChannel.outputTransactionsTotal).toBeGreaterThan(0)
       if (capacity === 0) expect(bypassed.readerChannel.depthBatches).toBe(0)
 
       simulation.updateConfig({ throttlerInstalled: true })
       for (let step = 0; step < 100; step += 1) simulation.advanceStep()
       const reinstalled = simulation.telemetry()
       expect(simulation.config.requestedTps).toBe(0)
-      expect(reinstalled.totalTransactions).toBe(bypassed.totalTransactions)
-      expect(reinstalled.senderChannel.inputTransactionsPerSecond).toBe(0)
+      expect(reinstalled.run.totalTransactions).toBeGreaterThanOrEqual(
+        bypassed.run.totalTransactions,
+      )
+      expect(reinstalled.senderChannel.inputTransactionsTotal).toBe(
+        bypassed.senderChannel.inputTransactionsTotal,
+      )
+      expect(reinstalled.readerChannel.blockedMs).toBeGreaterThan(bypassed.readerChannel.blockedMs)
       expect(reinstalled.readerChannel.blockedSenders).toBeGreaterThan(0)
 
       simulation.updateConfig({ requestedTps: CONFIG.requestedTps })
       for (let step = 0; step < 50; step += 1) simulation.advanceStep()
-      expect(simulation.telemetry().senderChannel.inputTransactionsPerSecond).toBeGreaterThan(0)
-      expect(simulation.telemetry().totalTransactions).toBeGreaterThan(
-        reinstalled.totalTransactions,
+      expect(simulation.telemetry().senderChannel.inputTransactionsTotal).toBeGreaterThan(
+        reinstalled.senderChannel.inputTransactionsTotal,
+      )
+      expect(simulation.telemetry().run.totalTransactions).toBeGreaterThan(
+        reinstalled.run.totalTransactions,
       )
     },
   )
@@ -67,6 +113,8 @@ describe('FixedStepSimulation pipeline batch', () => {
     })
 
     for (let step = 0; step < 200; step += 1) simulation.advanceStep()
+    simulation.updateConfig({ requestedTps: 0 })
+    simulation.advanceStep()
     const telemetry = simulation.telemetry()
 
     expect(attempts.length).toBeGreaterThan(0)
@@ -77,8 +125,8 @@ describe('FixedStepSimulation pipeline batch', () => {
           batch.identity === `pipeline-batch-${batch.sequence}`,
       ),
     ).toBe(true)
-    expect(telemetry.totalTransactions).toBe(attempts.length * CONFIG.readBatchSize)
-    expect(telemetry.rowsRead).toBe(telemetry.totalTransactions)
+    expect(telemetry.run.totalTransactions).toBe(attempts.length * CONFIG.readBatchSize)
+    expect(telemetry.reader.rowsRead).toBe(telemetry.run.totalTransactions)
     expect(telemetry.readerChannel.depthBatches).toBe(0)
     expect(telemetry.senderChannel.depthBatches).toBe(0)
   })
