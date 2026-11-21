@@ -273,7 +273,16 @@ func TestSenderPoolParentCancellationStopsRetryBackoff(t *testing.T) {
 			return io.ErrUnexpectedEOF
 		}
 		config.Senders = 2
-		config.Logger = zap.NewNop()
+		var started atomic.Int64
+		config.Logger = zap.New(zapcore.NewCore(
+			zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
+			zapcore.AddSync(io.Discard), zap.DebugLevel,
+		), zap.Hooks(func(entry zapcore.Entry) error {
+			if entry.Message == "sender worker started" {
+				started.Add(1)
+			}
+			return nil
+		}))
 		config.Deliver = attempt
 		pool := startSenderPool(parent, &channel, config, nil)
 
@@ -284,8 +293,9 @@ func TestSenderPoolParentCancellationStopsRetryBackoff(t *testing.T) {
 		cancel()
 		<-pool.done
 		pool.reconcile(3)
-		if got := pool.snapshot().WorkerStates; len(got) != 0 || pool.nextWorkerID != 2 {
-			t.Fatalf("workers started after cancellation: %+v started=%d", got, pool.nextWorkerID)
+		synctest.Wait()
+		if got := pool.snapshot().WorkerStates; len(got) != 0 || started.Load() != 2 {
+			t.Fatalf("workers started after cancellation: %+v started=%d", got, started.Load())
 		}
 		if pool.completed.Load() != 0 {
 			t.Fatalf("parent-canceled batch was counted as completed: consumed=%d", pool.completed.Load())
@@ -403,6 +413,8 @@ func TestSenderPoolDeliversBatchWhenResizedDuringWorkerExit(t *testing.T) {
 			return nil
 		}))
 		receive := []chan struct{}{make(chan struct{}), make(chan struct{})}
+		workersReady := make(chan struct{})
+		var originalWorkers []*senderWorker
 		releaseA := make(chan struct{})
 		releaseB := make(chan struct{})
 		attempted := make(chan string, 3)
@@ -421,10 +433,15 @@ func TestSenderPoolDeliversBatchWhenResizedDuringWorkerExit(t *testing.T) {
 		config.Logger = logger
 		config.Deliver = attempt
 		pool := startSenderPool(context.Background(), &telemetry, config, func(worker *senderWorker) {
-			if worker.id < len(receive) {
-				<-receive[worker.id]
+			<-workersReady
+			if index := slices.Index(originalWorkers, worker); index >= 0 {
+				<-receive[index]
 			}
 		})
+		pool.mu.Lock()
+		originalWorkers = slices.Clone(pool.workers)
+		pool.mu.Unlock()
+		close(workersReady)
 
 		close(receive[0])
 		batches <- []Transaction{{ClientID: "B"}}
@@ -446,7 +463,7 @@ func TestSenderPoolDeliversBatchWhenResizedDuringWorkerExit(t *testing.T) {
 			}
 		}
 		pool.mu.Lock()
-		replaced := pool.workers[0].id == 1 && pool.workers[1].id == 2
+		replaced := pool.workers[0] == originalWorkers[1] && !slices.Contains(originalWorkers, pool.workers[1])
 		pool.mu.Unlock()
 		if !replaced {
 			t.Fatal("growth must retain A's worker and replace B's already removed worker")
@@ -494,6 +511,8 @@ func TestSenderPoolReactivatesOnlyNeededWorkers(t *testing.T) {
 				config.RetryDelays = []time.Duration{3_600_000 * time.Millisecond}
 				config.RetryJitterPercent = 0
 				receive := []chan struct{}{make(chan struct{}), make(chan struct{}), make(chan struct{})}
+				workersReady := make(chan struct{})
+				var originalWorkers []*senderWorker
 				release := make(chan struct{})
 				attempt := func(_ context.Context, batch []Transaction, attempt int) error {
 					if test.retryA && batch[0].ClientID == "A" && attempt == 1 {
@@ -506,8 +525,13 @@ func TestSenderPoolReactivatesOnlyNeededWorkers(t *testing.T) {
 				config.Logger = zap.NewNop()
 				config.Deliver = attempt
 				pool := startSenderPool(context.Background(), &telemetry, config, func(worker *senderWorker) {
-					<-receive[worker.id]
+					<-workersReady
+					<-receive[slices.Index(originalWorkers, worker)]
 				})
+				pool.mu.Lock()
+				originalWorkers = slices.Clone(pool.workers)
+				pool.mu.Unlock()
+				close(workersReady)
 				for index, id := range []string{"A", "B", "C"} {
 					close(receive[index])
 					batches <- []Transaction{{ClientID: id}}
@@ -518,13 +542,13 @@ func TestSenderPoolReactivatesOnlyNeededWorkers(t *testing.T) {
 				pool.reconcile(2)
 				during := pool.snapshot().WorkerStates
 				pool.mu.Lock()
-				wantDrainingID := 1
+				wantDraining := originalWorkers[1]
 				if test.retryA {
-					wantDrainingID = 0
+					wantDraining = originalWorkers[0]
 				}
 				for _, worker := range pool.workers {
-					if worker.draining != (worker.id == wantDrainingID) {
-						t.Errorf("worker %d draining=%v, want only worker %d draining", worker.id, worker.draining, wantDrainingID)
+					if worker.draining != (worker == wantDraining) {
+						t.Errorf("worker %p draining=%v, want only worker %p draining", worker, worker.draining, wantDraining)
 					}
 				}
 				pool.mu.Unlock()
@@ -607,7 +631,9 @@ func TestSenderPoolEachDrainingWorkerAcceptsAtMostOneNewBatch(t *testing.T) {
 		queue := newBatchQueue(4, 1)
 
 		receive := []chan struct{}{make(chan struct{}), make(chan struct{}), make(chan struct{})}
-		atReceive := make(chan int, 3)
+		workersReady := make(chan struct{})
+		var originalWorkers []*senderWorker
+		atReceive := make(chan *senderWorker, 3)
 		attempted := make(chan string, 4)
 		release := make(chan struct{})
 		attempt := func(_ context.Context, batch []Transaction, _ int) error {
@@ -620,8 +646,9 @@ func TestSenderPoolEachDrainingWorkerAcceptsAtMostOneNewBatch(t *testing.T) {
 		config.Logger = zap.NewNop()
 		config.Deliver = attempt
 		pool := startSenderPool(t.Context(), queue, config, func(worker *senderWorker) {
-			atReceive <- worker.id
-			<-receive[worker.id]
+			<-workersReady
+			atReceive <- worker
+			<-receive[slices.Index(originalWorkers, worker)]
 			// Force the legal receive branch of the select after marking this worker.
 			// Other workers remain held, so each batch is attributed to a known worker.
 			select {
@@ -629,6 +656,10 @@ func TestSenderPoolEachDrainingWorkerAcceptsAtMostOneNewBatch(t *testing.T) {
 			default:
 			}
 		})
+		pool.mu.Lock()
+		originalWorkers = slices.Clone(pool.workers)
+		pool.mu.Unlock()
+		close(workersReady)
 		for range 3 {
 			<-atReceive
 		}
@@ -661,10 +692,10 @@ func TestSenderPoolEachDrainingWorkerAcceptsAtMostOneNewBatch(t *testing.T) {
 			t.Fatalf("remaining worker is draining: %+v", states)
 		}
 		pool.mu.Lock()
-		remainingID := pool.workers[0].id
+		remaining := pool.workers[0]
 		pool.mu.Unlock()
-		if remainingID != 2 {
-			t.Fatalf("remaining worker=%d, want 2", remainingID)
+		if remaining != originalWorkers[2] {
+			t.Fatalf("remaining worker=%p, want %p", remaining, originalWorkers[2])
 		}
 		close(receive[2])
 		close(queue.ch)
