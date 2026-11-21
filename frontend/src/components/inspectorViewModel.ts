@@ -1,3 +1,4 @@
+import { workerStateCounts } from './workerStateCounts'
 import type {
   LoadgenSnapshot,
   ChannelCapacitySnapshot,
@@ -75,14 +76,15 @@ export function getInspectorViewModel(
 ): InspectorViewModel | null {
   switch (selectedId) {
     case 'reader': {
-      const { idleWorkers, readingWorkers, blockedWorkers } = snapshot.reader
+      const counts = workerStateCounts(snapshot.reader.workerStates)
+      const { idleWorkers, readingWorkers, blockedWorkers } = counts
       const sourceError = snapshot.reader.sourceError
       const hasSourceError = sourceError !== null && sourceError !== undefined
       const errorCount = formatReaderErrorCount(snapshot.reader)
       const rows: InspectorRow[] = [
         {
           label: 'Workers desired / live / draining',
-          value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(snapshot.reader.liveWorkers)} / ${formatInteger(snapshot.reader.drainingWorkers)}`,
+          value: `${formatInteger(snapshot.reader.workers.applied)} / ${formatInteger(counts.liveWorkers)} / ${formatInteger(counts.drainingWorkers)}`,
         },
         {
           label: 'Worker states',
@@ -128,15 +130,16 @@ export function getInspectorViewModel(
         rows: [{ label: 'Admitted TPS', value: formatRate(snapshot.throttler.admittedTps) }],
       }
     case 'sender': {
-      const { idleWorkers, inFlightWorkers, backoffWorkers } = snapshot.sender
+      const counts = workerStateCounts(snapshot.sender.workerStates)
+      const { idleWorkers, inFlightWorkers, backoffWorkers } = counts
       const sender = { id: selectedId, title: 'SENDER', kind: 'HTTP sender' }
       const poolRows: ReadonlyArray<InspectorRow> = [
         {
           label: 'Workers desired / live / draining',
           value:
             `${formatInteger(snapshot.sender.workers.applied)} / ` +
-            `${formatInteger(snapshot.sender.liveWorkers)} / ` +
-            `${formatInteger(snapshot.sender.drainingWorkers)}`,
+            `${formatInteger(counts.liveWorkers)} / ` +
+            `${formatInteger(counts.drainingWorkers)}`,
         },
         {
           label: 'Worker states',

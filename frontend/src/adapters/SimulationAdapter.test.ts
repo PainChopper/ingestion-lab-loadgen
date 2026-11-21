@@ -6,30 +6,23 @@ describe('SimulationAdapter', () => {
     vi.useRealTimers()
   })
 
-  it('publishes an immutable Sender aggregate snapshot with retained controls', () => {
+  it('publishes an immutable Sender worker list snapshot with retained controls', () => {
     const adapter = new SimulationAdapter()
     const snapshot = adapter.getSnapshot()
 
     expect(Object.isFrozen(snapshot)).toBe(true)
     expect(Object.isFrozen(snapshot.sender)).toBe(true)
     expect(snapshot.sender.workers.applied).not.toBeNull()
-    expect(snapshot.sender).toMatchObject({
-      liveWorkers: 3,
-      idleWorkers: 3,
-      inFlightWorkers: 0,
-      backoffWorkers: 0,
-      drainingWorkers: 0,
-    })
-    expect(Object.keys(snapshot.sender)).toEqual(
-      expect.arrayContaining([
-        'workers',
-        'liveWorkers',
-        'idleWorkers',
-        'inFlightWorkers',
-        'backoffWorkers',
-        'drainingWorkers',
-      ]),
-    )
+    expect(snapshot.sender.workerStates).toEqual([
+      { activity: 'idle', draining: false },
+      { activity: 'idle', draining: false },
+      { activity: 'idle', draining: false },
+    ])
+    expect(Object.keys(snapshot.sender)).toEqual(['id', 'workers', 'workerStates'])
+    for (const pool of [snapshot.reader, snapshot.sender]) {
+      expect(Object.isFrozen(pool.workerStates)).toBe(true)
+      expect(pool.workerStates.every(Object.isFrozen)).toBe(true)
+    }
     adapter.dispose()
   })
 
@@ -75,6 +68,10 @@ describe('SimulationAdapter', () => {
 
     await vi.advanceTimersByTimeAsync(200)
     const initial = adapter.getSnapshot()
+    const initialWorkerStates = JSON.stringify([
+      initial.reader.workerStates,
+      initial.sender.workerStates,
+    ])
     await expect(adapter.dispatch({ type: 'set-reader-workers', value: 7 })).resolves.toMatchObject(
       { accepted: true },
     )
@@ -89,12 +86,17 @@ describe('SimulationAdapter', () => {
     expect(updated).toMatchObject({
       runState: 'running',
       elapsedMs: initial.elapsedMs,
-      reader: { workers: { applied: 7 }, liveWorkers: 7 },
-      sender: { workers: { applied: 4 }, liveWorkers: 4 },
+      reader: { workers: { applied: 7 } },
+      sender: { workers: { applied: 4 } },
       throttler: { requestedTps: { applied: 75_000 } },
     })
+    expect(updated.reader.workerStates).toHaveLength(7)
+    expect(updated.sender.workerStates).toHaveLength(4)
     await vi.advanceTimersByTimeAsync(200)
     expect(adapter.getSnapshot().totalTransactions).toBeGreaterThan(initial.totalTransactions)
+    expect(JSON.stringify([initial.reader.workerStates, initial.sender.workerStates])).toBe(
+      initialWorkerStates,
+    )
     adapter.dispose()
   })
 
@@ -142,7 +144,7 @@ describe('SimulationAdapter', () => {
     }
   })
 
-  it('keeps draining in-flight workers in the aggregate', async () => {
+  it('keeps draining in-flight workers in the worker list', async () => {
     vi.useFakeTimers()
     const adapter = new SimulationAdapter()
 
@@ -150,12 +152,14 @@ describe('SimulationAdapter', () => {
     await vi.advanceTimersByTimeAsync(50)
     await adapter.dispatch({ type: 'set-sender-workers', value: 1 })
 
-    expect(adapter.getSnapshot().sender).toMatchObject({
-      liveWorkers: 2,
-      inFlightWorkers: 2,
-      drainingWorkers: 1,
-      drainingInFlightWorkers: 1,
-    })
+    expect(adapter.getSnapshot().sender.workers.applied).toBe(1)
+    expect(adapter.getSnapshot().sender.workerStates).toEqual(
+      expect.arrayContaining([
+        { activity: 'inFlight', draining: false },
+        { activity: 'inFlight', draining: true },
+      ]),
+    )
+    expect(adapter.getSnapshot().sender.workerStates).toHaveLength(2)
     adapter.dispose()
   })
 })

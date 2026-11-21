@@ -422,12 +422,18 @@ function withWorkerCount(snapshot: LoadgenSnapshot, count: number): LoadgenSnaps
     reader: {
       ...snapshot.reader,
       workers: control(snapshot.reader.workers),
-      liveWorkers: count,
+      workerStates: Array.from({ length: count }, () => ({
+        activity: 'idle' as const,
+        draining: false,
+      })),
     },
     sender: {
       ...snapshot.sender,
       workers: control(snapshot.sender.workers),
-      liveWorkers: count,
+      workerStates: Array.from({ length: count }, () => ({
+        activity: 'idle' as const,
+        draining: false,
+      })),
     },
   }
 }
@@ -513,13 +519,11 @@ describe('PipelineSvg rendering', () => {
         reader: {
           ...base.reader,
           readTps: 50_000,
-          liveWorkers: 3,
-          idleWorkers: 1,
-          readingWorkers: 1,
-          blockedWorkers: 1,
-          drainingIdleWorkers: 0,
-          drainingReadingWorkers: 0,
-          drainingBlockedWorkers: 0,
+          workerStates: [
+            { activity: 'idle', draining: false },
+            { activity: 'reading', draining: false },
+            { activity: 'blocked', draining: false },
+          ],
         },
       }
       const view = renderPipeline(snapshot, orientation)
@@ -614,13 +618,11 @@ describe('PipelineSvg rendering', () => {
           ...base,
           sender: {
             ...base.sender,
-            liveWorkers: 3,
-            idleWorkers: 1,
-            inFlightWorkers: 1,
-            backoffWorkers: 1,
-            drainingIdleWorkers: 0,
-            drainingInFlightWorkers: 0,
-            drainingBackoffWorkers: 0,
+            workerStates: [
+              { activity: 'idle', draining: false },
+              { activity: 'inFlight', draining: false },
+              { activity: 'backoff', draining: false },
+            ],
           },
         },
         orientation,
@@ -743,7 +745,14 @@ describe('PipelineSvg rendering', () => {
     const base = activeSnapshot()
     const snapshot = {
       ...base,
-      sender: { ...base.sender, workers: { ...base.sender.workers, applied: 1 }, liveWorkers: 32 },
+      sender: {
+        ...base.sender,
+        workers: { ...base.sender.workers, applied: 1 },
+        workerStates: Array.from({ length: 32 }, () => ({
+          activity: 'idle' as const,
+          draining: false,
+        })),
+      },
     }
     const view = render(
       <PipelineSvg
@@ -805,13 +814,11 @@ describe('PipelineSvg rendering', () => {
         ...base,
         sender: {
           ...base.sender,
-          liveWorkers: 3,
-          idleWorkers: 1,
-          inFlightWorkers: 1,
-          backoffWorkers: 1,
-          drainingIdleWorkers: 0,
-          drainingInFlightWorkers: 0,
-          drainingBackoffWorkers: 0,
+          workerStates: [
+            { activity: 'idle', draining: false },
+            { activity: 'inFlight', draining: false },
+            { activity: 'backoff', draining: false },
+          ],
         },
       }
       const view = renderPipeline(snapshot, orientation)
@@ -853,27 +860,13 @@ describe('PipelineSvg rendering', () => {
         reader: {
           ...base.reader,
           workers: { ...base.reader.workers, applied: 2 },
-          liveWorkers: 0,
-          drainingWorkers: 0,
-          idleWorkers: 0,
-          readingWorkers: 0,
-          blockedWorkers: 0,
-          drainingIdleWorkers: 0,
-          drainingReadingWorkers: 0,
-          drainingBlockedWorkers: 0,
+          workerStates: [],
           readBatchSize: 1_500,
         },
         sender: {
           ...base.sender,
           workers: { ...base.sender.workers, applied: 3 },
-          liveWorkers: 0,
-          drainingWorkers: 0,
-          idleWorkers: 0,
-          inFlightWorkers: 0,
-          backoffWorkers: 0,
-          drainingIdleWorkers: 0,
-          drainingInFlightWorkers: 0,
-          drainingBackoffWorkers: 0,
+          workerStates: [],
         },
         readerChannel: zeroFlowChannel(base.readerChannel),
         senderChannel: zeroFlowChannel(base.senderChannel),
@@ -901,14 +894,11 @@ describe('PipelineSvg rendering', () => {
         sender: {
           ...base.sender,
           workers: { ...base.sender.workers, applied: 1 },
-          liveWorkers: 3,
-          drainingWorkers: 2,
-          idleWorkers: 1,
-          inFlightWorkers: 1,
-          backoffWorkers: 1,
-          drainingIdleWorkers: 1,
-          drainingInFlightWorkers: 0,
-          drainingBackoffWorkers: 1,
+          workerStates: [
+            { activity: 'idle', draining: true },
+            { activity: 'inFlight', draining: false },
+            { activity: 'backoff', draining: true },
+          ],
         },
       }
       const view = renderPipeline(snapshot, orientation)
@@ -948,14 +938,13 @@ describe('PipelineSvg rendering', () => {
           reader: {
             ...base.reader,
             workers: { ...base.reader.workers, applied: 1 },
-            liveWorkers: 5,
-            drainingWorkers: 2,
-            idleWorkers: 1,
-            readingWorkers: 2,
-            blockedWorkers: 2,
-            drainingIdleWorkers: 0,
-            drainingReadingWorkers: 1,
-            drainingBlockedWorkers: 1,
+            workerStates: [
+              { activity: 'idle', draining: true },
+              { activity: 'reading', draining: true },
+              { activity: 'reading', draining: false },
+              { activity: 'blocked', draining: true },
+              { activity: 'blocked', draining: false },
+            ],
           },
         },
         orientation,
@@ -972,7 +961,7 @@ describe('PipelineSvg rendering', () => {
         'pipeline-worker--blocked',
         'pipeline-worker--reading pipeline-worker--draining',
         'pipeline-worker--reading',
-        'pipeline-worker--idle',
+        'pipeline-worker--idle pipeline-worker--draining',
       ])
       expect(getComputedStyle(reader.querySelector('.pipeline-worker--idle')!).opacity).toBe('0.34')
       view.unmount()
@@ -992,10 +981,36 @@ describe('PipelineSvg rendering', () => {
           [actor]: {
             ...base[actor],
             workers: { ...base.sender.workers, applied: 32 },
-            liveWorkers: 32,
-            idleWorkers: 25,
-            inFlightWorkers: 4,
-            backoffWorkers: 3,
+            workerStates:
+              actor === 'reader'
+                ? [
+                    ...Array.from({ length: 25 }, () => ({
+                      activity: 'idle' as const,
+                      draining: false,
+                    })),
+                    ...Array.from({ length: 4 }, () => ({
+                      activity: 'reading' as const,
+                      draining: false,
+                    })),
+                    ...Array.from({ length: 3 }, () => ({
+                      activity: 'blocked' as const,
+                      draining: false,
+                    })),
+                  ]
+                : [
+                    ...Array.from({ length: 25 }, () => ({
+                      activity: 'idle' as const,
+                      draining: false,
+                    })),
+                    ...Array.from({ length: 4 }, () => ({
+                      activity: 'inFlight' as const,
+                      draining: false,
+                    })),
+                    ...Array.from({ length: 3 }, () => ({
+                      activity: 'backoff' as const,
+                      draining: false,
+                    })),
+                  ],
           },
         },
         orientation,
@@ -1015,8 +1030,10 @@ describe('PipelineSvg rendering', () => {
       const live = 1_234
       const pool = {
         workers: { ...base.sender.workers, max: 10_000, applied: 10_000 },
-        liveWorkers: live,
-        idleWorkers: live,
+        workerStates: Array.from({ length: live }, () => ({
+          activity: 'idle' as const,
+          draining: false,
+        })),
       }
       const view = renderPipeline(
         {
@@ -1069,13 +1086,11 @@ describe('PipelineSvg rendering', () => {
         ...base,
         sender: {
           ...base.sender,
-          liveWorkers: 3,
-          idleWorkers: 2,
-          inFlightWorkers: 0,
-          backoffWorkers: 1,
-          drainingIdleWorkers: 0,
-          drainingInFlightWorkers: 0,
-          drainingBackoffWorkers: 0,
+          workerStates: [
+            { activity: 'idle', draining: false },
+            { activity: 'idle', draining: false },
+            { activity: 'backoff', draining: false },
+          ],
         },
       }
       const view = renderPipeline(snapshot)
