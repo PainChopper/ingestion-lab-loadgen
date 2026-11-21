@@ -11,6 +11,24 @@ import (
 	"time"
 )
 
+func TestLoadConfigRejectsUnknownNames(t *testing.T) {
+	base := testConfigContents()
+	for _, test := range []struct{ name, contents, unknown string }{
+		{"empty section", base + "\n[unexpected]\n", "unexpected"},
+		{"wrong-case section", strings.Replace(base, "[http]", "[HTTP]", 1), "HTTP"},
+		{"wrong-case key", strings.Replace(base, "addr =", "Addr =", 1), "Addr"},
+		{"additional wrong-case section", base + "\n[HTTP]\naddr = \"127.0.0.1:8080\"\n", "HTTP"},
+		{"additional wrong-case key", strings.Replace(base, "[http]", "[http]\nAddr = \"127.0.0.1:8080\"", 1), "Addr"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := loadConfig(writeConfigInput(t, test.contents))
+			if err == nil || !strings.Contains(err.Error(), "invalid keys: "+test.unknown) {
+				t.Fatalf("error = %v, want unknown key %q", err, test.unknown)
+			}
+		})
+	}
+}
+
 func TestLoadConfigRejectsWeakNumericTypes(t *testing.T) {
 	for _, test := range []struct{ name, old, replacement string }{
 		{"worker string", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = \"1\""},

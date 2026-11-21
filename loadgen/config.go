@@ -111,18 +111,19 @@ func loadConfig(configPath string) (config, error) {
 	if err := toml.Unmarshal(data, &values); err != nil {
 		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
 	}
-	if http, ok := configValue(values, "http").(map[string]any); !ok || configValue(http, "addr") == nil {
-		return config{}, errors.New("http.addr is required")
-	}
 	var cfg config
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result: &cfg, TagName: "mapstructure", ErrorUnused: true, ErrorUnset: true,
 		WeaklyTypedInput: false, DecodeHook: rejectFractionalInt,
+		MatchName: func(mapKey, fieldName string) bool { return mapKey == fieldName },
 	})
 	if err != nil {
 		return config{}, fmt.Errorf("create config decoder: %w", err)
 	}
 	if err := decoder.Decode(values); err != nil {
+		if http, ok := values["http"].(map[string]any); !ok || http["addr"] == nil {
+			err = errors.Join(err, errors.New("http.addr is required"))
+		}
 		return config{}, fmt.Errorf("decode config %q: %w", absConfigPath, err)
 	}
 	if err := cfg.validate(); err != nil {
@@ -130,15 +131,6 @@ func loadConfig(configPath string) (config, error) {
 	}
 
 	return cfg, nil
-}
-
-func configValue(values map[string]any, key string) any {
-	for name, value := range values {
-		if strings.EqualFold(name, key) {
-			return value
-		}
-	}
-	return nil
 }
 
 func rejectFractionalInt(from, to reflect.Type, data any) (any, error) {
