@@ -3,17 +3,90 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
 	"loadgen/internal/pipeline"
 )
 
+func TestSnapshotReaderWorkerMapping(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		activity pipeline.ReaderActivity
+		want     string
+	}{
+		{name: "zero idle", want: "idle"},
+		{name: "reading", activity: pipeline.ReaderReading, want: "reading"},
+		{name: "blocked", activity: pipeline.ReaderBlocked, want: "blocked"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, draining := range []bool{false, true} {
+				got := snapshotReaderWorkers([]pipeline.ReaderWorkerState{{Activity: test.activity, Draining: draining}})
+				if len(got) != 1 || string(got[0].Activity) != test.want || got[0].Draining != draining {
+					t.Fatalf("mapped reader (draining=%t) = %+v, want %s", draining, got, test.want)
+				}
+			}
+		})
+	}
+	for _, source := range [][]pipeline.ReaderWorkerState{nil, {}} {
+		if got := snapshotReaderWorkers(source); got == nil || len(got) != 0 {
+			t.Fatalf("empty reader mapping = %#v, want []", got)
+		}
+	}
+	for _, activity := range []pipeline.ReaderActivity{-1, pipeline.ReaderBlocked + 1} {
+		t.Run("invalid "+strconv.Itoa(int(activity)), func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("invalid reader activity did not panic")
+				}
+			}()
+			snapshotReaderWorkers([]pipeline.ReaderWorkerState{{Activity: activity}})
+		})
+	}
+}
+
+func TestSnapshotSenderWorkerMapping(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		activity pipeline.SenderActivity
+		want     string
+	}{
+		{name: "zero idle", want: "idle"},
+		{name: "in flight", activity: pipeline.SenderInFlight, want: "inFlight"},
+		{name: "backoff", activity: pipeline.SenderBackoff, want: "backoff"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, draining := range []bool{false, true} {
+				got := snapshotSenderWorkers([]pipeline.SenderWorkerState{{Activity: test.activity, Draining: draining}})
+				if len(got) != 1 || string(got[0].Activity) != test.want || got[0].Draining != draining {
+					t.Fatalf("mapped sender (draining=%t) = %+v, want %s", draining, got, test.want)
+				}
+			}
+		})
+	}
+	for _, source := range [][]pipeline.SenderWorkerState{nil, {}} {
+		if got := snapshotSenderWorkers(source); got == nil || len(got) != 0 {
+			t.Fatalf("empty sender mapping = %#v, want []", got)
+		}
+	}
+	for _, activity := range []pipeline.SenderActivity{-1, pipeline.SenderBackoff + 1} {
+		t.Run("invalid "+strconv.Itoa(int(activity)), func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("invalid sender activity did not panic")
+				}
+			}()
+			snapshotSenderWorkers([]pipeline.SenderWorkerState{{Activity: activity}})
+		})
+	}
+}
+
 func TestWorkerCountsAndCLI(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		reader []pipeline.ReaderWorkerState
-		sender []pipeline.SenderWorkerState
+		reader []readerWorkerState
+		sender []senderWorkerState
 		wantR  readerWorkerCounts
 		wantS  senderWorkerCounts
 		lineR  string
@@ -21,17 +94,17 @@ func TestWorkerCountsAndCLI(t *testing.T) {
 	}{
 		{
 			name:   "empty",
-			reader: []pipeline.ReaderWorkerState{}, sender: []pipeline.SenderWorkerState{},
+			reader: []readerWorkerState{}, sender: []senderWorkerState{},
 			lineR: "configured=1 live=0 reading=0 idle=0 blocked=0 draining=0",
 			lineS: "configured=2 live=0 in-flight=0 idle=0 backoff=0 draining=0",
 		},
 		{
 			name: "two owned workers",
-			reader: []pipeline.ReaderWorkerState{
-				{Activity: pipeline.ReaderReading}, {Activity: pipeline.ReaderBlocked, Draining: true},
+			reader: []readerWorkerState{
+				{Activity: readerWireReading}, {Activity: readerWireBlocked, Draining: true},
 			},
-			sender: []pipeline.SenderWorkerState{
-				{Activity: pipeline.SenderInFlight}, {Activity: pipeline.SenderBackoff, Draining: true},
+			sender: []senderWorkerState{
+				{Activity: senderWireInFlight}, {Activity: senderWireBackoff, Draining: true},
 			},
 			wantR: readerWorkerCounts{LiveWorkers: 2, ReadingWorkers: 1, BlockedWorkers: 1, DrainingWorkers: 1},
 			wantS: senderWorkerCounts{LiveWorkers: 2, InFlightWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
@@ -40,18 +113,18 @@ func TestWorkerCountsAndCLI(t *testing.T) {
 		},
 		{
 			name: "distinct counts and draining false",
-			reader: []pipeline.ReaderWorkerState{
-				{Activity: pipeline.ReaderReading},
-				{Activity: pipeline.ReaderBlocked}, {Activity: pipeline.ReaderBlocked},
-				{Activity: pipeline.ReaderIdle, Draining: true},
-				{Activity: pipeline.ReaderIdle, Draining: true},
-				{Activity: pipeline.ReaderIdle, Draining: true},
+			reader: []readerWorkerState{
+				{Activity: readerWireReading},
+				{Activity: readerWireBlocked}, {Activity: readerWireBlocked},
+				{Activity: readerWireIdle, Draining: true},
+				{Activity: readerWireIdle, Draining: true},
+				{Activity: readerWireIdle, Draining: true},
 			},
-			sender: []pipeline.SenderWorkerState{
-				{Activity: pipeline.SenderInFlight, Draining: true},
-				{Activity: pipeline.SenderInFlight, Draining: true},
-				{Activity: pipeline.SenderInFlight},
-				{Activity: pipeline.SenderBackoff}, {Activity: pipeline.SenderIdle},
+			sender: []senderWorkerState{
+				{Activity: senderWireInFlight, Draining: true},
+				{Activity: senderWireInFlight, Draining: true},
+				{Activity: senderWireInFlight},
+				{Activity: senderWireBackoff}, {Activity: senderWireIdle},
 			},
 			wantR: readerWorkerCounts{LiveWorkers: 6, ReadingWorkers: 1, BlockedWorkers: 2, IdleWorkers: 3, DrainingWorkers: 3},
 			wantS: senderWorkerCounts{LiveWorkers: 5, InFlightWorkers: 3, BackoffWorkers: 1, IdleWorkers: 1, DrainingWorkers: 2},

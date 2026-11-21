@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"loadgen/internal/pipeline"
 	"maps"
 	"os"
 	"reflect"
@@ -16,19 +15,19 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 	want := runtimeSnapshot{
 		Run: runSnapshot{State: runStateStopping, TotalTransactions: 101, ElapsedMs: 102},
 		Reader: readerSnapshot{
-			Workers: 11, WorkerStates: []pipeline.ReaderWorkerState{
-				{Activity: pipeline.ReaderReading}, {Activity: pipeline.ReaderReading},
-				{Activity: pipeline.ReaderBlocked, Draining: true}, {Activity: pipeline.ReaderIdle},
+			Workers: 11, WorkerStates: []readerWorkerState{
+				{Activity: readerWireReading}, {Activity: readerWireReading},
+				{Activity: readerWireBlocked, Draining: true}, {Activity: readerWireIdle},
 			},
 			ReadBatchSize: 20, ReadTps: 21.5, RowsRead: 22, SourceDirectory: "reader-source",
 			SourceError: &readerSourceError{Category: "reader-category", Operation: "reader-operation", RelativePath: "reader-path", Message: "reader-message"},
 		},
 		Throttler: throttlerSnapshot{RequestedTps: 31, AdmittedTps: 32.5, Installed: false},
 		Sender: senderSnapshot{
-			Workers: 41, WorkerStates: []pipeline.SenderWorkerState{
-				{Activity: pipeline.SenderInFlight, Draining: true},
-				{Activity: pipeline.SenderBackoff}, {Activity: pipeline.SenderBackoff},
-				{Activity: pipeline.SenderBackoff}, {Activity: pipeline.SenderIdle, Draining: true},
+			Workers: 41, WorkerStates: []senderWorkerState{
+				{Activity: senderWireInFlight, Draining: true},
+				{Activity: senderWireBackoff}, {Activity: senderWireBackoff},
+				{Activity: senderWireBackoff}, {Activity: senderWireIdle, Draining: true},
 			},
 		},
 		ReaderChannel: channelSnapshot{

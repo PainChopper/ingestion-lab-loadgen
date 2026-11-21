@@ -180,7 +180,7 @@ func TestReaderPoolReportsOnlyFirstConcurrentSourceError(t *testing.T) {
 		if sourceError.Path != "a.parquet" && sourceError.Path != "b.parquet" {
 			t.Fatalf("source error path=%q", sourceError.Path)
 		}
-		if pool.canRead() || pool.testSnapshot().LiveWorkers != 0 {
+		if pool.canRead() || len(pool.snapshot().WorkerStates) != 0 {
 			t.Fatal("source error did not stop all readers")
 		}
 		for path, file := range files {
@@ -205,13 +205,23 @@ func TestReaderPoolReactivatesOnlyNeededBlockedWorkers(t *testing.T) {
 			}, nil, zap.NewNop())
 		assertBlockedSenders(t, queue, 3)
 		pool.reconcile(1)
-		if got := pool.testSnapshot(); got.LiveWorkers != 3 || got.DrainingBlockedWorkers != 2 {
+		got := pool.snapshot().WorkerStates
+		if len(got) != 3 {
 			t.Fatalf("after 3 to 1: %+v", got)
 		}
-		pool.reconcile(2)
-		if got := pool.testSnapshot(); got.LiveWorkers != 3 || got.BlockedWorkers != 3 || got.DrainingBlockedWorkers != 1 {
-			t.Fatalf("after 1 to 2: %+v", got)
+		drainingBlocked := []ReaderWorkerState{}
+		for _, state := range got {
+			if state.Activity == ReaderBlocked && state.Draining {
+				drainingBlocked = append(drainingBlocked, state)
+			}
 		}
+		assertWorkerStateMultiset(t, drainingBlocked, []ReaderWorkerState{
+			{Activity: ReaderBlocked, Draining: true}, {Activity: ReaderBlocked, Draining: true},
+		})
+		pool.reconcile(2)
+		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
+			{Activity: ReaderBlocked}, {Activity: ReaderBlocked}, {Activity: ReaderBlocked, Draining: true},
+		})
 		pool.stopReading()
 		seen := make(map[string]bool)
 		for range 3 {
@@ -222,7 +232,7 @@ func TestReaderPoolReactivatesOnlyNeededBlockedWorkers(t *testing.T) {
 			seen[batch[0].ClientID] = true
 		}
 		<-pool.done
-		if got := queue.snapshot(time.Now()); got.SentTransactionsTotal != 3 || pool.testSnapshot().LiveWorkers != 0 {
+		if got := queue.snapshot(time.Now()); got.SentTransactionsTotal != 3 || len(pool.snapshot().WorkerStates) != 0 {
 			t.Fatalf("after drain: %+v", got)
 		}
 	})
@@ -383,12 +393,14 @@ func TestReaderPoolStopReadingSendsPendingPartialBatch(t *testing.T) {
 		pool = startReaderPool(t.Context(), Source{files: []string{"one"}}, 2, 3,
 			queue, &readerTelemetry{}, openFile, nil, zap.NewNop())
 		synctest.Wait()
-		if got := pool.testSnapshot(); got.ReadingWorkers != 1 || got.IdleWorkers != 2 {
-			t.Fatalf("before StopReading: %+v", got)
+		activities := []ReaderActivity{}
+		for _, state := range pool.snapshot().WorkerStates {
+			activities = append(activities, state.Activity)
 		}
+		assertWorkerStateMultiset(t, activities, []ReaderActivity{ReaderReading, ReaderIdle, ReaderIdle})
 		close(allowRead)
 		<-pool.done
-		if got := pool.testSnapshot().LiveWorkers; got != 0 {
+		if got := len(pool.snapshot().WorkerStates); got != 0 {
 			t.Fatalf("live workers after StopReading = %d, want 0", got)
 		}
 		select {
@@ -423,9 +435,11 @@ func TestReaderPoolImmediateSendKeepsWorkerReading(t *testing.T) {
 	if worker.activity == ReaderBlocked {
 		t.Fatal("immediate send marked worker blocked")
 	}
-	if snapshot := pool.testSnapshot(); snapshot.ReadingWorkers != 1 {
-		t.Fatalf("immediate send snapshot = %+v, want one reading worker", snapshot)
+	activities := []ReaderActivity{}
+	for _, state := range pool.snapshot().WorkerStates {
+		activities = append(activities, state.Activity)
 	}
+	assertWorkerStateMultiset(t, activities, []ReaderActivity{ReaderReading})
 	if measurements := channel.snapshot(time.Now()); measurements.BlockedSenders != 0 ||
 		measurements.SentBatchesTotal != 1 || measurements.SentTransactionsTotal != 1 {
 		t.Fatalf("immediate send channel measurements = %+v", measurements)
@@ -460,9 +474,6 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 		if !blocked {
 			t.Fatal("blocked send did not mark worker blocked")
 		}
-		if snapshot := pool.testSnapshot(); snapshot.BlockedWorkers != 1 || snapshot.DrainingBlockedWorkers != 1 {
-			t.Fatalf("blocked draining snapshot = %+v", snapshot)
-		}
 		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
 			{Activity: ReaderBlocked, Draining: true},
 		})
@@ -482,9 +493,9 @@ func TestReaderPoolBlockedSendReturnsToReadingAfterDrain(t *testing.T) {
 		if blocked {
 			t.Fatal("drained send left worker blocked")
 		}
-		if snapshot := pool.testSnapshot(); snapshot.ReadingWorkers != 1 || snapshot.DrainingReadingWorkers != 1 {
-			t.Fatalf("drained snapshot = %+v", snapshot)
-		}
+		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
+			{Activity: ReaderReading, Draining: true},
+		})
 		if measurements := channel.snapshot(time.Now()); measurements.BlockedSenders != 0 ||
 			measurements.SentBatchesTotal != 1 || measurements.SentTransactionsTotal != 1 {
 			t.Fatalf("drained send channel measurements = %+v", measurements)
@@ -536,9 +547,11 @@ func TestReaderPoolCanceledBlockedSendClearsBlockedState(t *testing.T) {
 		if blocked {
 			t.Fatal("cancelled send left worker blocked")
 		}
-		if snapshot := pool.testSnapshot(); snapshot.ReadingWorkers != 1 || snapshot.BlockedWorkers != 0 {
-			t.Fatalf("cancelled send snapshot = %+v", snapshot)
+		activities := []ReaderActivity{}
+		for _, state := range pool.snapshot().WorkerStates {
+			activities = append(activities, state.Activity)
 		}
+		assertWorkerStateMultiset(t, activities, []ReaderActivity{ReaderReading})
 		if measurements := channel.snapshot(time.Now()); measurements.BlockedSenders != 0 || measurements.BlockedMS != blockedFor.Milliseconds() ||
 			measurements.SentBatchesTotal != 0 || measurements.SentTransactionsTotal != 0 {
 			t.Fatalf("cancelled send channel measurements = %+v", measurements)
@@ -615,8 +628,9 @@ func TestReaderPoolDrainingIdleWorkerExitsWithoutWaiting(t *testing.T) {
 		t.Fatal("draining worker acquired a file")
 	}
 	pool.mu.Unlock()
-	if got := pool.testSnapshot(); got.LiveWorkers != 1 || got.DrainingWorkers != 0 {
-		t.Fatalf("retired idle worker remains live: %+v", got)
+	states := pool.snapshot().WorkerStates
+	if len(states) != 1 || states[0].Draining {
+		t.Fatalf("retired idle worker remains live: %+v", states)
 	}
 }
 
@@ -660,9 +674,11 @@ func TestReaderPoolReleaseWakesAllIdleWorkersBeforeDownscale(t *testing.T) {
 		<-firstRead
 		pool.reconcile(3)
 		synctest.Wait()
-		if got := pool.testSnapshot(); got.ReadingWorkers != 1 || got.IdleWorkers != 2 {
-			t.Fatalf("before release: %+v", got)
+		activities := []ReaderActivity{}
+		for _, state := range pool.snapshot().WorkerStates {
+			activities = append(activities, state.Activity)
 		}
+		assertWorkerStateMultiset(t, activities, []ReaderActivity{ReaderReading, ReaderIdle, ReaderIdle})
 		blockClaims.Store(true)
 		close(releaseFirst)
 		seen := map[int]bool{}
@@ -678,18 +694,19 @@ func TestReaderPoolReleaseWakesAllIdleWorkersBeforeDownscale(t *testing.T) {
 		close(releaseClaims)
 		<-secondRead
 		synctest.Wait()
-		got := pool.testSnapshot()
+		got := pool.snapshot().WorkerStates
 		pool.mu.Lock()
 		survivor := len(pool.workers) == 1 && pool.workers[0].id == 2
 		pool.mu.Unlock()
-		if !survivor || got.LiveWorkers != 1 || got.ReadingWorkers != 1 || got.DrainingWorkers != 0 {
+		if !survivor {
 			t.Fatalf("W2 did not claim the released file without another command: %+v", got)
 		}
+		assertWorkerStateMultiset(t, got, []ReaderWorkerState{{Activity: ReaderReading}})
 		cancel()
 		close(releaseSecond)
 		<-pool.done
 		pool.reconcile(3)
-		if got := pool.testSnapshot(); got.LiveWorkers != 0 {
+		if got := pool.snapshot().WorkerStates; len(got) != 0 {
 			t.Fatalf("workers started after cancellation: %+v", got)
 		}
 	})
@@ -708,9 +725,13 @@ func TestReaderPoolDownscaleSelectsIdleBeforeBusy(t *testing.T) {
 	pool.ctx = t.Context()
 
 	pool.reconcile(2)
-	if snapshot := pool.testSnapshot(); snapshot.DrainingWorkers != 1 || snapshot.DrainingIdleWorkers != 1 {
-		t.Fatalf("downscale snapshot = %+v, want one draining idle worker", snapshot)
+	draining := []ReaderWorkerState{}
+	for _, state := range pool.snapshot().WorkerStates {
+		if state.Draining {
+			draining = append(draining, state)
+		}
 	}
+	assertWorkerStateMultiset(t, draining, []ReaderWorkerState{{Activity: ReaderIdle, Draining: true}})
 }
 
 func TestReaderPoolBusyDownscaleFinishesCurrentFileWithoutClaimingNext(t *testing.T) {
@@ -741,16 +762,18 @@ func TestReaderPoolBusyDownscaleFinishesCurrentFileWithoutClaimingNext(t *testin
 			t.Fatalf("first opened file = %q", path)
 		}
 		synctest.Wait()
-		if got := pool.testSnapshot(); got.ReadingWorkers != 1 || got.BlockedWorkers != 0 {
-			t.Fatalf("first file must be held in Read: %+v", got)
+		activities := []ReaderActivity{}
+		for _, state := range pool.snapshot().WorkerStates {
+			activities = append(activities, state.Activity)
 		}
+		assertWorkerStateMultiset(t, activities, []ReaderActivity{ReaderReading})
 		pool.reconcile(0)
-		if got := pool.testSnapshot(); got.DrainingReadingWorkers != 1 {
-			t.Fatalf("busy worker not marked: %+v", got)
-		}
+		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
+			{Activity: ReaderReading, Draining: true},
+		})
 		close(releaseFirst)
 		synctest.Wait()
-		if got := pool.testSnapshot(); got.LiveWorkers != 0 {
+		if got := pool.snapshot().WorkerStates; len(got) != 0 {
 			t.Fatalf("worker did not retire after first file: %+v", got)
 		}
 		select {
@@ -794,18 +817,18 @@ func TestReaderPoolBlockedDownscaleFlushesEntireFile(t *testing.T) {
 		channel.batchSize = 2
 		pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 2, batches, &telemetry, &channel)
 		assertBlockedSender(t, &channel)
-		if snapshot := pool.testSnapshot(); snapshot.LiveWorkers != 2 || snapshot.BlockedWorkers != 1 || snapshot.IdleWorkers != 1 {
-			t.Fatalf("before downscale snapshot = %+v", snapshot)
+		beforeActivities := []ReaderActivity{}
+		for _, state := range pool.snapshot().WorkerStates {
+			beforeActivities = append(beforeActivities, state.Activity)
 		}
+		assertWorkerStateMultiset(t, beforeActivities, []ReaderActivity{ReaderBlocked, ReaderIdle})
 		pool.reconcile(1)
 		assertReaderLive(t, pool, 1)
-		if snapshot := pool.testSnapshot(); snapshot.BlockedWorkers != 1 || snapshot.DrainingWorkers != 0 {
-			t.Fatalf("busy worker was selected before idle: %+v", snapshot)
-		}
+		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{{Activity: ReaderBlocked}})
 		pool.reconcile(0)
-		if snapshot := pool.testSnapshot(); snapshot.BlockedWorkers != 1 || snapshot.DrainingBlockedWorkers != 1 {
-			t.Fatalf("blocked draining snapshot = %+v", snapshot)
-		}
+		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
+			{Activity: ReaderBlocked, Draining: true},
+		})
 		<-batches
 		var emitted []Transaction
 		for len(emitted) < 3 {
@@ -858,7 +881,7 @@ func TestReaderPoolBlockedDownscaleRetainsFileUntilRecovery(t *testing.T) {
 			t.Fatal("draining worker exited while downstream remained full")
 		default:
 		}
-		if got := pool.testSnapshot().LiveWorkers; got != 1 {
+		if got := len(pool.snapshot().WorkerStates); got != 1 {
 			t.Fatalf("worker exited before downstream recovered: live=%d", got)
 		}
 		<-batches
@@ -919,7 +942,7 @@ func TestReaderPoolSnapshotStatesAreIndependent(t *testing.T) {
 func assertReaderLive(t *testing.T, pool *readerPool, want int) {
 	t.Helper()
 	synctest.Wait()
-	if got := pool.testSnapshot().LiveWorkers; got != want {
+	if got := len(pool.snapshot().WorkerStates); got != want {
 		t.Fatalf("reader live=%d, want %d", got, want)
 	}
 }
@@ -941,13 +964,11 @@ func TestReaderPoolReactivatesBlockedWorkerWithoutDuplicateSlot(t *testing.T) {
 		pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 1, 1, batches, &telemetry, &channel)
 		assertBlockedSender(t, &channel)
 		pool.reconcile(0)
-		if snapshot := pool.testSnapshot(); snapshot.BlockedWorkers != 1 || snapshot.DrainingBlockedWorkers != 1 {
-			t.Fatalf("before reactivation = %+v", snapshot)
-		}
+		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
+			{Activity: ReaderBlocked, Draining: true},
+		})
 		pool.reconcile(1)
-		if snapshot := pool.testSnapshot(); snapshot.LiveWorkers != 1 || snapshot.BlockedWorkers != 1 || snapshot.DrainingWorkers != 0 {
-			t.Fatalf("reactivated snapshot = %+v", snapshot)
-		}
+		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{{Activity: ReaderBlocked}})
 		<-batches
 		select {
 		case batch := <-batches:
@@ -957,8 +978,12 @@ func TestReaderPoolReactivatesBlockedWorkerWithoutDuplicateSlot(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("reactivated worker did not flush its blocked batch")
 		}
-		if snapshot := pool.testSnapshot(); snapshot.LiveWorkers != 1 || snapshot.DrainingWorkers != 0 {
-			t.Fatalf("worker was replaced or duplicated: %+v", snapshot)
+		states := pool.snapshot().WorkerStates
+		if len(states) != 1 {
+			t.Fatalf("worker was replaced or duplicated: %+v", states)
+		}
+		if states[0].Draining {
+			t.Fatalf("reactivated worker is draining: %+v", states)
 		}
 		cancel()
 		<-pool.done
@@ -978,18 +1003,22 @@ func TestReaderPoolCancellationUnblocksDrainingWorkers(t *testing.T) {
 		var channel batchQueue
 		pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 1, 2, batches, &telemetry, &channel)
 		assertBlockedSender(t, &channel)
-		if got := pool.testSnapshot(); got.BlockedWorkers != 1 || got.IdleWorkers != 1 {
-			t.Fatalf("before downscale: %+v", got)
+		beforeActivities := []ReaderActivity{}
+		for _, state := range pool.snapshot().WorkerStates {
+			beforeActivities = append(beforeActivities, state.Activity)
 		}
+		assertWorkerStateMultiset(t, beforeActivities, []ReaderActivity{ReaderBlocked, ReaderIdle})
 		pool.reconcile(1)
 		synctest.Wait()
-		if got := pool.testSnapshot(); got.BlockedWorkers != 1 || got.LiveWorkers != 1 {
-			t.Fatalf("after downscale: %+v", got)
+		afterActivities := []ReaderActivity{}
+		for _, state := range pool.snapshot().WorkerStates {
+			afterActivities = append(afterActivities, state.Activity)
 		}
+		assertWorkerStateMultiset(t, afterActivities, []ReaderActivity{ReaderBlocked})
 		pool.reconcile(0)
-		if got := pool.testSnapshot(); got.DrainingBlockedWorkers != 1 {
-			t.Fatalf("before cancellation: %+v", got)
-		}
+		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
+			{Activity: ReaderBlocked, Draining: true},
+		})
 		cancel()
 		select {
 		case <-pool.done:
@@ -997,7 +1026,7 @@ func TestReaderPoolCancellationUnblocksDrainingWorkers(t *testing.T) {
 			t.Fatal("cancellation left a draining or blocked worker alive")
 		}
 		pool.reconcile(2)
-		if snapshot := pool.testSnapshot(); snapshot.LiveWorkers != 0 {
+		if snapshot := pool.snapshot().WorkerStates; len(snapshot) != 0 {
 			t.Fatalf("cancelled pool recreated workers: %+v", snapshot)
 		}
 	})

@@ -5,11 +5,41 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"loadgen/internal/pipeline"
 )
 
-type readerWorkerStates []pipeline.ReaderWorkerState
+type readerWireActivity string
+
+const (
+	readerWireIdle    readerWireActivity = "idle"
+	readerWireReading readerWireActivity = "reading"
+	readerWireBlocked readerWireActivity = "blocked"
+)
+
+type readerWorkerState struct {
+	Activity readerWireActivity `json:"activity"`
+	Draining bool               `json:"draining"`
+}
+
+var readerActivityWire = [...]readerWireActivity{
+	pipeline.ReaderIdle:    readerWireIdle,
+	pipeline.ReaderReading: readerWireReading,
+	pipeline.ReaderBlocked: readerWireBlocked,
+}
+
+func snapshotReaderWorkers(states []pipeline.ReaderWorkerState) readerWorkerStates {
+	result := make(readerWorkerStates, 0, len(states))
+	for _, state := range states {
+		result = append(result, readerWorkerState{
+			Activity: readerActivityWire[state.Activity], Draining: state.Draining,
+		})
+	}
+	return result
+}
+
+type readerWorkerStates []readerWorkerState
 
 func (states *readerWorkerStates) UnmarshalJSON(data []byte) error {
 	items, err := decodeWorkerStateItems(data)
@@ -18,19 +48,46 @@ func (states *readerWorkerStates) UnmarshalJSON(data []byte) error {
 	}
 	result := make(readerWorkerStates, 0, len(items))
 	for index, item := range items {
-		activity := pipeline.ReaderActivity(*item.Activity)
-		switch activity {
-		case pipeline.ReaderIdle, pipeline.ReaderReading, pipeline.ReaderBlocked:
-		default:
+		activity := readerWireActivity(*item.Activity)
+		if !slices.Contains(readerActivityWire[:], activity) {
 			return fmt.Errorf("reader.workerStates[%d]: invalid activity %q", index, activity)
 		}
-		result = append(result, pipeline.ReaderWorkerState{Activity: activity, Draining: *item.Draining})
+		result = append(result, readerWorkerState{Activity: activity, Draining: *item.Draining})
 	}
 	*states = result
 	return nil
 }
 
-type senderWorkerStates []pipeline.SenderWorkerState
+type senderWireActivity string
+
+const (
+	senderWireIdle     senderWireActivity = "idle"
+	senderWireInFlight senderWireActivity = "inFlight"
+	senderWireBackoff  senderWireActivity = "backoff"
+)
+
+type senderWorkerState struct {
+	Activity senderWireActivity `json:"activity"`
+	Draining bool               `json:"draining"`
+}
+
+var senderActivityWire = [...]senderWireActivity{
+	pipeline.SenderIdle:     senderWireIdle,
+	pipeline.SenderInFlight: senderWireInFlight,
+	pipeline.SenderBackoff:  senderWireBackoff,
+}
+
+func snapshotSenderWorkers(states []pipeline.SenderWorkerState) senderWorkerStates {
+	result := make(senderWorkerStates, 0, len(states))
+	for _, state := range states {
+		result = append(result, senderWorkerState{
+			Activity: senderActivityWire[state.Activity], Draining: state.Draining,
+		})
+	}
+	return result
+}
+
+type senderWorkerStates []senderWorkerState
 
 func (states *senderWorkerStates) UnmarshalJSON(data []byte) error {
 	items, err := decodeWorkerStateItems(data)
@@ -39,13 +96,11 @@ func (states *senderWorkerStates) UnmarshalJSON(data []byte) error {
 	}
 	result := make(senderWorkerStates, 0, len(items))
 	for index, item := range items {
-		activity := pipeline.SenderActivity(*item.Activity)
-		switch activity {
-		case pipeline.SenderIdle, pipeline.SenderInFlight, pipeline.SenderBackoff:
-		default:
+		activity := senderWireActivity(*item.Activity)
+		if !slices.Contains(senderActivityWire[:], activity) {
 			return fmt.Errorf("sender.workerStates[%d]: invalid activity %q", index, activity)
 		}
-		result = append(result, pipeline.SenderWorkerState{Activity: activity, Draining: *item.Draining})
+		result = append(result, senderWorkerState{Activity: activity, Draining: *item.Draining})
 	}
 	*states = result
 	return nil
@@ -80,15 +135,15 @@ type readerWorkerCounts struct {
 	DrainingWorkers                                          int
 }
 
-func countReaderWorkers(states []pipeline.ReaderWorkerState) readerWorkerCounts {
+func countReaderWorkers(states []readerWorkerState) readerWorkerCounts {
 	counts := readerWorkerCounts{LiveWorkers: len(states)}
 	for _, state := range states {
 		switch state.Activity {
-		case pipeline.ReaderIdle:
+		case readerWireIdle:
 			counts.IdleWorkers++
-		case pipeline.ReaderReading:
+		case readerWireReading:
 			counts.ReadingWorkers++
-		case pipeline.ReaderBlocked:
+		case readerWireBlocked:
 			counts.BlockedWorkers++
 		}
 		if state.Draining {
@@ -103,15 +158,15 @@ type senderWorkerCounts struct {
 	DrainingWorkers                                           int
 }
 
-func countSenderWorkers(states []pipeline.SenderWorkerState) senderWorkerCounts {
+func countSenderWorkers(states []senderWorkerState) senderWorkerCounts {
 	counts := senderWorkerCounts{LiveWorkers: len(states)}
 	for _, state := range states {
 		switch state.Activity {
-		case pipeline.SenderIdle:
+		case senderWireIdle:
 			counts.IdleWorkers++
-		case pipeline.SenderInFlight:
+		case senderWireInFlight:
 			counts.InFlightWorkers++
-		case pipeline.SenderBackoff:
+		case senderWireBackoff:
 			counts.BackoffWorkers++
 		}
 		if state.Draining {

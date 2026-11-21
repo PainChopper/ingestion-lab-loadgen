@@ -267,12 +267,6 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 		snapshot = run.Snapshot(now)
 	}
 	readerPool, senderPool := snapshot.Reader, snapshot.Sender
-	if readerPool.WorkerStates == nil {
-		readerPool.WorkerStates = []pipeline.ReaderWorkerState{}
-	}
-	if senderPool.WorkerStates == nil {
-		senderPool.WorkerStates = []pipeline.SenderWorkerState{}
-	}
 	readerChannel, senderChannel := snapshot.ReaderQueue, snapshot.SenderQueue
 
 	return runtimeSnapshot{
@@ -282,7 +276,7 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 			ElapsedMs:         s.elapsedMs(now),
 		},
 		Reader: readerSnapshot{
-			Workers: s.controls.readerWorkers, WorkerStates: readerPool.WorkerStates,
+			Workers: s.controls.readerWorkers, WorkerStates: snapshotReaderWorkers(readerPool.WorkerStates),
 			ReadBatchSize: s.config.Reader.ReadBatchSize, ReadTps: readerPool.ReadTPS,
 			RowsRead:        readerPool.RowsRead,
 			SourceDirectory: pipeline.SourceDirectory(s.config.Source.Path),
@@ -294,7 +288,7 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 			Installed:    s.controls.installed,
 		},
 		Sender: senderSnapshot{
-			Workers: s.controls.senderWorkers, WorkerStates: senderPool.WorkerStates,
+			Workers: s.controls.senderWorkers, WorkerStates: snapshotSenderWorkers(senderPool.WorkerStates),
 		},
 		ReaderChannel: snapshotChannel(readerChannel, s.config.ReaderChannel.Capacity),
 		SenderChannel: snapshotChannel(senderChannel, s.config.SenderChannel.Capacity),

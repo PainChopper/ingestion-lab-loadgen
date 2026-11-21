@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"loadgen/internal/pipeline"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,17 +187,17 @@ func TestFormatSnapshot(t *testing.T) {
 	status := runtimeSnapshot{
 		Run: runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
 		Reader: readerSnapshot{
-			Workers: 3, WorkerStates: []pipeline.ReaderWorkerState{
-				{Activity: pipeline.ReaderReading}, {Activity: pipeline.ReaderIdle, Draining: true},
+			Workers: 3, WorkerStates: []readerWorkerState{
+				{Activity: readerWireReading}, {Activity: readerWireIdle, Draining: true},
 			}, ReadTps: 12.34, RowsRead: 99,
 			SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt"},
 		},
 		Throttler:     throttlerSnapshot{RequestedTps: 100, AdmittedTps: 9.87, Installed: true},
 		ReaderChannel: channelSnapshot{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, SentTransactionsPerSecond: 1.25, ReceivedTransactionsPerSecond: 2.5},
 		SenderChannel: channelSnapshot{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, SentTransactionsPerSecond: 3.75, ReceivedTransactionsPerSecond: 4.5},
-		Sender: senderSnapshot{Workers: 5, WorkerStates: []pipeline.SenderWorkerState{
-			{Activity: pipeline.SenderInFlight}, {Activity: pipeline.SenderInFlight},
-			{Activity: pipeline.SenderIdle}, {Activity: pipeline.SenderBackoff, Draining: true},
+		Sender: senderSnapshot{Workers: 5, WorkerStates: []senderWorkerState{
+			{Activity: senderWireInFlight}, {Activity: senderWireInFlight},
+			{Activity: senderWireIdle}, {Activity: senderWireBackoff, Draining: true},
 		}},
 	}
 
