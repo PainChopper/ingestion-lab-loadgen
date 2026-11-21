@@ -25,73 +25,39 @@ function control(overrides: Partial<NumericControlSnapshot> = {}): NumericContro
 }
 
 describe('throttler valve mapping', () => {
-  it('creates 12 capability-anchored snapped absolute targets', () => {
+  it('creates local integer targets spanning the complete range', () => {
     expect(getValveTargets(control())).toEqual([
-      0, 25_000, 45_000, 70_000, 90_000, 115_000, 135_000, 160_000, 180_000, 205_000, 225_000,
+      0, 22_727, 45_455, 68_182, 90_909, 113_636, 136_364, 159_091, 181_818, 204_545, 227_273,
       250_000,
-    ])
-    expect(getValveTargets(control({ min: 10, max: 120, step: 10 }))).toEqual([
-      10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120,
     ])
   })
 
-  it('maps applied values to the nearest opening and resolves ties downward', () => {
-    const targets = getValveTargets(control())!
-    expect(valueToOpeningIndex(-1, control(), targets)).toBe(0)
-    expect(valueToOpeningIndex(35_000, control(), targets)).toBe(1)
-    expect(valueToOpeningIndex(250_001, control(), targets)).toBe(11)
-    expect(effectiveValveOpeningIndex(false, control({ applied: 25_000 }))).toBe(11)
+  it('maps values to the nearest opening and resolves ties downward', () => {
+    const capability = control({ max: 110 })
+    expect(valueToOpeningIndex(-1, capability)).toBe(0)
+    expect(valueToOpeningIndex(15, capability)).toBe(1)
+    expect(valueToOpeningIndex(200, capability)).toBe(11)
+    expect(effectiveValveOpeningIndex(false, control())).toBe(11)
     expect(effectiveValveOpeningIndex(true, control({ applied: 25_000 }))).toBe(1)
     expect(effectiveValveOpeningIndex(null, control({ applied: 25_000 }))).toBe(1)
   })
 
-  it.each([
-    { max: 400_001, step: 200_000, last: null },
-    { max: 400_001, step: 25_000, last: 400_000 },
-    { max: Number.MAX_SAFE_INTEGER, step: 3, last: 9_007_199_254_740_990 },
-    { max: 250_001, step: 5_000, last: 250_000 },
-    { max: 1_000_000_000_000_000, step: 3, last: 999_999_999_999_999 },
-  ])('uses only legal grid targets below off-grid max=$max', ({ max, step, last }) => {
-    const capability = control({ max, step })
-    const targets = getValveTargets(capability)
-    if (last === null) {
-      expect(targets).toBeNull()
-      expect(valveIsAdjustable(capability)).toBe(false)
-    } else {
-      expect(targets).toHaveLength(12)
-      expect(targets!.at(-1)).toBe(last)
+  it.each([1, 10, 250_001, 4_000_000, Number.MAX_SAFE_INTEGER])(
+    'includes both edges with safe unique integer targets for max=%s',
+    (max) => {
+      const capability = control({ max })
+      const targets = getValveTargets(capability)!
+      expect(targets[0]).toBe(0)
+      expect(targets.at(-1)).toBe(max)
+      expect(targets.length).toBeLessThanOrEqual(12)
+      expect(new Set(targets).size).toBe(targets.length)
       expect(
-        targets!.every(
-          (target) =>
-            Number.isSafeInteger(target) && target >= 0 && target <= max && target % step === 0,
-        ),
+        targets.every((value) => Number.isSafeInteger(value) && value >= 0 && value <= max),
       ).toBe(true)
-    }
-  })
-
-  it('keeps the 12-stop current TPS config mapping', () => {
-    const currentConfig = control({
-      applied: 2_000_000,
-      max: 4_000_000,
-      step: 200_000,
-    })
-    const targets = getValveTargets(currentConfig)!
-
-    expect(targets).toEqual([
-      0, 400_000, 800_000, 1_000_000, 1_400_000, 1_800_000, 2_200_000, 2_600_000, 3_000_000,
-      3_200_000, 3_600_000, 4_000_000,
-    ])
-    expect(new Set(targets)).toHaveLength(12)
-    expect(
-      targets.every(
-        (target) =>
-          target >= currentConfig.min &&
-          target <= currentConfig.max &&
-          target % currentConfig.step === 0,
-      ),
-    ).toBe(true)
-    expect(valueToOpeningIndex(2_000_000, currentConfig, targets)).toBe(5)
-  })
+      expect(effectiveValveOpeningIndex(true, control({ max, applied: max }))).toBe(11)
+      expect(valveIsAdjustable(capability)).toBe(true)
+    },
+  )
 
   it('keeps visible side targets separate from the installed bypass grip', () => {
     const intersects = (
@@ -139,10 +105,10 @@ describe('throttler valve mapping', () => {
     expect(contains(VALVE_OPENING_CONTROLS.increase, 456, 415)).toBe(true)
   })
 
-  it('disables adjustment unless all 12 snapped targets are distinct', () => {
+  it('disables adjustment for unavailable values and invalid ranges', () => {
     expect(valveIsAdjustable(control())).toBe(true)
-    expect(valveIsAdjustable(control({ max: 10, step: 2 }))).toBe(false)
-    expect(valveIsAdjustable(control({ step: 0 }))).toBe(false)
+    expect(valveIsAdjustable(control({ max: 0 }))).toBe(false)
+    expect(valveIsAdjustable(control({ max: Number.MAX_SAFE_INTEGER + 1 }))).toBe(false)
     expect(valveIsAdjustable(control({ applied: null }))).toBe(false)
     expect(valveIsAdjustable(control({ applyMode: 'unavailable' }))).toBe(false)
   })

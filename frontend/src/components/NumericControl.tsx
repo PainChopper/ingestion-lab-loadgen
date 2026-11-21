@@ -33,7 +33,7 @@ export function NumericControl({ label, control, desiredControl, className }: Nu
     if (!editable) return
     setDraft(event.currentTarget.value)
     const value = event.currentTarget.valueAsNumber
-    const valid = event.currentTarget.checkValidity() && Number.isFinite(value)
+    const valid = event.currentTarget.checkValidity() && Number.isSafeInteger(value)
     if (valid) {
       desiredControl.preview(value)
     } else {
@@ -45,7 +45,7 @@ export function NumericControl({ label, control, desiredControl, className }: Nu
     if (!editable) return
 
     const value = input.valueAsNumber
-    if (input.checkValidity() && Number.isFinite(value)) {
+    if (input.checkValidity() && Number.isSafeInteger(value)) {
       void desiredControl.commit(value)
     } else {
       desiredControl.cancel()
@@ -87,7 +87,7 @@ export function NumericControl({ label, control, desiredControl, className }: Nu
         type="number"
         min={control.min}
         max={control.max}
-        step={control.step}
+        step={1}
         value={editable ? (draft ?? displayedValue) : displayedValue}
         disabled={!editable}
         inputMode="numeric"

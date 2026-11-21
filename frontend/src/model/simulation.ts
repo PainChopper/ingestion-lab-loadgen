@@ -26,7 +26,7 @@ export interface SimulationConfig {
   targetErrorRatePercent: number
 }
 
-export type ChannelTelemetry = Readonly<WireSnapshot['readerChannel']>
+export type ChannelTelemetry = Readonly<WireSnapshot['readerChannel'] & { capacity: number }>
 
 export interface SenderTelemetry {
   readonly workerStates: readonly SenderWorkerSnapshot[]
@@ -212,10 +212,6 @@ class StatefulChannel<TItem> {
       depthBatches: this.depthBatches,
       blockedSenders: this.blockedSenders,
       oldestBlockedSenderMs: this.oldestBlockedSenderMs,
-      bufferedTransactions: this.items.reduce(
-        (total, item) => total + this.transactionsOf(item),
-        0,
-      ),
       blockedMs: this.blockedMs,
       inputTransactionsTotal: this.sentTransactionsTotal,
       outputTransactionsTotal: this.receivedTransactionsTotal,
@@ -237,7 +233,6 @@ class StatefulChannel<TItem> {
 
 export class FixedStepSimulation {
   readonly config: SimulationConfig
-  readonly initialConfig: Readonly<SimulationConfig>
 
   private readonly readerChannel: StatefulChannel<SimulationBatch>
   private readonly senderChannel: StatefulChannel<SimulationBatch>
@@ -262,7 +257,6 @@ export class FixedStepSimulation {
     attemptOutcomeSource?: SimulationAttemptOutcomeSource,
   ) {
     this.config = { ...config, throttlerInstalled: config.throttlerInstalled ?? true }
-    this.initialConfig = Object.freeze({ ...this.config })
     this.readerChannel = new StatefulChannel(readerChannelCapacity, (batch) => batch.transactions)
     this.senderChannel = new StatefulChannel(senderChannelCapacity, (batch) => batch.transactions)
     this.attemptOutcomeSource = attemptOutcomeSource

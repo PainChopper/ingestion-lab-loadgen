@@ -2,48 +2,24 @@ import { z } from 'zod/mini'
 
 const wireInteger = z.int().check(z.nonnegative())
 
-const workersConfigSchema = z
-  .strictObject({
-    initial: wireInteger.check(z.positive()),
-    max: wireInteger.check(z.positive()),
-  })
-  .check(
-    z.refine(({ initial, max }) => initial <= max, {
-      path: ['initial'],
-      error: 'Expected initial within 1..max',
-    }),
-  )
-
-const tpsConfigSchema = z
-  .strictObject({
-    initial: wireInteger,
-    max: wireInteger.check(z.positive()),
-    step: wireInteger.check(z.positive()),
-  })
-  .check(
-    z.refine(({ initial, max, step }) => initial <= max && initial % step === 0, {
-      path: ['initial'],
-      error: 'Expected initial within 0..max and on the step grid',
-    }),
-  )
-
 const configSchema = z.strictObject({
-  readerWorkers: workersConfigSchema,
-  senderWorkers: workersConfigSchema,
-  throttlerRequestedTps: tpsConfigSchema,
+  readerWorkersMax: wireInteger.check(z.positive()),
+  senderWorkersMax: wireInteger.check(z.positive()),
+  requestedTpsMax: wireInteger.check(z.positive()),
+  readBatchSize: wireInteger.check(z.positive()),
+  readerChannelCapacity: wireInteger,
+  senderChannelCapacity: wireInteger,
+  sourcePath: z.string(),
 })
 
 const sourceErrorSchema = z.strictObject({
-  category: z.string(),
   operation: z.string(),
-  relativePath: z.string(),
+  path: z.string(),
   message: z.string(),
 })
 
 const channelSchema = z.strictObject({
-  capacity: wireInteger,
   depthBatches: wireInteger,
-  bufferedTransactions: wireInteger,
   blockedSenders: wireInteger,
   oldestBlockedSenderMs: wireInteger,
   blockedMs: wireInteger,
@@ -66,9 +42,7 @@ export const wireSnapshotSchema = z.strictObject({
         draining: z.boolean(),
       }),
     ),
-    readBatchSize: wireInteger.check(z.positive()),
     rowsRead: wireInteger,
-    sourceDirectory: z.string(),
     sourceError: z.nullable(sourceErrorSchema),
   }),
   throttler: z.strictObject({

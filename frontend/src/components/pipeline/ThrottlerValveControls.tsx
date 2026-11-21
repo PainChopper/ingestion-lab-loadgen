@@ -2,7 +2,6 @@ import { clsx } from 'clsx'
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { ThrottlerValveWheel } from './ThrottlerValveSvg'
 import {
-  MAX_OPENING_INDEX,
   VALVE_FOCUS_RING,
   VALVE_INSTALLATION_CONTROL,
   VALVE_OPENING_CONTROLS,
@@ -14,6 +13,7 @@ import type { useValveInstallation } from './useValveInstallation'
 interface OpeningControlProps {
   adjustable: boolean
   rangeIndex: number
+  maxRangeIndex: number
   rangeText: string
   wheelPhase: number
   handlePointerDown: (event: ReactPointerEvent<SVGRectElement>, delta: -1 | 1) => void
@@ -24,6 +24,7 @@ interface OpeningControlProps {
 export function ThrottlerValveOpeningControl({
   adjustable,
   rangeIndex,
+  maxRangeIndex,
   rangeText,
   wheelPhase,
   handlePointerDown,
@@ -37,7 +38,7 @@ export function ThrottlerValveOpeningControl({
       tabIndex={0}
       aria-label="Throttle opening"
       aria-valuemin={0}
-      aria-valuemax={MAX_OPENING_INDEX}
+      aria-valuemax={maxRangeIndex}
       aria-valuenow={rangeIndex}
       aria-valuetext={rangeText}
       aria-disabled={!adjustable}

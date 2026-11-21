@@ -104,14 +104,11 @@ export function getInspectorViewModel(
         { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
       ]
       if (hasSourceError) {
-        const sourcePath = `${snapshot.reader.sourceDirectory ?? ''}/${sourceError.relativePath}`
-          .replace(/\/+/g, '/')
-          .replace(/\/$/, '')
         rows.push({
           label: '',
           key: 'source-error',
           kind: 'source-error',
-          value: `${sourceError.operation}: ${sourcePath}: ${sourceError.message}`,
+          value: `${sourceError.operation}: ${sourceError.path}: ${sourceError.message}`,
           layout: 'full-width',
         })
       }

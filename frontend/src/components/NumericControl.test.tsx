@@ -49,6 +49,28 @@ function LiveNumericControl({
 }
 
 describe('NumericControl', () => {
+  it.each(['Enter', 'blur'])(
+    'commits an exact TPS between valve positions on %s',
+    async (finish) => {
+      const user = userEvent.setup()
+      const dispatch = vi.fn().mockResolvedValue({ accepted: true })
+      render(
+        <LiveNumericControl
+          snapshot={{ ...control(2_000_000), max: 4_000_000, step: 200_000 }}
+          dispatch={dispatch}
+        />,
+      )
+      const input = screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Capacity/ })
+      await user.clear(input)
+      await user.type(input, '2000001')
+      expect(input.checkValidity()).toBe(true)
+      if (finish === 'Enter') await user.keyboard('{Enter}')
+      else await user.tab()
+      expect(dispatch.mock.calls).toEqual([[2_000_001]])
+      expect(input.value).toBe('2000001')
+    },
+  )
+
   it('shows the applied value after external cancellation while focused without committing on Tab', async () => {
     const user = userEvent.setup()
     const dispatch = vi.fn().mockResolvedValue({ accepted: true })
