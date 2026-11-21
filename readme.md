@@ -129,8 +129,9 @@ The HTTP Sender posts a JSON array with `Content-Type: application/json` and tre
 
 ## HTTP API and observability
 
-- `GET /api/loadgen/snapshot`: run status and live stage/queue telemetry. The immutable `config` object contains `readerWorkersMax`, `senderWorkersMax`, `requestedTpsMax`, `readBatchSize`, `readerChannelCapacity`, `senderChannelCapacity`, and `sourcePath`.
-- `HEAD /api/loadgen/snapshot`: the same response headers without a body.
+- `GET /api/loadgen/config`: exactly seven immutable startup settings: `readerWorkersMax`, `senderWorkersMax`, `requestedTpsMax`, `readBatchSize`, `readerChannelCapacity`, `senderChannelCapacity`, and `sourcePath`. The response is built once when the HTTP mux is created and does not use the event loop; it is available while HTTP serves requests, including during startup, shutdown, and faults.
+- `GET /api/loadgen/snapshot`: run status and live stage/queue telemetry, including `reader.workers`, `sender.workers`, `throttler.requestedTps`, and `throttler.installed`; no `config` object.
+- `HEAD /api/loadgen/config` and `HEAD /api/loadgen/snapshot`: the corresponding GET response headers without a body.
 - `POST /api/loadgen/commands`: change live settings while the pipeline is running.
 - `GET /metrics`: Prometheus metrics.
 - `/debug/pprof/`: Go profiling.
@@ -139,7 +140,9 @@ Snapshots expose cumulative `reader.rowsRead`, channel `inputTransactionsTotal`/
 
 Source errors expose `operation`, the exact file `path` (or glob pattern for discovery failures), and `message`. CLI displays the configured source glob and labels queued transactions as an approximation of `depthBatches × config.readBatchSize`; partial batches can contain fewer transactions.
 
-CLI `status` makes one snapshot request and shows explicitly labelled average TPS since the run started (total divided by `run.elapsedMs`), including admitted TPS from the Sender channel's input total. Before the run starts, averages are zero. Prometheus `loadgen_transactions_total` reads current confirmations at every scrape; `loadgen_target_tps` remains the configured target. Runtime summaries have their own one-minute timer and log cumulative channel totals.
+CLI `status` requests config and snapshot separately, rejecting unknown fields and trailing JSON in both responses. A failure of either request fails the command and identifies the endpoint; the status output is unchanged. CLI `set` posts a command and confirms the applied value using only a snapshot GET, without requesting config. Status shows explicitly labelled average TPS since the run started (total divided by `run.elapsedMs`), including admitted TPS from the Sender channel's input total. Before the run starts, averages are zero. Prometheus `loadgen_transactions_total` reads current confirmations at every scrape; `loadgen_target_tps` remains the configured target. Runtime summaries have their own one-minute timer and log cumulative channel totals, taking queue capacities directly from startup configuration.
+
+The HTTP frontend adapter fetches config at startup and polls snapshots every second. It re-fetches config when `capturedAtMs` decreases or snapshot polling recovers after a failed poll, even if the new capture time is larger. On failure or detected restart it discards the old config and rejects late config responses from before that boundary. A config request failure leaves snapshot polling active and is retried on the next poll, without a separate timer. Until current config is loaded, numeric controls are unavailable, capacities and batch size are unknown (`null`), all commands are rejected as `unavailable`, and the connection remains `connecting` or `error`. Simulation exposes config separately through the same adapter interface with `sourcePath` set to `simulation`; its snapshots contain no config.
 
 Reader and Sender snapshots expose `workerStates`: a list of live workers, each with `activity` and `draining`. Reader activities are `idle`, `reading`, and `blocked`; Sender activities are `idle`, `inFlight`, and `backoff`. A blocked Reader still owns its file, and a Sender in backoff still owns its batch. The independent `draining` flag prevents new work after current work finishes. Lists are empty (`[]`) before startup, allow repeated states, and have no ordering guarantee. `workers` remains the configured target; during downscale it can be smaller than the list length. CLI displays counts derived from these lists; runtime summaries log only the target and live count for each pool.
 
@@ -153,7 +156,7 @@ Supported actions: `set-reader-workers`, `set-sender-workers`, `set-requested-tp
 
 Invalid actions or values receive `400 Bad Request`. During shutdown, snapshots remain available while batches drain and commands receive `409 Conflict`. The backend UI shows batch size and queue capacity as read-only values.
 
-Unsupported methods return `405` with `Allow: GET, HEAD` for snapshots or `Allow: POST` for commands. Command bodies over 4096 bytes return `413` before JSON validation. Interrupted runtime waits return `503`; a command may already have been applied. Command `200` and `409` responses have empty bodies.
+Unsupported methods return `405` with `Allow: GET, HEAD` for config and snapshots or `Allow: POST` for commands. Command bodies over 4096 bytes return `413` before JSON validation. Interrupted runtime waits for snapshots or commands return `503`; a command may already have been applied. Config does not depend on the runtime loop. Command `200` and `409` responses have empty bodies.
 
 ## Tests
 
