@@ -376,11 +376,5 @@ func TestSenderPoolEntersBackoffWhenReceiverTimesOut(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("Sender did not enter backoff after the HTTP timeout")
 	}
-	backoffStates := []SenderActivity{}
-	for _, state := range pool.snapshot().WorkerStates {
-		if state.Activity == SenderBackoff {
-			backoffStates = append(backoffStates, state.Activity)
-		}
-	}
-	assertWorkerStateMultiset(t, backoffStates, []SenderActivity{SenderBackoff})
+	assertWorkerStateMultiset(t, projectWorkerStates(filterWorkerStates(pool.snapshot().WorkerStates, func(state SenderWorkerState) bool { return state.Activity == SenderBackoff }), func(state SenderWorkerState) SenderActivity { return state.Activity }), []SenderActivity{SenderBackoff})
 }
