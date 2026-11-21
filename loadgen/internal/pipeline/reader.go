@@ -15,17 +15,17 @@ import (
 	"go.uber.org/zap"
 )
 
-type ReaderActivity string
+type ReaderActivity int
 
 const (
-	ReaderIdle    ReaderActivity = "idle"
-	ReaderReading ReaderActivity = "reading"
-	ReaderBlocked ReaderActivity = "blocked"
+	ReaderIdle ReaderActivity = iota
+	ReaderReading
+	ReaderBlocked
 )
 
 type ReaderWorkerState struct {
-	Activity ReaderActivity `json:"activity"`
-	Draining bool           `json:"draining"`
+	Activity ReaderActivity
+	Draining bool
 }
 
 // readerWorker holds the per-worker lifecycle state.
@@ -283,7 +283,7 @@ func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
 }
 
 func (p *readerPool) startWorkerLocked() {
-	worker := &readerWorker{id: p.nextWorkerID, wake: make(chan struct{}, 1), activity: ReaderIdle}
+	worker := &readerWorker{id: p.nextWorkerID, wake: make(chan struct{}, 1)}
 	p.nextWorkerID++
 	p.workers = append(p.workers, worker)
 	p.wg.Add(1)

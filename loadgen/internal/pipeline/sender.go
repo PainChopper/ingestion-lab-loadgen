@@ -13,17 +13,17 @@ import (
 	"go.uber.org/zap"
 )
 
-type SenderActivity string
+type SenderActivity int
 
 const (
-	SenderIdle     SenderActivity = "idle"
-	SenderInFlight SenderActivity = "inFlight"
-	SenderBackoff  SenderActivity = "backoff"
+	SenderIdle SenderActivity = iota
+	SenderInFlight
+	SenderBackoff
 )
 
 type SenderWorkerState struct {
-	Activity SenderActivity `json:"activity"`
-	Draining bool           `json:"draining"`
+	Activity SenderActivity
+	Draining bool
 }
 
 type senderWorker struct {
@@ -170,9 +170,8 @@ func (p *senderPool) supervise() {
 
 func (p *senderPool) startWorkerLocked() {
 	worker := &senderWorker{
-		id:       p.nextWorkerID,
-		wake:     make(chan struct{}, 1),
-		activity: SenderIdle,
+		id:   p.nextWorkerID,
+		wake: make(chan struct{}, 1),
 	}
 	p.nextWorkerID++
 	p.workers = append(p.workers, worker)

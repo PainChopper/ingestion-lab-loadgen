@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"loadgen/internal/pipeline"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -391,8 +390,8 @@ func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 		"Snapshot":          reflect.TypeOf(runtimeSnapshot{}),
 		"RunStatus":         reflect.TypeOf(runSnapshot{}),
 		"ReaderStatus":      reflect.TypeOf(readerSnapshot{}),
-		"ReaderWorkerState": reflect.TypeOf(pipeline.ReaderWorkerState{}),
-		"SenderWorkerState": reflect.TypeOf(pipeline.SenderWorkerState{}),
+		"ReaderWorkerState": reflect.TypeOf(readerWorkerState{}),
+		"SenderWorkerState": reflect.TypeOf(senderWorkerState{}),
 		"ReaderSourceError": reflect.TypeOf(readerSourceError{}),
 		"ThrottlerStatus":   reflect.TypeOf(throttlerSnapshot{}),
 		"SenderStatus":      reflect.TypeOf(senderSnapshot{}),
@@ -501,22 +500,22 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 	} else {
 		fixtures := map[string]runtimeSnapshot{
 			"zero": {
-				Sender: senderSnapshot{WorkerStates: []pipeline.SenderWorkerState{}},
-				Run:    runSnapshot{State: runStateStarting}, Reader: readerSnapshot{ReadBatchSize: 1000, WorkerStates: []pipeline.ReaderWorkerState{}},
+				Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
+				Run:    runSnapshot{State: runStateStarting}, Reader: readerSnapshot{ReadBatchSize: 1000, WorkerStates: []readerWorkerState{}},
 				Config: snapshotConfig(testConfig(t)),
 			},
 			"populated": {
 				Run:       runSnapshot{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
-				Reader:    readerSnapshot{Workers: 1, WorkerStates: []pipeline.ReaderWorkerState{{Activity: pipeline.ReaderReading}, {Activity: pipeline.ReaderBlocked, Draining: true}}, ReadBatchSize: 1500, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
+				Reader:    readerSnapshot{Workers: 1, WorkerStates: []readerWorkerState{{Activity: readerWireReading}, {Activity: readerWireBlocked, Draining: true}}, ReadBatchSize: 1500, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
 				Throttler: throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, Installed: true},
-				Sender:    senderSnapshot{Workers: 32, WorkerStates: []pipeline.SenderWorkerState{}},
+				Sender:    senderSnapshot{Workers: 32, WorkerStates: []senderWorkerState{}},
 				Config:    snapshotConfig(testConfig(t)),
 			},
 			"source error": {
-				Sender: senderSnapshot{WorkerStates: []pipeline.SenderWorkerState{}},
+				Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
 				Run:    runSnapshot{State: runStateFaulted},
 				Config: snapshotConfig(testConfig(t)),
-				Reader: readerSnapshot{WorkerStates: []pipeline.ReaderWorkerState{}, ReadBatchSize: 1000, SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
+				Reader: readerSnapshot{WorkerStates: []readerWorkerState{}, ReadBatchSize: 1000, SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}
 		for name, fixture := range fixtures {
@@ -603,8 +602,8 @@ func TestOpenAPIWorkerStates(t *testing.T) {
 		name       string
 		activities []string
 	}{
-		{name: "Reader", activities: []string{string(pipeline.ReaderIdle), string(pipeline.ReaderReading), string(pipeline.ReaderBlocked)}},
-		{name: "Sender", activities: []string{string(pipeline.SenderIdle), string(pipeline.SenderInFlight), string(pipeline.SenderBackoff)}},
+		{name: "Reader", activities: []string{string(readerWireIdle), string(readerWireReading), string(readerWireBlocked)}},
+		{name: "Sender", activities: []string{string(senderWireIdle), string(senderWireInFlight), string(senderWireBackoff)}},
 	} {
 		t.Run(pool.name, func(t *testing.T) {
 			item := schemas[pool.name+"WorkerState"].(map[string]any)

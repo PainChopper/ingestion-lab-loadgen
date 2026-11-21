@@ -765,20 +765,20 @@ func TestSnapshotRetainsLiveStatesAboveTargetsDuringShrink(t *testing.T) {
 		run.SetSenders(1)
 		state.controls.readerWorkers, state.controls.senderWorkers = 1, 1
 		snapshot := state.snapshotAt(run, time.Now())
-		readers, senders := make(map[pipeline.ReaderWorkerState]int), make(map[pipeline.SenderWorkerState]int)
+		readers, senders := make(map[readerWorkerState]int), make(map[senderWorkerState]int)
 		for _, worker := range snapshot.Reader.WorkerStates {
 			readers[worker]++
 		}
 		for _, worker := range snapshot.Sender.WorkerStates {
 			senders[worker]++
 		}
-		if snapshot.Reader.Workers != 1 || !maps.Equal(readers, map[pipeline.ReaderWorkerState]int{
-			{Activity: pipeline.ReaderBlocked}: 1, {Activity: pipeline.ReaderBlocked, Draining: true}: 1,
+		if snapshot.Reader.Workers != 1 || !maps.Equal(readers, map[readerWorkerState]int{
+			{Activity: readerWireBlocked}: 1, {Activity: readerWireBlocked, Draining: true}: 1,
 		}) {
 			t.Errorf("Reader shrink target/states = %+v", snapshot.Reader)
 		}
-		if snapshot.Sender.Workers != 1 || !maps.Equal(senders, map[pipeline.SenderWorkerState]int{
-			{Activity: pipeline.SenderBackoff}: 1, {Activity: pipeline.SenderBackoff, Draining: true}: 1,
+		if snapshot.Sender.Workers != 1 || !maps.Equal(senders, map[senderWorkerState]int{
+			{Activity: senderWireBackoff}: 1, {Activity: senderWireBackoff, Draining: true}: 1,
 		}) {
 			t.Errorf("Sender shrink target/states = %+v", snapshot.Sender)
 		}
