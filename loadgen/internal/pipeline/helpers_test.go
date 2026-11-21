@@ -76,6 +76,24 @@ func testSenderOptions() Options {
 	}
 }
 
+func projectWorkerStates[T, U any](states []T, project func(T) U) []U {
+	projected := make([]U, 0, len(states))
+	for _, state := range states {
+		projected = append(projected, project(state))
+	}
+	return projected
+}
+
+func filterWorkerStates[T any](states []T, keep func(T) bool) []T {
+	filtered := make([]T, 0, len(states))
+	for _, state := range states {
+		if keep(state) {
+			filtered = append(filtered, state)
+		}
+	}
+	return filtered
+}
+
 func assertWorkerStateMultiset[T comparable](t *testing.T, got, want []T) {
 	t.Helper()
 	actual, expected := make(map[T]int), make(map[T]int)
