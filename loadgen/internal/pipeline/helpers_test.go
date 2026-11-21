@@ -11,7 +11,7 @@ import (
 
 func testPipelineOptions() Options {
 	options := testSenderOptions()
-	options.Source = Source{directory: "fixtures", files: []string{"fixtures/data.parquet"}}
+	options.Source = Source{files: []string{"fixtures/data.parquet"}}
 	options.BatchSize = 2
 	options.Readers = 1
 	options.Senders = 1

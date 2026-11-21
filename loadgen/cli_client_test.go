@@ -24,6 +24,7 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		{target: "readers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *runtimeSnapshot) { snapshot.Reader.Workers = 3 }},
 		{target: "senders", requestAction: "set-sender-workers", value: 4, update: func(snapshot *runtimeSnapshot) { snapshot.Sender.Workers = 4 }},
 		{target: "tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.RequestedTps = 0 }},
+		{target: "tps", requestAction: "set-requested-tps", value: 2000001, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.RequestedTps = 2000001 }},
 		{target: "throttle", requestAction: "set-throttler-installed", value: false, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.Installed = false }},
 		{target: "throttle", requestAction: "set-throttler-installed", value: true, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.Installed = true }},
 	} {
@@ -159,6 +160,18 @@ func TestDecodeStrictSnapshotValidatesJSONAndState(t *testing.T) {
 		{name: "old throttler rate", body: `{"run":{"state":"running"},"throttler":{"admittedTps":1}}`, wantErr: true},
 		{name: "old input rate", body: `{"run":{"state":"running"},"readerChannel":{"inputTransactionsPerSecond":1}}`, wantErr: true},
 		{name: "old output rate", body: `{"run":{"state":"running"},"senderChannel":{"outputTransactionsPerSecond":1}}`, wantErr: true},
+		{name: "reader batch size", body: `{"run":{"state":"running"},"reader":{"readBatchSize":1}}`, wantErr: true},
+		{name: "source directory", body: `{"run":{"state":"running"},"reader":{"sourceDirectory":"data"}}`, wantErr: true},
+		{name: "reader capacity", body: `{"run":{"state":"running"},"readerChannel":{"capacity":1}}`, wantErr: true},
+		{name: "sender capacity", body: `{"run":{"state":"running"},"senderChannel":{"capacity":1}}`, wantErr: true},
+		{name: "reader buffered transactions", body: `{"run":{"state":"running"},"readerChannel":{"bufferedTransactions":1}}`, wantErr: true},
+		{name: "sender buffered transactions", body: `{"run":{"state":"running"},"senderChannel":{"bufferedTransactions":1}}`, wantErr: true},
+		{name: "source error category", body: `{"run":{"state":"running"},"reader":{"sourceError":{"category":"source"}}}`, wantErr: true},
+		{name: "source error relative path", body: `{"run":{"state":"running"},"reader":{"sourceError":{"relativePath":"a.parquet"}}}`, wantErr: true},
+		{name: "reader profile", body: `{"run":{"state":"running"},"config":{"readerWorkers":{"initial":1,"max":7}}}`, wantErr: true},
+		{name: "sender profile", body: `{"run":{"state":"running"},"config":{"senderWorkers":{"initial":1,"max":32}}}`, wantErr: true},
+		{name: "TPS profile", body: `{"run":{"state":"running"},"config":{"throttlerRequestedTps":{"initial":0,"max":4000000}}}`, wantErr: true},
+		{name: "initial in config", body: `{"run":{"state":"running"},"config":{"initial":1}}`, wantErr: true},
 		{name: "unknown root field", body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: true},
 		{name: "unknown nested field", body: `{"run":{"state":"running"},"reader":{"unexpected":true}}`, wantErr: true},
 		{name: "wrong known type", body: `{"run":{"state":"running"},"throttler":{"requestedTps":"0"}}`, wantErr: true},
@@ -189,16 +202,17 @@ func mustMarshalJSON(t *testing.T, value any) string {
 
 func TestFormatSnapshot(t *testing.T) {
 	status := runtimeSnapshot{
-		Run: runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
+		Config: configSnapshot{ReadBatchSize: 10, ReaderChannelCapacity: 3, SenderChannelCapacity: 4},
+		Run:    runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
 		Reader: readerSnapshot{
 			Workers: 3, WorkerStates: []readerWorkerState{
 				{Activity: readerWireReading}, {Activity: readerWireIdle, Draining: true},
 			}, RowsRead: 99,
-			SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt"},
+			SourceError: &readerSourceError{Operation: "read", Path: "broken.parquet", Message: "corrupt"},
 		},
 		Throttler:     throttlerSnapshot{RequestedTps: 100, Installed: true},
-		ReaderChannel: channelSnapshot{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, InputTransactionsTotal: 1, OutputTransactionsTotal: 2},
-		SenderChannel: channelSnapshot{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, InputTransactionsTotal: 3, OutputTransactionsTotal: 4},
+		ReaderChannel: channelSnapshot{DepthBatches: 2, InputTransactionsTotal: 1, OutputTransactionsTotal: 2},
+		SenderChannel: channelSnapshot{DepthBatches: 1, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, InputTransactionsTotal: 3, OutputTransactionsTotal: 4},
 		Sender: senderSnapshot{Workers: 5, WorkerStates: []senderWorkerState{
 			{Activity: senderWireInFlight}, {Activity: senderWireInFlight},
 			{Activity: senderWireIdle}, {Activity: senderWireBackoff, Draining: true},
@@ -219,13 +233,13 @@ func TestFormatSnapshot(t *testing.T) {
 		"Average read TPS:         79.2\n" +
 		"Rows read:                99\n" +
 		"Source:                   none\n" +
-		"Source error:             source/read broken.parquet: corrupt\n\n" +
+		"Source error:             read broken.parquet: corrupt\n\n" +
 		"Reader channel\n" +
-		"Queue:                    2/3 batches; 20 transactions\n" +
+		"Queue:                    2/3 batches; approximately 20 transactions\n" +
 		"Average input/output TPS: 0.8 / 1.6\n" +
 		"Blocked:                  senders=0 oldest=0ms total=0ms\n\n" +
 		"Sender channel\n" +
-		"Queue:                    1/4 batches; 10 transactions\n" +
+		"Queue:                    1/4 batches; approximately 10 transactions\n" +
 		"Average input/output TPS: 2.4 / 3.2\n" +
 		"Blocked:                  senders=1 oldest=7ms total=8ms\n\n" +
 		"Sender\n" +
@@ -237,14 +251,13 @@ func TestFormatSnapshot(t *testing.T) {
 
 func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 	status := runtimeSnapshot{
-		Run: runSnapshot{State: runState("running\n\x1b[2J")},
+		Config: configSnapshot{SourcePath: "source\r\n\x1b[31m"},
+		Run:    runSnapshot{State: runState("running\n\x1b[2J")},
 		Reader: readerSnapshot{
-			SourceDirectory: "source\r\n\x1b[31m",
 			SourceError: &readerSourceError{
-				Category:     "category\x00",
-				Operation:    "operation\t",
-				RelativePath: "path\x7f",
-				Message:      "message\n\x1b[0m",
+				Operation: "operation\t",
+				Path:      "path\x7f",
+				Message:   "message\n\x1b[0m",
 			},
 		},
 	}
@@ -264,7 +277,7 @@ func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 	for _, want := range []string{
 		`State:                    running\x0a\x1b[2J`,
 		`Source:                   source\x0d\x0a\x1b[31m`,
-		`Source error:             category\x00/operation\x09 path\x7f: message\x0a\x1b[0m`,
+		`Source error:             operation\x09 path\x7f: message\x0a\x1b[0m`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("card missing sanitized value %q: %q", want, got)

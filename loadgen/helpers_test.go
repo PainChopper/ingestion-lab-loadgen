@@ -86,7 +86,6 @@ installed = true
 [throttler.requested_tps]
 initial = 2000000
 max = 4000000
-step = 200000
 
 
 [sender.workers]

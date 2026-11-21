@@ -169,18 +169,17 @@ func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
 func formatSnapshot(snapshot runtimeSnapshot) string {
 	reader := countReaderWorkers(snapshot.Reader.WorkerStates)
 	sender := countSenderWorkers(snapshot.Sender.WorkerStates)
-	sourceDirectory := sanitizeSnapshotValue(snapshot.Reader.SourceDirectory)
-	if sourceDirectory == "" {
-		sourceDirectory = "none"
+	sourcePath := sanitizeSnapshotValue(snapshot.Config.SourcePath)
+	if sourcePath == "" {
+		sourcePath = "none"
 	}
 
 	sourceError := "none"
 	if snapshot.Reader.SourceError != nil {
 		sourceError = fmt.Sprintf(
-			"%s/%s %s: %s",
-			sanitizeSnapshotValue(snapshot.Reader.SourceError.Category),
+			"%s %s: %s",
 			sanitizeSnapshotValue(snapshot.Reader.SourceError.Operation),
-			sanitizeSnapshotValue(snapshot.Reader.SourceError.RelativePath),
+			sanitizeSnapshotValue(snapshot.Reader.SourceError.Path),
 			sanitizeSnapshotValue(snapshot.Reader.SourceError.Message),
 		)
 	}
@@ -207,10 +206,24 @@ func formatSnapshot(snapshot runtimeSnapshot) string {
 	)
 	fmt.Fprintf(&output, "Average read TPS:         %.1f\n", averageTPS(snapshot.Reader.RowsRead, snapshot.Run.ElapsedMs))
 	fmt.Fprintf(&output, "Rows read:                %d\n", snapshot.Reader.RowsRead)
-	fmt.Fprintf(&output, "Source:                   %s\n", sourceDirectory)
+	fmt.Fprintf(&output, "Source:                   %s\n", sourcePath)
 	fmt.Fprintf(&output, "Source error:             %s\n\n", sourceError)
-	writeSnapshotChannel(&output, "Reader channel", snapshot.ReaderChannel, snapshot.Run.ElapsedMs)
-	writeSnapshotChannel(&output, "Sender channel", snapshot.SenderChannel, snapshot.Run.ElapsedMs)
+	writeSnapshotChannel(
+		&output,
+		"Reader channel",
+		snapshot.ReaderChannel,
+		snapshot.Config.ReaderChannelCapacity,
+		snapshot.Config.ReadBatchSize,
+		snapshot.Run.ElapsedMs,
+	)
+	writeSnapshotChannel(
+		&output,
+		"Sender channel",
+		snapshot.SenderChannel,
+		snapshot.Config.SenderChannelCapacity,
+		snapshot.Config.ReadBatchSize,
+		snapshot.Run.ElapsedMs,
+	)
 	fmt.Fprintf(&output, "Sender\n")
 	fmt.Fprintf(
 		&output,
@@ -241,14 +254,22 @@ func sanitizeSnapshotValue(value string) string {
 	return sanitized.String()
 }
 
-func writeSnapshotChannel(output *strings.Builder, title string, channel channelSnapshot, elapsedMs int64) {
+func writeSnapshotChannel(
+	output *strings.Builder,
+	title string,
+	channel channelSnapshot,
+	capacity int,
+	batchSize int,
+	elapsedMs int64,
+) {
+	// Validated capacity * batchSize fits Go int and exact JSON integers; depth <= capacity.
 	fmt.Fprintf(output, "%s\n", title)
 	fmt.Fprintf(
 		output,
-		"Queue:                    %d/%d batches; %d transactions\n",
+		"Queue:                    %d/%d batches; approximately %d transactions\n",
 		channel.DepthBatches,
-		channel.Capacity,
-		channel.BufferedTransactions,
+		capacity,
+		channel.DepthBatches*batchSize,
 	)
 	fmt.Fprintf(
 		output,

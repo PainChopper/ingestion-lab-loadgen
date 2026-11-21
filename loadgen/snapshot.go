@@ -26,19 +26,16 @@ type runSnapshot struct {
 }
 
 type readerSnapshot struct {
-	Workers         int                `json:"workers"`
-	WorkerStates    readerWorkerStates `json:"workerStates"`
-	ReadBatchSize   int                `json:"readBatchSize"`
-	RowsRead        int64              `json:"rowsRead"`
-	SourceDirectory string             `json:"sourceDirectory"`
-	SourceError     *readerSourceError `json:"sourceError"`
+	Workers      int                `json:"workers"`
+	WorkerStates readerWorkerStates `json:"workerStates"`
+	RowsRead     int64              `json:"rowsRead"`
+	SourceError  *readerSourceError `json:"sourceError"`
 }
 
 type readerSourceError struct {
-	Category     string `json:"category"`
-	Operation    string `json:"operation"`
-	RelativePath string `json:"relativePath"`
-	Message      string `json:"message"`
+	Operation string `json:"operation"`
+	Path      string `json:"path"`
+	Message   string `json:"message"`
 }
 
 type throttlerSnapshot struct {
@@ -52,9 +49,7 @@ type senderSnapshot struct {
 }
 
 type channelSnapshot struct {
-	Capacity                int   `json:"capacity"`
 	DepthBatches            int   `json:"depthBatches"`
-	BufferedTransactions    int   `json:"bufferedTransactions"`
 	BlockedSenders          int   `json:"blockedSenders"`
 	OldestBlockedSenderMs   int64 `json:"oldestBlockedSenderMs"`
 	BlockedMs               int64 `json:"blockedMs"`
@@ -63,16 +58,18 @@ type channelSnapshot struct {
 }
 
 type configSnapshot struct {
-	ReaderWorkers         workersConfig `json:"readerWorkers"`
-	SenderWorkers         workersConfig `json:"senderWorkers"`
-	ThrottlerRequestedTPS tpsConfig     `json:"throttlerRequestedTps"`
+	ReaderWorkersMax      int    `json:"readerWorkersMax"`
+	SenderWorkersMax      int    `json:"senderWorkersMax"`
+	RequestedTpsMax       int    `json:"requestedTpsMax"`
+	ReadBatchSize         int    `json:"readBatchSize"`
+	ReaderChannelCapacity int    `json:"readerChannelCapacity"`
+	SenderChannelCapacity int    `json:"senderChannelCapacity"`
+	SourcePath            string `json:"sourcePath"`
 }
 
-func snapshotChannel(measurements pipeline.QueueSnapshot, capacity int) channelSnapshot {
+func snapshotChannel(measurements pipeline.QueueSnapshot) channelSnapshot {
 	return channelSnapshot{
-		Capacity:                capacity,
 		DepthBatches:            measurements.DepthBatches,
-		BufferedTransactions:    measurements.BufferedTransactions,
 		BlockedSenders:          measurements.BlockedSenders,
 		OldestBlockedSenderMs:   measurements.OldestBlockedSenderMS,
 		BlockedMs:               measurements.BlockedMS,
@@ -83,22 +80,24 @@ func snapshotChannel(measurements pipeline.QueueSnapshot, capacity int) channelS
 
 func snapshotConfig(config config) configSnapshot {
 	return configSnapshot{
-		ReaderWorkers:         config.Reader.Workers,
-		SenderWorkers:         config.Sender.Workers,
-		ThrottlerRequestedTPS: config.Throttler.RequestedTPS,
+		ReaderWorkersMax:      config.Reader.Workers.Max,
+		SenderWorkersMax:      config.Sender.Workers.Max,
+		RequestedTpsMax:       config.Throttler.RequestedTPS.Max,
+		ReadBatchSize:         config.Reader.ReadBatchSize,
+		ReaderChannelCapacity: config.ReaderChannel.Capacity,
+		SenderChannelCapacity: config.SenderChannel.Capacity,
+		SourcePath:            config.Source.Path,
 	}
 }
 
 const snapshotLogInterval = time.Minute
 
 func snapshotLogFields(snapshot runtimeSnapshot) []zap.Field {
-	sourceErrorCategory := ""
 	sourceErrorOperation := ""
-	sourceErrorRelativePath := ""
+	sourceErrorPath := ""
 	if snapshot.Reader.SourceError != nil {
-		sourceErrorCategory = snapshot.Reader.SourceError.Category
 		sourceErrorOperation = snapshot.Reader.SourceError.Operation
-		sourceErrorRelativePath = snapshot.Reader.SourceError.RelativePath
+		sourceErrorPath = snapshot.Reader.SourceError.Path
 	}
 
 	return []zap.Field{
@@ -112,17 +111,15 @@ func snapshotLogFields(snapshot runtimeSnapshot) []zap.Field {
 		zap.Int("reader_live_workers", len(snapshot.Reader.WorkerStates)),
 		zap.Int("throttler_requested_tps", snapshot.Throttler.RequestedTps),
 		zap.Bool("installed", snapshot.Throttler.Installed),
-		zap.Int("reader_channel_capacity", snapshot.ReaderChannel.Capacity),
+		zap.Int("reader_channel_capacity", snapshot.Config.ReaderChannelCapacity),
 		zap.Int("reader_channel_depth_batches", snapshot.ReaderChannel.DepthBatches),
-		zap.Int("reader_channel_buffered_transactions", snapshot.ReaderChannel.BufferedTransactions),
 		zap.Int64("reader_channel_input_transactions_total", snapshot.ReaderChannel.InputTransactionsTotal),
 		zap.Int64("reader_channel_output_transactions_total", snapshot.ReaderChannel.OutputTransactionsTotal),
 		zap.Int("reader_channel_blocked_senders", snapshot.ReaderChannel.BlockedSenders),
 		zap.Int64("reader_channel_oldest_blocked_ms", snapshot.ReaderChannel.OldestBlockedSenderMs),
 		zap.Int64("reader_channel_blocked_ms", snapshot.ReaderChannel.BlockedMs),
-		zap.Int("sender_channel_capacity", snapshot.SenderChannel.Capacity),
+		zap.Int("sender_channel_capacity", snapshot.Config.SenderChannelCapacity),
 		zap.Int("sender_channel_depth_batches", snapshot.SenderChannel.DepthBatches),
-		zap.Int("sender_channel_buffered_transactions", snapshot.SenderChannel.BufferedTransactions),
 		zap.Int64("sender_channel_input_transactions_total", snapshot.SenderChannel.InputTransactionsTotal),
 		zap.Int64("sender_channel_output_transactions_total", snapshot.SenderChannel.OutputTransactionsTotal),
 		zap.Int("sender_channel_blocked_senders", snapshot.SenderChannel.BlockedSenders),
@@ -130,8 +127,7 @@ func snapshotLogFields(snapshot runtimeSnapshot) []zap.Field {
 		zap.Int64("sender_channel_blocked_ms", snapshot.SenderChannel.BlockedMs),
 		zap.Int("sender_workers", snapshot.Sender.Workers),
 		zap.Int("sender_live_workers", len(snapshot.Sender.WorkerStates)),
-		zap.String("source_error_category", sourceErrorCategory),
 		zap.String("source_error_operation", sourceErrorOperation),
-		zap.String("source_error_relative_path", sourceErrorRelativePath),
+		zap.String("source_error_path", sourceErrorPath),
 	}
 }

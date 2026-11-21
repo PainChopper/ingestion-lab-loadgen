@@ -101,7 +101,7 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 	seen := map[string]bool{}
 	expected := map[string]runtimeCommand{
 		"set-reader-workers":      {kind: setReaderWorkers, value: 2},
-		"set-requested-tps":       {kind: setRequestedTPS, value: 2000000},
+		"set-requested-tps":       {kind: setRequestedTPS, value: 2000001},
 		"set-throttler-installed": {kind: setThrottlerInstalled, installed: true},
 		"set-sender-workers":      {kind: setSenderWorkers, value: 32},
 	}
@@ -397,8 +397,6 @@ func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 		"SenderStatus":      reflect.TypeOf(senderSnapshot{}),
 		"ChannelStatus":     reflect.TypeOf(channelSnapshot{}),
 		"ConfigStatus":      reflect.TypeOf(configSnapshot{}),
-		"WorkersConfig":     reflect.TypeOf(workersConfig{}),
-		"TPSConfig":         reflect.TypeOf(tpsConfig{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
@@ -501,12 +499,12 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 		fixtures := map[string]runtimeSnapshot{
 			"zero": {
 				Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
-				Run:    runSnapshot{State: runStateStarting}, Reader: readerSnapshot{ReadBatchSize: 1000, WorkerStates: []readerWorkerState{}},
+				Run:    runSnapshot{State: runStateStarting}, Reader: readerSnapshot{WorkerStates: []readerWorkerState{}},
 				Config: snapshotConfig(testConfig(t)),
 			},
 			"populated": {
 				Run:       runSnapshot{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
-				Reader:    readerSnapshot{Workers: 1, WorkerStates: []readerWorkerState{{Activity: readerWireReading}, {Activity: readerWireBlocked, Draining: true}}, ReadBatchSize: 1500, RowsRead: 47, SourceDirectory: "data/part"},
+				Reader:    readerSnapshot{Workers: 1, WorkerStates: []readerWorkerState{{Activity: readerWireReading}, {Activity: readerWireBlocked, Draining: true}}, RowsRead: 47},
 				Throttler: throttlerSnapshot{RequestedTps: 200, Installed: true},
 				Sender:    senderSnapshot{Workers: 32, WorkerStates: []senderWorkerState{}},
 				Config:    snapshotConfig(testConfig(t)),
@@ -515,7 +513,7 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 				Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
 				Run:    runSnapshot{State: runStateFaulted},
 				Config: snapshotConfig(testConfig(t)),
-				Reader: readerSnapshot{WorkerStates: []readerWorkerState{}, ReadBatchSize: 1000, SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
+				Reader: readerSnapshot{WorkerStates: []readerWorkerState{}, SourceError: &readerSourceError{Operation: "read", Path: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}
 		for name, fixture := range fixtures {

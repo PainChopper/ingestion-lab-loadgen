@@ -2,7 +2,7 @@
 addr = "127.0.0.1:8080"
 
 [source]
-path = 'D:\.DEV\ingestion-lab\ingestion-lab\data\MBD-mini\trx\fold=*\*.parquet'
+path = '../data/MBD-mini/trx/fold=*/*.parquet'
 
 [reader]
 read_batch_size = 1_000
@@ -23,7 +23,6 @@ installed = true
 [throttler.requested_tps]
 initial = 2_000_000
 max = 4_000_000
-step = 200_000
 
 [sender.workers]
 initial = 32

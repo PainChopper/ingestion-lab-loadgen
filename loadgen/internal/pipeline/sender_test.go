@@ -112,7 +112,6 @@ func TestSenderPoolRetryLogWritesEventWithoutClientID(t *testing.T) {
 		batches := make(chan []Transaction)
 		var channel batchQueue
 		channel.ch = batches
-		channel.batchSize = 0
 
 		config := testSenderOptions()
 		config.RetryDelays = []time.Duration{1 * time.Millisecond}
@@ -150,7 +149,6 @@ func TestSenderPoolRetriesFailureUntilSuccess(t *testing.T) {
 		batches := make(chan []Transaction)
 		var channel batchQueue
 		channel.ch = batches
-		channel.batchSize = 0
 
 		config := testSenderOptions()
 		config.RetryDelays = []time.Duration{1 * time.Millisecond}
@@ -214,7 +212,6 @@ func TestSenderPoolCancellationStopsRetry(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel batchQueue
 	channel.ch = batches
-	channel.batchSize = 0
 
 	config := testSenderOptions()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -265,7 +262,6 @@ func TestSenderPoolParentCancellationStopsRetryBackoff(t *testing.T) {
 		batches := make(chan []Transaction)
 		var channel batchQueue
 		channel.ch = batches
-		channel.batchSize = 0
 
 		config := testSenderOptions()
 		config.RetryDelays = []time.Duration{3_600_000 * time.Millisecond}
@@ -308,7 +304,6 @@ func TestSenderPoolBackpressureWhenAllWorkersRetry(t *testing.T) {
 		batches := make(chan []Transaction, 1)
 		var channel batchQueue
 		channel.ch = batches
-		channel.batchSize = 0
 
 		config := testSenderOptions()
 		config.RetryDelays = []time.Duration{3_600_000 * time.Millisecond}
@@ -346,7 +341,6 @@ func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) 
 	batches := make(chan []Transaction, 3)
 	var channel batchQueue
 	channel.ch = batches
-	channel.batchSize = 0
 
 	config := testSenderOptions()
 	entered := make(chan struct{}, 3)
@@ -396,7 +390,6 @@ func TestSenderPoolDeliversBatchWhenResizedDuringWorkerExit(t *testing.T) {
 		batches := make(chan []Transaction)
 		var telemetry batchQueue
 		telemetry.ch = batches
-		telemetry.batchSize = 0
 
 		config := testSenderOptions()
 		exiting := make(chan struct{})
@@ -505,7 +498,6 @@ func TestSenderPoolReactivatesOnlyNeededWorkers(t *testing.T) {
 				batches := make(chan []Transaction)
 				var telemetry batchQueue
 				telemetry.ch = batches
-				telemetry.batchSize = 0
 
 				config := testSenderOptions()
 				config.RetryDelays = []time.Duration{3_600_000 * time.Millisecond}
@@ -583,7 +575,7 @@ func TestSenderPoolReactivatesOnlyNeededWorkers(t *testing.T) {
 
 func TestSenderPoolDownscaleReturnsBeforeIdleWorkerExits(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		queue := newBatchQueue(1, 1)
+		queue := newBatchQueue(1)
 
 		exiting, releaseExit := make(chan struct{}), make(chan struct{})
 		var firstExit atomic.Bool
@@ -628,7 +620,7 @@ func TestSenderPoolDownscaleReturnsBeforeIdleWorkerExits(t *testing.T) {
 
 func TestSenderPoolEachDrainingWorkerAcceptsAtMostOneNewBatch(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		queue := newBatchQueue(4, 1)
+		queue := newBatchQueue(4)
 
 		receive := []chan struct{}{make(chan struct{}), make(chan struct{}), make(chan struct{})}
 		workersReady := make(chan struct{})
@@ -713,7 +705,6 @@ func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 		batches := make(chan []Transaction)
 		var channel batchQueue
 		channel.ch = batches
-		channel.batchSize = 0
 
 		config := testSenderOptions()
 		config.RetryJitterPercent = 0
@@ -762,7 +753,6 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	batches := make(chan []Transaction)
 	var channel batchQueue
 	channel.ch = batches
-	channel.batchSize = 0
 
 	config := testSenderOptions()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -798,7 +788,6 @@ func TestSenderPoolRetryDeadlineSurvivesReconcile(t *testing.T) {
 		batches := make(chan []Transaction)
 		var telemetry batchQueue
 		telemetry.ch = batches
-		telemetry.batchSize = 0
 
 		config := testSenderOptions()
 		config.RetryDelays = []time.Duration{3_600_000 * time.Millisecond}
