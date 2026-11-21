@@ -57,7 +57,7 @@
 
 Без изменения pipeline можно реализовать полный wire snapshot с честной доступностью:
 
-- `schemaVersion`, `snapshotRevision`, `controlRevision`, `observedAt`, `samplePeriodMs` и `rateWindowMs`;
+- `snapshotRevision`, `controlRevision`, `observedAt`, `samplePeriodMs` и `rateWindowMs`;
 - `run.totalTransactions` из `generatorState.totalTransactions`;
 - фиксированные `reader.workers.applied=1` и `reader.readBatchSize.applied=50000` с `applyMode=unavailable`;
 - сохранённый configured requested TPS, с явной оговоркой, что он ещё не является эффективным throttling limit;
@@ -177,7 +177,7 @@ SSE технически можно добавить раньше V5, но по�
 
 ## 8. Расхождения документа и фактического frontend
 
-1. Документ задаёт `schemaVersion`, `snapshotRevision`, `controlRevision`, `observedAt`, `samplePeriodMs`, `rateWindowMs` и вложенный объект `run`; frontend имеет `revision` и плоские `runState`, `elapsedMs`, `totalTransactions` ([frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L122)).
+1. Документ задаёт `snapshotRevision`, `controlRevision`, `observedAt`, `samplePeriodMs`, `rateWindowMs` и вложенный объект `run`; frontend имеет `revision` и плоские `runState`, `elapsedMs`, `totalTransactions` ([frontend/src/model/loadgen.ts](../frontend/src/model/loadgen.ts#L122)).
 2. Документ задаёт массив `channels`; frontend использует отдельные `readerChannel` и `senderChannel`.
 3. Имена расходятся: `rowsRead`/`rowsReadTotal`, `source`/`currentSources`, `limitedMs`/`limitedMsTotal`, `blockedMs`/`blockedMsTotal`, `statusCode`/`lastStatusCode`, response/retry counters без/с суффиксом `Total`.
 4. Frontend одновременно содержит `inputTransactionsPerSecond`/`outputTransactionsPerSecond` и дублирующие `inputTps`/`outputTps`; документ определяет только один набор transaction rates.

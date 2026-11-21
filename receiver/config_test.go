@@ -22,7 +22,6 @@ func TestLoadConfigStrictRequiredTypes(t *testing.T) {
 		{"bool status pointer", "response_status = 204", "response_status = true"},
 		{"fractional status pointer", "response_status = 204", "response_status = 204.9"},
 		{"missing logging", "level = \"info\"\n", ""},
-		{"missing schema", "schema_version = 2\n", ""},
 		{"missing address", "address = \"127.0.0.1:18080\"\n", ""},
 		{"missing timeout", "shutdown_timeout_ms = 2000\n", ""},
 		{"missing path", "path = \"/internal/ingest\"\n", ""},
@@ -42,7 +41,7 @@ func TestLoadConfigStrictRequiredTypes(t *testing.T) {
 	}
 }
 
-func TestLoadConfigDurationBoundsAndSchema(t *testing.T) {
+func TestLoadConfigDurationBounds(t *testing.T) {
 	maximum := int64(math.MaxInt64 / time.Millisecond)
 	for _, field := range []struct {
 		line    string
@@ -61,14 +60,6 @@ func TestLoadConfigDurationBoundsAndSchema(t *testing.T) {
 				}
 			})
 		}
-	}
-	for _, version := range []int{1, 3} {
-		t.Run(fmt.Sprintf("version %d", version), func(t *testing.T) {
-			content := strings.Replace(validTOMLConfig(), "schema_version = 2", fmt.Sprintf("schema_version = %d", version), 1)
-			if _, err := LoadConfig(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "schema_version") {
-				t.Fatalf("unsupported schema %d accepted: %v", version, err)
-			}
-		})
 	}
 }
 
@@ -105,9 +96,6 @@ func TestLoadConfig(t *testing.T) {
 				t.Helper()
 				if config.Logging.Level != "info" {
 					t.Fatalf("logging level=%q, want info", config.Logging.Level)
-				}
-				if config.SchemaVersion != 2 {
-					t.Fatalf("SchemaVersion = %d, want 2", config.SchemaVersion)
 				}
 				if config.Server.Address != "127.0.0.1:18080" {
 					t.Fatalf("Server.Address = %q, want loopback address", config.Server.Address)
@@ -186,9 +174,7 @@ func TestLoadConfig(t *testing.T) {
 }
 
 func validTOMLConfig() string {
-	return `schema_version = 2
-
-[server]
+	return `[server]
 address = "127.0.0.1:18080"
 shutdown_timeout_ms = 2000
 

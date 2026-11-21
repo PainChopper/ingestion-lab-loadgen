@@ -261,7 +261,7 @@ func TestSenderRetryConfigDurationBounds(t *testing.T) {
 	}
 }
 
-func TestSchema4RequiredFields(t *testing.T) {
+func TestLoadConfigRequiredFields(t *testing.T) {
 	section := ""
 	for _, line := range strings.Split(testConfigContents(), "\n") {
 		if strings.HasPrefix(line, "[") {
@@ -281,11 +281,9 @@ func TestSchema4RequiredFields(t *testing.T) {
 	}
 }
 
-func TestSchema4StrictShapeAndTypes(t *testing.T) {
+func TestLoadConfigStrictShapeAndTypes(t *testing.T) {
 	for _, tc := range []struct{ name, old, replacement string }{
 		{"relative source", `C:\dataset\*.parquet`, "data/*.parquet"},
-		{"schema3", "schema_version = 4", "schema_version = 3"},
-		{"future", "schema_version = 4", "schema_version = 5"},
 		{"worker step", "[sender.workers]", "[sender.workers]\nstep = 1"},
 		{"unknown", "[metrics]", "[metrics]\nextra = 1"},
 		{"capacity string", "capacity = 2", "capacity = '2'"},
@@ -307,7 +305,7 @@ func TestSchema4StrictShapeAndTypes(t *testing.T) {
 	}
 }
 
-func TestSchema4ScalarValuesAndBounds(t *testing.T) {
+func TestLoadConfigScalarValuesAndBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name, old, replacement string
 		valid                  bool
@@ -375,7 +373,7 @@ func TestSchema4ScalarValuesAndBounds(t *testing.T) {
 	}
 }
 
-func TestSchema4CheckedInProfile(t *testing.T) {
+func TestLoadConfigCheckedInProfile(t *testing.T) {
 	cfg, err := loadConfig(defaultConfigPath)
 	if err != nil {
 		t.Fatal(err)

@@ -61,9 +61,7 @@ func testConfig(t *testing.T) config {
 }
 
 func testConfigContents() string {
-	return `schema_version = 4
-
-[http]
+	return `[http]
 addr = "127.0.0.1:8080"
 
 [source]
