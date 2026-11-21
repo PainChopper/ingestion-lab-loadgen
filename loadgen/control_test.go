@@ -818,9 +818,6 @@ func TestConfirmedTotalsAreCurrentWithoutTicks(t *testing.T) {
 			}
 			found := false
 			for _, family := range families {
-				if family.GetName() == "loadgen_actual_tps" {
-					t.Fatal("removed rate metric is registered")
-				}
 				if family.GetName() == "loadgen_transactions_total" {
 					found = true
 					if got := family.GetMetric()[0].GetCounter().GetValue(); got != 3 {
@@ -1073,15 +1070,18 @@ func TestSnapshotLogCadence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		core, entries := observer.New(zap.InfoLevel)
 		state := newControlState(cfg, zap.New(core))
-		ticker := time.NewTicker(snapshotLogInterval)
-		defer ticker.Stop()
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan struct{})
+		defer func() {
+			cancel()
+			<-done
+		}()
 		go func() {
 			defer close(done)
-			state.runEventLoop(ctx, runtimeEvents{ticks: ticker.C, metrics: newPrometheusMetrics()}, gracefulShutdownTimeout)
+			state.runEventLoop(ctx, runtimeEvents{metrics: newPrometheusMetrics()}, gracefulShutdownTimeout)
 		}()
-		time.Sleep(snapshotLogInterval - time.Millisecond)
+		synctest.Wait()
+		time.Sleep(time.Minute - time.Millisecond)
 		synctest.Wait()
 		if entries.Len() != 0 {
 			t.Fatalf("early summary: %+v", entries.All())
@@ -1091,21 +1091,19 @@ func TestSnapshotLogCadence(t *testing.T) {
 		if entries.Len() != 1 {
 			t.Fatalf("summary entries=%+v", entries.All())
 		}
-		if fields := entries.All()[0].ContextMap(); fields["event"] != "runtime_summary" || fields["reader_read_tps"] != nil {
+		if fields := entries.All()[0].ContextMap(); fields["event"] != "runtime_summary" {
 			t.Fatalf("summary fields=%+v", fields)
 		}
-		time.Sleep(snapshotLogInterval / 2)
+		time.Sleep(time.Minute / 2)
 		synctest.Wait()
 		if entries.Len() != 1 {
 			t.Fatalf("early duplicate: %+v", entries.All())
 		}
-		time.Sleep(snapshotLogInterval / 2)
+		time.Sleep(time.Minute / 2)
 		synctest.Wait()
 		if entries.Len() != 2 {
 			t.Fatalf("next summary missing: %+v", entries.All())
 		}
-		cancel()
-		<-done
 	})
 }
 

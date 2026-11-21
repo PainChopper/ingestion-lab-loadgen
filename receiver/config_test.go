@@ -11,6 +11,24 @@ import (
 	"time"
 )
 
+func TestLoadConfigRejectsUnknownNames(t *testing.T) {
+	base := validTOMLConfig()
+	for _, test := range []struct{ name, contents, unknown string }{
+		{"empty section", base + "\n[unexpected]\n", "unexpected"},
+		{"wrong-case section", strings.Replace(base, "[server]", "[Server]", 1), "Server"},
+		{"wrong-case key", strings.Replace(base, "address =", "Address =", 1), "Address"},
+		{"additional wrong-case section", base + "\n[Server]\naddress = \"127.0.0.1:18080\"\nshutdown_timeout_ms = 2000\n", "Server"},
+		{"additional wrong-case key", strings.Replace(base, "[server]", "[server]\nAddress = \"127.0.0.1:18080\"", 1), "Address"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := LoadConfig(writeConfig(t, test.contents))
+			if err == nil || !strings.Contains(err.Error(), "invalid keys: "+test.unknown) {
+				t.Fatalf("error = %v, want unknown key %q", err, test.unknown)
+			}
+		})
+	}
+}
+
 func TestLoadConfigStrictRequiredTypes(t *testing.T) {
 	for _, test := range []struct{ name, old, replacement string }{
 		{"string delay", "response_delay_ms = 25", `response_delay_ms = "25"`},

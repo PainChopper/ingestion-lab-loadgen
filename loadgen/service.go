@@ -34,8 +34,6 @@ func runServe(appCtx context.Context, configPath string) error {
 	requests := runtimeRequests{queue: queue, done: loopDone}
 	metrics := newPrometheusMetrics()
 	metrics.targetTPS.Set(float64(cfg.Throttler.RequestedTPS.Initial))
-	ticker := time.NewTicker(snapshotLogInterval)
-	defer ticker.Stop()
 
 	server, serverDone, err := startHTTPServer(requests, metrics, cfg, logger)
 	if err != nil {
@@ -45,7 +43,6 @@ func runServe(appCtx context.Context, configPath string) error {
 		requests:   queue,
 		source:     prepareSourceAsync(cfg.Source.Path),
 		serverDone: serverDone,
-		ticks:      ticker.C,
 		metrics:    metrics,
 	}
 	deadline, runErr := state.runEventLoop(appCtx, events, gracefulShutdownTimeout)

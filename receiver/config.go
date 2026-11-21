@@ -4,13 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"reflect"
 	"time"
 
 	"receiver/internal/ingest"
 
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/spf13/viper"
+	"github.com/pelletier/go-toml/v2"
 )
 
 type Config struct {
@@ -51,18 +52,24 @@ type fileLabConfig struct {
 }
 
 func LoadConfig(path string) (Config, error) {
-	decoder := viper.New()
-	decoder.SetConfigFile(path)
-	if err := decoder.ReadInConfig(); err != nil {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read config: %w", err)
+	}
+	var values map[string]any
+	if err := toml.Unmarshal(data, &values); err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
 	}
 	var decoded fileConfig
-	if err := decoder.UnmarshalExact(&decoded, func(options *mapstructure.DecoderConfig) {
-		options.ErrorUnset = true
-		options.AllowUnsetPointer = true
-		options.WeaklyTypedInput = false
-		options.DecodeHook = rejectFractionalInt
-	}); err != nil {
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		Result: &decoded, TagName: "mapstructure", ErrorUnused: true, ErrorUnset: true,
+		AllowUnsetPointer: true, WeaklyTypedInput: false, DecodeHook: rejectFractionalInt,
+		MatchName: func(mapKey, fieldName string) bool { return mapKey == fieldName },
+	})
+	if err != nil {
+		return Config{}, fmt.Errorf("create config decoder: %w", err)
+	}
+	if err := decoder.Decode(values); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 

@@ -39,7 +39,7 @@ cd receiver
 go run .
 ```
 
-The default Receiver configuration listens on `127.0.0.1:8081`, accepts batches at `POST /internal/ingest`, and reports acceptance counters at `GET /status` (also supports HEAD). Configuration is unversioned; unknown or missing required keys are rejected. Explicitly provide `lab.response_delay_ms`, including zero. Omit `lab.response_status` for 204; an explicit zero is invalid. See [configuration](docs/configuration.md#конфигурация-receiver) for exact paths and lab settings.
+The default Receiver configuration listens on `127.0.0.1:8081`, accepts batches at `POST /internal/ingest`, and reports acceptance counters at `GET /status` (also supports HEAD). Configuration is unversioned; section and key names are case-sensitive. Unknown keys and sections, including empty sections, and missing required keys are rejected. Explicitly provide `lab.response_delay_ms`, including zero. Omit `lab.response_status` for 204; an explicit zero is invalid. See [configuration](docs/configuration.md#конфигурация-receiver) for exact paths and lab settings.
 
 Start LoadGen in another terminal.
 
@@ -106,7 +106,7 @@ go run . set throttle true --url http://127.0.0.1:8080
 
 ## Configuration and delivery
 
-See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. Configuration is unversioned. Startup batch size and capacities are scalars; workers use initial/max, TPS uses initial/max/step with a server-defined zero minimum, and installed is a boolean. Unknown or missing fields are rejected at startup. Explicit zero values are supported where valid. Changes to a key's meaning, units or allowed values require a new key name, including for optional keys; the old name is rejected as unknown.
+See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. Configuration is unversioned. Startup batch size and capacities are scalars; workers use initial/max, TPS uses initial/max/step with a server-defined zero minimum, and installed is a boolean. Section and key names are case-sensitive; unknown keys and sections, including empty sections, and missing fields are rejected at startup. Explicit zero values are supported where valid. Changes to a key's meaning, units or allowed values require a new key name, including for optional keys; the old name is rejected as unknown.
 
 | Setting | Purpose | When it can be changed |
 | --- | --- | --- |

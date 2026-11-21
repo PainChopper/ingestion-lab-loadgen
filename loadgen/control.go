@@ -37,7 +37,6 @@ type runtimeEvents struct {
 	requests   <-chan runtimeRequest
 	source     <-chan sourceDiscovery
 	serverDone <-chan error
-	ticks      <-chan time.Time
 	metrics    *prometheusMetrics
 }
 
@@ -63,6 +62,8 @@ func (s *controlState) runEventLoop(
 	grace time.Duration,
 ) (shutdownDeadline time.Time, runErr error) {
 	metrics := events.metrics
+	ticker := time.NewTicker(snapshotLogInterval)
+	defer ticker.Stop()
 
 	// App cancellation stops admission first; the deadline cancels the pipeline.
 	runCtx, cancelRun := context.WithCancel(context.Background())
@@ -171,7 +172,7 @@ func (s *controlState) runEventLoop(
 				request.reply <- s.run.state == runStateRunning &&
 					s.applyCommand(run, request.command, metrics)
 			}
-		case <-events.ticks:
+		case <-ticker.C:
 			s.logger.Info("runtime summary", snapshotLogFields(s.snapshotAt(run, time.Now()))...)
 		}
 	}
