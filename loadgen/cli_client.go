@@ -262,14 +262,13 @@ func writeSnapshotChannel(
 	batchSize int,
 	elapsedMs int64,
 ) {
-	// Validated capacity * batchSize fits Go int and exact JSON integers; depth <= capacity.
 	fmt.Fprintf(output, "%s\n", title)
 	fmt.Fprintf(
 		output,
-		"Queue:                    %d/%d batches; approximately %d transactions\n",
+		"Queue:                    %d/%d batches; approximately %.0f transactions\n",
 		channel.DepthBatches,
 		capacity,
-		channel.DepthBatches*batchSize,
+		float64(channel.DepthBatches)*float64(batchSize),
 	)
 	fmt.Fprintf(
 		output,

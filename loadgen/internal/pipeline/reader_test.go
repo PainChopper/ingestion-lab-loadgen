@@ -14,7 +14,7 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestReaderResourcesAndSourceErrors(t *testing.T) {
@@ -626,16 +626,8 @@ func TestReaderPoolReleaseWakesAllIdleWorkersBeforeDownscale(t *testing.T) {
 			}
 		}
 		queue := newBatchQueue(1)
-		var started atomic.Int64
-		logger := zap.New(zapcore.NewCore(
-			zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
-			zapcore.AddSync(io.Discard), zap.DebugLevel,
-		), zap.Hooks(func(entry zapcore.Entry) error {
-			if entry.Message == "reader worker started" {
-				started.Add(1)
-			}
-			return nil
-		}))
+		core, logs := observer.New(zap.DebugLevel)
+		logger := zap.New(core)
 		pool := startReaderPool(ctx, Source{files: []string{"one"}}, 2, 1,
 			queue, &readerTelemetry{}, openFile, beforeClaim, logger)
 		<-firstRead
@@ -674,8 +666,9 @@ func TestReaderPoolReleaseWakesAllIdleWorkersBeforeDownscale(t *testing.T) {
 		<-pool.done
 		pool.reconcile(3)
 		synctest.Wait()
-		if got := pool.snapshot().WorkerStates; len(got) != 0 || started.Load() != 3 {
-			t.Fatalf("workers started after cancellation: %+v started=%d", got, started.Load())
+		started := logs.FilterField(zap.String("event", "reader_worker_started")).Len()
+		if got := pool.snapshot().WorkerStates; len(got) != 0 || started != 3 {
+			t.Fatalf("workers started after cancellation: %+v started=%d", got, started)
 		}
 	})
 }

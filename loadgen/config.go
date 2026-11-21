@@ -22,8 +22,8 @@ import (
 // Configuration location.
 const (
 	defaultConfigPath = "config.toml"
-	// Keep integers exact for consumers that represent JSON numbers as IEEE 754 doubles.
-	maxSnapshotInteger = 1<<53 - 1
+	// Interoperable exact JSON integers: https://www.rfc-editor.org/rfc/rfc8259#section-6
+	maxExactJSONInteger = 1<<53 - 1
 )
 
 type config struct {
@@ -167,8 +167,7 @@ func (c config) validate() error {
 	}
 	maxCapacity := min(
 		int64(math.MaxInt)/int64(unsafe.Sizeof([]struct{}{})),
-		int64(math.MaxInt)/int64(c.Reader.ReadBatchSize),
-		maxSnapshotInteger/int64(c.Reader.ReadBatchSize),
+		maxExactJSONInteger,
 	)
 	for _, queue := range []struct {
 		name     string
@@ -178,7 +177,7 @@ func (c config) validate() error {
 		{name: "senderChannel.capacity", capacity: c.SenderChannel.Capacity},
 	} {
 		if queue.capacity < 0 || int64(queue.capacity) > maxCapacity {
-			return fmt.Errorf("%s must be non-negative and its storage and buffered transactions must be representable", queue.name)
+			return fmt.Errorf("%s must be non-negative, fit its backing array and not exceed %d", queue.name, maxExactJSONInteger)
 		}
 	}
 	if err := c.Throttler.RequestedTPS.validateRequestedTPS(); err != nil {
@@ -280,7 +279,7 @@ func (c senderAPIConfig) validate() error {
 }
 
 func (c workersConfig) validateWorkers() error {
-	if c.Max < 1 || int64(c.Max) > maxSnapshotInteger || !c.contains(c.Initial) {
+	if c.Max < 1 || int64(c.Max) > maxExactJSONInteger || !c.contains(c.Initial) {
 		return errors.New("initial and max must be positive safe JSON integers, with initial <= max")
 	}
 	return nil
@@ -291,7 +290,7 @@ func (c workersConfig) contains(value int) bool {
 }
 
 func (c tpsConfig) validateRequestedTPS() error {
-	validMax := c.Max > 0 && int64(c.Max) <= maxSnapshotInteger
+	validMax := c.Max > 0 && int64(c.Max) <= maxExactJSONInteger
 	if !validMax {
 		return errors.New("max must be a positive safe JSON integer")
 	}
