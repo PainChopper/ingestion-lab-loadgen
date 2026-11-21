@@ -17,7 +17,6 @@ function control(overrides: Partial<NumericControlSnapshot> = {}): NumericContro
     applied: 0,
     min: 0,
     max: 250_000,
-    step: 5_000,
     unit: 'tx/s',
     applyMode: 'immediate',
     ...overrides,
@@ -26,9 +25,12 @@ function control(overrides: Partial<NumericControlSnapshot> = {}): NumericContro
 
 describe('throttler valve mapping', () => {
   it('creates local integer targets spanning the complete range', () => {
-    expect(getValveTargets(control())).toEqual([
-      0, 22_727, 45_455, 68_182, 90_909, 113_636, 136_364, 159_091, 181_818, 204_545, 227_273,
-      250_000,
+    expect(getValveTargets(control())).toEqual([0, 50_000, 100_000, 150_000, 200_000, 250_000])
+    expect(getValveTargets(control({ max: 4_000_000 }))).toEqual([
+      0, 500_000, 1_000_000, 1_500_000, 2_000_000, 2_500_000, 3_000_000, 3_500_000, 4_000_000,
+    ])
+    expect(getValveTargets(control({ max: 250_001 }))).toEqual([
+      0, 50_000, 100_000, 150_000, 200_000, 250_001,
     ])
   })
 
@@ -38,8 +40,18 @@ describe('throttler valve mapping', () => {
     expect(valueToOpeningIndex(15, capability)).toBe(1)
     expect(valueToOpeningIndex(200, capability)).toBe(11)
     expect(effectiveValveOpeningIndex(false, control())).toBe(11)
-    expect(effectiveValveOpeningIndex(true, control({ applied: 25_000 }))).toBe(1)
-    expect(effectiveValveOpeningIndex(null, control({ applied: 25_000 }))).toBe(1)
+    expect(effectiveValveOpeningIndex(true, control({ applied: 25_000 }))).toBe(0)
+    expect(effectiveValveOpeningIndex(null, control({ applied: 25_000 }))).toBe(0)
+  })
+
+  it('removes only the last interior target strictly closer than half a step to max', () => {
+    expect(getValveTargets(control({ max: 104 }))?.slice(-2)).toEqual([90, 104])
+    expect(getValveTargets(control({ max: 105 }))?.slice(-2)).toEqual([100, 105])
+    expect(getValveTargets(control({ max: 106 }))?.slice(-2)).toEqual([100, 106])
+    expect(getValveTargets(control({ min: 5, max: 6 }))).toEqual([5, 6])
+    expect(
+      getValveTargets(control({ min: Number.MAX_SAFE_INTEGER - 1, max: Number.MAX_SAFE_INTEGER })),
+    ).toEqual([Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER])
   })
 
   it.each([1, 10, 250_001, 4_000_000, Number.MAX_SAFE_INTEGER])(

@@ -30,7 +30,6 @@ function requestedControl(overrides: Partial<NumericControlSnapshot> = {}): Nume
     applied: 120_000,
     min: 0,
     max: 250_000,
-    step: 5_000,
     unit: 'tx/s',
     applyMode: 'immediate',
     ...overrides,
@@ -183,8 +182,8 @@ describe('ThrottlerActor valve control', () => {
     const view = renderHarness({ onCommand, onSelect })
     const slider = screen.getByRole('slider', { name: 'Throttle opening' })
 
-    expect(slider.getAttribute('aria-valuenow')).toBe('5')
-    expect(slider.getAttribute('aria-valuetext')).toContain('45% open')
+    expect(slider.getAttribute('aria-valuenow')).toBe('2')
+    expect(slider.getAttribute('aria-valuetext')).toContain('36% open')
     expect(view.container.querySelector('.pipeline-valve-body')).not.toBeNull()
     expect(view.container.querySelectorAll('.pipeline-valve-wheel-knob')).toHaveLength(6)
     expect(view.container.querySelectorAll('.pipeline-valve-wheel-spoke')).toHaveLength(5)
@@ -200,27 +199,27 @@ describe('ThrottlerActor valve control', () => {
     fireEvent.pointerDown(view.container.querySelector('[data-direction="increase"]')!)
     fireEvent.pointerUp(window)
 
-    expect(onCommand).toHaveBeenCalledWith(136_364)
-    await waitFor(() => expect(slider.getAttribute('aria-valuenow')).toBe('6'))
+    expect(onCommand).toHaveBeenCalledWith(150_000)
+    await waitFor(() => expect(slider.getAttribute('aria-valuenow')).toBe('3'))
     expect(onSelect).not.toHaveBeenCalled()
 
     fireEvent.pointerDown(view.container.querySelector('[data-direction="decrease"]')!)
     fireEvent.pointerUp(window)
-    expect(onCommand).toHaveBeenLastCalledWith(113_636)
+    expect(onCommand).toHaveBeenLastCalledWith(100_000)
 
     await userEvent.setup().click(screen.getByRole('button', { name: 'Inspect throttler' }))
     expect(onSelect).toHaveBeenCalledWith('throttler')
   })
 
   it.each([
-    { max: 250_001, step: 5_000, last: 250_001 },
-    { max: 1_000_000_000_000_000, step: 3, last: 1_000_000_000_000_000 },
-    { max: 1, step: 5_000, last: 1 },
-    { max: 10, step: 5_000, last: 10 },
-    { max: Number.MAX_SAFE_INTEGER, step: 1, last: Number.MAX_SAFE_INTEGER },
-  ])('sends the exact maximum on End for max=$max', async ({ max, step, last }) => {
+    { max: 250_001, last: 250_001 },
+    { max: 1_000_000_000_000_000, last: 1_000_000_000_000_000 },
+    { max: 1, last: 1 },
+    { max: 10, last: 10 },
+    { max: Number.MAX_SAFE_INTEGER, last: Number.MAX_SAFE_INTEGER },
+  ])('sends the exact maximum on End for max=$max', async ({ max, last }) => {
     const onCommand = vi.fn()
-    renderHarness({ control: requestedControl({ applied: 0, max, step }), onCommand })
+    renderHarness({ control: requestedControl({ applied: 0, max }), onCommand })
     const slider = screen.getByRole('slider')
     slider.focus()
     await userEvent.setup().keyboard('{End}')
@@ -271,7 +270,6 @@ describe('ThrottlerActor valve control', () => {
       control: requestedControl({
         applied: 1_800_000,
         max: 4_000_000,
-        step: 200_000,
       }),
       onCommand,
       onModeCommand,
@@ -285,7 +283,7 @@ describe('ThrottlerActor valve control', () => {
     fireEvent.pointerDown(increase)
     fireEvent.pointerUp(window)
 
-    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([1_454_545, 1_818_182])
+    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([1_500_000, 2_000_000])
     expect(onModeCommand).not.toHaveBeenCalled()
   })
 
@@ -307,7 +305,7 @@ describe('ThrottlerActor valve control', () => {
     slider.focus()
     fireEvent.keyDown(slider, { key: 'ArrowRight' })
 
-    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([90_909, 113_636, 136_364])
+    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([50_000, 100_000, 150_000])
     expect(onModeCommand).not.toHaveBeenCalled()
     for (const half of [decrease, increase]) {
       expect(half.getAttribute('aria-hidden')).toBe('true')
@@ -330,7 +328,7 @@ describe('ThrottlerActor valve control', () => {
     await user.keyboard('{End}{End}')
     expect(onCommand).toHaveBeenCalledTimes(1)
     expect(onCommand).toHaveBeenLastCalledWith(250_000)
-    await waitFor(() => expect(slider.getAttribute('aria-valuenow')).toBe('11'))
+    await waitFor(() => expect(slider.getAttribute('aria-valuenow')).toBe('5'))
     expect(slider.getAttribute('data-wheel-phase')).toBe('5')
 
     await user.keyboard('{Home}')
@@ -349,7 +347,7 @@ describe('ThrottlerActor valve control', () => {
     const slider = screen.getByRole('slider', { name: 'Throttle opening' })
     await user.click(slider)
 
-    const firstOpening = 22_727
+    const firstOpening = 50_000
     await user.keyboard('{ArrowRight}')
     expect(onCommand.mock.calls).toEqual([[firstOpening]])
     expect(slider.getAttribute('aria-valuenow')).toBe('0')
@@ -379,8 +377,8 @@ describe('ThrottlerActor valve control', () => {
       await userEvent.setup().click(slider)
 
       fireEvent.keyDown(slider, { key: 'ArrowRight' })
-      expect(onCommand.mock.calls).toEqual([[22_727]])
-      screen.getByText('9% OPEN')
+      expect(onCommand.mock.calls).toEqual([[50_000]])
+      screen.getByText('18% OPEN')
       expect(view.container.querySelector('.pipeline-valve-ghost')).toBeNull()
 
       view.rerender({ control: requestedControl({ applied: 25_000 }), onCommand, onModeCommand })
@@ -567,7 +565,7 @@ describe('ThrottlerActor valve control', () => {
     })
 
     view.rerender({
-      control: requestedControl({ applied: 0, max: 0, step: 2 }),
+      control: requestedControl({ applied: 0, max: 0 }),
       onCommand: rejected,
     })
     const readonly = screen.getByRole('slider', { name: 'Throttle opening' })
@@ -603,7 +601,7 @@ describe('ThrottlerActor valve control', () => {
     fireEvent.pointerUp(window)
     const callsAtRelease = onCommand.mock.calls.length
 
-    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([68_182])
+    expect(onCommand.mock.calls.map(([value]) => value)).toEqual([150_000])
     act(() => vi.advanceTimersByTime(1_000))
     expect(onCommand).toHaveBeenCalledTimes(callsAtRelease)
   })
@@ -613,14 +611,14 @@ describe('ThrottlerActor valve control', () => {
     (end) => {
       vi.useFakeTimers()
       const onCommand = vi.fn()
-      const view = renderHarness({ control: requestedControl({ applied: 205_000 }), onCommand })
+      const view = renderHarness({ control: requestedControl({ applied: 155_000 }), onCommand })
       const increase = view.container.querySelector('[data-wheel-direction="increase"]')!
       const slider = screen.getByRole('slider', { name: 'Throttle opening' })
 
       fireEvent.pointerDown(increase, { pointerId: 1 })
-      expect(slider.getAttribute('aria-valuenow')).toBe('10')
+      expect(slider.getAttribute('aria-valuenow')).toBe('4')
       act(() => vi.advanceTimersByTime(780))
-      expect(slider.getAttribute('aria-valuenow')).toBe('11')
+      expect(slider.getAttribute('aria-valuenow')).toBe('5')
       expect(onCommand).not.toHaveBeenCalled()
 
       switch (end) {
@@ -645,7 +643,7 @@ describe('ThrottlerActor valve control', () => {
       fireEvent.pointerUp(window, { pointerId: 1 })
       expect(onCommand.mock.calls).toEqual(end === 'release' ? [[250_000]] : [])
       if (end !== 'unmount') {
-        expect(slider.getAttribute('aria-valuenow')).toBe(end === 'release' ? '11' : '9')
+        expect(slider.getAttribute('aria-valuenow')).toBe(end === 'release' ? '5' : '3')
         expect(view.container.querySelector('[data-gate-kind="preview"]')).toBeNull()
       }
     },
@@ -711,7 +709,7 @@ describe('ThrottlerActor valve control', () => {
       ['440', '398', '26', '34'],
     ])
 
-    view.rerender({ control: requestedControl({ applied: 113_636 }) })
+    view.rerender({ control: requestedControl({ applied: 100_000 }) })
     const partialY = readPose()
     expect(partialY).toBeGreaterThan(393)
     expect(partialY).toBeLessThan(415)
@@ -728,7 +726,7 @@ describe('ThrottlerActor valve control', () => {
       ),
     ).toBe(true)
 
-    view.rerender({ control: requestedControl({ applied: 113_636 }), confirmRequested: false })
+    view.rerender({ control: requestedControl({ applied: 100_000 }), confirmRequested: false })
     const pendingSlider = screen.getByRole('slider', { name: 'Throttle opening' })
     fireEvent.keyDown(pendingSlider, { key: 'ArrowRight' })
     const ghost = view.container.querySelector('[data-gate-kind="pending"]')!

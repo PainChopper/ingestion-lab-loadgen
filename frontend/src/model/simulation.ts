@@ -614,11 +614,7 @@ export class FixedStepSimulation {
   }
 
   private nextIdleWorker(): SenderWorker | null {
-    for (const worker of this.workers) {
-      if (worker.retiring || worker.state !== 'idle') continue
-      return worker
-    }
-    return null
+    return this.workers.find((worker) => !worker.retiring && worker.state === 'idle') ?? null
   }
 
   private requestSenderWorkerCount(requested: number): void {
@@ -626,8 +622,7 @@ export class FixedStepSimulation {
       worker.retiring = false
     })
     if (requested > this.workers.length) {
-      const firstOrdinal = this.workers.length
-      for (let ordinal = firstOrdinal; ordinal < requested; ordinal += 1) {
+      while (this.workers.length < requested) {
         this.workers.push(createWorker())
       }
       return

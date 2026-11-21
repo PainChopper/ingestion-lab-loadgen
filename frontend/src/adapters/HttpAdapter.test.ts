@@ -362,10 +362,10 @@ describe('HttpAdapter', () => {
               },
         )
       }
-      expect(snapshot.reader.workers).toMatchObject({ applied: 11, min: 1, max: 7, step: 1 })
-      expect(snapshot.sender.workers).toMatchObject({ applied: 41, min: 1, max: 32, step: 1 })
+      expect(snapshot.reader.workers).toMatchObject({ applied: 11, min: 1, max: 7 })
+      expect(snapshot.sender.workers).toMatchObject({ applied: 41, min: 1, max: 32 })
       expect(snapshot.throttler).toMatchObject({
-        requestedTps: { applied: 31, min: 0, max: 4_000_000, step: 1 },
+        requestedTps: { applied: 31, min: 0, max: 4_000_000 },
         admittedTps: null,
         installed: { applied: false },
       })
@@ -528,7 +528,7 @@ describe('HttpAdapter', () => {
 
     expect(adapter.getSnapshot()).toMatchObject({
       connectionState: 'connected',
-      sender: { workers: { applied: 35, min: 1, max: 35, step: 1, applyMode: 'immediate' } },
+      sender: { workers: { applied: 35, min: 1, max: 35, applyMode: 'immediate' } },
     })
     adapter.dispose()
   })
@@ -984,7 +984,6 @@ describe('HttpAdapter', () => {
         applied: 0,
         min: 0,
         max: 400,
-        step: 1,
         applyMode: 'immediate',
       })
 

@@ -42,7 +42,7 @@ describe('SimulationAdapter', () => {
         readBatchSize: 1_000,
         readerChannelCapacity: 2,
         senderChannelCapacity: 3,
-        sourcePath: '../data/MBD-mini/trx/fold=*/*.parquet',
+        sourcePath: 'simulation',
       },
     })
     simulation.updateConfig({
@@ -78,6 +78,32 @@ describe('SimulationAdapter', () => {
     }
     adapter.dispose()
   })
+
+  it.each([
+    { type: 'set-reader-workers', pool: 'reader', max: 7 },
+    { type: 'set-sender-workers', pool: 'sender', max: 32 },
+  ] as const)(
+    'accepts exact $pool worker counts and rejects invalid values without mutation',
+    async ({ type, pool, max }) => {
+      const adapter = new SimulationAdapter()
+      try {
+        for (const value of [1, max - 1, max]) {
+          expect((await adapter.dispatch({ type, value })).accepted).toBe(true)
+          expect(adapter.getSnapshot()[pool].workers.applied).toBe(value)
+        }
+        const before = adapter.getSnapshot()
+        for (const value of [0, -1, max + 1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+          expect(await adapter.dispatch({ type, value })).toMatchObject({
+            accepted: false,
+            error: { code: 'invalid-command' },
+          })
+          expect(adapter.getSnapshot()).toBe(before)
+        }
+      } finally {
+        adapter.dispose()
+      }
+    },
+  )
 
   it('publishes an immutable Sender worker list snapshot with retained controls', () => {
     const adapter = new SimulationAdapter()

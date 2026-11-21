@@ -12,15 +12,14 @@ import type { ChannelTelemetry, SimulationConfig } from '../model/simulation'
 import type { WireSnapshot } from '../model/wireSnapshot'
 
 const RANGES = Object.freeze({
-  readerWorkers: Object.freeze({ min: 1, max: 7, step: 1 }),
-  senderWorkers: Object.freeze({ min: 1, max: 32, step: 1 }),
-  requestedTps: Object.freeze({ min: 0, max: 250_000, step: 1 }),
+  readerWorkers: Object.freeze({ min: 1, max: 7 }),
+  senderWorkers: Object.freeze({ min: 1, max: 32 }),
+  requestedTps: Object.freeze({ min: 0, max: 250_000 }),
 })
 
 interface NumericRange {
   readonly min: number
   readonly max: number
-  readonly step: number
 }
 
 function numericControl(
@@ -33,16 +32,9 @@ function numericControl(
     applied,
     min: range.min,
     max: range.max,
-    step: range.step,
     unit,
     applyMode,
   })
-}
-
-function normalizeNumericValue(value: number, range: NumericRange): number {
-  const bounded = Math.min(range.max, Math.max(range.min, value))
-  const stepped = range.min + Math.round((bounded - range.min) / range.step) * range.step
-  return Math.min(range.max, Math.max(range.min, stepped))
 }
 
 export function createSimulationWireSnapshot(simulation: FixedStepSimulation): WireSnapshot {
@@ -70,7 +62,7 @@ export function createSimulationWireSnapshot(simulation: FixedStepSimulation): W
       readBatchSize: config.readBatchSize,
       readerChannelCapacity,
       senderChannelCapacity,
-      sourcePath: '../data/MBD-mini/trx/fold=*/*.parquet',
+      sourcePath: 'simulation',
     },
   }
 }
@@ -224,22 +216,30 @@ export class SimulationAdapter implements LoadgenAdapter {
         changed = this.updateConfig('requestedTps', command.value)
         break
       case 'set-reader-workers':
-        if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber('worker count')
+        if (
+          !Number.isSafeInteger(command.value) ||
+          command.value < RANGES.readerWorkers.min ||
+          command.value > RANGES.readerWorkers.max
+        ) {
+          return this.reject({
+            code: 'invalid-command',
+            message: 'worker count must be an integer within min..max',
+          })
         }
-        changed = this.updateConfig(
-          'readerWorkers',
-          normalizeNumericValue(command.value, RANGES.readerWorkers),
-        )
+        changed = this.updateConfig('readerWorkers', command.value)
         break
       case 'set-sender-workers':
-        if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber('sender workers')
+        if (
+          !Number.isSafeInteger(command.value) ||
+          command.value < RANGES.senderWorkers.min ||
+          command.value > RANGES.senderWorkers.max
+        ) {
+          return this.reject({
+            code: 'invalid-command',
+            message: 'sender workers must be an integer within min..max',
+          })
         }
-        changed = this.updateConfig(
-          'senderWorkers',
-          normalizeNumericValue(command.value, RANGES.senderWorkers),
-        )
+        changed = this.updateConfig('senderWorkers', command.value)
         break
       case 'set-throttler-installed':
         changed = this.updateConfig('throttlerInstalled', command.value)
@@ -296,10 +296,6 @@ export class SimulationAdapter implements LoadgenAdapter {
     if (this.simulation.config[key] === value) return advanced
     this.simulation.updateConfig({ [key]: value })
     return true
-  }
-
-  private rejectInvalidNumber(field: string): CommandReceipt {
-    return this.reject({ code: 'invalid-command', message: `${field} must be a finite number` })
   }
 
   private publish(): void {

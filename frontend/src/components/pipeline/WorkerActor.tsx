@@ -141,9 +141,7 @@ export function WorkerActor({
   )
   const overflowWorkers = (liveWorkers ?? 0) - layout.chips.length
   const workerMin = Math.round(workers.min)
-  const workerStep = Math.max(1, Math.round(workers.step))
-  const workerMax =
-    workerMin + Math.floor((Math.round(workers.max) - workerMin) / workerStep) * workerStep
+  const workerMax = Math.round(workers.max)
   const workerControlDisabled = !desiredControl.available || desiredControl.phase === 'pending'
   const states =
     actor === 'reader'
@@ -172,10 +170,7 @@ export function WorkerActor({
   }
   const stepWorkers = (direction: -1 | 1) => {
     if (workerControlDisabled) return false
-    const next = Math.min(
-      workerMax,
-      Math.max(workerMin, desiredRef.current + direction * workerStep),
-    )
+    const next = Math.min(workerMax, Math.max(workerMin, desiredRef.current + direction))
     if (next === desiredRef.current) return false
     desiredRef.current = next
     desiredControl.preview(next)
