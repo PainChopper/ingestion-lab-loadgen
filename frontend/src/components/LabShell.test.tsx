@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LoadgenAdapter } from '../adapters/LoadgenAdapter'
 import { SimulationAdapter } from '../adapters/SimulationAdapter'
 import { HttpAdapter } from '../adapters/HttpAdapter'
-import { readWireFixture } from '../test/wireFixture'
+import { readConfigFixture, readWireFixture } from '../test/wireFixture'
 import { LabShell } from './LabShell'
 
 let adapter: LoadgenAdapter | null = null
@@ -50,7 +50,7 @@ describe('LabShell', () => {
     expect(
       screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Requested TPS/ }).disabled,
     ).toBe(true)
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
 
   it('recovers after the first HTTP failure and retains measurements after connection loss', async () => {
@@ -69,7 +69,15 @@ describe('LabShell', () => {
         new Response(JSON.stringify(wire), { headers: { 'Content-Type': 'application/json' } }),
       )
       .mockRejectedValue(new TypeError('offline'))
-    vi.stubGlobal('fetch', fetch)
+    vi.stubGlobal('fetch', (input: RequestInfo | URL) =>
+      input === '/api/loadgen/config'
+        ? Promise.resolve(
+            new Response(JSON.stringify(readConfigFixture()), {
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          )
+        : fetch(input),
+    )
     adapter = new HttpAdapter()
     const view = render(<LabShell adapter={adapter} />)
     await act(async () => {
@@ -107,7 +115,7 @@ describe('LabShell', () => {
       elapsedMs: 1_000,
       totalTransactions: 101,
     })
-    expect(view.container.querySelector('#run-state')?.textContent).toBe('running')
+    expect(view.container.querySelector('#run-state')?.textContent).toBe('error')
     expect(
       view.container.querySelector('#sender-actor .pipeline-worker-primary')?.textContent,
     ).toBe('No data')
@@ -120,6 +128,36 @@ describe('LabShell', () => {
     expect(
       screen.getByRole('slider', { name: 'Throttle opening' }).getAttribute('aria-disabled'),
     ).toBe('true')
+  })
+
+  it('shows connecting and disabled controls for a running snapshot while config is pending', async () => {
+    vi.useFakeTimers()
+    const wire = readWireFixture()
+    wire.run.state = 'running'
+    wire.reader.sourceError = null
+    vi.stubGlobal('fetch', (input: RequestInfo | URL) =>
+      input === '/api/loadgen/config'
+        ? new Promise<Response>(() => undefined)
+        : Promise.resolve(
+            new Response(JSON.stringify(wire), { headers: { 'Content-Type': 'application/json' } }),
+          ),
+    )
+    adapter = new HttpAdapter()
+    const view = render(<LabShell adapter={adapter} />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(adapter.getSnapshot().runState).toBe('running')
+    expect(view.container.querySelector('#run-state')?.textContent).toBe('connecting')
+    for (const name of ['Add reader worker', 'Add sender worker']) {
+      expect(screen.getByRole<HTMLButtonElement>('button', { name }).disabled).toBe(true)
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect reader' }))
+    expect(screen.getByRole<HTMLInputElement>('spinbutton', { name: /^Workers/ }).disabled).toBe(
+      true,
+    )
+    expect(adapter.getSnapshot().reader.readBatchSize).toBeNull()
+    expect(adapter.getSnapshot().readerChannel.capacity).toBeNull()
   })
 
   it('autostarts in StrictMode and advances the counters without input', () => {
@@ -150,12 +188,14 @@ describe('LabShell', () => {
       new Response(JSON.stringify(body), {
         headers: { 'Content-Type': 'application/json' },
       })
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce(response(wire))
-        .mockResolvedValue(response({ ...wire, reader: { ...wire.reader, sourceError: null } })),
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(response(wire))
+      .mockResolvedValue(response({ ...wire, reader: { ...wire.reader, sourceError: null } }))
+    vi.stubGlobal('fetch', (input: RequestInfo | URL) =>
+      input === '/api/loadgen/config'
+        ? Promise.resolve(response(readConfigFixture()))
+        : fetch(input),
     )
     adapter = new HttpAdapter()
     render(<LabShell adapter={adapter} />)

@@ -2,7 +2,7 @@ import { z } from 'zod/mini'
 
 const wireInteger = z.int().check(z.nonnegative())
 
-const configSchema = z.strictObject({
+export const wireConfigSchema = z.strictObject({
   readerWorkersMax: wireInteger.check(z.positive()),
   senderWorkersMax: wireInteger.check(z.positive()),
   requestedTpsMax: wireInteger.check(z.positive()),
@@ -60,7 +60,7 @@ export const wireSnapshotSchema = z.strictObject({
   }),
   readerChannel: channelSchema,
   senderChannel: channelSchema,
-  config: configSchema,
 })
 
 export type WireSnapshot = z.infer<typeof wireSnapshotSchema>
+export type WireConfig = z.infer<typeof wireConfigSchema>

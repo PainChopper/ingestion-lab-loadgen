@@ -9,7 +9,7 @@ import type {
 import { FIXED_STEP_MS, FixedStepSimulation, SNAPSHOT_INTERVAL_MS } from '../model/simulation'
 import { CounterRateCalculator, type CounterRates } from '../model/counterRates'
 import type { ChannelTelemetry, SimulationConfig } from '../model/simulation'
-import type { WireSnapshot } from '../model/wireSnapshot'
+import type { WireConfig, WireSnapshot } from '../model/wireSnapshot'
 
 const RANGES = Object.freeze({
   readerWorkers: Object.freeze({ min: 1, max: 7 }),
@@ -40,8 +40,8 @@ function numericControl(
 export function createSimulationWireSnapshot(simulation: FixedStepSimulation): WireSnapshot {
   const telemetry = simulation.telemetry()
   const config = simulation.config
-  const { capacity: readerChannelCapacity, ...readerChannel } = telemetry.readerChannel
-  const { capacity: senderChannelCapacity, ...senderChannel } = telemetry.senderChannel
+  const { capacity: _readerCapacity, ...readerChannel } = telemetry.readerChannel
+  const { capacity: _senderCapacity, ...senderChannel } = telemetry.senderChannel
   return {
     capturedAtMs: telemetry.capturedAtMs,
     run: { state: 'running', ...telemetry.run },
@@ -55,16 +55,20 @@ export function createSimulationWireSnapshot(simulation: FixedStepSimulation): W
     sender: { workers: config.senderWorkers, workerStates: [...telemetry.sender.workerStates] },
     readerChannel,
     senderChannel,
-    config: {
-      readerWorkersMax: RANGES.readerWorkers.max,
-      senderWorkersMax: RANGES.senderWorkers.max,
-      requestedTpsMax: RANGES.requestedTps.max,
-      readBatchSize: config.readBatchSize,
-      readerChannelCapacity,
-      senderChannelCapacity,
-      sourcePath: 'simulation',
-    },
   }
+}
+
+export function createSimulationWireConfig(simulation: FixedStepSimulation): Readonly<WireConfig> {
+  const telemetry = simulation.telemetry()
+  return Object.freeze({
+    readerWorkersMax: RANGES.readerWorkers.max,
+    senderWorkersMax: RANGES.senderWorkers.max,
+    requestedTpsMax: RANGES.requestedTps.max,
+    readBatchSize: simulation.config.readBatchSize,
+    readerChannelCapacity: telemetry.readerChannel.capacity,
+    senderChannelCapacity: telemetry.senderChannel.capacity,
+    sourcePath: 'simulation',
+  })
 }
 
 function freezeChannelSnapshot(
@@ -93,6 +97,7 @@ function freezeSnapshot(
   revision: number,
   simulation: FixedStepSimulation,
   calculator: CounterRateCalculator,
+  config: Readonly<WireConfig>,
 ): LoadgenTelemetrySnapshot {
   const wire = createSimulationWireSnapshot(simulation)
   const rates = calculator.observe(wire)
@@ -108,8 +113,8 @@ function freezeSnapshot(
       id: 'reader',
       workers: numericControl(wire.reader.workers, RANGES.readerWorkers, 'workers'),
       workerStates: Object.freeze(wire.reader.workerStates),
-      readBatchSize: wire.config.readBatchSize,
-      sourcePath: wire.config.sourcePath,
+      readBatchSize: config.readBatchSize,
+      sourcePath: config.sourcePath,
       readTps: rates.readTps,
       rowsRead: wire.reader.rowsRead,
       sourceError: wire.reader.sourceError,
@@ -125,7 +130,7 @@ function freezeSnapshot(
     }),
     readerChannel: freezeChannelSnapshot(
       wire.readerChannel,
-      wire.config.readerChannelCapacity,
+      config.readerChannelCapacity,
       rates.readerChannel,
       {
         id: 'reader-to-throttler',
@@ -135,7 +140,7 @@ function freezeSnapshot(
     ),
     senderChannel: freezeChannelSnapshot(
       wire.senderChannel,
-      wire.config.senderChannelCapacity,
+      config.senderChannelCapacity,
       rates.senderChannel,
       {
         id: 'throttler-to-sender',
@@ -170,18 +175,20 @@ export class SimulationAdapter implements LoadgenAdapter {
     100,
   )
   private snapshot: LoadgenTelemetrySnapshot
+  private readonly config = createSimulationWireConfig(this.simulation)
   private timer: ReturnType<typeof setInterval> | null
   private lastTickMs: number
   private pendingStepMs = 0
   private disposed = false
 
   constructor() {
-    this.snapshot = freezeSnapshot(0, this.simulation, this.rateCalculator)
+    this.snapshot = freezeSnapshot(0, this.simulation, this.rateCalculator, this.config)
     this.lastTickMs = Date.now()
     this.timer = setInterval(this.tick, SNAPSHOT_INTERVAL_MS)
   }
 
   getSnapshot = (): LoadgenTelemetrySnapshot => this.snapshot
+  getConfig = (): Readonly<WireConfig> => this.config
 
   subscribe = (listener: LoadgenSnapshotListener): (() => void) => {
     if (this.disposed) return () => undefined
@@ -299,7 +306,12 @@ export class SimulationAdapter implements LoadgenAdapter {
   }
 
   private publish(): void {
-    this.snapshot = freezeSnapshot(this.snapshot.revision + 1, this.simulation, this.rateCalculator)
+    this.snapshot = freezeSnapshot(
+      this.snapshot.revision + 1,
+      this.simulation,
+      this.rateCalculator,
+      this.config,
+    )
     this.listeners.forEach((listener) => listener(this.snapshot))
   }
 

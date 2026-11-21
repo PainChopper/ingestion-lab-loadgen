@@ -1,5 +1,10 @@
 import { CounterRateCalculator, type CounterRates } from '../model/counterRates'
-import { wireSnapshotSchema, type WireSnapshot } from '../model/wireSnapshot'
+import {
+  wireConfigSchema,
+  wireSnapshotSchema,
+  type WireConfig,
+  type WireSnapshot,
+} from '../model/wireSnapshot'
 import type { LoadgenAdapter, LoadgenSnapshotListener } from './LoadgenAdapter'
 import type {
   CommandReceipt,
@@ -10,6 +15,7 @@ import type {
   ChannelTelemetrySnapshot,
 } from '../model/loadgen'
 const SNAPSHOT_ENDPOINT = '/api/loadgen/snapshot'
+const CONFIG_ENDPOINT = '/api/loadgen/config'
 const COMMAND_ENDPOINT = '/api/loadgen/commands'
 const POLL_INTERVAL_MS = 1_000
 const SNAPSHOT_TIMEOUT_MS = 2_000
@@ -91,6 +97,7 @@ function neutralChannel(
 
 function channelSnapshot(
   wire: WireSnapshot | null,
+  config: Readonly<WireConfig> | null,
   side: 'reader' | 'sender',
   rates: CounterRates | null,
 ): ChannelTelemetrySnapshot {
@@ -103,7 +110,7 @@ function channelSnapshot(
   const telemetry = wire[`${side}Channel`]
   return {
     ...channel,
-    capacity: wire.config[`${side}ChannelCapacity`],
+    capacity: config?.[`${side}ChannelCapacity`] ?? null,
     depthBatches: telemetry.depthBatches,
     inputTransactionsPerSecond: rates?.[`${side}Channel`].inputTransactionsPerSecond ?? null,
     outputTransactionsPerSecond: rates?.[`${side}Channel`].outputTransactionsPerSecond ?? null,
@@ -117,6 +124,7 @@ function createSnapshot(
   connectionState: ConnectionState,
   wire: WireSnapshot | null,
   rates: CounterRates | null = null,
+  config: Readonly<WireConfig> | null = null,
 ): LoadgenTelemetrySnapshot {
   const runState = wire?.run.state ?? null
   const writable = connectionState === 'connected' && runState === 'running'
@@ -133,22 +141,22 @@ function createSnapshot(
       id: 'reader',
       workers: numericControl(
         wire?.reader.workers ?? null,
-        wire?.config.readerWorkersMax ?? null,
+        config?.readerWorkersMax ?? null,
         applyMode,
         'workers',
       ),
       workerStates: wire?.reader.workerStates ?? [],
-      readBatchSize: wire?.config.readBatchSize ?? null,
+      readBatchSize: config?.readBatchSize ?? null,
       readTps: rates?.readTps ?? null,
       rowsRead: wire?.reader.rowsRead ?? null,
-      sourcePath: wire?.config.sourcePath,
+      sourcePath: config?.sourcePath,
       sourceError: wire?.reader.sourceError ?? null,
     },
     throttler: {
       id: 'throttler',
       requestedTps: numericControl(
         wire?.throttler.requestedTps ?? null,
-        wire?.config.requestedTpsMax ?? null,
+        config?.requestedTpsMax ?? null,
         applyMode,
         'transactions/s',
         0,
@@ -159,13 +167,13 @@ function createSnapshot(
       },
       admittedTps: rates?.admittedTps ?? null,
     },
-    readerChannel: channelSnapshot(wire, 'reader', rates),
-    senderChannel: channelSnapshot(wire, 'sender', rates),
+    readerChannel: channelSnapshot(wire, config, 'reader', rates),
+    senderChannel: channelSnapshot(wire, config, 'sender', rates),
     sender: {
       id: 'sender',
       workers: numericControl(
         wire?.sender.workers ?? null,
-        wire?.config.senderWorkersMax ?? null,
+        config?.senderWorkersMax ?? null,
         applyMode,
         'workers',
       ),
@@ -194,7 +202,7 @@ function appendFieldPath(path: string, key: PropertyKey): string {
 function canDispatchConfigCommand(
   command: SupportedCommand,
   snapshot: LoadgenTelemetrySnapshot,
-  config: WireSnapshot['config'] | null,
+  config: Readonly<WireConfig> | null,
 ): boolean {
   if (
     snapshot.connectionState !== 'connected' ||
@@ -234,18 +242,18 @@ function isSuccessfulStatus(status: number): boolean {
   return status >= 200 && status <= 299
 }
 
-async function decodeResponse(response: Response) {
+async function decodeResponse(response: Response, kind: 'snapshot' | 'config') {
   const mediaType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase()
   if (mediaType !== 'application/json') {
-    throw new Error('snapshot response must be JSON')
+    throw new Error(`${kind} response must be JSON`)
   }
 
   const body: unknown = await response.json()
-  const parsed = wireSnapshotSchema.safeParse(body)
+  const parsed = (kind === 'snapshot' ? wireSnapshotSchema : wireConfigSchema).safeParse(body)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]!
     const path = issue.path.reduce<string>(appendFieldPath, '')
-    throw new Error(`snapshot ${path || 'body'}: ${issue.message}`)
+    throw new Error(`${kind} ${path || 'body'}: ${issue.message}`)
   }
 
   return parsed.data
@@ -260,8 +268,13 @@ export class HttpAdapter implements LoadgenAdapter {
   private snapshot: LoadgenTelemetrySnapshot = createSnapshot(0, 'connecting', null)
   private timer: ReturnType<typeof setInterval> | null
   private activePoll: ActiveRequest | null = null
+  private activeConfigRequest: ActiveRequest | null = null
   private activeCommand: ActiveRequest | null = null
   private lastWire: WireSnapshot | null = null
+  private config: Readonly<WireConfig> | null = null
+  private generation = 0
+  private snapshotFailed = false
+  private configFailed = false
   private lastDecodeError: string | null = null
   private commandChannel: Promise<void> = Promise.resolve()
   private disposed = false
@@ -272,6 +285,7 @@ export class HttpAdapter implements LoadgenAdapter {
   }
 
   getSnapshot = (): LoadgenTelemetrySnapshot => this.snapshot
+  getConfig = (): Readonly<WireConfig> | null => this.config
 
   subscribe = (listener: LoadgenSnapshotListener): (() => void) => {
     if (this.disposed) return () => undefined
@@ -294,11 +308,12 @@ export class HttpAdapter implements LoadgenAdapter {
     if (this.disposed) {
       return Promise.resolve(this.rejectCommand('disposed', DISPOSED_COMMAND_MESSAGE))
     }
-    if (!canDispatchConfigCommand(command, this.snapshot, this.lastWire?.config ?? null)) {
+    if (!canDispatchConfigCommand(command, this.snapshot, this.config)) {
       return Promise.resolve(this.rejectCommand('unavailable', UNAVAILABLE_COMMAND_MESSAGE))
     }
 
-    const receipt = this.commandChannel.then(() => this.sendCommand(command))
+    const generation = this.generation
+    const receipt = this.commandChannel.then(() => this.sendCommand(command, generation))
     this.commandChannel = receipt.then(
       () => undefined,
       () => undefined,
@@ -315,12 +330,15 @@ export class HttpAdapter implements LoadgenAdapter {
       this.timer = null
     }
     this.activePoll?.abort()
+    this.activeConfigRequest?.abort()
     this.activeCommand?.abort()
     this.listeners.clear()
   }
 
   private poll = async (): Promise<void> => {
     if (this.disposed || this.activePoll !== null) return
+
+    if (!this.snapshotFailed) void this.loadConfig()
 
     const request = startRequest(SNAPSHOT_TIMEOUT_MS)
     this.activePoll = request
@@ -335,7 +353,7 @@ export class HttpAdapter implements LoadgenAdapter {
       })
       if (!request.signal.aborted && isSuccessfulStatus(response.status)) {
         decoding = true
-        wire = await decodeResponse(response)
+        wire = (await decodeResponse(response, 'snapshot')) as WireSnapshot
       }
     } catch (error) {
       if (decoding && !request.signal.aborted) {
@@ -351,29 +369,103 @@ export class HttpAdapter implements LoadgenAdapter {
       } else {
         request.finish()
       }
-      this.activePoll = null
+      if (this.activePoll === request) this.activePoll = null
     }
 
     if (this.disposed) return
 
-    const revision = this.snapshot.revision + 1
     if (wire === null || request.signal.aborted) {
-      this.publish(createSnapshot(revision, 'error', this.lastWire, this.rates))
+      this.invalidateConfig()
+      this.snapshotFailed = true
+      this.publishCurrent()
       return
     }
 
+    const restarted =
+      this.snapshotFailed ||
+      (this.lastWire !== null && wire.capturedAtMs < this.lastWire.capturedAtMs)
+    if (restarted) {
+      this.invalidateConfig()
+    }
+    this.snapshotFailed = false
     this.lastWire = wire
     this.rates = this.rateCalculator.observe(wire)
     this.lastDecodeError = null
-    this.publish(createSnapshot(revision, 'connected', wire, this.rates))
+    this.publishCurrent()
+    if (restarted) void this.loadConfig()
   }
 
-  private sendCommand = async (command: SupportedCommand): Promise<CommandReceipt> => {
+  private invalidateConfig(): void {
+    this.generation += 1
+    this.config = null
+    this.configFailed = false
+    this.activeConfigRequest?.abort()
+    this.activeConfigRequest = null
+    this.activeCommand?.abort()
+  }
+
+  private loadConfig = async (): Promise<void> => {
+    if (this.disposed || this.config !== null || this.activeConfigRequest !== null) return
+
+    const generation = this.generation
+    const request = startRequest(SNAPSHOT_TIMEOUT_MS)
+    this.activeConfigRequest = request
+    let config: WireConfig | null = null
+    try {
+      const response = await fetch(CONFIG_ENDPOINT, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: request.signal,
+      })
+      if (!request.signal.aborted && isSuccessfulStatus(response.status)) {
+        config = (await decodeResponse(response, 'config')) as WireConfig
+      }
+    } catch {
+      // A failed config request is retried by the next snapshot poll.
+    } finally {
+      if (config === null) request.abort()
+      else request.finish()
+    }
+
+    if (this.disposed || this.generation !== generation || this.activeConfigRequest !== request)
+      return
+    this.activeConfigRequest = null
+    if (request.signal.aborted) config = null
+    this.config = config === null ? null : deepFreeze(config)
+    this.configFailed = config === null
+    if (this.lastWire !== null) this.publishCurrent()
+  }
+
+  private publishCurrent(): void {
+    const connectionState =
+      this.snapshotFailed || this.configFailed
+        ? 'error'
+        : this.config === null
+          ? 'connecting'
+          : 'connected'
+    this.publish(
+      createSnapshot(
+        this.snapshot.revision + 1,
+        connectionState,
+        this.lastWire,
+        this.rates,
+        this.config,
+      ),
+    )
+  }
+
+  private sendCommand = async (
+    command: SupportedCommand,
+    generation: number,
+  ): Promise<CommandReceipt> => {
     if (this.disposed) {
       return this.rejectCommand('disposed', DISPOSED_COMMAND_MESSAGE)
     }
 
-    if (!canDispatchConfigCommand(command, this.snapshot, this.lastWire?.config ?? null)) {
+    if (
+      generation !== this.generation ||
+      !canDispatchConfigCommand(command, this.snapshot, this.config)
+    ) {
       return this.rejectCommand('unavailable', UNAVAILABLE_COMMAND_MESSAGE)
     }
 
@@ -397,11 +489,14 @@ export class HttpAdapter implements LoadgenAdapter {
       // Abort releases the unread response body even after the headers have arrived.
       abortedBeforeCleanup = request.signal.aborted
       request.abort()
-      this.activeCommand = null
+      if (this.activeCommand === request) this.activeCommand = null
     }
 
     if (this.disposed) {
       return this.rejectCommand('disposed', DISPOSED_COMMAND_MESSAGE)
+    }
+    if (generation !== this.generation) {
+      return this.rejectCommand('unavailable', UNAVAILABLE_COMMAND_MESSAGE)
     }
     if (abortedBeforeCleanup || response === null) {
       return this.rejectCommand(
