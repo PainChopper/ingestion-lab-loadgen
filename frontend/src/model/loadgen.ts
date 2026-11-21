@@ -49,7 +49,7 @@ export interface ReaderSnapshot {
   readonly readBatchSize: number | null
   readonly readTps: number | null
   readonly rowsRead: number | null
-  readonly sourceDirectory?: string
+  readonly sourcePath?: string
   readonly sourceError: ReaderSourceErrorSnapshot | null
 }
 
@@ -86,9 +86,8 @@ export interface SenderSnapshot {
 }
 
 export interface ReaderSourceErrorSnapshot {
-  readonly category: string
   readonly operation: string
-  readonly relativePath: string
+  readonly path: string
   readonly message: string
 }
 

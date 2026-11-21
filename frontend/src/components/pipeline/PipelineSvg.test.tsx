@@ -561,9 +561,8 @@ describe('PipelineSvg rendering', () => {
           reader: {
             ...base.reader,
             sourceError: {
-              category: 'source',
               operation: 'read',
-              relativePath: 'broken.parquet',
+              path: 'broken.parquet',
               message: 'corrupt parquet',
             },
           },

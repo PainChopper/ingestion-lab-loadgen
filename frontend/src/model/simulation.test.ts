@@ -113,7 +113,6 @@ describe('FixedStepSimulation pipeline batch', () => {
     for (const channel of [completed.readerChannel, completed.senderChannel]) {
       expect(channel.inputTransactionsTotal).toBe(5_000)
       expect(channel.outputTransactionsTotal).toBe(5_000)
-      expect(channel.bufferedTransactions).toBe(0)
     }
     expect(completed.readerChannel.blockedMs).toBeGreaterThan(inFlight.readerChannel.blockedMs)
     expect(completed.capturedAtMs).toBe(completed.run.elapsedMs)

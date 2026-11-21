@@ -77,7 +77,7 @@ export interface ValveWheelKnob {
   readonly layer: 'back' | 'front'
 }
 
-type ValveCapability = Pick<NumericControlSnapshot, 'min' | 'max' | 'step'>
+type ValveCapability = Pick<NumericControlSnapshot, 'min' | 'max'>
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -104,24 +104,30 @@ export function valvePassageCenterY(openingIndex: number): number {
 
 function capabilityIsFinite(capability: ValveCapability): boolean {
   return (
-    Number.isFinite(capability.min) &&
-    Number.isFinite(capability.max) &&
-    Number.isFinite(capability.step) &&
-    capability.max > capability.min &&
-    capability.step > 0
+    Number.isSafeInteger(capability.min) &&
+    Number.isSafeInteger(capability.max) &&
+    capability.min >= 0 &&
+    capability.max > capability.min
   )
 }
 
 export function getValveTargets(capability: ValveCapability): readonly number[] | null {
   if (!capabilityIsFinite(capability)) return null
 
-  const maxSteps = Math.floor((capability.max - capability.min) / capability.step)
   const targets = Array.from({ length: OPENING_POSITION_COUNT }, (_, index) => {
-    const stepsFromMin = Math.min(maxSteps, Math.round((maxSteps * index) / MAX_OPENING_INDEX))
-    return capability.min + stepsFromMin * capability.step
+    return (
+      capability.min + Math.round((index / MAX_OPENING_INDEX) * (capability.max - capability.min))
+    )
   })
 
-  return new Set(targets).size === OPENING_POSITION_COUNT ? Object.freeze(targets) : null
+  return Object.freeze([...new Set(targets)])
+}
+
+export function targetIndexToOpeningIndex(
+  index: number,
+  targets: readonly number[] | null,
+): number {
+  return targets === null ? index : Math.round((index / (targets.length - 1)) * MAX_OPENING_INDEX)
 }
 
 export function valueToOpeningIndex(
@@ -159,7 +165,10 @@ export function effectiveValveOpeningIndex(
   installed: boolean | null,
   control: NumericControlSnapshot,
 ): number {
-  return installed === false ? MAX_OPENING_INDEX : valueToOpeningIndex(control.applied, control)
+  const targets = getValveTargets(control)
+  return installed === false
+    ? MAX_OPENING_INDEX
+    : targetIndexToOpeningIndex(valueToOpeningIndex(control.applied, control, targets), targets)
 }
 
 export function openingPercent(index: number): number {

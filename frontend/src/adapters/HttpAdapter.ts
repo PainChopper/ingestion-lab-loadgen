@@ -57,19 +57,17 @@ function unavailableControl(unit: string): NumericControlSnapshot {
 
 function numericControl(
   value: number | null,
-  config:
-    | WireSnapshot['config']['readerWorkers']
-    | WireSnapshot['config']['throttlerRequestedTps']
-    | null,
+  max: number | null,
   applyMode: NumericControlSnapshot['applyMode'],
   unit: string,
+  min = 1,
 ): NumericControlSnapshot {
-  if (config === null) return unavailableControl(unit)
+  if (max === null) return unavailableControl(unit)
   return {
     applied: value,
-    min: 'step' in config ? 0 : 1,
-    max: config.max,
-    step: 'step' in config ? config.step : 1,
+    min,
+    max,
+    step: 1,
     unit,
     applyMode,
   }
@@ -107,7 +105,7 @@ function channelSnapshot(
   const telemetry = wire[`${side}Channel`]
   return {
     ...channel,
-    capacity: telemetry.capacity,
+    capacity: wire.config[`${side}ChannelCapacity`],
     depthBatches: telemetry.depthBatches,
     inputTransactionsPerSecond: rates?.[`${side}Channel`].inputTransactionsPerSecond ?? null,
     outputTransactionsPerSecond: rates?.[`${side}Channel`].outputTransactionsPerSecond ?? null,
@@ -137,24 +135,25 @@ function createSnapshot(
       id: 'reader',
       workers: numericControl(
         wire?.reader.workers ?? null,
-        wire?.config.readerWorkers ?? null,
+        wire?.config.readerWorkersMax ?? null,
         applyMode,
         'workers',
       ),
       workerStates: wire?.reader.workerStates ?? [],
-      readBatchSize: wire?.reader.readBatchSize ?? null,
+      readBatchSize: wire?.config.readBatchSize ?? null,
       readTps: rates?.readTps ?? null,
       rowsRead: wire?.reader.rowsRead ?? null,
-      sourceDirectory: wire?.reader.sourceDirectory,
+      sourcePath: wire?.config.sourcePath,
       sourceError: wire?.reader.sourceError ?? null,
     },
     throttler: {
       id: 'throttler',
       requestedTps: numericControl(
         wire?.throttler.requestedTps ?? null,
-        wire?.config.throttlerRequestedTps ?? null,
+        wire?.config.requestedTpsMax ?? null,
         applyMode,
         'transactions/s',
+        0,
       ),
       installed: {
         applied: wire?.throttler.installed ?? null,
@@ -168,7 +167,7 @@ function createSnapshot(
       id: 'sender',
       workers: numericControl(
         wire?.sender.workers ?? null,
-        wire?.config.senderWorkers ?? null,
+        wire?.config.senderWorkersMax ?? null,
         applyMode,
         'workers',
       ),
@@ -183,16 +182,8 @@ function isWireInteger(value: unknown): value is number {
   )
 }
 
-function isRangeValue(
-  value: unknown,
-  config: { min: number; max: number; step: number },
-): value is number {
-  return (
-    isWireInteger(value) &&
-    value >= config.min &&
-    value <= config.max &&
-    (value - config.min) % config.step === 0
-  )
+function isRangeValue(value: unknown, config: { min: number; max: number }): value is number {
+  return isWireInteger(value) && value >= config.min && value <= config.max
 }
 
 function appendFieldPath(path: string, key: PropertyKey): string {
@@ -215,13 +206,13 @@ function canDispatchConfigCommand(
     return false
   switch (command.type) {
     case 'set-requested-tps':
-      return isRangeValue(command.value, { min: 0, ...config.throttlerRequestedTps })
+      return isRangeValue(command.value, { min: 0, max: config.requestedTpsMax })
     case 'set-throttler-installed':
       return typeof command.value === 'boolean'
     case 'set-sender-workers':
-      return isRangeValue(command.value, { min: 1, max: config.senderWorkers.max, step: 1 })
+      return isRangeValue(command.value, { min: 1, max: config.senderWorkersMax })
     case 'set-reader-workers':
-      return isRangeValue(command.value, { min: 1, max: config.readerWorkers.max, step: 1 })
+      return isRangeValue(command.value, { min: 1, max: config.readerWorkersMax })
   }
 }
 

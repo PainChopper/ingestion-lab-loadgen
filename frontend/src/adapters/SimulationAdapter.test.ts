@@ -8,7 +8,7 @@ describe('SimulationAdapter', () => {
     vi.useRealTimers()
   })
 
-  it('builds a full HTTP wire snapshot from simulation state and retains startup config', () => {
+  it('builds a full HTTP wire snapshot from simulation state and retains immutable config', () => {
     const simulation = new FixedStepSimulation(
       {
         readerWorkers: 1,
@@ -20,7 +20,7 @@ describe('SimulationAdapter', () => {
         targetErrorRatePercent: 0,
       },
       2,
-      2,
+      3,
     )
     const first = createSimulationWireSnapshot(simulation)
     expect(wireSnapshotSchema.parse(first)).toEqual(first)
@@ -29,18 +29,20 @@ describe('SimulationAdapter', () => {
       run: { state: 'running', elapsedMs: 0, totalTransactions: 0 },
       reader: {
         workers: 1,
-        readBatchSize: 1_000,
         rowsRead: 0,
-        sourceDirectory: '',
         sourceError: null,
         workerStates: [{ activity: 'idle', draining: false }],
       },
       throttler: { installed: true, requestedTps: 50_000 },
       sender: { workers: 1, workerStates: [{ activity: 'idle', draining: false }] },
       config: {
-        readerWorkers: { initial: 1, max: 7 },
-        senderWorkers: { initial: 1, max: 32 },
-        throttlerRequestedTps: { initial: 50_000, max: 250_000, step: 5_000 },
+        readerWorkersMax: 7,
+        senderWorkersMax: 32,
+        requestedTpsMax: 250_000,
+        readBatchSize: 1_000,
+        readerChannelCapacity: 2,
+        senderChannelCapacity: 3,
+        sourcePath: '../data/MBD-mini/trx/fold=*/*.parquet',
       },
     })
     simulation.updateConfig({
@@ -62,6 +64,19 @@ describe('SimulationAdapter', () => {
     expect(wire.senderChannel.inputTransactionsTotal).toBeGreaterThan(0)
     expect(wire.readerChannel.blockedMs).toBeGreaterThan(0)
     expect(wire.capturedAtMs).toBe(wire.run.elapsedMs)
+  })
+
+  it('accepts exact integer TPS and rejects values outside the integer range', async () => {
+    const adapter = new SimulationAdapter()
+    for (const value of [0, 120_001, 250_000]) {
+      expect((await adapter.dispatch({ type: 'set-requested-tps', value })).accepted).toBe(true)
+      expect(adapter.getSnapshot().throttler.requestedTps.applied).toBe(value)
+    }
+    for (const value of [-1, 250_001, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect((await adapter.dispatch({ type: 'set-requested-tps', value })).accepted).toBe(false)
+      expect(adapter.getSnapshot().throttler.requestedTps.applied).toBe(250_000)
+    }
+    adapter.dispose()
   })
 
   it('publishes an immutable Sender worker list snapshot with retained controls', () => {

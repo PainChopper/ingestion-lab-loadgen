@@ -12,11 +12,11 @@ interface MockResponseOptions {
 }
 
 const FIXTURE = readWireFixture()
-// Small command grid keeps boundary/FIFO tests readable; the contract test uses the unmodified profile.
+// Small maximum keeps boundary/FIFO tests readable; the contract test uses the shared fixture.
 const WIRE = {
   ...FIXTURE,
   run: { ...FIXTURE.run, state: 'running' },
-  config: { ...FIXTURE.config, throttlerRequestedTps: { initial: 200, max: 400, step: 25 } },
+  config: { ...FIXTURE.config, requestedTpsMax: 400 },
 }
 
 function withRunState(state: RunState) {
@@ -200,44 +200,38 @@ const malformedCases = [
   },
   {
     name: 'positive batch size',
-    result: async () => mockResponse({ ...WIRE, reader: { ...WIRE.reader, readBatchSize: 0 } }),
+    result: async () => mockResponse({ ...WIRE, config: { ...WIRE.config, readBatchSize: 0 } }),
   },
-  {
-    name: 'config initial bound',
-    result: async () =>
-      mockResponse({
-        ...WIRE,
-        config: { ...WIRE.config, senderWorkers: { initial: 33, max: 32 } },
-      }),
-  },
-  {
-    name: 'config positive step',
-    result: async () =>
-      mockResponse({
-        ...WIRE,
-        config: { ...WIRE.config, throttlerRequestedTps: { initial: 0, max: 400, step: 0 } },
-      }),
-  },
-  {
-    name: 'config initial grid',
-    result: async () =>
-      mockResponse({
-        ...WIRE,
-        config: { ...WIRE.config, throttlerRequestedTps: { initial: 201, max: 400, step: 25 } },
-      }),
-  },
+  ...(['readerWorkersMax', 'senderWorkersMax', 'requestedTpsMax'] as const).map((field) => ({
+    name: `config positive ${field}`,
+    result: async () => mockResponse({ ...WIRE, config: { ...WIRE.config, [field]: 0 } }),
+  })),
   {
     name: 'strict config shape',
     result: async () => mockResponse({ ...WIRE, config: { ...WIRE.config, extra: true } }),
   },
-  {
-    name: 'strict control profile',
+  ...[
+    ['config', 'readerWorkers'],
+    ['config', 'senderWorkers'],
+    ['config', 'throttlerRequestedTps'],
+    ['reader', 'readBatchSize'],
+    ['reader', 'sourceDirectory'],
+    ['readerChannel', 'capacity'],
+    ['senderChannel', 'capacity'],
+    ['readerChannel', 'bufferedTransactions'],
+    ['senderChannel', 'bufferedTransactions'],
+  ].map(([side, field]) => ({
+    name: `removed field ${side}.${field}`,
+    result: async () => mockResponse({ ...WIRE, [side]: { ...WIRE[side], [field]: 1 } }),
+  })),
+  ...['category', 'relativePath'].map((field) => ({
+    name: `removed source error ${field}`,
     result: async () =>
       mockResponse({
         ...WIRE,
-        config: { ...WIRE.config, readerWorkers: { ...WIRE.config.readerWorkers, extra: true } },
+        reader: { ...WIRE.reader, sourceError: { ...WIRE.reader.sourceError, [field]: '' } },
       }),
-  },
+  })),
   {
     name: 'required source error string',
     result: async () => {
@@ -345,7 +339,7 @@ describe('HttpAdapter', () => {
         readBatchSize: 20,
         readTps: null,
         rowsRead: 22,
-        sourceDirectory: 'reader-source',
+        sourcePath: 'reader-source',
       })
       expect(snapshot.reader.sourceError).toEqual(body.reader.sourceError)
       for (const pool of ['reader', 'sender'] as const) {
@@ -371,7 +365,7 @@ describe('HttpAdapter', () => {
       expect(snapshot.reader.workers).toMatchObject({ applied: 11, min: 1, max: 7, step: 1 })
       expect(snapshot.sender.workers).toMatchObject({ applied: 41, min: 1, max: 32, step: 1 })
       expect(snapshot.throttler).toMatchObject({
-        requestedTps: { applied: 31, min: 0, max: 4_000_000, step: 200_000 },
+        requestedTps: { applied: 31, min: 0, max: 4_000_000, step: 1 },
         admittedTps: null,
         installed: { applied: false },
       })
@@ -413,7 +407,7 @@ describe('HttpAdapter', () => {
       for (const command of [
         { type: 'set-reader-workers', value: 11 },
         { type: 'set-sender-workers', value: 41 },
-        { type: 'set-requested-tps', value: 31 },
+        { type: 'set-requested-tps', value: 4_000_001 },
       ] as const) {
         expect((await adapter.dispatch(command)).accepted).toBe(false)
       }
@@ -426,6 +420,25 @@ describe('HttpAdapter', () => {
       adapter.dispose()
     },
   )
+
+  it('sends exact integer TPS across the range and rejects invalid values locally', async () => {
+    const wire = { ...FIXTURE, run: { ...FIXTURE.run, state: 'running' } }
+    fetchMock.mockImplementation((input) =>
+      Promise.resolve(input === COMMAND_ENDPOINT ? mockCommandResponse() : mockResponse(wire)),
+    )
+    const adapter = new HttpAdapter()
+    await flushPoll()
+    for (const value of [0, 2_000_001, 4_000_000]) {
+      expect((await adapter.dispatch({ type: 'set-requested-tps', value })).accepted).toBe(true)
+    }
+    for (const value of [-1, 4_000_001, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      expect((await adapter.dispatch({ type: 'set-requested-tps', value })).accepted).toBe(false)
+    }
+    expect(
+      commandFetchCalls().map(([, init]) => JSON.parse((init as RequestInit).body as string).value),
+    ).toEqual([0, 2_000_001, 4_000_000])
+    adapter.dispose()
+  })
 
   it('accepts zero measurements and a nullable source error', async () => {
     fetchMock.mockResolvedValueOnce(
@@ -479,34 +492,34 @@ describe('HttpAdapter', () => {
     adapter.dispose()
   })
 
-  it('accepts source error strings without imposing category, operation or path conventions', async () => {
+  it('accepts source error strings without imposing operation or path conventions', async () => {
     const sourceError = {
-      category: '',
       operation: 'future-operation',
-      relativePath: '',
+      path: '',
       message: '',
     }
     fetchMock.mockResolvedValueOnce(
       mockResponse({
         ...WIRE,
-        reader: { ...WIRE.reader, sourceDirectory: '', sourceError },
+        config: { ...WIRE.config, sourcePath: '' },
+        reader: { ...WIRE.reader, sourceError },
       }),
     )
     const adapter = new HttpAdapter()
     await flushPoll()
     expect(adapter.getSnapshot()).toMatchObject({
       connectionState: 'connected',
-      reader: { sourceDirectory: '', sourceError },
+      reader: { sourcePath: '', sourceError },
     })
     adapter.dispose()
   })
 
   it('uses the Sender worker range from the snapshot', async () => {
-    const senderWorkers = { initial: 5, max: 35 }
+    const senderWorkersMax = 35
     fetchMock.mockResolvedValueOnce(
       mockResponse({
         ...WIRE,
-        config: { ...WIRE.config, senderWorkers },
+        config: { ...WIRE.config, senderWorkersMax },
         sender: { ...WIRE.sender, workers: 35 },
       }),
     )
@@ -552,7 +565,7 @@ describe('HttpAdapter', () => {
     async (readerChannelCapacity) => {
       const wire = {
         ...WIRE,
-        readerChannel: { ...WIRE.readerChannel, capacity: readerChannelCapacity },
+        config: { ...WIRE.config, readerChannelCapacity },
       }
       fetchMock.mockResolvedValueOnce(mockResponse(wire))
       const adapter = new HttpAdapter()
@@ -595,9 +608,8 @@ describe('HttpAdapter', () => {
         reader: {
           ...WIRE.reader,
           sourceError: {
-            category: 'source',
             operation: 'read',
-            relativePath: 'broken.parquet',
+            path: 'broken.parquet',
             message: 'Could not read file',
             extra: true,
           },
@@ -606,9 +618,7 @@ describe('HttpAdapter', () => {
     },
   ])('rejects an unknown field in $path as a schema error and recovers', async ({ path, wire }) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    fetchMock
-      .mockResolvedValueOnce(mockResponse(wire))
-      .mockResolvedValueOnce(mockResponse(WIRE))
+    fetchMock.mockResolvedValueOnce(mockResponse(wire)).mockResolvedValueOnce(mockResponse(WIRE))
     const adapter = new HttpAdapter()
 
     await flushPoll()
@@ -974,7 +984,7 @@ describe('HttpAdapter', () => {
         applied: 0,
         min: 0,
         max: 400,
-        step: 25,
+        step: 1,
         applyMode: 'immediate',
       })
 

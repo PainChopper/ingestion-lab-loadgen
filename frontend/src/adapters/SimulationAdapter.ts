@@ -14,7 +14,7 @@ import type { WireSnapshot } from '../model/wireSnapshot'
 const RANGES = Object.freeze({
   readerWorkers: Object.freeze({ min: 1, max: 7, step: 1 }),
   senderWorkers: Object.freeze({ min: 1, max: 32, step: 1 }),
-  requestedTps: Object.freeze({ min: 0, max: 250_000, step: 5_000 }),
+  requestedTps: Object.freeze({ min: 0, max: 250_000, step: 1 }),
 })
 
 interface NumericRange {
@@ -48,36 +48,36 @@ function normalizeNumericValue(value: number, range: NumericRange): number {
 export function createSimulationWireSnapshot(simulation: FixedStepSimulation): WireSnapshot {
   const telemetry = simulation.telemetry()
   const config = simulation.config
-  const initial = simulation.initialConfig
+  const { capacity: readerChannelCapacity, ...readerChannel } = telemetry.readerChannel
+  const { capacity: senderChannelCapacity, ...senderChannel } = telemetry.senderChannel
   return {
     capturedAtMs: telemetry.capturedAtMs,
     run: { state: 'running', ...telemetry.run },
     reader: {
       workers: config.readerWorkers,
       workerStates: [...telemetry.reader.workerStates],
-      readBatchSize: config.readBatchSize,
       rowsRead: telemetry.reader.rowsRead,
-      sourceDirectory: '',
       sourceError: null,
     },
     throttler: { requestedTps: config.requestedTps, installed: config.throttlerInstalled },
     sender: { workers: config.senderWorkers, workerStates: [...telemetry.sender.workerStates] },
-    readerChannel: telemetry.readerChannel,
-    senderChannel: telemetry.senderChannel,
+    readerChannel,
+    senderChannel,
     config: {
-      readerWorkers: { initial: initial.readerWorkers, max: RANGES.readerWorkers.max },
-      senderWorkers: { initial: initial.senderWorkers, max: RANGES.senderWorkers.max },
-      throttlerRequestedTps: {
-        initial: initial.requestedTps,
-        max: RANGES.requestedTps.max,
-        step: RANGES.requestedTps.step,
-      },
+      readerWorkersMax: RANGES.readerWorkers.max,
+      senderWorkersMax: RANGES.senderWorkers.max,
+      requestedTpsMax: RANGES.requestedTps.max,
+      readBatchSize: config.readBatchSize,
+      readerChannelCapacity,
+      senderChannelCapacity,
+      sourcePath: '../data/MBD-mini/trx/fold=*/*.parquet',
     },
   }
 }
 
 function freezeChannelSnapshot(
-  channel: ChannelTelemetry,
+  channel: WireSnapshot['readerChannel'],
+  capacity: ChannelTelemetry['capacity'],
   rates: CounterRates['readerChannel'],
   identity: {
     readonly id: 'reader-to-throttler' | 'throttler-to-sender'
@@ -89,7 +89,7 @@ function freezeChannelSnapshot(
     id: identity.id,
     from: identity.from,
     to: identity.to,
-    capacity: channel.capacity,
+    capacity,
     depthBatches: channel.depthBatches,
     blockedSenders: channel.blockedSenders,
     oldestBlockedSenderMs: channel.oldestBlockedSenderMs,
@@ -116,7 +116,8 @@ function freezeSnapshot(
       id: 'reader',
       workers: numericControl(wire.reader.workers, RANGES.readerWorkers, 'workers'),
       workerStates: Object.freeze(wire.reader.workerStates),
-      readBatchSize: wire.reader.readBatchSize,
+      readBatchSize: wire.config.readBatchSize,
+      sourcePath: wire.config.sourcePath,
       readTps: rates.readTps,
       rowsRead: wire.reader.rowsRead,
       sourceError: wire.reader.sourceError,
@@ -130,16 +131,26 @@ function freezeSnapshot(
       }),
       admittedTps: rates.admittedTps,
     }),
-    readerChannel: freezeChannelSnapshot(wire.readerChannel, rates.readerChannel, {
-      id: 'reader-to-throttler',
-      from: 'reader',
-      to: 'throttler',
-    }),
-    senderChannel: freezeChannelSnapshot(wire.senderChannel, rates.senderChannel, {
-      id: 'throttler-to-sender',
-      from: 'throttler',
-      to: 'sender',
-    }),
+    readerChannel: freezeChannelSnapshot(
+      wire.readerChannel,
+      wire.config.readerChannelCapacity,
+      rates.readerChannel,
+      {
+        id: 'reader-to-throttler',
+        from: 'reader',
+        to: 'throttler',
+      },
+    ),
+    senderChannel: freezeChannelSnapshot(
+      wire.senderChannel,
+      wire.config.senderChannelCapacity,
+      rates.senderChannel,
+      {
+        id: 'throttler-to-sender',
+        from: 'throttler',
+        to: 'sender',
+      },
+    ),
     sender: Object.freeze({
       id: 'sender',
       workers: numericControl(wire.sender.workers, RANGES.senderWorkers, 'workers'),
@@ -200,13 +211,17 @@ export class SimulationAdapter implements LoadgenAdapter {
 
     switch (command.type) {
       case 'set-requested-tps':
-        if (!Number.isFinite(command.value)) {
-          return this.rejectInvalidNumber('requested tps')
+        if (
+          !Number.isSafeInteger(command.value) ||
+          command.value < 0 ||
+          command.value > RANGES.requestedTps.max
+        ) {
+          return this.reject({
+            code: 'invalid-command',
+            message: 'requested tps must be an integer within 0..max',
+          })
         }
-        changed = this.updateConfig(
-          'requestedTps',
-          normalizeNumericValue(command.value, RANGES.requestedTps),
-        )
+        changed = this.updateConfig('requestedTps', command.value)
         break
       case 'set-reader-workers':
         if (!Number.isFinite(command.value)) {

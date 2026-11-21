@@ -167,7 +167,7 @@ describe('LabShell', () => {
     ).toBe('SOURCE ERROR')
     fireEvent.click(screen.getByRole('button', { name: 'Inspect reader' }))
     expect(screen.getByTestId('reader-source-error-label').parentElement?.textContent).toContain(
-      'reader-operation: reader-source/reader-path: reader-message',
+      'reader-operation: reader-path: reader-message',
     )
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000)

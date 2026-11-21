@@ -119,11 +119,9 @@ describe('inspector view model', () => {
           connectionState,
           reader: {
             ...base.reader,
-            sourceDirectory: 'C:/dataset',
             sourceError: {
-              category: 'source',
               operation: 'future-operation',
-              relativePath: 'broken/source.parquet',
+              path: 'C:/dataset/../outside//broken/source.parquet',
               message: 'corrupt parquet',
             },
           },
@@ -133,7 +131,7 @@ describe('inspector view model', () => {
       const errors = model?.rows.filter((row) => row.kind === 'source-error')
       expect(errors).toHaveLength(1)
       expect(errors?.[0]).toMatchObject({
-        value: 'future-operation: C:/dataset/broken/source.parquet: corrupt parquet',
+        value: 'future-operation: C:/dataset/../outside//broken/source.parquet: corrupt parquet',
         layout: 'full-width',
       })
       expect(model?.rows.find((row) => row.label === 'Worker states')?.segments?.at(-1)).toEqual({

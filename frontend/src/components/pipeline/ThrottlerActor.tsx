@@ -19,7 +19,7 @@ import {
 } from './ThrottlerValveSvg'
 import {
   getValveTargets,
-  MAX_OPENING_INDEX,
+  targetIndexToOpeningIndex,
   nextWheelPhase,
   openingPercent,
   VALVE_APERTURE,
@@ -71,6 +71,8 @@ export function ThrottlerActor({
       : `translate(${resolvedGeometry.transform.x} ${resolvedGeometry.transform.y})`
   const portraitPipe = 'portraitPipe' in resolvedGeometry ? resolvedGeometry.portraitPipe : null
   const targets = getValveTargets(snapshot.requestedTps)
+  const maxTargetIndex = (targets?.length ?? 1) - 1
+  const visualIndex = (index: number) => targetIndexToOpeningIndex(index, targets)
   const adjustable =
     valveIsAdjustable(snapshot.requestedTps) &&
     requestedTpsControl.available &&
@@ -88,23 +90,25 @@ export function ThrottlerActor({
   const candidateKind = requestedTpsControl.phase === 'idle' ? null : requestedTpsControl.phase
   const [initialAppliedIndex] = useState(appliedIndex)
   const openingIndex = candidateIndex ?? appliedIndex
-  const openingIndexRef = useRef(openingIndex)
+  const openingValue = candidateValue ?? snapshot.requestedTps.applied
+  const openingValueRef = useRef(openingValue)
   const wheelPhase = nextWheelPhase(0, openingIndex - initialAppliedIndex)
 
-  // A batched rollback can leave the rendered index unchanged after the ref advances.
+  // A batched rollback can leave the rendered value unchanged after the ref advances.
   useLayoutEffect(() => {
-    openingIndexRef.current = openingIndex
+    openingValueRef.current = openingValue
   })
 
   const requestDelta = (delta: number) => {
     if (!adjustable || targets === null) return false
 
-    const sourceIndex = openingIndexRef.current
-    const targetIndex = Math.min(MAX_OPENING_INDEX, Math.max(0, sourceIndex + delta))
-    if (targetIndex === sourceIndex) return false
+    const sourceIndex = valueToOpeningIndex(openingValueRef.current, snapshot.requestedTps, targets)
+    const targetIndex = Math.min(maxTargetIndex, Math.max(0, sourceIndex + delta))
+    const targetValue = targets[targetIndex]
+    if (targetValue === openingValueRef.current) return false
 
-    openingIndexRef.current = targetIndex
-    requestedTpsControl.preview(targets[targetIndex])
+    openingValueRef.current = targetValue
+    requestedTpsControl.preview(targetValue)
     return true
   }
 
@@ -138,8 +142,8 @@ export function ThrottlerActor({
       ArrowUp: 1,
       PageDown: -5,
       PageUp: 5,
-      Home: -MAX_OPENING_INDEX,
-      End: MAX_OPENING_INDEX,
+      Home: -maxTargetIndex,
+      End: maxTargetIndex,
     }
     const delta = changes[event.key]
     if (delta === undefined || event.repeat) return
@@ -158,12 +162,12 @@ export function ThrottlerActor({
   const { installationCandidate, installationCandidateKind, installationError, targetInstalled } =
     installation
 
-  const appliedGateY = valvePistonCenterY(appliedIndex)
+  const appliedGateY = valvePistonCenterY(visualIndex(appliedIndex))
   const candidateGateY =
-    candidateIndex === null ? null : valvePistonCenterY(candidateIndex ?? appliedIndex)
+    candidateIndex === null ? null : valvePistonCenterY(visualIndex(candidateIndex))
   const candidateState = candidateKind === null ? 'applied' : candidateKind
   const rangeIndex = openingIndex
-  const rangeText = `${openingPercent(rangeIndex)}% open, ${candidateState}; applied ${openingPercent(appliedIndex)}% open`
+  const rangeText = `${openingPercent(visualIndex(rangeIndex))}% open, ${candidateState}; applied ${openingPercent(visualIndex(appliedIndex))}% open`
   const valveStyle = {
     '--pipeline-valve-flow-color': flowColor(upstreamChannel),
   } as CSSProperties
@@ -275,7 +279,7 @@ export function ThrottlerActor({
                   `pipeline-valve-ghost-label--${candidateKind ?? 'pending'}`,
                 )}
               >
-                {openingPercent(candidateIndex)}% target
+                {openingPercent(visualIndex(candidateIndex))}% target
               </text>
             </>
           )}
@@ -285,6 +289,7 @@ export function ThrottlerActor({
           <ThrottlerValveOpeningControl
             adjustable={adjustable}
             rangeIndex={rangeIndex}
+            maxRangeIndex={maxTargetIndex}
             rangeText={rangeText}
             wheelPhase={wheelPhase}
             handlePointerDown={handlePointerDown}
@@ -324,7 +329,7 @@ export function ThrottlerActor({
         >
           {appliedInstalled === false
             ? 'BYPASS · APPLIED'
-            : `${openingPercent(appliedIndex)}% OPEN`}
+            : `${openingPercent(visualIndex(appliedIndex))}% OPEN`}
         </text>
         <text
           x={VALVE_APERTURE.centerX}
@@ -333,7 +338,7 @@ export function ThrottlerActor({
           className="pipeline-valve-readonly-label"
         >
           {appliedInstalled === false
-            ? `${openingPercent(appliedIndex)}% SAVED · THROTTLE IGNORED`
+            ? `${openingPercent(visualIndex(appliedIndex))}% SAVED · THROTTLE IGNORED`
             : !adjustable
               ? snapshot.requestedTps.applyMode === 'unavailable'
                 ? 'UNAVAILABLE'
