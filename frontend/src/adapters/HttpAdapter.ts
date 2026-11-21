@@ -202,24 +202,6 @@ function appendFieldPath(path: string, key: PropertyKey): string {
   return `${path}[${JSON.stringify(key)}]`
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-// Zod strips unknown keys. Compare only the decoded branches to report what it discarded.
-function collectUnknownPaths(input: unknown, parsed: unknown, paths: string[], prefix = ''): void {
-  if (!isObject(input) || !isObject(parsed)) return
-
-  for (const [key, value] of Object.entries(input)) {
-    const path = appendFieldPath(prefix, key)
-    if (Object.hasOwn(parsed, key)) {
-      collectUnknownPaths(value, parsed[key], paths, path)
-    } else {
-      paths.push(path)
-    }
-  }
-}
-
 function canDispatchConfigCommand(
   command: SupportedCommand,
   snapshot: LoadgenTelemetrySnapshot,
@@ -277,16 +259,13 @@ async function decodeResponse(response: Response) {
     throw new Error(`snapshot ${path || 'body'}: ${issue.message}`)
   }
 
-  const unknownPaths: string[] = []
-  collectUnknownPaths(body, parsed.data, unknownPaths)
-  return { wire: parsed.data, unknownPaths }
+  return parsed.data
 }
 
 export class HttpAdapter implements LoadgenAdapter {
   readonly kind = 'http' as const
 
   private readonly listeners = new Set<LoadgenSnapshotListener>()
-  private readonly warnedUnknownPathSets = new Set<string>()
   private readonly rateCalculator = new CounterRateCalculator()
   private rates: CounterRates | null = null
   private snapshot: LoadgenTelemetrySnapshot = createSnapshot(0, 'connecting', null)
@@ -356,7 +335,7 @@ export class HttpAdapter implements LoadgenAdapter {
 
     const request = startRequest(SNAPSHOT_TIMEOUT_MS)
     this.activePoll = request
-    let decoded: Awaited<ReturnType<typeof decodeResponse>> | null = null
+    let wire: WireSnapshot | null = null
     let decoding = false
 
     try {
@@ -367,7 +346,7 @@ export class HttpAdapter implements LoadgenAdapter {
       })
       if (!request.signal.aborted && isSuccessfulStatus(response.status)) {
         decoding = true
-        decoded = await decodeResponse(response)
+        wire = await decodeResponse(response)
       }
     } catch (error) {
       if (decoding && !request.signal.aborted) {
@@ -378,7 +357,7 @@ export class HttpAdapter implements LoadgenAdapter {
         }
       }
     } finally {
-      if (decoded === null) {
+      if (wire === null) {
         request.abort()
       } else {
         request.finish()
@@ -389,22 +368,14 @@ export class HttpAdapter implements LoadgenAdapter {
     if (this.disposed) return
 
     const revision = this.snapshot.revision + 1
-    if (decoded === null || request.signal.aborted) {
+    if (wire === null || request.signal.aborted) {
       this.publish(createSnapshot(revision, 'error', this.lastWire, this.rates))
       return
     }
 
-    const { wire, unknownPaths } = decoded
     this.lastWire = wire
     this.rates = this.rateCalculator.observe(wire)
     this.lastDecodeError = null
-    if (unknownPaths.length !== 0) {
-      const key = JSON.stringify(unknownPaths.sort())
-      if (!this.warnedUnknownPathSets.has(key)) {
-        this.warnedUnknownPathSets.add(key)
-        console.warn(`LoadGen snapshot unknown fields: ${unknownPaths.join(', ')}`)
-      }
-    }
     this.publish(createSnapshot(revision, 'connected', wire, this.rates))
   }
 

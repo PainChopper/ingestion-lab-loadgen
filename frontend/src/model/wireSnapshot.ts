@@ -33,7 +33,7 @@ const configSchema = z.strictObject({
   throttlerRequestedTps: tpsConfigSchema,
 })
 
-const sourceErrorSchema = z.object({
+const sourceErrorSchema = z.strictObject({
   category: z.string(),
   operation: z.string(),
   relativePath: z.string(),
@@ -51,9 +51,9 @@ const channelSchema = z.strictObject({
   outputTransactionsTotal: wireInteger,
 })
 
-export const wireSnapshotSchema = z.object({
+export const wireSnapshotSchema = z.strictObject({
   capturedAtMs: wireInteger,
-  run: z.object({
+  run: z.strictObject({
     state: z.enum(['starting', 'running', 'stopping', 'faulted']),
     elapsedMs: wireInteger,
     totalTransactions: wireInteger,
@@ -75,7 +75,7 @@ export const wireSnapshotSchema = z.object({
     requestedTps: wireInteger,
     installed: z.boolean(),
   }),
-  sender: z.object({
+  sender: z.strictObject({
     workers: wireInteger,
     workerStates: z.array(
       z.strictObject({

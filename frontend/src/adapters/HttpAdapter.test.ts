@@ -585,76 +585,53 @@ describe('HttpAdapter', () => {
   })
 
   it.each([
-    { path: 'extra', wire: { ...WIRE, extra: true } },
-    { path: 'sender.extra', wire: { ...WIRE, sender: { ...WIRE.sender, extra: true } } },
-  ])('accepts and strips $path with a warning', async ({ path, wire }) => {
+    { path: 'body', wire: { ...WIRE, extra: true } },
+    { path: 'run', wire: { ...WIRE, run: { ...WIRE.run, extra: true } } },
+    { path: 'sender', wire: { ...WIRE, sender: { ...WIRE.sender, extra: true } } },
+    {
+      path: 'reader.sourceError',
+      wire: {
+        ...WIRE,
+        reader: {
+          ...WIRE.reader,
+          sourceError: {
+            category: 'source',
+            operation: 'read',
+            relativePath: 'broken.parquet',
+            message: 'Could not read file',
+            extra: true,
+          },
+        },
+      },
+    },
+  ])('rejects an unknown field in $path as a schema error and recovers', async ({ path, wire }) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    fetchMock.mockResolvedValueOnce(mockResponse(wire))
-    const adapter = new HttpAdapter()
-
-    await flushPoll()
-    expect(adapter.getSnapshot()).toMatchObject({ revision: 1, connectionState: 'connected' })
-    expect(adapter.getSnapshot()).not.toHaveProperty(path)
-    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(path))
-    adapter.dispose()
-  })
-
-  it('warns once per set of unknown paths regardless of key order, independently per adapter', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const futureA = 'futureA'
-    const futureB = 'futureB'
-    const extraFields = { [futureA]: { initial: 10 }, [futureB]: { initial: 2 } }
-    const first = {
-      ...WIRE,
-      sender: { ...WIRE.sender, ...extraFields },
-      extra: true,
-    }
-    const reordered = {
-      extra: false,
-      ...WIRE,
-      sender: { [futureB]: null, ...WIRE.sender, [futureA]: null },
-    }
-    const sourceError = {
-      category: 'source',
-      operation: 'read',
-      relativePath: 'broken.parquet',
-      message: 'Could not read file',
-    } as const
-    const second = {
-      ...WIRE,
-      reader: { ...WIRE.reader, sourceError: { ...sourceError, 'future.path': true } },
-    }
     fetchMock
-      .mockResolvedValueOnce(mockResponse(first))
-      .mockResolvedValueOnce(mockResponse(reordered))
-      .mockResolvedValueOnce(mockResponse(second))
-      .mockResolvedValueOnce(mockResponse(first))
-      .mockResolvedValueOnce(mockResponse(first))
+      .mockResolvedValueOnce(mockResponse(wire))
+      .mockResolvedValueOnce(mockResponse(WIRE))
     const adapter = new HttpAdapter()
 
     await flushPoll()
-    const firstWarning = expect.stringContaining(`extra, sender.${futureA}, sender.${futureB}`)
-    expect(warn).toHaveBeenCalledExactlyOnceWith(firstWarning)
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(warn).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(warn).toHaveBeenCalledTimes(2)
-    expect(warn).toHaveBeenLastCalledWith(
-      expect.stringContaining('reader.sourceError["future.path"]'),
+    expect(adapter.getSnapshot()).toMatchObject({
+      revision: 1,
+      connectionState: 'error',
+      runState: null,
+      reader: { readTps: null },
+    })
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(`LoadGen snapshot decoding failed: snapshot ${path}:`),
     )
-    expect(adapter.getSnapshot().reader.sourceError).toEqual(sourceError)
-    expectDeepFrozen(adapter.getSnapshot().reader.sourceError)
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(warn).toHaveBeenCalledTimes(2)
 
-    const other = new HttpAdapter()
-    await flushPoll()
-    expect(warn).toHaveBeenCalledTimes(3)
-    expect(warn).toHaveBeenLastCalledWith(firstWarning)
-    other.dispose()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(adapter.getSnapshot()).toMatchObject({
+      revision: 2,
+      connectionState: 'connected',
+      runState: WIRE.run.state,
+      reader: { rowsRead: WIRE.reader.rowsRead },
+    })
+    expect(warn).toHaveBeenCalledTimes(1)
     adapter.dispose()
   })
-
   it.each([
     { status: 503, contentType: 'application/json' },
     { status: 200, contentType: 'text/plain' },
