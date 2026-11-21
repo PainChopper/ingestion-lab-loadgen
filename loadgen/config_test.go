@@ -20,7 +20,6 @@ func TestLoadConfigRejectsWeakNumericTypes(t *testing.T) {
 		{"reader infinity", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = inf"},
 		{"reader float overflow", "[reader.workers]\ninitial = 1", "[reader.workers]\ninitial = 9223372036854775808.0"},
 		{"sender fraction", "[sender.workers]\ninitial = 32", "[sender.workers]\ninitial = 32.9"},
-		{"metrics bool", "[metrics]\nwindow_ms = 1000", "[metrics]\nwindow_ms = true"},
 		{"jitter string", "jitter_percent = 20", "jitter_percent = \"20\""},
 		{"jitter fraction", "jitter_percent = 20", "jitter_percent = 20.9"},
 		{"retry string elements", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = [\"250\", \"500\"]"},
@@ -285,11 +284,10 @@ func TestLoadConfigStrictShapeAndTypes(t *testing.T) {
 	for _, tc := range []struct{ name, old, replacement string }{
 		{"relative source", `C:\dataset\*.parquet`, "data/*.parquet"},
 		{"worker step", "[sender.workers]", "[sender.workers]\nstep = 1"},
-		{"unknown", "[metrics]", "[metrics]\nextra = 1"},
+		{"unknown", "[logging]", "[logging]\nextra = 1"},
 		{"capacity string", "capacity = 2", "capacity = '2'"},
 		{"capacity bool", "capacity = 2", "capacity = true"},
 		{"batch fraction", "read_batch_size = 1000", "read_batch_size = 1500.5"},
-		{"window fraction", "window_ms = 1000", "window_ms = 1000.1"},
 		{"bool string", "installed = true", "installed = 'false'"},
 		{"bool number", "installed = true", "installed = 0"},
 	} {
@@ -322,11 +320,6 @@ func TestLoadConfigScalarValuesAndBounds(t *testing.T) {
 		{"sender negative", "[senderChannel]\ncapacity = 0", "[senderChannel]\ncapacity = -1", false},
 		{"depth max", "capacity = 2", fmt.Sprintf("capacity = %d", maxSnapshotInteger/1000), true},
 		{"depth overflow", "capacity = 2", fmt.Sprintf("capacity = %d", maxSnapshotInteger/1000+1), false},
-		{"window100", "window_ms = 1000", "window_ms = 100", true},
-		{"window1050", "window_ms = 1000", "window_ms = 1050", true},
-		{"window10000", "window_ms = 1000", "window_ms = 10000", true},
-		{"window99", "window_ms = 1000", "window_ms = 99", false},
-		{"window10001", "window_ms = 1000", "window_ms = 10001", false},
 		{"false", "installed = true", "installed = false", true},
 		{"TPS0", "initial = 2000000", "initial = 0", true},
 		{"TPS off grid", "initial = 2000000", "initial = 2000001", false},
@@ -380,7 +373,7 @@ func TestLoadConfigCheckedInProfile(t *testing.T) {
 	}
 	if cfg.Reader.ReadBatchSize != 1000 || cfg.ReaderChannel.Capacity != 2 || cfg.SenderChannel.Capacity != 0 ||
 		cfg.Reader.Workers != (workersConfig{Initial: 1, Max: 7}) || cfg.Sender.Workers != (workersConfig{Initial: 32, Max: 32}) ||
-		cfg.Throttler.RequestedTPS != (tpsConfig{Initial: 2000000, Max: 4000000, Step: 200000}) || !cfg.Throttler.Installed || cfg.Metrics.WindowMS != 1000 {
+		cfg.Throttler.RequestedTPS != (tpsConfig{Initial: 2000000, Max: 4000000, Step: 200000}) || !cfg.Throttler.Installed {
 		t.Fatalf("example profile changed: %+v", cfg)
 	}
 }

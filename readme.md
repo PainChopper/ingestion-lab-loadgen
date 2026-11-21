@@ -19,7 +19,7 @@ Parquet → Reader workers → Reader queue → Throttler → Sender queue → S
 - Two configurable queues and optional batch-level transaction rate limiting (TPS).
 - HTTP POST delivery of JSON batches, retries with delays and jitter, and cancellation handling.
 - A standalone HTTP receiver for local experiments.
-- Backend snapshots with rates, counters, queue occupancy, and applied settings.
+- Backend snapshots with cumulative counters, monotonic capture time, queue occupancy, and applied settings.
 - Prometheus metrics and standard Go `pprof` endpoints.
 - A React/TypeScript frontend built with Vite.
 - Automated Go tests and frontend tests using Vitest and Testing Library.
@@ -106,7 +106,7 @@ go run . set throttle true --url http://127.0.0.1:8080
 
 ## Configuration and delivery
 
-See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. Configuration is unversioned. Startup batch size, capacities and metrics window are scalars; workers use initial/max, TPS uses initial/max/step with a server-defined zero minimum, and installed is a boolean. Unknown or missing fields are rejected at startup. Explicit zero values are supported where valid. Changes to a key's meaning, units or allowed values require a new key name, including for optional keys; the old name is rejected as unknown.
+See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. Configuration is unversioned. Startup batch size and capacities are scalars; workers use initial/max, TPS uses initial/max/step with a server-defined zero minimum, and installed is a boolean. Unknown or missing fields are rejected at startup. Explicit zero values are supported where valid. Changes to a key's meaning, units or allowed values require a new key name, including for optional keys; the old name is rejected as unknown.
 
 | Setting | Purpose | When it can be changed |
 | --- | --- | --- |
@@ -134,6 +134,10 @@ The HTTP Sender posts a JSON array with `Content-Type: application/json` and tre
 - `POST /api/loadgen/commands`: change live settings while the pipeline is running.
 - `GET /metrics`: Prometheus metrics.
 - `/debug/pprof/`: Go profiling.
+
+Snapshots expose cumulative `reader.rowsRead`, channel `inputTransactionsTotal`/`outputTransactionsTotal`, channel `blockedMs`, and confirmed `run.totalTransactions`. They never reset during the process, including retries, pool downscale and shutdown. The root `capturedAtMs` uses the server's monotonic clock from one service startup origin. All observations use one capture time and are read sequentially; brief differences between counters are possible while workers make progress. Clients calculate rates from counter differences and server capture-time differences. The first observation, a repeated capture time, or a decreased counter/time after restart gives no rate for that interval and establishes the next baseline.
+
+CLI `status` makes one snapshot request and shows explicitly labelled average TPS since the run started (total divided by `run.elapsedMs`), including admitted TPS from the Sender channel's input total. Before the run starts, averages are zero. Prometheus `loadgen_transactions_total` reads current confirmations at every scrape; `loadgen_target_tps` remains the configured target. Runtime summaries have their own one-minute timer and log cumulative channel totals.
 
 Reader and Sender snapshots expose `workerStates`: a list of live workers, each with `activity` and `draining`. Reader activities are `idle`, `reading`, and `blocked`; Sender activities are `idle`, `inFlight`, and `backoff`. A blocked Reader still owns its file, and a Sender in backoff still owns its batch. The independent `draining` flag prevents new work after current work finishes. Lists are empty (`[]`) before startup, allow repeated states, and have no ordering guarantee. `workers` remains the configured target; during downscale it can be smaller than the list length. CLI displays counts derived from these lists; runtime summaries log only the target and live count for each pool.
 

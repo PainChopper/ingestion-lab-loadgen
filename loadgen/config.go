@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -15,7 +16,7 @@ import (
 	"unsafe"
 
 	"github.com/go-viper/mapstructure/v2"
-	"github.com/spf13/viper"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // Configuration location.
@@ -33,7 +34,6 @@ type config struct {
 	SenderChannel channelConfig   `mapstructure:"senderChannel"`
 	Throttler     throttlerConfig `mapstructure:"throttler"`
 	Sender        senderConfig    `mapstructure:"sender"`
-	Metrics       metricsConfig   `mapstructure:"metrics"`
 	Logging       loggingConfig   `mapstructure:"logging"`
 }
 
@@ -57,10 +57,6 @@ type channelConfig struct {
 type throttlerConfig struct {
 	RequestedTPS tpsConfig `mapstructure:"requested_tps"`
 	Installed    bool      `mapstructure:"installed"`
-}
-
-type metricsConfig struct {
-	WindowMS int `mapstructure:"window_ms"`
 }
 
 type loggingConfig struct {
@@ -105,20 +101,28 @@ func loadConfig(configPath string) (config, error) {
 		return config{}, fmt.Errorf("make config path absolute: %w", err)
 	}
 
-	viperConfig := viper.New()
-	viperConfig.SetConfigFile(absConfigPath)
-	if err := viperConfig.ReadInConfig(); err != nil {
+	data, err := os.ReadFile(absConfigPath)
+	if err != nil {
 		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
 	}
-	if !viperConfig.IsSet("http.addr") {
+	// Decode the complete TOML tree: flattened settings discard empty tables,
+	// which would otherwise let unknown sections bypass strict decoding.
+	var values map[string]any
+	if err := toml.Unmarshal(data, &values); err != nil {
+		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
+	}
+	if http, ok := configValue(values, "http").(map[string]any); !ok || configValue(http, "addr") == nil {
 		return config{}, errors.New("http.addr is required")
 	}
 	var cfg config
-	if err := viperConfig.UnmarshalExact(&cfg, func(decoderConfig *mapstructure.DecoderConfig) {
-		decoderConfig.ErrorUnset = true
-		decoderConfig.WeaklyTypedInput = false
-		decoderConfig.DecodeHook = rejectFractionalInt
-	}); err != nil {
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		Result: &cfg, TagName: "mapstructure", ErrorUnused: true, ErrorUnset: true,
+		WeaklyTypedInput: false, DecodeHook: rejectFractionalInt,
+	})
+	if err != nil {
+		return config{}, fmt.Errorf("create config decoder: %w", err)
+	}
+	if err := decoder.Decode(values); err != nil {
 		return config{}, fmt.Errorf("decode config %q: %w", absConfigPath, err)
 	}
 	if err := cfg.validate(); err != nil {
@@ -126,6 +130,15 @@ func loadConfig(configPath string) (config, error) {
 	}
 
 	return cfg, nil
+}
+
+func configValue(values map[string]any, key string) any {
+	for name, value := range values {
+		if strings.EqualFold(name, key) {
+			return value
+		}
+	}
+	return nil
 }
 
 func rejectFractionalInt(from, to reflect.Type, data any) (any, error) {
@@ -182,9 +195,6 @@ func (c config) validate() error {
 	}
 	if err := c.Sender.validate(); err != nil {
 		return fmt.Errorf("sender: %w", err)
-	}
-	if c.Metrics.WindowMS < 100 || c.Metrics.WindowMS > 10000 {
-		return errors.New("metrics.window_ms must be within 100..10000 milliseconds")
 	}
 	if err := c.Logging.validate(); err != nil {
 		return fmt.Errorf("logging: %w", err)

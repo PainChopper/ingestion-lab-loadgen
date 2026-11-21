@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"loadgen/internal/pipeline"
@@ -33,7 +34,7 @@ func runServe(appCtx context.Context, configPath string) error {
 	requests := runtimeRequests{queue: queue, done: loopDone}
 	metrics := newPrometheusMetrics()
 	metrics.targetTPS.Set(float64(cfg.Throttler.RequestedTPS.Initial))
-	ticker := time.NewTicker(state.metricsWindow)
+	ticker := time.NewTicker(snapshotLogInterval)
 	defer ticker.Stop()
 
 	server, serverDone, err := startHTTPServer(requests, metrics, cfg, logger)
@@ -106,18 +107,25 @@ type prometheusMetrics struct {
 	registry *prometheus.Registry
 
 	targetTPS prometheus.Gauge
-	actualTPS prometheus.Gauge
 
-	transactionsTotal prometheus.Counter
+	run               atomic.Pointer[pipeline.Pipeline]
+	transactionsTotal prometheus.CounterFunc
 }
 
 func newPrometheusMetrics() *prometheusMetrics {
 	reg := prometheus.NewRegistry()
 	target := prometheus.NewGauge(prometheus.GaugeOpts{Name: "loadgen_target_tps"})
-	actual := prometheus.NewGauge(prometheus.GaugeOpts{Name: "loadgen_actual_tps"})
-	total := prometheus.NewCounter(prometheus.CounterOpts{Name: "loadgen_transactions_total"})
-	reg.MustRegister(target, actual, total)
-	return &prometheusMetrics{registry: reg, targetTPS: target, actualTPS: actual, transactionsTotal: total}
+	metrics := &prometheusMetrics{registry: reg, targetTPS: target}
+	total := prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "loadgen_transactions_total"}, func() float64 {
+		run := metrics.run.Load()
+		if run == nil {
+			return 0
+		}
+		return float64(run.CompletedTotal())
+	})
+	metrics.transactionsTotal = total
+	reg.MustRegister(target, total)
+	return metrics
 }
 
 func newApplicationLogger(level string, output io.Writer) (*zap.Logger, error) {

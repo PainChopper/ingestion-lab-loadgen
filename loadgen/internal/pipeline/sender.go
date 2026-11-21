@@ -226,7 +226,7 @@ func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transacti
 	p.mu.Unlock()
 }
 
-func (p *senderPool) takeCompleted() int64 { return p.completed.Swap(0) }
+func (p *senderPool) completedTotal() int64 { return p.completed.Load() }
 
 func (p *senderPool) removeWorkerLocked(worker *senderWorker) {
 	for index, candidate := range p.workers {

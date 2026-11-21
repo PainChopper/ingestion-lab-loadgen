@@ -138,8 +138,9 @@
       },
       "Snapshot": {
         "type": "object", "additionalProperties": false,
-        "required": ["run", "reader", "throttler", "sender", "readerChannel", "senderChannel", "config"],
+        "required": ["capturedAtMs", "run", "reader", "throttler", "sender", "readerChannel", "senderChannel", "config"],
         "properties": {
+          "capturedAtMs": { "type": "integer", "format": "int64", "minimum": 0, "description": "Milliseconds since service startup measured by the server monotonic clock; shared across the snapshot." },
           "run": { "$ref": "#/components/schemas/RunStatus" },
           "reader": { "$ref": "#/components/schemas/ReaderStatus" },
           "throttler": { "$ref": "#/components/schemas/ThrottlerStatus" },
@@ -160,11 +161,11 @@
       },
       "ReaderStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["workers", "workerStates", "readBatchSize", "readTps", "rowsRead", "sourceDirectory", "sourceError"],
+        "required": ["workers", "workerStates", "readBatchSize", "rowsRead", "sourceDirectory", "sourceError"],
         "properties": {
           "workers": { "type": "integer" },
           "workerStates": { "type": "array", "items": { "$ref": "#/components/schemas/ReaderWorkerState" }, "description": "Live workers in unspecified order; repeated states are allowed. workers remains the configured target." },
-          "readBatchSize": { "type": "integer", "minimum": 1, "maximum": 9223372036, "description": "Applied startup batch size; bounded by Go int and safe batch pacing duration arithmetic." }, "readTps": { "type": "number", "format": "double" }, "rowsRead": { "type": "integer", "format": "int64" },
+          "readBatchSize": { "type": "integer", "minimum": 1, "maximum": 9223372036, "description": "Applied startup batch size; bounded by Go int and safe batch pacing duration arithmetic." }, "rowsRead": { "type": "integer", "format": "int64" },
           "sourceDirectory": { "type": "string" }, "sourceError": { "$ref": "#/components/schemas/ReaderSourceError" }
         }
       },
@@ -183,8 +184,8 @@
       },
       "ThrottlerStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["requestedTps", "admittedTps", "installed"],
-        "properties": { "requestedTps": { "type": "integer" }, "admittedTps": { "type": "number", "format": "double" }, "installed": { "type": "boolean" } }
+        "required": ["requestedTps", "installed"],
+        "properties": { "requestedTps": { "type": "integer" }, "installed": { "type": "boolean" } }
       },
       "SenderStatus": {
         "type": "object", "additionalProperties": false,
@@ -204,10 +205,10 @@
       },
       "ChannelStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["capacity", "depthBatches", "bufferedTransactions", "blockedSenders", "oldestBlockedSenderMs", "blockedMs", "inputTransactionsPerSecond", "outputTransactionsPerSecond"],
+        "required": ["capacity", "depthBatches", "bufferedTransactions", "blockedSenders", "oldestBlockedSenderMs", "blockedMs", "inputTransactionsTotal", "outputTransactionsTotal"],
         "properties": {
           "capacity": { "type": "integer" }, "depthBatches": { "type": "integer" }, "bufferedTransactions": { "type": "integer" }, "blockedSenders": { "type": "integer" }, "oldestBlockedSenderMs": { "type": "integer", "format": "int64" }, "blockedMs": { "type": "integer", "format": "int64" },
-          "inputTransactionsPerSecond": { "type": "number", "format": "double" }, "outputTransactionsPerSecond": { "type": "number", "format": "double" }
+          "inputTransactionsTotal": { "type": "integer", "format": "int64", "minimum": 0 }, "outputTransactionsTotal": { "type": "integer", "format": "int64", "minimum": 0 }
         }
       },
       "ConfigStatus": {"type": "object", "additionalProperties": false, "required": ["readerWorkers", "senderWorkers", "throttlerRequestedTps"], "properties": {"readerWorkers": {"$ref": "#/components/schemas/WorkersConfig"}, "senderWorkers": {"$ref": "#/components/schemas/WorkersConfig"}, "throttlerRequestedTps": {"$ref": "#/components/schemas/TPSConfig"}}},
