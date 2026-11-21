@@ -133,7 +133,7 @@ func TestBatchQueueConcurrentSendsKeepSecondWriterBlocked(t *testing.T) {
 	})
 }
 
-func TestBatchQueueCountsSuccessfulSendAndSamplesWindow(t *testing.T) {
+func TestBatchQueueCountsSuccessfulTransfers(t *testing.T) {
 	batches := make(chan []Transaction, 2)
 	var telemetry batchQueue
 	telemetry.ch = batches
@@ -149,24 +149,10 @@ func TestBatchQueueCountsSuccessfulSendAndSamplesWindow(t *testing.T) {
 	beforeSample := telemetry.snapshot(time.Now())
 	if beforeSample.BlockedSenders != 0 || beforeSample.BlockedMS != 0 ||
 		beforeSample.SentBatchesTotal != 2 || beforeSample.SentTransactionsTotal != 5 ||
-		beforeSample.ReceivedBatchesTotal != 1 || beforeSample.ReceivedTransactionsTotal != 3 ||
-		beforeSample.SentBatchesPerSecond != 0 || beforeSample.ReceivedBatchesPerSecond != 0 {
+		beforeSample.ReceivedBatchesTotal != 1 || beforeSample.ReceivedTransactionsTotal != 3 {
 		t.Fatalf("before sample = %+v", beforeSample)
 	}
 
-	telemetry.sample(500 * time.Millisecond)
-	first := telemetry.snapshot(time.Now())
-	if first.SentBatchesPerSecond != 4 || first.SentTransactionsPerSecond != 10 ||
-		first.ReceivedBatchesPerSecond != 2 || first.ReceivedTransactionsPerSecond != 6 {
-		t.Fatalf("first window = %+v", first)
-	}
-	telemetry.sample(500 * time.Millisecond)
-	second := telemetry.snapshot(time.Now())
-	if second.SentBatchesTotal != 2 || second.ReceivedBatchesTotal != 1 ||
-		second.SentBatchesPerSecond != 0 || second.SentTransactionsPerSecond != 0 ||
-		second.ReceivedBatchesPerSecond != 0 || second.ReceivedTransactionsPerSecond != 0 {
-		t.Fatalf("empty window = %+v", second)
-	}
 }
 
 func TestBatchQueueUnbufferedHandoffCountsOnlyAfterSend(t *testing.T) {
@@ -191,12 +177,10 @@ func TestBatchQueueUnbufferedHandoffCountsOnlyAfterSend(t *testing.T) {
 		if ok := <-sent; !ok {
 			t.Fatal("unbuffered send failed after receive")
 		}
-		telemetry.sample(time.Second)
 		handoff := telemetry.snapshot(time.Now())
 		if handoff.DepthBatches != 0 || handoff.SentBatchesTotal != 1 ||
 			handoff.SentTransactionsTotal != 2 || handoff.ReceivedBatchesTotal != 1 ||
-			handoff.ReceivedTransactionsTotal != 2 || handoff.SentBatchesPerSecond != 1 ||
-			handoff.ReceivedBatchesPerSecond != 1 {
+			handoff.ReceivedTransactionsTotal != 2 {
 			t.Fatalf("unbuffered handoff = %+v", handoff)
 		}
 	})

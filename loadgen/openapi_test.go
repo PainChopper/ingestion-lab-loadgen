@@ -506,8 +506,8 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 			},
 			"populated": {
 				Run:       runSnapshot{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
-				Reader:    readerSnapshot{Workers: 1, WorkerStates: []readerWorkerState{{Activity: readerWireReading}, {Activity: readerWireBlocked, Draining: true}}, ReadBatchSize: 1500, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
-				Throttler: throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, Installed: true},
+				Reader:    readerSnapshot{Workers: 1, WorkerStates: []readerWorkerState{{Activity: readerWireReading}, {Activity: readerWireBlocked, Draining: true}}, ReadBatchSize: 1500, RowsRead: 47, SourceDirectory: "data/part"},
+				Throttler: throttlerSnapshot{RequestedTps: 200, Installed: true},
 				Sender:    senderSnapshot{Workers: 32, WorkerStates: []senderWorkerState{}},
 				Config:    snapshotConfig(testConfig(t)),
 			},

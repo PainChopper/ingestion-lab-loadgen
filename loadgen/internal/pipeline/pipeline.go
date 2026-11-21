@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -30,10 +29,11 @@ type Options struct {
 }
 
 type Snapshot struct {
-	Reader      ReaderSnapshot
-	Sender      SenderSnapshot
-	ReaderQueue QueueSnapshot
-	SenderQueue QueueSnapshot
+	CompletedTransactions int64
+	Reader                ReaderSnapshot
+	Sender                SenderSnapshot
+	ReaderQueue           QueueSnapshot
+	SenderQueue           QueueSnapshot
 }
 
 type Pipeline struct {
@@ -44,22 +44,17 @@ type Pipeline struct {
 	senderQueue     *batchQueue
 	readerTelemetry readerTelemetry
 	done            chan struct{}
-	sampleMu        sync.Mutex
-	sampledAt       time.Time
 }
 
 func Start(ctx context.Context, options Options) *Pipeline {
 	if options.Logger == nil {
 		options.Logger = zap.NewNop()
 	}
-	now := time.Now()
 	p := &Pipeline{
 		done:        make(chan struct{}),
 		readerQueue: newBatchQueue(options.ReaderCapacity, options.BatchSize),
 		senderQueue: newBatchQueue(options.SenderCapacity, options.BatchSize),
-		sampledAt:   now,
 	}
-	p.readerTelemetry.startInterval(now)
 	p.reader = startReaderPool(ctx, options.Source, options.BatchSize, options.Readers,
 		p.readerQueue, &p.readerTelemetry, options.OpenFile, nil, options.Logger)
 	p.throttler = startThrottler(ctx, p.readerQueue, p.senderQueue, options.Rate)
@@ -81,32 +76,17 @@ func (p *Pipeline) SetRate(rate Rate)          { p.throttler.update(rate) }
 func (p *Pipeline) StopReading()               { p.reader.stopReading() }
 func (p *Pipeline) Done() <-chan struct{}      { return p.done }
 func (p *Pipeline) SourceErrors() <-chan error { return p.reader.sourceErrors }
-func (p *Pipeline) TakeCompleted() int64       { return p.sender.takeCompleted() }
-
-// Sample uses the same elapsed interval for every stage and returns it to the caller.
-func (p *Pipeline) Sample(now time.Time) time.Duration {
-	p.sampleMu.Lock()
-	defer p.sampleMu.Unlock()
-	elapsed := now.Sub(p.sampledAt)
-	if elapsed <= 0 {
-		return 0
-	}
-	p.readerTelemetry.sample(now)
-	p.readerQueue.sample(elapsed)
-	p.senderQueue.sample(elapsed)
-	p.sampledAt = now
-	return elapsed
-}
+func (p *Pipeline) CompletedTotal() int64      { return p.sender.completedTotal() }
 
 func (p *Pipeline) Snapshot(now time.Time) Snapshot {
+	completed := p.CompletedTotal()
 	reader := p.reader.snapshot()
-	measurements := p.readerTelemetry.snapshot()
-	reader.RowsRead = measurements.RowsRead
-	reader.ReadTPS = measurements.ReadTPS
+	reader.RowsRead = p.readerTelemetry.snapshot()
 	return Snapshot{
-		Reader:      reader,
-		Sender:      p.sender.snapshot(),
-		ReaderQueue: p.readerQueue.snapshot(now),
-		SenderQueue: p.senderQueue.snapshot(now),
+		CompletedTransactions: completed,
+		Reader:                reader,
+		Sender:                p.sender.snapshot(),
+		ReaderQueue:           p.readerQueue.snapshot(now),
+		SenderQueue:           p.senderQueue.snapshot(now),
 	}
 }

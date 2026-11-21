@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,7 +51,6 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 			loaded.Sender.Workers.Initial = 7
 			loaded.SenderChannel.Capacity = 4
 			loaded.Throttler.Installed = false
-			loaded.Metrics.WindowMS = 300
 			if name == "zero initial values" {
 				loaded.ReaderChannel.Capacity = 0
 				loaded.SenderChannel.Capacity = 0
@@ -61,9 +59,6 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 			state := newControlState(loaded, zap.NewNop())
 			if got := state.run.state; got != runStateStarting {
 				t.Fatalf("initial run state = %q, want %q", got, runStateStarting)
-			}
-			if want := time.Duration(loaded.Metrics.WindowMS) * time.Millisecond; state.metricsWindow != want {
-				t.Fatalf("metrics window = %s, want %s", state.metricsWindow, want)
 			}
 			snapshot := state.snapshotAt(nil, time.Now())
 			if snapshot.Reader.WorkerStates == nil || len(snapshot.Reader.WorkerStates) != 0 ||
@@ -785,12 +780,11 @@ func TestSnapshotRetainsLiveStatesAboveTargetsDuringShrink(t *testing.T) {
 	})
 }
 
-func TestSamplingUsesElapsedIntervalForChannelRatesAndActualTPS(t *testing.T) {
+func TestConfirmedTotalsAreCurrentWithoutTicks(t *testing.T) {
 	cfg := testConfig(t)
 	source := testDiscoveredSource(t)
 	synctest.Test(t, func(t *testing.T) {
 		state := newControlState(cfg, zap.NewNop())
-		state.metricsWindow = 300 * time.Millisecond
 		options := state.pipelineOptions
 		options.Source = source
 		options.Readers, options.Senders, options.BatchSize = 1, 1, 3
@@ -799,47 +793,44 @@ func TestSamplingUsesElapsedIntervalForChannelRatesAndActualTPS(t *testing.T) {
 		release := make(chan struct{})
 		var run *pipeline.Pipeline
 		options.OpenFile = func(string) (pipeline.ReaderFile, error) {
-			return testReaderFile{rows: &testRowReader{read: func(rows []pipeline.Transaction) (int, error) {
+			return testReaderFile{rows: &testRowReader{read: func([]pipeline.Transaction) (int, error) {
 				<-release
 				run.StopReading()
 				return 3, io.EOF
 			}}}, nil
 		}
-		startedAt := time.Now()
+		state.run.runStartedAt = time.Now()
 		run = pipeline.Start(t.Context(), options)
+		metrics := newPrometheusMetrics()
+		metrics.run.Store(run)
 		close(release)
 		<-run.Done()
-		metrics := newPrometheusMetrics()
-		metrics.actualTPS.Set(17)
-		for _, now := range []time.Time{startedAt, startedAt.Add(-time.Second)} {
-			state.sample(run, metrics, now)
-			var actual, total dto.Metric
-			if err := metrics.actualTPS.Write(&actual); err != nil {
+		for range 2 {
+			snapshot := state.snapshotAt(run, time.Now())
+			if snapshot.Run.TotalTransactions != 3 || snapshot.Reader.RowsRead != 3 ||
+				snapshot.ReaderChannel.InputTransactionsTotal != 3 || snapshot.ReaderChannel.OutputTransactionsTotal != 3 ||
+				snapshot.SenderChannel.InputTransactionsTotal != 3 || snapshot.SenderChannel.OutputTransactionsTotal != 3 {
+				t.Fatalf("totals without a tick = %+v", snapshot)
+			}
+			families, err := metrics.registry.Gather()
+			if err != nil {
 				t.Fatal(err)
 			}
-			if err := metrics.transactionsTotal.Write(&total); err != nil {
-				t.Fatal(err)
+			found := false
+			for _, family := range families {
+				if family.GetName() == "loadgen_actual_tps" {
+					t.Fatal("removed rate metric is registered")
+				}
+				if family.GetName() == "loadgen_transactions_total" {
+					found = true
+					if got := family.GetMetric()[0].GetCounter().GetValue(); got != 3 {
+						t.Fatalf("confirmed metric=%v,want 3", got)
+					}
+				}
 			}
-			if actual.GetGauge().GetValue() != 17 || total.GetCounter().GetValue() != 0 || state.run.totalTransactions != 0 {
-				t.Fatalf("nonpositive interval changed measurements: gauge=%v counter=%v transactions=%d",
-					actual.GetGauge().GetValue(), total.GetCounter().GetValue(), state.run.totalTransactions)
+			if !found {
+				t.Fatal("confirmed metric missing")
 			}
-		}
-		time.Sleep(900 * time.Millisecond)
-		state.sample(run, metrics, time.Now())
-		snapshot := state.snapshotAt(run, time.Now())
-		wantRate := 3 / time.Since(startedAt).Seconds()
-		if snapshot.Run.TotalTransactions != 3 || snapshot.Reader.ReadTps != wantRate ||
-			snapshot.ReaderChannel.ReceivedTransactionsPerSecond != wantRate ||
-			snapshot.SenderChannel.ReceivedTransactionsPerSecond != wantRate {
-			t.Fatalf("delayed tick used inconsistent intervals: %+v, want rate %v", snapshot, wantRate)
-		}
-		var actual dto.Metric
-		if err := metrics.actualTPS.Write(&actual); err != nil {
-			t.Fatal(err)
-		}
-		if got := actual.GetGauge().GetValue(); got != wantRate {
-			t.Fatalf("actual TPS = %v, want %v", got, wantRate)
 		}
 	})
 }
@@ -1078,58 +1069,44 @@ func TestRuntimeRequestPreservesReadyReceiptWhenEventLoopCloses(t *testing.T) {
 }
 
 func TestSnapshotLogCadence(t *testing.T) {
-	var output bytes.Buffer
-	logger, err := newApplicationLogger("info", &output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := newTestControlState(t)
-	state.logger = logger
-	queue := make(chan runtimeRequest)
-	ticks := make(chan time.Time)
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		events := runtimeEvents{
-			requests: queue,
-			source:   prepareSourceAsync(state.config.Source.Path),
-			ticks:    ticks,
-			metrics:  newPrometheusMetrics(),
+	cfg := testConfig(t)
+	synctest.Test(t, func(t *testing.T) {
+		core, entries := observer.New(zap.InfoLevel)
+		state := newControlState(cfg, zap.New(core))
+		ticker := time.NewTicker(snapshotLogInterval)
+		defer ticker.Stop()
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			state.runEventLoop(ctx, runtimeEvents{ticks: ticker.C, metrics: newPrometheusMetrics()}, gracefulShutdownTimeout)
+		}()
+		time.Sleep(snapshotLogInterval - time.Millisecond)
+		synctest.Wait()
+		if entries.Len() != 0 {
+			t.Fatalf("early summary: %+v", entries.All())
 		}
-		state.runEventLoop(ctx, events, gracefulShutdownTimeout)
-	}()
-	t.Cleanup(func() {
+		time.Sleep(time.Millisecond)
+		synctest.Wait()
+		if entries.Len() != 1 {
+			t.Fatalf("summary entries=%+v", entries.All())
+		}
+		if fields := entries.All()[0].ContextMap(); fields["event"] != "runtime_summary" || fields["reader_read_tps"] != nil {
+			t.Fatalf("summary fields=%+v", fields)
+		}
+		time.Sleep(snapshotLogInterval / 2)
+		synctest.Wait()
+		if entries.Len() != 1 {
+			t.Fatalf("early duplicate: %+v", entries.All())
+		}
+		time.Sleep(snapshotLogInterval / 2)
+		synctest.Wait()
+		if entries.Len() != 2 {
+			t.Fatalf("next summary missing: %+v", entries.All())
+		}
 		cancel()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Error("event loop did not stop")
-		}
+		<-done
 	})
-	harness := testEventLoop{requests: runtimeRequests{queue: queue, done: done}}
-	harness.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateRunning })
-	output.Reset()
-	ticks <- time.Now()
-	awaitSnapshotLogTick(t, harness.requests)
-	if output.Len() != 0 {
-		t.Fatalf("summary emitted before one-minute deadline: %q", output.String())
-	}
-	afterDeadline := time.Now().Add(2 * snapshotLogInterval)
-	ticks <- afterDeadline
-	awaitSnapshotLogTick(t, harness.requests)
-	line := output.String()
-	if strings.Count(line, "\n") != 1 || strings.Contains(line, "runtime_snapshot") || strings.Contains(line, "INGESTION LAB") {
-		t.Fatalf("summary line = %q", line)
-	}
-	if !strings.Contains(line, "event=runtime_summary") {
-		t.Fatalf("summary event missing: %q", line)
-	}
-	ticks <- afterDeadline.Add(time.Millisecond)
-	awaitSnapshotLogTick(t, harness.requests)
-	if strings.Count(output.String(), "\n") != 1 {
-		t.Fatalf("duplicate summary before next deadline: %q", output.String())
-	}
 }
 
 func awaitSnapshotLogTick(t *testing.T, requests runtimeRequests) {

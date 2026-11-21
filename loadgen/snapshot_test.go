@@ -13,16 +13,17 @@ import (
 
 func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 	want := runtimeSnapshot{
-		Run: runSnapshot{State: runStateStopping, TotalTransactions: 101, ElapsedMs: 102},
+		CapturedAtMs: 103,
+		Run:          runSnapshot{State: runStateStopping, TotalTransactions: 101, ElapsedMs: 102},
 		Reader: readerSnapshot{
 			Workers: 11, WorkerStates: []readerWorkerState{
 				{Activity: readerWireReading}, {Activity: readerWireReading},
 				{Activity: readerWireBlocked, Draining: true}, {Activity: readerWireIdle},
 			},
-			ReadBatchSize: 20, ReadTps: 21.5, RowsRead: 22, SourceDirectory: "reader-source",
+			ReadBatchSize: 20, RowsRead: 22, SourceDirectory: "reader-source",
 			SourceError: &readerSourceError{Category: "reader-category", Operation: "reader-operation", RelativePath: "reader-path", Message: "reader-message"},
 		},
-		Throttler: throttlerSnapshot{RequestedTps: 31, AdmittedTps: 32.5, Installed: false},
+		Throttler: throttlerSnapshot{RequestedTps: 31, Installed: false},
 		Sender: senderSnapshot{
 			Workers: 41, WorkerStates: []senderWorkerState{
 				{Activity: senderWireInFlight, Draining: true},
@@ -32,15 +33,15 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 		},
 		ReaderChannel: channelSnapshot{
 			Capacity: 51, DepthBatches: 52, BufferedTransactions: 53, BlockedSenders: 54, OldestBlockedSenderMs: 55,
-			BlockedMs:                     56,
-			SentTransactionsPerSecond:     62.5,
-			ReceivedTransactionsPerSecond: 64.5,
+			BlockedMs:               56,
+			InputTransactionsTotal:  62,
+			OutputTransactionsTotal: 64,
 		},
 		SenderChannel: channelSnapshot{
 			Capacity: 71, DepthBatches: 72, BufferedTransactions: 73, BlockedSenders: 74, OldestBlockedSenderMs: 75,
-			BlockedMs:                     76,
-			SentTransactionsPerSecond:     82.5,
-			ReceivedTransactionsPerSecond: 84.5,
+			BlockedMs:               76,
+			InputTransactionsTotal:  82,
+			OutputTransactionsTotal: 84,
 		},
 		Config: snapshotConfig(testConfig(t)),
 	}
@@ -78,19 +79,19 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]any{
-		"event": "runtime_summary", "state": "stopping",
+		"event": "runtime_summary", "state": "stopping", "captured_at_ms": int64(103),
 		"elapsed_ms": int64(102), "total_transactions": int64(101),
-		"reader_read_tps": 21.5, "reader_rows_read": int64(22),
-		"reader_workers": int64(11), "reader_live_workers": int64(4),
-		"throttler_requested_tps": int64(31), "throttler_admitted_tps": 32.5, "installed": false,
+		"reader_rows_read": int64(22),
+		"reader_workers":   int64(11), "reader_live_workers": int64(4),
+		"throttler_requested_tps": int64(31), "installed": false,
 		"reader_channel_capacity": int64(51), "reader_channel_depth_batches": int64(52),
 		"reader_channel_buffered_transactions": int64(53), "reader_channel_blocked_senders": int64(54),
 		"reader_channel_oldest_blocked_ms": int64(55), "reader_channel_blocked_ms": int64(56),
-		"reader_channel_input_tps": 62.5, "reader_channel_output_tps": 64.5,
+		"reader_channel_input_transactions_total": int64(62), "reader_channel_output_transactions_total": int64(64),
 		"sender_channel_capacity": int64(71), "sender_channel_depth_batches": int64(72),
 		"sender_channel_buffered_transactions": int64(73), "sender_channel_blocked_senders": int64(74),
 		"sender_channel_oldest_blocked_ms": int64(75), "sender_channel_blocked_ms": int64(76),
-		"sender_channel_input_tps": 82.5, "sender_channel_output_tps": 84.5,
+		"sender_channel_input_transactions_total": int64(82), "sender_channel_output_transactions_total": int64(84),
 		"sender_workers": int64(41), "sender_live_workers": int64(5),
 		"source_error_category": "reader-category", "source_error_operation": "reader-operation", "source_error_relative_path": "reader-path",
 	}

@@ -40,7 +40,6 @@ type readerWorker struct {
 
 type ReaderSnapshot struct {
 	RowsRead     int64
-	ReadTPS      float64
 	WorkerStates []ReaderWorkerState
 }
 

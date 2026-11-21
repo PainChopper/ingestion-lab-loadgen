@@ -1,4 +1,5 @@
 {
+  "capturedAtMs": 103,
   "run": { "state": "stopping", "totalTransactions": 101, "elapsedMs": 102 },
   "reader": {
     "workers": 11,
@@ -9,7 +10,6 @@
       { "activity": "idle", "draining": false }
     ],
     "readBatchSize": 20,
-    "readTps": 21.5,
     "rowsRead": 22,
     "sourceDirectory": "reader-source",
     "sourceError": {
@@ -19,7 +19,7 @@
       "message": "reader-message"
     }
   },
-  "throttler": { "requestedTps": 31, "admittedTps": 32.5, "installed": false },
+  "throttler": { "requestedTps": 31, "installed": false },
   "sender": {
     "workers": 41,
     "workerStates": [
@@ -37,8 +37,8 @@
     "blockedSenders": 54,
     "oldestBlockedSenderMs": 55,
     "blockedMs": 56,
-    "inputTransactionsPerSecond": 62.5,
-    "outputTransactionsPerSecond": 64.5
+    "inputTransactionsTotal": 62,
+    "outputTransactionsTotal": 64
   },
   "senderChannel": {
     "capacity": 71,
@@ -47,8 +47,8 @@
     "blockedSenders": 74,
     "oldestBlockedSenderMs": 75,
     "blockedMs": 76,
-    "inputTransactionsPerSecond": 82.5,
-    "outputTransactionsPerSecond": 84.5
+    "inputTransactionsTotal": 82,
+    "outputTransactionsTotal": 84
   },
   "config": {
     "readerWorkers": { "initial": 1, "max": 7 },

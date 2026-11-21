@@ -103,8 +103,6 @@ url = "http://127.0.0.1:8081/internal/ingest"
 delays_ms = [250, 500, 1000, 2000, 5000]
 jitter_percent = 20
 
-[metrics]
-window_ms = 1000
 
 [logging]
 level = "info"

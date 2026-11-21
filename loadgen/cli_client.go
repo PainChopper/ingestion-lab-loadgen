@@ -192,7 +192,7 @@ func formatSnapshot(snapshot runtimeSnapshot) string {
 	fmt.Fprintf(&output, "Transactions:             %d\n\n", snapshot.Run.TotalTransactions)
 	fmt.Fprintf(&output, "Throttler\n")
 	fmt.Fprintf(&output, "Requested TPS:            %d\n", snapshot.Throttler.RequestedTps)
-	fmt.Fprintf(&output, "Admitted TPS:             %.1f\n", snapshot.Throttler.AdmittedTps)
+	fmt.Fprintf(&output, "Average admitted TPS:     %.1f\n", averageTPS(snapshot.SenderChannel.InputTransactionsTotal, snapshot.Run.ElapsedMs))
 	fmt.Fprintf(&output, "Installed:                %t\n\n", snapshot.Throttler.Installed)
 	fmt.Fprintf(&output, "Reader\n")
 	fmt.Fprintf(
@@ -205,12 +205,12 @@ func formatSnapshot(snapshot runtimeSnapshot) string {
 		reader.BlockedWorkers,
 		reader.DrainingWorkers,
 	)
-	fmt.Fprintf(&output, "Read TPS:                 %.1f\n", snapshot.Reader.ReadTps)
+	fmt.Fprintf(&output, "Average read TPS:         %.1f\n", averageTPS(snapshot.Reader.RowsRead, snapshot.Run.ElapsedMs))
 	fmt.Fprintf(&output, "Rows read:                %d\n", snapshot.Reader.RowsRead)
 	fmt.Fprintf(&output, "Source:                   %s\n", sourceDirectory)
 	fmt.Fprintf(&output, "Source error:             %s\n\n", sourceError)
-	writeSnapshotChannel(&output, "Reader channel", snapshot.ReaderChannel)
-	writeSnapshotChannel(&output, "Sender channel", snapshot.SenderChannel)
+	writeSnapshotChannel(&output, "Reader channel", snapshot.ReaderChannel, snapshot.Run.ElapsedMs)
+	writeSnapshotChannel(&output, "Sender channel", snapshot.SenderChannel, snapshot.Run.ElapsedMs)
 	fmt.Fprintf(&output, "Sender\n")
 	fmt.Fprintf(
 		&output,
@@ -241,7 +241,7 @@ func sanitizeSnapshotValue(value string) string {
 	return sanitized.String()
 }
 
-func writeSnapshotChannel(output *strings.Builder, title string, channel channelSnapshot) {
+func writeSnapshotChannel(output *strings.Builder, title string, channel channelSnapshot, elapsedMs int64) {
 	fmt.Fprintf(output, "%s\n", title)
 	fmt.Fprintf(
 		output,
@@ -252,9 +252,9 @@ func writeSnapshotChannel(output *strings.Builder, title string, channel channel
 	)
 	fmt.Fprintf(
 		output,
-		"Input / output TPS:       %.1f / %.1f\n",
-		channel.SentTransactionsPerSecond,
-		channel.ReceivedTransactionsPerSecond,
+		"Average input/output TPS: %.1f / %.1f\n",
+		averageTPS(channel.InputTransactionsTotal, elapsedMs),
+		averageTPS(channel.OutputTransactionsTotal, elapsedMs),
 	)
 	fmt.Fprintf(
 		output,
@@ -263,4 +263,11 @@ func writeSnapshotChannel(output *strings.Builder, title string, channel channel
 		channel.OldestBlockedSenderMs,
 		channel.BlockedMs,
 	)
+}
+
+func averageTPS(total, elapsedMs int64) float64 {
+	if elapsedMs <= 0 {
+		return 0
+	}
+	return float64(total) * 1000 / float64(elapsedMs)
 }

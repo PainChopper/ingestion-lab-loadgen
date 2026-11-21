@@ -231,17 +231,10 @@ func TestThrottlerMeasuresSuccessfulUnbufferedHandoff(t *testing.T) {
 		}
 		close(readerBatches)
 		<-stage.done
-		senderChannel.sample(time.Second)
 		after := senderChannel.snapshot(time.Now())
 		if after.BlockedSenders != 0 || after.OldestBlockedSenderMS != 0 || after.BlockedMS <= 0 ||
-			after.SentBatchesTotal != 1 || after.SentTransactionsTotal != 3 ||
-			after.SentBatchesPerSecond != 1 || after.SentTransactionsPerSecond != 3 {
+			after.SentBatchesTotal != 1 || after.SentTransactionsTotal != 3 {
 			t.Fatalf("Sender channel after handoff = %+v", after)
-		}
-		senderChannel.sample(time.Second)
-		if empty := senderChannel.snapshot(time.Now()); empty.SentBatchesPerSecond != 0 ||
-			empty.SentTransactionsPerSecond != 0 || empty.SentTransactionsTotal != 3 {
-			t.Fatalf("Sender channel after empty window = %+v", empty)
 		}
 	})
 }
@@ -266,10 +259,6 @@ func TestThrottlerControlUpdateEndsBlockedWaitWithoutAdmission(t *testing.T) {
 		paused := senderChannel.snapshot(time.Now())
 		if paused.BlockedSenders != 0 || paused.SentBatchesTotal != 0 || paused.SentTransactionsTotal != 0 {
 			t.Fatalf("Sender channel after zero TPS = %+v", paused)
-		}
-		senderChannel.sample(time.Second)
-		if got := senderChannel.snapshot(time.Now()); got.SentTransactionsPerSecond != 0 {
-			t.Fatalf("Sender sent rate after zero TPS = %v, want 0", got.SentTransactionsPerSecond)
 		}
 		stage.update(Rate{Installed: false})
 		if batch := <-senderBatches; len(batch) != 1 || batch[0].ClientID != "held" {

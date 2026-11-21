@@ -155,6 +155,10 @@ func TestDecodeStrictSnapshotValidatesJSONAndState(t *testing.T) {
 		{name: "missing state", body: `{"run":{}}`, wantErr: true},
 		{name: "null state", body: `{"run":{"state":null}}`, wantErr: true},
 		{name: "invalid state", body: `{"run":{"state":"invalid"}}`, wantErr: true},
+		{name: "old reader rate", body: `{"run":{"state":"running"},"reader":{"readTps":1}}`, wantErr: true},
+		{name: "old throttler rate", body: `{"run":{"state":"running"},"throttler":{"admittedTps":1}}`, wantErr: true},
+		{name: "old input rate", body: `{"run":{"state":"running"},"readerChannel":{"inputTransactionsPerSecond":1}}`, wantErr: true},
+		{name: "old output rate", body: `{"run":{"state":"running"},"senderChannel":{"outputTransactionsPerSecond":1}}`, wantErr: true},
 		{name: "unknown root field", body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: true},
 		{name: "unknown nested field", body: `{"run":{"state":"running"},"reader":{"unexpected":true}}`, wantErr: true},
 		{name: "wrong known type", body: `{"run":{"state":"running"},"throttler":{"requestedTps":"0"}}`, wantErr: true},
@@ -189,12 +193,12 @@ func TestFormatSnapshot(t *testing.T) {
 		Reader: readerSnapshot{
 			Workers: 3, WorkerStates: []readerWorkerState{
 				{Activity: readerWireReading}, {Activity: readerWireIdle, Draining: true},
-			}, ReadTps: 12.34, RowsRead: 99,
+			}, RowsRead: 99,
 			SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "broken.parquet", Message: "corrupt"},
 		},
-		Throttler:     throttlerSnapshot{RequestedTps: 100, AdmittedTps: 9.87, Installed: true},
-		ReaderChannel: channelSnapshot{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, SentTransactionsPerSecond: 1.25, ReceivedTransactionsPerSecond: 2.5},
-		SenderChannel: channelSnapshot{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, SentTransactionsPerSecond: 3.75, ReceivedTransactionsPerSecond: 4.5},
+		Throttler:     throttlerSnapshot{RequestedTps: 100, Installed: true},
+		ReaderChannel: channelSnapshot{Capacity: 3, DepthBatches: 2, BufferedTransactions: 20, InputTransactionsTotal: 1, OutputTransactionsTotal: 2},
+		SenderChannel: channelSnapshot{Capacity: 4, DepthBatches: 1, BufferedTransactions: 10, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, InputTransactionsTotal: 3, OutputTransactionsTotal: 4},
 		Sender: senderSnapshot{Workers: 5, WorkerStates: []senderWorkerState{
 			{Activity: senderWireInFlight}, {Activity: senderWireInFlight},
 			{Activity: senderWireIdle}, {Activity: senderWireBackoff, Draining: true},
@@ -208,21 +212,21 @@ func TestFormatSnapshot(t *testing.T) {
 		"Transactions:             42\n\n" +
 		"Throttler\n" +
 		"Requested TPS:            100\n" +
-		"Admitted TPS:             9.9\n" +
+		"Average admitted TPS:     2.4\n" +
 		"Installed:                true\n\n" +
 		"Reader\n" +
 		"Workers:                  configured=3 live=2 reading=1 idle=1 blocked=0 draining=1\n" +
-		"Read TPS:                 12.3\n" +
+		"Average read TPS:         79.2\n" +
 		"Rows read:                99\n" +
 		"Source:                   none\n" +
 		"Source error:             source/read broken.parquet: corrupt\n\n" +
 		"Reader channel\n" +
 		"Queue:                    2/3 batches; 20 transactions\n" +
-		"Input / output TPS:       1.2 / 2.5\n" +
+		"Average input/output TPS: 0.8 / 1.6\n" +
 		"Blocked:                  senders=0 oldest=0ms total=0ms\n\n" +
 		"Sender channel\n" +
 		"Queue:                    1/4 batches; 10 transactions\n" +
-		"Input / output TPS:       3.8 / 4.5\n" +
+		"Average input/output TPS: 2.4 / 3.2\n" +
 		"Blocked:                  senders=1 oldest=7ms total=8ms\n\n" +
 		"Sender\n" +
 		"Workers:                  configured=5 live=4 in-flight=2 idle=1 backoff=1 draining=1\n"
@@ -354,5 +358,15 @@ func TestRunRemoteCLISetReportsPOSTTransportError(t *testing.T) {
 	}
 	if got := <-received; got != "POST "+commandsPath {
 		t.Fatalf("request = %q, want POST %s", got, commandsPath)
+	}
+}
+
+func TestFormatSnapshotBeforeRunShowsZeroAverages(t *testing.T) {
+	snapshot := runtimeSnapshot{Reader: readerSnapshot{RowsRead: 9}, SenderChannel: channelSnapshot{InputTransactionsTotal: 12, OutputTransactionsTotal: 6}}
+	got := formatSnapshot(snapshot)
+	for _, line := range []string{"Average read TPS:         0.0", "Average admitted TPS:     0.0", "Average input/output TPS: 0.0 / 0.0"} {
+		if !strings.Contains(got, line) {
+			t.Fatalf("missing %q in %q", line, got)
+		}
 	}
 }

@@ -12,7 +12,7 @@ import (
 )
 
 type controlState struct {
-	metricsWindow   time.Duration
+	startedAt       time.Time
 	run             controlRunState
 	config          config
 	controls        configuredControls
@@ -21,10 +21,9 @@ type controlState struct {
 }
 
 type controlRunState struct {
-	totalTransactions int64
-	runStartedAt      time.Time
-	sourceError       *readerSourceError
-	state             runState
+	runStartedAt time.Time
+	sourceError  *readerSourceError
+	state        runState
 }
 
 type configuredControls struct {
@@ -44,9 +43,9 @@ type runtimeEvents struct {
 
 func newControlState(cfg config, logger *zap.Logger) controlState {
 	return controlState{
-		metricsWindow: time.Duration(cfg.Metrics.WindowMS) * time.Millisecond,
-		run:           controlRunState{state: runStateStarting},
-		config:        cfg,
+		startedAt: time.Now(),
+		run:       controlRunState{state: runStateStarting},
+		config:    cfg,
 		controls: configuredControls{
 			readerWorkers: cfg.Reader.Workers.Initial,
 			requestedTPS:  cfg.Throttler.RequestedTPS.Initial,
@@ -105,7 +104,6 @@ func (s *controlState) runEventLoop(
 		s.finishRun(run, metrics, partial)
 	}()
 
-	nextSnapshotLog := time.Now().Add(snapshotLogInterval)
 	for {
 		select {
 		case <-appDone:
@@ -137,10 +135,11 @@ func (s *controlState) runEventLoop(
 			}
 			options := s.pipelineOptions
 			options.Source = found.source
+			s.run.runStartedAt = time.Now()
 			run = pipeline.Start(runCtx, options)
+			metrics.run.Store(run)
 			pipelineDone = run.Done()
 			sourceErrors = run.SourceErrors()
-			s.run.runStartedAt = time.Now()
 			s.run.state = runStateRunning
 			s.logger.Info("run started", zap.String("event", "run_started"))
 		case sourceError := <-sourceErrors:
@@ -172,14 +171,8 @@ func (s *controlState) runEventLoop(
 				request.reply <- s.run.state == runStateRunning &&
 					s.applyCommand(run, request.command, metrics)
 			}
-		case now := <-events.ticks:
-			if run != nil {
-				s.sample(run, metrics, now)
-			}
-			if !now.Before(nextSnapshotLog) {
-				nextSnapshotLog = now.Add(snapshotLogInterval)
-				s.logger.Info("runtime summary", snapshotLogFields(s.snapshotAt(run, now))...)
-			}
+		case <-events.ticks:
+			s.logger.Info("runtime summary", snapshotLogFields(s.snapshotAt(run, time.Now()))...)
 		}
 	}
 }
@@ -234,30 +227,13 @@ func (s *controlState) recordSourceFault(err error) {
 		zap.String("operation", sourceError.Op), zap.String("relative_path", sourceError.Path), zap.Error(sourceError))
 }
 
-func (s *controlState) sample(run *pipeline.Pipeline, metrics *prometheusMetrics, now time.Time) {
-	elapsed := run.Sample(now)
-	if elapsed <= 0 {
-		return
-	}
-	delta := s.collectCompleted(run, metrics)
-	metrics.actualTPS.Set(float64(delta) / elapsed.Seconds())
-}
-
 func (s *controlState) finishRun(run *pipeline.Pipeline, metrics *prometheusMetrics, partial bool) {
-	if run != nil {
-		s.collectCompleted(run, metrics)
-	}
-	metrics.actualTPS.Set(0)
-	// Sample confirmations first: all confirmed rows were already counted at the Reader.
-	var rowsRead int64
-	if run != nil {
-		rowsRead = run.Snapshot(time.Now()).Reader.RowsRead
-	}
+	snapshot := s.snapshotAt(run, time.Now())
 	s.logger.Info("run stopped", zap.String("event", "run_stopped"),
 		zap.String("state", string(s.run.state)),
 		zap.Bool("partial", partial),
-		zap.Int64("confirmed_transactions", s.run.totalTransactions),
-		zap.Int64("unconfirmed_transactions", rowsRead-s.run.totalTransactions),
+		zap.Int64("confirmed_transactions", snapshot.Run.TotalTransactions),
+		zap.Int64("unconfirmed_transactions", snapshot.Reader.RowsRead-snapshot.Run.TotalTransactions),
 	)
 }
 
@@ -270,21 +246,21 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 	readerChannel, senderChannel := snapshot.ReaderQueue, snapshot.SenderQueue
 
 	return runtimeSnapshot{
+		CapturedAtMs: max(0, now.Sub(s.startedAt).Milliseconds()),
 		Run: runSnapshot{
 			State:             s.run.state,
-			TotalTransactions: s.run.totalTransactions,
+			TotalTransactions: snapshot.CompletedTransactions,
 			ElapsedMs:         s.elapsedMs(now),
 		},
 		Reader: readerSnapshot{
 			Workers: s.controls.readerWorkers, WorkerStates: snapshotReaderWorkers(readerPool.WorkerStates),
-			ReadBatchSize: s.config.Reader.ReadBatchSize, ReadTps: readerPool.ReadTPS,
+			ReadBatchSize:   s.config.Reader.ReadBatchSize,
 			RowsRead:        readerPool.RowsRead,
 			SourceDirectory: pipeline.SourceDirectory(s.config.Source.Path),
 			SourceError:     s.run.sourceError,
 		},
 		Throttler: throttlerSnapshot{
 			RequestedTps: s.controls.requestedTPS,
-			AdmittedTps:  senderChannel.SentTransactionsPerSecond,
 			Installed:    s.controls.installed,
 		},
 		Sender: senderSnapshot{
@@ -298,16 +274,6 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 
 func (s *controlState) rate() pipeline.Rate {
 	return pipeline.Rate{TPS: s.controls.requestedTPS, Installed: s.controls.installed}
-}
-
-func (s *controlState) collectCompleted(
-	run *pipeline.Pipeline,
-	promMetrics *prometheusMetrics,
-) int64 {
-	delta := run.TakeCompleted()
-	s.run.totalTransactions += delta
-	promMetrics.transactionsTotal.Add(float64(delta))
-	return delta
 }
 
 func (s *controlState) elapsedMs(now time.Time) int64 {

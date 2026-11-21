@@ -617,13 +617,13 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 			Workers: 1, WorkerStates: []readerWorkerState{
 				{Activity: readerWireReading}, {Activity: readerWireReading, Draining: true},
 			},
-			ReadBatchSize: 50000, ReadTps: 123.5, RowsRead: 47,
+			ReadBatchSize: 50000, RowsRead: 47,
 			SourceDirectory: "data/part", SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"},
 		},
-		Throttler:     throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, Installed: true},
+		Throttler:     throttlerSnapshot{RequestedTps: 200, Installed: true},
 		Sender:        senderSnapshot{Workers: 32, WorkerStates: []senderWorkerState{}},
-		ReaderChannel: channelSnapshot{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, SentTransactionsPerSecond: 3, ReceivedTransactionsPerSecond: 1},
-		SenderChannel: channelSnapshot{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, SentTransactionsPerSecond: 4, ReceivedTransactionsPerSecond: 2.5},
+		ReaderChannel: channelSnapshot{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, InputTransactionsTotal: 3, OutputTransactionsTotal: 1},
+		SenderChannel: channelSnapshot{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, InputTransactionsTotal: 4, OutputTransactionsTotal: 2},
 		Config:        snapshotConfig(testConfig(t)),
 	}
 	rec := httptest.NewRecorder()
@@ -684,7 +684,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	if string(reader["workerStates"]) != "[]" || string(sender["workerStates"]) != "[]" {
 		t.Fatalf("starting worker lists = %s / %s", reader["workerStates"], sender["workerStates"])
 	}
-	if string(run["elapsedMs"]) != "0" || string(reader["readTps"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["sourceDirectory"]) != "\"\"" || string(reader["sourceError"]) != "null" {
+	if string(run["elapsedMs"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["sourceDirectory"]) != "\"\"" || string(reader["sourceError"]) != "null" {
 		t.Errorf("starting snapshot body = %v", root)
 	}
 	var throttler map[string]json.RawMessage

@@ -7,20 +7,16 @@ import (
 )
 
 type QueueSnapshot struct {
-	Capacity                      int
-	DepthBatches                  int
-	BufferedTransactions          int
-	BlockedSenders                int
-	OldestBlockedSenderMS         int64
-	BlockedMS                     int64
-	SentBatchesTotal              int64
-	SentTransactionsTotal         int64
-	ReceivedBatchesTotal          int64
-	ReceivedTransactionsTotal     int64
-	SentBatchesPerSecond          float64
-	SentTransactionsPerSecond     float64
-	ReceivedBatchesPerSecond      float64
-	ReceivedTransactionsPerSecond float64
+	Capacity                  int
+	DepthBatches              int
+	BufferedTransactions      int
+	BlockedSenders            int
+	OldestBlockedSenderMS     int64
+	BlockedMS                 int64
+	SentBatchesTotal          int64
+	SentTransactionsTotal     int64
+	ReceivedBatchesTotal      int64
+	ReceivedTransactionsTotal int64
 }
 
 type queueMeasurements struct {
@@ -29,11 +25,6 @@ type queueMeasurements struct {
 	blocked       time.Duration
 
 	snapshot QueueSnapshot
-
-	sentBatchesSinceTick          int64
-	sentTransactionsSinceTick     int64
-	receivedBatchesSinceTick      int64
-	receivedTransactionsSinceTick int64
 }
 
 type batchQueue struct {
@@ -112,8 +103,6 @@ func (q *batchQueue) recordSend(transactions int) {
 	defer q.mu.Unlock()
 	q.measurements.snapshot.SentBatchesTotal++
 	q.measurements.snapshot.SentTransactionsTotal += int64(transactions)
-	q.measurements.sentBatchesSinceTick++
-	q.measurements.sentTransactionsSinceTick += int64(transactions)
 }
 
 func (q *batchQueue) recordReceive(transactions int) {
@@ -121,22 +110,6 @@ func (q *batchQueue) recordReceive(transactions int) {
 	defer q.mu.Unlock()
 	q.measurements.snapshot.ReceivedBatchesTotal++
 	q.measurements.snapshot.ReceivedTransactionsTotal += int64(transactions)
-	q.measurements.receivedBatchesSinceTick++
-	q.measurements.receivedTransactionsSinceTick += int64(transactions)
-}
-
-func (q *batchQueue) sample(window time.Duration) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	seconds := window.Seconds()
-	q.measurements.snapshot.SentBatchesPerSecond = float64(q.measurements.sentBatchesSinceTick) / seconds
-	q.measurements.snapshot.SentTransactionsPerSecond = float64(q.measurements.sentTransactionsSinceTick) / seconds
-	q.measurements.snapshot.ReceivedBatchesPerSecond = float64(q.measurements.receivedBatchesSinceTick) / seconds
-	q.measurements.snapshot.ReceivedTransactionsPerSecond = float64(q.measurements.receivedTransactionsSinceTick) / seconds
-	q.measurements.sentBatchesSinceTick = 0
-	q.measurements.sentTransactionsSinceTick = 0
-	q.measurements.receivedBatchesSinceTick = 0
-	q.measurements.receivedTransactionsSinceTick = 0
 }
 
 func (q *batchQueue) startBlocked(now time.Time) uint64 {
