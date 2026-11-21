@@ -19,7 +19,6 @@ export interface NumericControlSnapshot {
   readonly applied: number | null
   readonly min: number
   readonly max: number
-  readonly step: number
   readonly unit: string
   readonly applyMode: ApplyMode
 }

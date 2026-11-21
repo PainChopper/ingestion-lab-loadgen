@@ -13,7 +13,6 @@ function control(
     applied,
     min: 0,
     max: 12,
-    step: 1,
     unit: 'batches',
     applyMode,
   }
@@ -56,7 +55,7 @@ describe('NumericControl', () => {
       const dispatch = vi.fn().mockResolvedValue({ accepted: true })
       render(
         <LiveNumericControl
-          snapshot={{ ...control(2_000_000), max: 4_000_000, step: 200_000 }}
+          snapshot={{ ...control(2_000_000), max: 4_000_000 }}
           dispatch={dispatch}
         />,
       )

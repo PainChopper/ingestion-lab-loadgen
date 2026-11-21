@@ -114,13 +114,27 @@ function capabilityIsFinite(capability: ValveCapability): boolean {
 export function getValveTargets(capability: ValveCapability): readonly number[] | null {
   if (!capabilityIsFinite(capability)) return null
 
-  const targets = Array.from({ length: OPENING_POSITION_COUNT }, (_, index) => {
-    return (
-      capability.min + Math.round((index / MAX_OPENING_INDEX) * (capability.max - capability.min))
-    )
-  })
+  const span = capability.max - capability.min
+  let step = 1
+  for (let magnitude = 1; ; magnitude *= 10) {
+    const candidate = [1, 2, 5]
+      .map((factor) => factor * magnitude)
+      .find((value) => Math.ceil(span / value) <= MAX_OPENING_INDEX)
+    if (candidate !== undefined) {
+      step = candidate
+      break
+    }
+  }
 
-  return Object.freeze([...new Set(targets)])
+  const targets = [capability.min]
+  while (capability.max - targets[targets.length - 1] > step) {
+    targets.push(targets[targets.length - 1] + step)
+  }
+  if (targets.length > 1 && capability.max - targets[targets.length - 1] < step / 2) {
+    targets.pop()
+  }
+  targets.push(capability.max)
+  return Object.freeze(targets)
 }
 
 export function targetIndexToOpeningIndex(

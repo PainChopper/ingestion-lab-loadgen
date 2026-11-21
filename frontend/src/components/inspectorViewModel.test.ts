@@ -67,12 +67,22 @@ describe('inspector view model', () => {
     const model = getInspectorViewModel(
       {
         ...base,
-        reader: { ...base.reader, readTps: 50_000, rowsRead: 14_000 },
+        reader: {
+          ...base.reader,
+          readTps: 50_000,
+          rowsRead: 14_000,
+          sourcePath: 'C:/dataset/very/long/path/fold=*/*.parquet',
+        },
       },
       'reader',
     )
     expect(model?.rows).toContainEqual({ label: 'Actual Read TPS', value: '50,000 tx/s' })
     expect(model?.rows).toContainEqual({ label: 'Rows read', value: '14,000' })
+    expect(model?.rows).toContainEqual({
+      label: 'Source',
+      value: 'C:/dataset/very/long/path/fold=*/*.parquet',
+      layout: 'full-width',
+    })
     const states = model?.rows.find((row) => row.label === 'Worker states')
     expect(states?.value).toBe('5 idle · 0 reading · 0 blocked · 0 errors')
     expect(states?.segments?.map((segment) => segment.tone)).toEqual([

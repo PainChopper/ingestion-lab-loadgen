@@ -49,7 +49,6 @@ function unavailableControl(unit: string): NumericControlSnapshot {
     applied: null,
     min: 0,
     max: 0,
-    step: 1,
     unit,
     applyMode: 'unavailable',
   }
@@ -67,7 +66,6 @@ function numericControl(
     applied: value,
     min,
     max,
-    step: 1,
     unit,
     applyMode,
   }

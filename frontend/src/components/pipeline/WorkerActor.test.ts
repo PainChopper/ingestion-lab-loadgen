@@ -14,7 +14,6 @@ function workers(applied: number): NumericControlSnapshot {
     applied,
     min: 0,
     max: 32,
-    step: 1,
     unit: 'workers',
     applyMode: 'immediate',
   }

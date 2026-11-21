@@ -11,7 +11,7 @@ const activityCounts = { idle: 0, reading: 0, blocked: 0, 'in-flight': 0, backof
 
 function SenderWorkers({
   onCommand,
-  max = 10,
+  max = 6,
 }: {
   onCommand: (value: number) => void
   max?: number
@@ -41,9 +41,8 @@ function SenderWorkers({
         controls={sender.controls}
         workers={{
           applied,
-          min: 2,
+          min: 4,
           max,
-          step: 3,
           unit: 'workers',
           applyMode: 'immediate',
         }}
@@ -71,11 +70,11 @@ describe('WorkerActor controls', () => {
     const increase = screen.getByRole<HTMLButtonElement>('button', { name: 'Add sender worker' })
 
     await user.click(increase)
-    expect(screen.getByLabelText('Sender worker count, 8 applied').textContent).toBe('8')
+    expect(screen.getByLabelText('Sender worker count, 6 applied').textContent).toBe('6')
     expect(increase.disabled).toBe(true)
     await user.click(increase)
 
-    expect(onCommand.mock.calls).toEqual([[8]])
+    expect(onCommand.mock.calls).toEqual([[6]])
   })
 
   it('retries the same worker step after a synchronous dispatch failure', async () => {
@@ -83,22 +82,22 @@ describe('WorkerActor controls', () => {
     const onCommand = vi.fn().mockImplementationOnce(() => {
       throw new Error('Dispatch unavailable')
     })
-    render(<SenderWorkers onCommand={onCommand} max={13} />)
+    render(<SenderWorkers onCommand={onCommand} max={9} />)
     const increase = screen.getByRole('button', { name: 'Add sender worker' })
     increase.focus()
 
     await user.keyboard('{Enter}')
-    expect(onCommand.mock.calls).toEqual([[8]])
+    expect(onCommand.mock.calls).toEqual([[6]])
     expect(screen.getByLabelText('Sender worker count, 5 applied').textContent).toBe('5')
 
     await user.keyboard('{Enter}')
-    expect(onCommand.mock.calls).toEqual([[8], [8]])
-    expect(screen.getByLabelText('Sender worker count, 8 applied').textContent).toBe('8')
+    expect(onCommand.mock.calls).toEqual([[6], [6]])
+    expect(screen.getByLabelText('Sender worker count, 6 applied').textContent).toBe('6')
   })
 
   it.each([
-    { name: 'Add sender worker', expected: 8 },
-    { name: 'Remove sender worker', expected: 2 },
+    { name: 'Add sender worker', expected: 6 },
+    { name: 'Remove sender worker', expected: 4 },
   ])('commits the held $name button once at the limit', async ({ name, expected }) => {
     vi.useFakeTimers()
     const onCommand = vi.fn()
@@ -128,27 +127,27 @@ describe('WorkerActor controls', () => {
     const increase = screen.getByRole('button', { name: 'Add sender worker' })
 
     fireEvent.pointerDown(increase, { pointerId: 1 })
-    expect(screen.getByRole('status').textContent).toBe('8')
-    rerender(<SenderWorkers onCommand={currentCommand} max={13} />)
+    expect(screen.getByRole('status').textContent).toBe('6')
+    rerender(<SenderWorkers onCommand={currentCommand} max={9} />)
     act(() => vi.advanceTimersByTime(540))
-    expect(screen.getByRole('status').textContent).toBe('11')
+    expect(screen.getByRole('status').textContent).toBe('7')
     expect(currentCommand).not.toHaveBeenCalled()
 
     await act(async () => {
       fireEvent.pointerUp(window, { pointerId: 1 })
     })
     expect(originalCommand).not.toHaveBeenCalled()
-    expect(currentCommand.mock.calls).toEqual([[11]])
+    expect(currentCommand.mock.calls).toEqual([[7]])
   })
 
   it('accepts keyboard activation after cancelling a worker hold', async () => {
     vi.useFakeTimers()
     const onCommand = vi.fn()
-    render(<SenderWorkers onCommand={onCommand} max={13} />)
+    render(<SenderWorkers onCommand={onCommand} max={9} />)
     const increase = screen.getByRole('button', { name: 'Add sender worker' })
 
     fireEvent.pointerDown(increase, { pointerId: 1 })
-    expect(screen.getByRole('status').textContent).toBe('8')
+    expect(screen.getByRole('status').textContent).toBe('6')
     fireEvent.pointerCancel(window, { pointerId: 1 })
     act(() => vi.advanceTimersByTime(1_000))
     expect(screen.getByRole('status').textContent).toBe('5')
@@ -157,6 +156,6 @@ describe('WorkerActor controls', () => {
     vi.useRealTimers()
     increase.focus()
     await userEvent.setup().keyboard('{Enter}')
-    expect(onCommand.mock.calls).toEqual([[8]])
+    expect(onCommand.mock.calls).toEqual([[6]])
   })
 })

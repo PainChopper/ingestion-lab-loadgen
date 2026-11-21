@@ -102,6 +102,7 @@ export function getInspectorViewModel(
         },
         { label: 'Actual Read TPS', value: formatRate(snapshot.reader.readTps) },
         { label: 'Rows read', value: formatInteger(snapshot.reader.rowsRead) },
+        { label: 'Source', value: snapshot.reader.sourcePath ?? '—', layout: 'full-width' },
       ]
       if (hasSourceError) {
         rows.push({
