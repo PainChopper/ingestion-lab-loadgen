@@ -110,16 +110,22 @@ function PipelineViewport({
       createPipelineGeometry({
         orientation,
         landscapeContentWidth,
-        readerWorkers: Math.max(liveControls.readerWorkers.desired, snapshot.reader.liveWorkers),
-        senderWorkers: Math.max(liveControls.senderWorkers.desired, snapshot.sender.liveWorkers),
+        readerWorkers: Math.max(
+          liveControls.readerWorkers.desired,
+          snapshot.reader.workerStates.length,
+        ),
+        senderWorkers: Math.max(
+          liveControls.senderWorkers.desired,
+          snapshot.sender.workerStates.length,
+        ),
       }),
     [
       landscapeContentWidth,
       orientation,
       liveControls.readerWorkers.desired,
       liveControls.senderWorkers.desired,
-      snapshot.reader.liveWorkers,
-      snapshot.sender.liveWorkers,
+      snapshot.reader.workerStates.length,
+      snapshot.sender.workerStates.length,
     ],
   )
 

@@ -97,21 +97,28 @@ describe('FixedStepSimulation pipeline batch', () => {
 
     for (let step = 0; step < 50; step += 1) {
       simulation.advanceStep()
-      if (simulation.telemetry().sender.workerStates.inFlight === 2) break
+      if (
+        simulation.telemetry().sender.workerStates.filter(({ activity }) => activity === 'inFlight')
+          .length === 2
+      )
+        break
     }
 
-    expect(simulation.telemetry().sender.workerStates.inFlight).toBe(2)
+    expect(
+      simulation.telemetry().sender.workerStates.filter(({ activity }) => activity === 'inFlight')
+        .length,
+    ).toBe(2)
 
     simulation.updateConfig({ senderWorkers: 1 })
 
     const telemetry = simulation.telemetry().sender
-    expect(telemetry.liveWorkers).toBe(2)
-    expect(telemetry.workerStates.inFlight).toBe(1)
-    expect(telemetry.drainingWorkerStates).toEqual({
-      idle: 0,
-      inFlight: 1,
-      backoff: 0,
-    })
+    expect(telemetry.workerStates).toHaveLength(2)
+    expect(telemetry.workerStates).toEqual(
+      expect.arrayContaining([
+        { activity: 'inFlight', draining: false },
+        { activity: 'inFlight', draining: true },
+      ]),
+    )
   })
 
   it('retains batches across backoff and drains retiring workers after retry', () => {
@@ -131,21 +138,38 @@ describe('FixedStepSimulation pipeline batch', () => {
     )
     for (let step = 0; step < 50; step += 1) {
       simulation.advanceStep()
-      if (simulation.telemetry().sender.workerStates.backoff === 2) break
+      if (
+        simulation.telemetry().sender.workerStates.filter(({ activity }) => activity === 'backoff')
+          .length === 2
+      )
+        break
     }
-    expect(simulation.telemetry().sender.workerStates.backoff).toBe(2)
+    expect(
+      simulation.telemetry().sender.workerStates.filter(({ activity }) => activity === 'backoff')
+        .length,
+    ).toBe(2)
     simulation.updateConfig({ senderWorkers: 1, requestedTps: 0 })
-    expect(simulation.telemetry().sender).toMatchObject({
-      liveWorkers: 2,
-      workerStates: { backoff: 1 },
-      drainingWorkerStates: { backoff: 1 },
-    })
+    const beforeRetry = simulation.telemetry().sender.workerStates
+    expect(beforeRetry).toHaveLength(2)
+    expect(beforeRetry).toEqual(
+      expect.arrayContaining([
+        { activity: 'backoff', draining: false },
+        { activity: 'backoff', draining: true },
+      ]),
+    )
     for (let step = 0; step < 50; step += 1) simulation.advanceStep()
-    expect(simulation.telemetry().sender).toMatchObject({
-      liveWorkers: 1,
-      workerStates: { idle: 1, backoff: 0, inFlight: 0 },
-      drainingWorkerStates: { idle: 0, backoff: 0, inFlight: 0 },
-    })
+    expect(simulation.telemetry().sender.workerStates).toEqual([
+      { activity: 'idle', draining: false },
+    ])
+    expect(beforeRetry).toHaveLength(2)
+    expect(beforeRetry).toEqual(
+      expect.arrayContaining([
+        { activity: 'backoff', draining: false },
+        { activity: 'backoff', draining: true },
+      ]),
+    )
+    expect(Object.isFrozen(beforeRetry)).toBe(true)
+    expect(beforeRetry.every(Object.isFrozen)).toBe(true)
     for (const first of attempts.filter(({ attempt }) => attempt === 1)) {
       const retry = attempts.find(({ batch, attempt }) => batch === first.batch && attempt === 2)
       expect(retry?.batch).toBe(first.batch)

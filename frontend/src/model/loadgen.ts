@@ -29,17 +29,23 @@ export interface InstalledControlSnapshot {
   readonly applyMode: ApplyMode
 }
 
+export type ReaderActivity = 'idle' | 'reading' | 'blocked'
+export type SenderActivity = 'idle' | 'inFlight' | 'backoff'
+
+export interface ReaderWorkerState {
+  readonly activity: ReaderActivity
+  readonly draining: boolean
+}
+
+export interface SenderWorkerState {
+  readonly activity: SenderActivity
+  readonly draining: boolean
+}
+
 export interface ReaderSnapshot {
   readonly id: 'reader'
   readonly workers: NumericControlSnapshot
-  readonly liveWorkers: number
-  readonly idleWorkers: number
-  readonly readingWorkers: number
-  readonly blockedWorkers: number
-  readonly drainingWorkers: number
-  readonly drainingIdleWorkers: number
-  readonly drainingReadingWorkers: number
-  readonly drainingBlockedWorkers: number
+  readonly workerStates: readonly ReaderWorkerState[]
   readonly readBatchSize: number | null
   readonly readTps: number | null
   readonly rowsRead: number | null
@@ -76,14 +82,7 @@ export interface ChannelSnapshot extends ChannelTelemetrySnapshot {
 export interface SenderSnapshot {
   readonly id: 'sender'
   readonly workers: NumericControlSnapshot
-  readonly liveWorkers: number
-  readonly idleWorkers: number
-  readonly inFlightWorkers: number
-  readonly backoffWorkers: number
-  readonly drainingWorkers: number
-  readonly drainingIdleWorkers: number
-  readonly drainingInFlightWorkers: number
-  readonly drainingBackoffWorkers: number
+  readonly workerStates: readonly SenderWorkerState[]
 }
 
 export interface ReaderSourceErrorSnapshot {

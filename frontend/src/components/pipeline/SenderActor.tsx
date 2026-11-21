@@ -1,3 +1,4 @@
+import { workerStateCounts } from '../workerStateCounts'
 import type { SelectableId, RunState, SenderSnapshot } from '../../model/loadgen'
 import { formatInteger, formatRate } from './formatters'
 import type { PipelineGeometry } from './geometry'
@@ -26,17 +27,18 @@ export function SenderActor({
   geometry,
   orientation,
 }: SenderActorProps) {
+  const counts = workerStateCounts(snapshot.workerStates)
   const workerStateSegments = [
     {
-      value: `${formatInteger(snapshot.idleWorkers)} idle`,
+      value: `${formatInteger(counts.idleWorkers)} idle`,
       tone: 'idle' as const,
     },
     {
-      value: `${formatInteger(snapshot.inFlightWorkers)} in-flight`,
+      value: `${formatInteger(counts.inFlightWorkers)} in-flight`,
       tone: 'in-flight' as const,
     },
     {
-      value: `${formatInteger(snapshot.backoffWorkers)} backoff`,
+      value: `${formatInteger(counts.backoffWorkers)} backoff`,
       tone: 'backoff' as const,
     },
   ]
@@ -50,21 +52,21 @@ export function SenderActor({
       bounds={geometry.bounds}
       controls={geometry.controls}
       workers={snapshot.workers}
-      liveWorkers={snapshot.liveWorkers}
-      drainingWorkers={snapshot.drainingWorkers}
+      liveWorkers={counts.liveWorkers}
+      drainingWorkers={counts.drainingWorkers}
       activityCounts={{
-        idle: snapshot.idleWorkers,
+        idle: counts.idleWorkers,
         reading: 0,
         blocked: 0,
-        'in-flight': snapshot.inFlightWorkers,
-        backoff: snapshot.backoffWorkers,
+        'in-flight': counts.inFlightWorkers,
+        backoff: counts.backoffWorkers,
       }}
       drainingActivityCounts={{
-        idle: snapshot.drainingIdleWorkers,
+        idle: counts.drainingIdleWorkers,
         reading: 0,
         blocked: 0,
-        'in-flight': snapshot.drainingInFlightWorkers,
-        backoff: snapshot.drainingBackoffWorkers,
+        'in-flight': counts.drainingInFlightWorkers,
+        backoff: counts.drainingBackoffWorkers,
       }}
       runState={runState}
       inputPort={geometry.ports.input}

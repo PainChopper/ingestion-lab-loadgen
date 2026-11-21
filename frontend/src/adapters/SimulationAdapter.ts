@@ -5,6 +5,7 @@ import type {
   LoadgenCommand,
   LoadgenTelemetrySnapshot,
   NumericControlSnapshot,
+  ReaderWorkerState,
 } from '../model/loadgen'
 import { FIXED_STEP_MS, FixedStepSimulation, SNAPSHOT_INTERVAL_MS } from '../model/simulation'
 import type { ChannelTelemetry, SimulationConfig, SimulationTelemetry } from '../model/simulation'
@@ -71,12 +72,6 @@ function freezeSnapshot(
   const telemetry: SimulationTelemetry = simulation.telemetry()
   const config = simulation.config
   const readerReadTps = Math.round(telemetry.readerTransactionsPerSecond)
-  const senderWorkerStates = telemetry.sender.workerStates
-  const drainingSenderWorkerStates = telemetry.sender.drainingWorkerStates
-  const drainingWorkers =
-    drainingSenderWorkerStates.idle +
-    drainingSenderWorkerStates.inFlight +
-    drainingSenderWorkerStates.backoff
 
   return Object.freeze({
     revision,
@@ -88,14 +83,14 @@ function freezeSnapshot(
     reader: Object.freeze({
       id: 'reader',
       workers: numericControl(config.readerWorkers, RANGES.readerWorkers, 'workers'),
-      liveWorkers: config.readerWorkers,
-      idleWorkers: readerReadTps === 0 ? config.readerWorkers : 0,
-      readingWorkers: readerReadTps > 0 ? config.readerWorkers : 0,
-      blockedWorkers: 0,
-      drainingWorkers: 0,
-      drainingIdleWorkers: 0,
-      drainingReadingWorkers: 0,
-      drainingBlockedWorkers: 0,
+      workerStates: Object.freeze(
+        Array.from({ length: config.readerWorkers }, (): ReaderWorkerState =>
+          Object.freeze({
+            activity: readerReadTps === 0 ? 'idle' : 'reading',
+            draining: false,
+          }),
+        ),
+      ),
       readBatchSize: config.readBatchSize,
       readTps: readerReadTps,
       rowsRead: telemetry.rowsRead,
@@ -123,14 +118,7 @@ function freezeSnapshot(
     sender: Object.freeze({
       id: 'sender',
       workers: numericControl(config.senderWorkers, RANGES.senderWorkers, 'workers'),
-      liveWorkers: telemetry.sender.liveWorkers,
-      idleWorkers: senderWorkerStates.idle + drainingSenderWorkerStates.idle,
-      inFlightWorkers: senderWorkerStates.inFlight + drainingSenderWorkerStates.inFlight,
-      backoffWorkers: senderWorkerStates.backoff + drainingSenderWorkerStates.backoff,
-      drainingWorkers: drainingWorkers,
-      drainingIdleWorkers: drainingSenderWorkerStates.idle,
-      drainingInFlightWorkers: drainingSenderWorkerStates.inFlight,
-      drainingBackoffWorkers: drainingSenderWorkerStates.backoff,
+      workerStates: telemetry.sender.workerStates,
     }),
   })
 }

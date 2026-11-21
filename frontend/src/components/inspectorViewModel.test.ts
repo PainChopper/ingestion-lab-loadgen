@@ -34,11 +34,17 @@ describe('inspector view model', () => {
         sender: {
           ...base.sender,
           workers: { ...base.sender.workers, applied: 24 },
-          liveWorkers: 32,
-          drainingWorkers: 8,
-          idleWorkers: 2,
-          inFlightWorkers: 11,
-          backoffWorkers: 19,
+          workerStates: [
+            ...Array.from({ length: 2 }, () => ({ activity: 'idle' as const, draining: false })),
+            ...Array.from({ length: 11 }, () => ({
+              activity: 'inFlight' as const,
+              draining: false,
+            })),
+            ...Array.from({ length: 19 }, (_, index) => ({
+              activity: 'backoff' as const,
+              draining: index < 8,
+            })),
+          ],
         },
       },
       'sender',

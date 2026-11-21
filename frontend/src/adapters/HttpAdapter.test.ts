@@ -3,6 +3,7 @@ import { ChannelFlowStateDeriver } from '../model/channelFlowState'
 import { readWireFixture } from '../test/wireFixture'
 import type { LoadgenCommand, LoadgenTelemetrySnapshot, RunState } from '../model/loadgen'
 import { HttpAdapter } from './HttpAdapter'
+import { getInspectorViewModel } from '../components/inspectorViewModel'
 
 interface MockResponseOptions {
   readonly status?: number
@@ -113,6 +114,30 @@ function expectDeepFrozen(value: unknown, seen = new Set<object>()): void {
 }
 
 const malformedCases = [
+  ...(['reader', 'sender'] as const).flatMap((pool) =>
+    [
+      { activity: pool === 'reader' ? 'inFlight' : 'reading', draining: false },
+      { activity: 'unknown', draining: false },
+      { draining: false },
+      { activity: null, draining: false },
+      { activity: 1, draining: false },
+      { activity: 'idle' },
+      { activity: 'idle', draining: null },
+      { activity: 'idle', draining: 'false' },
+      { activity: 'idle', draining: false, id: 1 },
+      null,
+    ].map((item, index) => ({
+      name: `${pool} malformed worker item ${index}`,
+      result: async () =>
+        mockResponse({ ...WIRE, [pool]: { ...WIRE[pool], workerStates: [item] } }),
+    })),
+  ),
+  ...(['reader', 'sender'] as const).flatMap((pool) =>
+    [null, undefined, {}].map((workerStates) => ({
+      name: `${pool} malformed worker list ${String(workerStates)}`,
+      result: async () => mockResponse({ ...WIRE, [pool]: { ...WIRE[pool], workerStates } }),
+    })),
+  ),
   {
     name: 'required field',
     result: async () => {
@@ -235,6 +260,42 @@ describe('HttpAdapter', () => {
     vi.useRealTimers()
   })
 
+  it('keeps previous worker lists unchanged when a later response has empty pools', async () => {
+    const body = structuredClone(WIRE)
+    const previousBody = JSON.stringify(body)
+    fetchMock.mockResolvedValueOnce(mockResponse(body))
+    const adapter = new HttpAdapter()
+    await flushPoll()
+    const previous = adapter.getSnapshot()
+    const previousStates = JSON.stringify([
+      previous.reader.workerStates,
+      previous.sender.workerStates,
+    ])
+    fetchMock.mockResolvedValue(
+      mockResponse({
+        ...WIRE,
+        reader: { ...WIRE.reader, workerStates: [] },
+        sender: { ...WIRE.sender, workerStates: [] },
+      }),
+    )
+    await vi.advanceTimersByTimeAsync(1_000)
+    const empty = adapter.getSnapshot()
+    expect(empty.connectionState).toBe('connected')
+    expect(empty.reader.workerStates).toEqual([])
+    expect(empty.sender.workerStates).toEqual([])
+    const displayed = new ChannelFlowStateDeriver().derive(empty, NOW_MS)
+    expect(getInspectorViewModel(displayed, 'reader')?.rows[0].value).toBe('11 / 0 / 0')
+    expect(getInspectorViewModel(displayed, 'sender')?.rows[0].value).toBe('41 / 0 / 0')
+    expect(JSON.stringify([previous.reader.workerStates, previous.sender.workerStates])).toBe(
+      previousStates,
+    )
+    expect(JSON.stringify(body)).toBe(previousBody)
+    expect(previous.reader.workerStates).not.toBe(body.reader.workerStates)
+    expect(previous.reader.workerStates[0]).not.toBe(body.reader.workerStates[0])
+    expectDeepFrozen(empty)
+    adapter.dispose()
+  })
+
   it.each(['starting', 'running', 'stopping', 'faulted'] as const)(
     'maps the complete shared Go fixture with independent measurements in %s',
     async (state) => {
@@ -255,30 +316,32 @@ describe('HttpAdapter', () => {
         totalTransactions: 101,
       })
       expect(snapshot.reader).toMatchObject({
-        liveWorkers: 12,
-        idleWorkers: 13,
-        readingWorkers: 14,
-        blockedWorkers: 15,
-        drainingWorkers: 16,
-        drainingIdleWorkers: 17,
-        drainingReadingWorkers: 18,
-        drainingBlockedWorkers: 19,
         readBatchSize: 20,
         readTps: 21.5,
         rowsRead: 22,
         sourceDirectory: 'reader-source',
       })
       expect(snapshot.reader.sourceError).toEqual(body.reader.sourceError)
-      expect(snapshot.sender).toMatchObject({
-        liveWorkers: 42,
-        idleWorkers: 43,
-        inFlightWorkers: 44,
-        backoffWorkers: 45,
-        drainingWorkers: 46,
-        drainingIdleWorkers: 47,
-        drainingInFlightWorkers: 48,
-        drainingBackoffWorkers: 49,
-      })
+      for (const pool of ['reader', 'sender'] as const) {
+        const counts = new Map<string, number>()
+        for (const item of snapshot[pool].workerStates) {
+          const pair = JSON.stringify(item)
+          counts.set(pair, (counts.get(pair) ?? 0) + 1)
+        }
+        expect(Object.fromEntries(counts)).toEqual(
+          pool === 'reader'
+            ? {
+                '{"activity":"reading","draining":false}': 2,
+                '{"activity":"blocked","draining":true}': 1,
+                '{"activity":"idle","draining":false}': 1,
+              }
+            : {
+                '{"activity":"inFlight","draining":true}': 1,
+                '{"activity":"backoff","draining":false}': 3,
+                '{"activity":"idle","draining":true}': 1,
+              },
+        )
+      }
       expect(snapshot.reader.workers).toMatchObject({ applied: 11, min: 1, max: 7, step: 1 })
       expect(snapshot.sender.workers).toMatchObject({ applied: 41, min: 1, max: 32, step: 1 })
       expect(snapshot.throttler).toMatchObject({
@@ -309,6 +372,16 @@ describe('HttpAdapter', () => {
         outputTransactionsPerSecond: 84.5,
       })
       expectDeepFrozen(snapshot)
+      const displayed = new ChannelFlowStateDeriver().derive(snapshot, NOW_MS)
+      expect(
+        getInspectorViewModel(displayed, 'reader')
+          ?.rows.slice(0, 2)
+          .map(({ value }) => value),
+      ).toEqual(['11 / 4 / 1', '1 idle · 2 reading · 1 blocked · 1 error'])
+      expect(getInspectorViewModel(displayed, 'sender')?.rows.map(({ value }) => value)).toEqual([
+        '41 / 5 / 2',
+        '1 idle · 1 in-flight · 3 backoff',
+      ])
       expect(warn).not.toHaveBeenCalled()
       fetchMock.mockResolvedValue(mockCommandResponse())
       for (const command of [

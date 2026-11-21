@@ -1,3 +1,5 @@
+import type { SenderWorkerState as SenderWorkerSnapshot } from './loadgen'
+
 export const FIXED_STEP_MS = 10
 export const SNAPSHOT_INTERVAL_MS = 100
 export const RETRY_MAX_ATTEMPTS = 3
@@ -30,9 +32,7 @@ export interface ChannelTelemetry {
 }
 
 export interface SenderTelemetry {
-  readonly liveWorkers: number
-  readonly workerStates: WorkerStateCounts
-  readonly drainingWorkerStates: WorkerStateCounts
+  readonly workerStates: readonly SenderWorkerSnapshot[]
 }
 
 export interface SimulationTelemetry {
@@ -100,12 +100,6 @@ interface ReaderProductionResult extends AdmissionResult {
 }
 
 type SenderWorkerState = 'idle' | 'in-flight' | 'backoff'
-
-interface WorkerStateCounts {
-  readonly idle: number
-  readonly inFlight: number
-  readonly backoff: number
-}
 
 interface SenderWorker {
   readonly workerId: number
@@ -335,7 +329,6 @@ export class FixedStepSimulation {
     const rateSeconds = (RATE_WINDOW_STEPS * FIXED_STEP_MS) / 1_000
     const readerChannel = this.readerChannel.telemetry(aggregate.readerChannel, rateSeconds)
     const senderChannel = this.senderChannel.telemetry(aggregate.senderChannel, rateSeconds)
-    const { active: workerStates, draining: drainingWorkerStates } = this.workerStateCounts()
 
     return {
       elapsedMs: this.elapsedMs,
@@ -346,43 +339,20 @@ export class FixedStepSimulation {
       readerChannel,
       senderChannel,
       sender: {
-        liveWorkers: this.workers.length,
-        workerStates,
-        drainingWorkerStates,
+        workerStates: Object.freeze(
+          this.workers.map((worker): SenderWorkerSnapshot =>
+            Object.freeze({
+              activity: worker.state === 'in-flight' ? 'inFlight' : worker.state,
+              draining: worker.retiring,
+            }),
+          ),
+        ),
       },
     }
   }
 
   private get readerCapacityTps(): number {
     return this.config.readerWorkers * READER_TRANSACTIONS_PER_WORKER_SECOND
-  }
-
-  private workerStateCounts(): {
-    readonly active: WorkerStateCounts
-    readonly draining: WorkerStateCounts
-  } {
-    const active = { idle: 0, inFlight: 0, backoff: 0 }
-    const draining = { idle: 0, inFlight: 0, backoff: 0 }
-
-    for (const worker of this.workers) {
-      const counts = worker.retiring ? draining : active
-      switch (worker.state) {
-        case 'idle':
-          counts.idle += 1
-          break
-        case 'in-flight':
-          counts.inFlight += 1
-          break
-        case 'backoff':
-          counts.backoff += 1
-          break
-      }
-    }
-
-    return {
-      active,
-      draining,
-    }
   }
 
   private completeDueAttempts(): void {
