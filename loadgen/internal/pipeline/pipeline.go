@@ -77,6 +77,7 @@ func (p *Pipeline) StopReading()               { p.reader.stopReading() }
 func (p *Pipeline) Done() <-chan struct{}      { return p.done }
 func (p *Pipeline) SourceErrors() <-chan error { return p.reader.sourceErrors }
 func (p *Pipeline) CompletedTotal() int64      { return p.sender.completedTotal() }
+func (p *Pipeline) RowsRead() int64            { return p.readerTelemetry.snapshot() }
 
 func (p *Pipeline) Snapshot(now time.Time) Snapshot {
 	completed := p.CompletedTotal()

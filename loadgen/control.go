@@ -101,7 +101,7 @@ func (s *controlState) runEventLoop(
 			runErr = errors.Join(runErr, sourceError)
 		default:
 		}
-		s.finishRun(run, metrics, partial)
+		s.finishRun(run, partial)
 	}()
 
 	for {
@@ -227,13 +227,17 @@ func (s *controlState) recordSourceFault(err error) {
 		zap.String("operation", sourceError.Op), zap.String("relative_path", sourceError.Path), zap.Error(sourceError))
 }
 
-func (s *controlState) finishRun(run *pipeline.Pipeline, metrics *prometheusMetrics, partial bool) {
-	snapshot := s.snapshotAt(run, time.Now())
+func (s *controlState) finishRun(run *pipeline.Pipeline, partial bool) {
+	var confirmed, rowsRead int64
+	if run != nil {
+		confirmed = run.CompletedTotal()
+		rowsRead = run.RowsRead()
+	}
 	s.logger.Info("run stopped", zap.String("event", "run_stopped"),
 		zap.String("state", string(s.run.state)),
 		zap.Bool("partial", partial),
-		zap.Int64("confirmed_transactions", snapshot.Run.TotalTransactions),
-		zap.Int64("unconfirmed_transactions", snapshot.Reader.RowsRead-snapshot.Run.TotalTransactions),
+		zap.Int64("confirmed_transactions", confirmed),
+		zap.Int64("unconfirmed_transactions", rowsRead-confirmed),
 	)
 }
 
