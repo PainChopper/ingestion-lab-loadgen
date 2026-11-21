@@ -167,6 +167,8 @@ func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
 }
 
 func formatSnapshot(snapshot runtimeSnapshot) string {
+	reader := countReaderWorkers(snapshot.Reader.WorkerStates)
+	sender := countSenderWorkers(snapshot.Sender.WorkerStates)
 	sourceDirectory := sanitizeSnapshotValue(snapshot.Reader.SourceDirectory)
 	if sourceDirectory == "" {
 		sourceDirectory = "none"
@@ -197,11 +199,11 @@ func formatSnapshot(snapshot runtimeSnapshot) string {
 		&output,
 		"Workers:                  configured=%d live=%d reading=%d idle=%d blocked=%d draining=%d\n",
 		snapshot.Reader.Workers,
-		snapshot.Reader.LiveWorkers,
-		snapshot.Reader.ReadingWorkers,
-		snapshot.Reader.IdleWorkers,
-		snapshot.Reader.BlockedWorkers,
-		snapshot.Reader.DrainingWorkers,
+		reader.LiveWorkers,
+		reader.ReadingWorkers,
+		reader.IdleWorkers,
+		reader.BlockedWorkers,
+		reader.DrainingWorkers,
 	)
 	fmt.Fprintf(&output, "Read TPS:                 %.1f\n", snapshot.Reader.ReadTps)
 	fmt.Fprintf(&output, "Rows read:                %d\n", snapshot.Reader.RowsRead)
@@ -214,11 +216,11 @@ func formatSnapshot(snapshot runtimeSnapshot) string {
 		&output,
 		"Workers:                  configured=%d live=%d in-flight=%d idle=%d backoff=%d draining=%d\n",
 		snapshot.Sender.Workers,
-		snapshot.Sender.LiveWorkers,
-		snapshot.Sender.InFlightWorkers,
-		snapshot.Sender.IdleWorkers,
-		snapshot.Sender.BackoffWorkers,
-		snapshot.Sender.DrainingWorkers,
+		sender.LiveWorkers,
+		sender.InFlightWorkers,
+		sender.IdleWorkers,
+		sender.BackoffWorkers,
+		sender.DrainingWorkers,
 	)
 	return output.String()
 }

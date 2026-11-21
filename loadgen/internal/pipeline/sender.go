@@ -13,23 +13,30 @@ import (
 	"go.uber.org/zap"
 )
 
+type SenderActivity string
+
+const (
+	SenderIdle     SenderActivity = "idle"
+	SenderInFlight SenderActivity = "inFlight"
+	SenderBackoff  SenderActivity = "backoff"
+)
+
+type SenderWorkerState struct {
+	Activity SenderActivity `json:"activity"`
+	Draining bool           `json:"draining"`
+}
+
 type senderWorker struct {
-	id       int
-	wake     chan struct{}
+	id   int
+	wake chan struct{}
+	// Prevents the worker from accepting new work.
 	draining bool
-	busy     bool
-	backoff  bool
+	// In-flight and backoff both retain ownership of the accepted batch.
+	activity SenderActivity
 }
 
 type SenderSnapshot struct {
-	LiveWorkers             int
-	IdleWorkers             int
-	InFlightWorkers         int
-	BackoffWorkers          int
-	DrainingWorkers         int
-	DrainingIdleWorkers     int
-	DrainingInFlightWorkers int
-	DrainingBackoffWorkers  int
+	WorkerStates []SenderWorkerState
 }
 
 type senderPool struct {
@@ -99,7 +106,7 @@ func (p *senderPool) reconcile(desired int) {
 				if active == desired {
 					break
 				}
-				if !worker.draining && worker.busy == busy {
+				if !worker.draining && (worker.activity != SenderIdle) == busy {
 					worker.draining = true
 					active--
 				}
@@ -111,7 +118,7 @@ func (p *senderPool) reconcile(desired int) {
 				if active == desired {
 					break
 				}
-				if worker.draining && worker.backoff == backoff {
+				if worker.draining && (worker.activity == SenderBackoff) == backoff {
 					worker.draining = false
 					active++
 				}
@@ -163,8 +170,9 @@ func (p *senderPool) supervise() {
 
 func (p *senderPool) startWorkerLocked() {
 	worker := &senderWorker{
-		id:   p.nextWorkerID,
-		wake: make(chan struct{}, 1),
+		id:       p.nextWorkerID,
+		wake:     make(chan struct{}, 1),
+		activity: SenderIdle,
 	}
 	p.nextWorkerID++
 	p.workers = append(p.workers, worker)
@@ -202,7 +210,7 @@ func (p *senderPool) runWorker(worker *senderWorker) {
 				return
 			}
 			// A batch received during downscale belongs to this worker until completion.
-			worker.busy = true
+			worker.activity = SenderInFlight
 			p.queue.recordReceive(len(batch))
 			p.mu.Unlock()
 			p.finishAcceptedBatch(worker, batch)
@@ -215,8 +223,7 @@ func (p *senderPool) finishAcceptedBatch(worker *senderWorker, batch []Transacti
 		p.completed.Add(int64(len(batch)))
 	}
 	p.mu.Lock()
-	worker.busy = false
-	worker.backoff = false
+	worker.activity = SenderIdle
 	p.mu.Unlock()
 }
 
@@ -234,7 +241,7 @@ func (p *senderPool) removeWorkerLocked(worker *senderWorker) {
 func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) bool {
 	for attempt := 1; ; attempt++ {
 		p.mu.Lock()
-		worker.backoff = false
+		worker.activity = SenderInFlight
 		p.mu.Unlock()
 		if p.ctx.Err() != nil {
 			return false
@@ -248,7 +255,7 @@ func (p *senderPool) processBatch(worker *senderWorker, batch []Transaction) boo
 		p.logger.Warn("batch delivery will retry", zap.String("event", "batch_delivery_retry"), zap.Int("batch_size", len(batch)), zap.Int("attempt", attempt))
 
 		p.mu.Lock()
-		worker.backoff = true
+		worker.activity = SenderBackoff
 		p.mu.Unlock()
 		delay := p.retry.delay(attempt)
 		if !p.waitBackoff(delay) {
@@ -261,24 +268,11 @@ func (p *senderPool) snapshot() SenderSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	snapshot := SenderSnapshot{LiveWorkers: len(p.workers)}
+	snapshot := SenderSnapshot{WorkerStates: make([]SenderWorkerState, 0, len(p.workers))}
 	for _, worker := range p.workers {
-		var draining *int
-		switch {
-		case worker.backoff:
-			snapshot.BackoffWorkers++
-			draining = &snapshot.DrainingBackoffWorkers
-		case worker.busy:
-			snapshot.InFlightWorkers++
-			draining = &snapshot.DrainingInFlightWorkers
-		default:
-			snapshot.IdleWorkers++
-			draining = &snapshot.DrainingIdleWorkers
-		}
-		if worker.draining {
-			snapshot.DrainingWorkers++
-			(*draining)++
-		}
+		snapshot.WorkerStates = append(snapshot.WorkerStates, SenderWorkerState{
+			Activity: worker.activity, Draining: worker.draining,
+		})
 	}
 	return snapshot
 }

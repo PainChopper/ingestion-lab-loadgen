@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"loadgen/internal/pipeline"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -389,6 +391,8 @@ func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 		"Snapshot":          reflect.TypeOf(runtimeSnapshot{}),
 		"RunStatus":         reflect.TypeOf(runSnapshot{}),
 		"ReaderStatus":      reflect.TypeOf(readerSnapshot{}),
+		"ReaderWorkerState": reflect.TypeOf(pipeline.ReaderWorkerState{}),
+		"SenderWorkerState": reflect.TypeOf(pipeline.SenderWorkerState{}),
 		"ReaderSourceError": reflect.TypeOf(readerSourceError{}),
 		"ThrottlerStatus":   reflect.TypeOf(throttlerSnapshot{}),
 		"SenderStatus":      reflect.TypeOf(senderSnapshot{}),
@@ -441,11 +445,14 @@ func checkFieldSchema(t *testing.T, name string, field reflect.Type, property ma
 		return
 	}
 	if field.Kind() == reflect.Slice {
-		if property["type"] != "array" || property["nullable"] != true {
-			t.Errorf("%s slice must allow array or null", name)
+		if property["type"] != "array" || property["nullable"] == true {
+			t.Errorf("%s worker states must be a non-null array", name)
 		}
-		field = field.Elem()
-		property = property["items"].(map[string]any)
+		if _, exists := property["uniqueItems"]; exists {
+			t.Errorf("%s must permit repeated states", name)
+		}
+		checkFieldSchema(t, name+"[]", field.Elem(), property["items"].(map[string]any), schemas, models)
+		return
 	}
 	want := "integer"
 	switch field.Kind() {
@@ -494,20 +501,22 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 	} else {
 		fixtures := map[string]runtimeSnapshot{
 			"zero": {
-				Run: runSnapshot{State: runStateStarting}, Reader: readerSnapshot{ReadBatchSize: 1000},
+				Sender: senderSnapshot{WorkerStates: []pipeline.SenderWorkerState{}},
+				Run:    runSnapshot{State: runStateStarting}, Reader: readerSnapshot{ReadBatchSize: 1000, WorkerStates: []pipeline.ReaderWorkerState{}},
 				Config: snapshotConfig(testConfig(t)),
 			},
 			"populated": {
 				Run:       runSnapshot{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
-				Reader:    readerSnapshot{Workers: 1, LiveWorkers: 2, ReadBatchSize: 1500, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
+				Reader:    readerSnapshot{Workers: 1, WorkerStates: []pipeline.ReaderWorkerState{{Activity: pipeline.ReaderReading}, {Activity: pipeline.ReaderBlocked, Draining: true}}, ReadBatchSize: 1500, ReadTps: 123.5, RowsRead: 47, SourceDirectory: "data/part"},
 				Throttler: throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, Installed: true},
-				Sender:    senderSnapshot{Workers: 32},
+				Sender:    senderSnapshot{Workers: 32, WorkerStates: []pipeline.SenderWorkerState{}},
 				Config:    snapshotConfig(testConfig(t)),
 			},
 			"source error": {
+				Sender: senderSnapshot{WorkerStates: []pipeline.SenderWorkerState{}},
 				Run:    runSnapshot{State: runStateFaulted},
 				Config: snapshotConfig(testConfig(t)),
-				Reader: readerSnapshot{ReadBatchSize: 1000, SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
+				Reader: readerSnapshot{WorkerStates: []pipeline.ReaderWorkerState{}, ReadBatchSize: 1000, SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}
 		for name, fixture := range fixtures {
@@ -581,6 +590,73 @@ func TestSchemaExampleValidationRejectsContractDrift(t *testing.T) {
 				t.Fatal("invalid example unexpectedly satisfied schema")
 			}
 		})
+	}
+}
+
+func TestOpenAPIWorkerStates(t *testing.T) {
+	var document map[string]any
+	if err := json.Unmarshal(openAPISpec, &document); err != nil {
+		t.Fatal(err)
+	}
+	schemas := document["components"].(map[string]any)["schemas"].(map[string]any)
+	for _, pool := range []struct {
+		name       string
+		activities []string
+	}{
+		{name: "Reader", activities: []string{string(pipeline.ReaderIdle), string(pipeline.ReaderReading), string(pipeline.ReaderBlocked)}},
+		{name: "Sender", activities: []string{string(pipeline.SenderIdle), string(pipeline.SenderInFlight), string(pipeline.SenderBackoff)}},
+	} {
+		t.Run(pool.name, func(t *testing.T) {
+			item := schemas[pool.name+"WorkerState"].(map[string]any)
+			activity := item["properties"].(map[string]any)["activity"].(map[string]any)
+			if got := anyStrings(activity["enum"].([]any)); !reflect.DeepEqual(got, pool.activities) {
+				t.Errorf("activity enum = %v, want %v", got, pool.activities)
+			}
+			list := schemas[pool.name+"Status"].(map[string]any)["properties"].(map[string]any)["workerStates"].(map[string]any)
+			for _, test := range []struct {
+				name, data string
+				valid      bool
+			}{
+				{name: "empty", data: `[]`, valid: true},
+				{name: "duplicates", data: `[{"activity":"idle","draining":false},{"activity":"idle","draining":false}]`, valid: true},
+				{name: "null list", data: `null`},
+				{name: "null item", data: `[null]`},
+				{name: "missing activity", data: `[{"draining":false}]`},
+				{name: "null activity", data: `[{"activity":null,"draining":false}]`},
+				{name: "missing draining", data: `[{"activity":"idle"}]`},
+				{name: "null draining", data: `[{"activity":"idle","draining":null}]`},
+				{name: "unknown activity", data: `[{"activity":"unknown","draining":false}]`},
+				{name: "extra property", data: `[{"activity":"idle","draining":false,"id":1}]`},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					var value any
+					if err := json.Unmarshal([]byte(test.data), &value); err != nil {
+						t.Fatal(err)
+					}
+					if err := validateSchema(value, list, schemas); (err == nil) != test.valid {
+						t.Fatalf("schema error = %v, want valid=%t", err, test.valid)
+					}
+				})
+			}
+			for _, activity := range []string{"reading", "blocked", "inFlight", "backoff"} {
+				value := []any{map[string]any{"activity": activity, "draining": true}}
+				err := validateSchema(value, list, schemas)
+				if (err == nil) != slices.Contains(pool.activities, activity) {
+					t.Errorf("%s activity validation error = %v", activity, err)
+				}
+			}
+		})
+	}
+	data, err := os.ReadFile("testdata/snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture any
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSchema(fixture, schemas["Snapshot"].(map[string]any), schemas); err != nil {
+		t.Fatalf("shared fixture violates snapshot schema: %v", err)
 	}
 }
 

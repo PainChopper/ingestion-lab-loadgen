@@ -267,6 +267,12 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 		snapshot = run.Snapshot(now)
 	}
 	readerPool, senderPool := snapshot.Reader, snapshot.Sender
+	if readerPool.WorkerStates == nil {
+		readerPool.WorkerStates = []pipeline.ReaderWorkerState{}
+	}
+	if senderPool.WorkerStates == nil {
+		senderPool.WorkerStates = []pipeline.SenderWorkerState{}
+	}
 	readerChannel, senderChannel := snapshot.ReaderQueue, snapshot.SenderQueue
 
 	return runtimeSnapshot{
@@ -276,13 +282,8 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 			ElapsedMs:         s.elapsedMs(now),
 		},
 		Reader: readerSnapshot{
-			Workers: s.controls.readerWorkers, LiveWorkers: readerPool.LiveWorkers,
-			IdleWorkers: readerPool.IdleWorkers, ReadingWorkers: readerPool.ReadingWorkers,
-			BlockedWorkers: readerPool.BlockedWorkers, DrainingWorkers: readerPool.DrainingWorkers,
-			DrainingIdleWorkers:    readerPool.DrainingIdleWorkers,
-			DrainingReadingWorkers: readerPool.DrainingReadingWorkers,
-			DrainingBlockedWorkers: readerPool.DrainingBlockedWorkers,
-			ReadBatchSize:          s.config.Reader.ReadBatchSize, ReadTps: readerPool.ReadTPS,
+			Workers: s.controls.readerWorkers, WorkerStates: readerPool.WorkerStates,
+			ReadBatchSize: s.config.Reader.ReadBatchSize, ReadTps: readerPool.ReadTPS,
 			RowsRead:        readerPool.RowsRead,
 			SourceDirectory: pipeline.SourceDirectory(s.config.Source.Path),
 			SourceError:     s.run.sourceError,
@@ -293,12 +294,7 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 			Installed:    s.controls.installed,
 		},
 		Sender: senderSnapshot{
-			Workers: s.controls.senderWorkers, LiveWorkers: senderPool.LiveWorkers,
-			IdleWorkers: senderPool.IdleWorkers, InFlightWorkers: senderPool.InFlightWorkers,
-			BackoffWorkers: senderPool.BackoffWorkers, DrainingWorkers: senderPool.DrainingWorkers,
-			DrainingIdleWorkers:     senderPool.DrainingIdleWorkers,
-			DrainingInFlightWorkers: senderPool.DrainingInFlightWorkers,
-			DrainingBackoffWorkers:  senderPool.DrainingBackoffWorkers,
+			Workers: s.controls.senderWorkers, WorkerStates: senderPool.WorkerStates,
 		},
 		ReaderChannel: snapshotChannel(readerChannel, s.config.ReaderChannel.Capacity),
 		SenderChannel: snapshotChannel(senderChannel, s.config.SenderChannel.Capacity),

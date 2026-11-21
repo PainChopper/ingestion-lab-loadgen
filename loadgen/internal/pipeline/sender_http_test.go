@@ -376,7 +376,7 @@ func TestSenderPoolEntersBackoffWhenReceiverTimesOut(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("Sender did not enter backoff after the HTTP timeout")
 	}
-	if got := pool.snapshot(); got.BackoffWorkers != 1 {
+	if got := pool.testSnapshot(); got.BackoffWorkers != 1 {
 		t.Fatalf("after HTTP timeout: %+v", got)
 	}
 }

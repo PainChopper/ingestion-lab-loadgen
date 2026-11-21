@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"loadgen/internal/pipeline"
 )
 
 const blackBoxTimeout = 10 * time.Second
@@ -39,6 +41,8 @@ func testRemoteSnapshot(t *testing.T) runtimeSnapshot {
 	t.Helper()
 	return runtimeSnapshot{
 		Run:    runSnapshot{State: runStateRunning},
+		Reader: readerSnapshot{WorkerStates: []pipeline.ReaderWorkerState{}},
+		Sender: senderSnapshot{WorkerStates: []pipeline.SenderWorkerState{}},
 		Config: snapshotConfig(testConfig(t)),
 	}
 }

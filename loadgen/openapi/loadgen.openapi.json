@@ -160,12 +160,20 @@
       },
       "ReaderStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["workers", "liveWorkers", "idleWorkers", "readingWorkers", "blockedWorkers", "drainingWorkers", "drainingIdleWorkers", "drainingReadingWorkers", "drainingBlockedWorkers", "readBatchSize", "readTps", "rowsRead", "sourceDirectory", "sourceError"],
+        "required": ["workers", "workerStates", "readBatchSize", "readTps", "rowsRead", "sourceDirectory", "sourceError"],
         "properties": {
-          "workers": { "type": "integer" }, "liveWorkers": { "type": "integer" }, "idleWorkers": { "type": "integer" }, "readingWorkers": { "type": "integer" }, "blockedWorkers": { "type": "integer" },
-          "drainingWorkers": { "type": "integer" }, "drainingIdleWorkers": { "type": "integer" }, "drainingReadingWorkers": { "type": "integer" }, "drainingBlockedWorkers": { "type": "integer" },
+          "workers": { "type": "integer" },
+          "workerStates": { "type": "array", "items": { "$ref": "#/components/schemas/ReaderWorkerState" }, "description": "Live workers in unspecified order; repeated states are allowed. workers remains the configured target." },
           "readBatchSize": { "type": "integer", "minimum": 1, "maximum": 9223372036, "description": "Applied startup batch size; bounded by Go int and safe batch pacing duration arithmetic." }, "readTps": { "type": "number", "format": "double" }, "rowsRead": { "type": "integer", "format": "int64" },
           "sourceDirectory": { "type": "string" }, "sourceError": { "$ref": "#/components/schemas/ReaderSourceError" }
+        }
+      },
+      "ReaderWorkerState": {
+        "type": "object", "additionalProperties": false,
+        "required": ["activity", "draining"],
+        "properties": {
+          "activity": { "type": "string", "enum": ["idle", "reading", "blocked"] },
+          "draining": { "type": "boolean" }
         }
       },
       "ReaderSourceError": {
@@ -180,10 +188,18 @@
       },
       "SenderStatus": {
         "type": "object", "additionalProperties": false,
-        "required": ["workers", "liveWorkers", "idleWorkers", "inFlightWorkers", "backoffWorkers", "drainingWorkers", "drainingIdleWorkers", "drainingInFlightWorkers", "drainingBackoffWorkers"],
+        "required": ["workers", "workerStates"],
         "properties": {
-          "workers": { "type": "integer" }, "liveWorkers": { "type": "integer" }, "idleWorkers": { "type": "integer" }, "inFlightWorkers": { "type": "integer" }, "backoffWorkers": { "type": "integer" },
-          "drainingWorkers": { "type": "integer" }, "drainingIdleWorkers": { "type": "integer" }, "drainingInFlightWorkers": { "type": "integer" }, "drainingBackoffWorkers": { "type": "integer" }
+          "workers": { "type": "integer" },
+          "workerStates": { "type": "array", "items": { "$ref": "#/components/schemas/SenderWorkerState" }, "description": "Live workers in unspecified order; repeated states are allowed. workers remains the configured target." }
+        }
+      },
+      "SenderWorkerState": {
+        "type": "object", "additionalProperties": false,
+        "required": ["activity", "draining"],
+        "properties": {
+          "activity": { "type": "string", "enum": ["idle", "inFlight", "backoff"] },
+          "draining": { "type": "boolean" }
         }
       },
       "ChannelStatus": {

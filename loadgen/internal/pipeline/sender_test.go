@@ -59,7 +59,7 @@ func TestSenderPoolKeepsAcceptedBatchOwnedAcrossDownscale(t *testing.T) {
 					batches <- []Transaction{{ClientID: "B"}}
 				}
 				synctest.Wait()
-				state := pool.snapshot()
+				state := pool.testSnapshot()
 				received := queue.snapshot(time.Now()).ReceivedBatchesTotal
 				depth := len(batches)
 				bAttempted := false
@@ -177,19 +177,35 @@ func TestSenderPoolRetriesFailureUntilSuccess(t *testing.T) {
 	})
 }
 
-func TestSenderPoolAggregateSnapshotPartitionsActivities(t *testing.T) {
-	pool := &senderPool{workers: []*senderWorker{
-		{}, {draining: true},
-		{busy: true}, {busy: true, draining: true},
-		{busy: true, backoff: true}, {busy: true, backoff: true, draining: true},
-	}}
-
-	snapshot := pool.snapshot()
-	if snapshot.LiveWorkers != 6 || snapshot.IdleWorkers != 2 || snapshot.InFlightWorkers != 2 || snapshot.BackoffWorkers != 2 {
-		t.Fatalf("activity partition = %+v", snapshot)
+func TestSenderPoolSnapshotStatesAreIndependent(t *testing.T) {
+	want := []SenderWorkerState{
+		{Activity: SenderIdle}, {Activity: SenderIdle, Draining: true},
+		{Activity: SenderInFlight}, {Activity: SenderInFlight, Draining: true},
+		{Activity: SenderBackoff}, {Activity: SenderBackoff, Draining: true},
+		{Activity: SenderInFlight},
 	}
-	if snapshot.DrainingWorkers != 3 || snapshot.DrainingIdleWorkers != 1 || snapshot.DrainingInFlightWorkers != 1 || snapshot.DrainingBackoffWorkers != 1 {
-		t.Fatalf("draining intersections = %+v", snapshot)
+	pool := &senderPool{ctx: t.Context()}
+	for _, state := range want {
+		pool.workers = append(pool.workers, &senderWorker{activity: state.Activity, draining: state.Draining})
+	}
+	first, second := pool.snapshot(), pool.snapshot()
+	assertWorkerStateMultiset(t, first.WorkerStates, want)
+	first.WorkerStates[0] = SenderWorkerState{Activity: SenderBackoff, Draining: true}
+	assertWorkerStateMultiset(t, second.WorkerStates, want)
+	assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, want)
+	pool.reconcile(0)
+	pool.mu.Lock()
+	pool.workers[0].activity = SenderBackoff
+	pool.mu.Unlock()
+	assertWorkerStateMultiset(t, second.WorkerStates, want)
+	for _, state := range pool.snapshot().WorkerStates {
+		if !state.Draining {
+			t.Fatalf("reconcile did not drain live state: %+v", state)
+		}
+	}
+	empty := (&senderPool{}).snapshot().WorkerStates
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("empty states = %#v, want non-nil []", empty)
 	}
 }
 
@@ -262,13 +278,13 @@ func TestSenderPoolParentCancellationStopsRetryBackoff(t *testing.T) {
 
 		batches <- []Transaction{{ClientID: "canceled-parent"}}
 		synctest.Wait()
-		if got := pool.snapshot(); got.BackoffWorkers != 1 || got.IdleWorkers != 1 {
+		if got := pool.testSnapshot(); got.BackoffWorkers != 1 || got.IdleWorkers != 1 {
 			t.Fatalf("want one worker in backoff and one waiting on open input: %+v", got)
 		}
 		cancel()
 		<-pool.done
 		pool.reconcile(3)
-		if got := pool.snapshot(); got.LiveWorkers != 0 || pool.nextWorkerID != 2 {
+		if got := pool.testSnapshot(); got.LiveWorkers != 0 || pool.nextWorkerID != 2 {
 			t.Fatalf("workers started after cancellation: %+v started=%d", got, pool.nextWorkerID)
 		}
 		if pool.completed.Load() != 0 {
@@ -341,11 +357,11 @@ func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) 
 	<-entered
 	drainingWorker := pool.workers[0]
 	pool.reconcile(1)
-	if got := pool.snapshot(); got.LiveWorkers != 2 || got.DrainingWorkers != 1 {
+	if got := pool.testSnapshot(); got.LiveWorkers != 2 || got.DrainingWorkers != 1 {
 		t.Fatalf("after scale down = %+v, want two live and one draining", got)
 	}
 	pool.reconcile(2)
-	if got := pool.snapshot(); got.LiveWorkers != 2 || got.DrainingWorkers != 0 {
+	if got := pool.testSnapshot(); got.LiveWorkers != 2 || got.DrainingWorkers != 0 {
 		t.Fatalf("after reactivation = %+v, want two live and zero draining", got)
 	}
 	if pool.workers[0] != drainingWorker {
@@ -362,7 +378,7 @@ func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) 
 	if got := pool.completed.Load(); got != 3 {
 		t.Fatalf("completed transactions = %d, want 3", got)
 	}
-	if got := pool.snapshot().LiveWorkers; got != 0 {
+	if got := pool.testSnapshot().LiveWorkers; got != 0 {
 		t.Fatalf("live workers after stop = %d, want 0", got)
 	}
 }
@@ -422,7 +438,7 @@ func TestSenderPoolDeliversBatchWhenResizedDuringWorkerExit(t *testing.T) {
 		close(releaseB)
 		<-exiting
 		pool.reconcile(2)
-		if got := pool.snapshot(); got.LiveWorkers != 2 || got.DrainingWorkers != 0 {
+		if got := pool.testSnapshot(); got.LiveWorkers != 2 || got.DrainingWorkers != 0 {
 			t.Fatalf("replacement during exit = %+v, want two live active workers", got)
 		}
 		pool.mu.Lock()
@@ -497,7 +513,7 @@ func TestSenderPoolReactivatesOnlyNeededWorkers(t *testing.T) {
 
 				pool.reconcile(1)
 				pool.reconcile(2)
-				during := pool.snapshot()
+				during := pool.testSnapshot()
 				pool.mu.Lock()
 				wantDrainingID := 1
 				if test.retryA {
@@ -513,7 +529,7 @@ func TestSenderPoolReactivatesOnlyNeededWorkers(t *testing.T) {
 				close(release)
 				time.Sleep(time.Hour)
 				synctest.Wait()
-				after := pool.snapshot()
+				after := pool.testSnapshot()
 				close(batches)
 				<-pool.done
 
@@ -558,7 +574,7 @@ func TestSenderPoolDownscaleReturnsBeforeIdleWorkerExits(t *testing.T) {
 		go func() { pool.reconcile(1); close(returned) }()
 		<-exiting
 		<-returned
-		got := pool.snapshot()
+		got := pool.testSnapshot()
 		if got.LiveWorkers != 1 || got.DrainingWorkers != 0 {
 			t.Fatalf("snapshot while exit held: %+v", got)
 		}
@@ -614,12 +630,12 @@ func TestSenderPoolEachDrainingWorkerAcceptsAtMostOneNewBatch(t *testing.T) {
 			}
 		}
 		synctest.Wait()
-		if got := pool.snapshot(); got.LiveWorkers != 3 || got.DrainingInFlightWorkers != 2 {
+		if got := pool.testSnapshot(); got.LiveWorkers != 3 || got.DrainingInFlightWorkers != 2 {
 			t.Fatalf("two marked workers must own their distinct batches: %+v", got)
 		}
 		close(release)
 		synctest.Wait()
-		if got := pool.snapshot(); got.LiveWorkers != 1 || got.DrainingWorkers != 0 || len(queue.ch) != 2 {
+		if got := pool.testSnapshot(); got.LiveWorkers != 1 || got.DrainingWorkers != 0 || len(queue.ch) != 2 {
 			t.Fatalf("draining workers consumed extra work: %+v queued=%d", got, len(queue.ch))
 		}
 		pool.mu.Lock()
@@ -668,7 +684,7 @@ func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 		batches <- []Transaction{{ClientID: "failure"}}
 		time.Sleep(14 * time.Second)
 		synctest.Wait()
-		if snapshot := pool.snapshot(); snapshot.IdleWorkers != 1 || snapshot.BackoffWorkers != 0 {
+		if snapshot := pool.testSnapshot(); snapshot.IdleWorkers != 1 || snapshot.BackoffWorkers != 0 {
 			t.Fatalf("successful sender snapshot = %+v", snapshot)
 		}
 		close(batches)
@@ -720,8 +736,8 @@ func TestSenderPoolStopWaitsForAcceptedBatch(t *testing.T) {
 	}
 	close(release)
 	<-pool.done
-	if pool.completed.Load() != 1 || pool.snapshot().LiveWorkers != 0 {
-		t.Fatalf("after join: consumed=%d live workers=%d", pool.completed.Load(), pool.snapshot().LiveWorkers)
+	if pool.completed.Load() != 1 || pool.testSnapshot().LiveWorkers != 0 {
+		t.Fatalf("after join: consumed=%d live workers=%d", pool.completed.Load(), pool.testSnapshot().LiveWorkers)
 	}
 }
 
