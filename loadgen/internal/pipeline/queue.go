@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,7 +25,10 @@ type queueMeasurements struct {
 	nextBlockedID uint64
 	blocked       time.Duration
 
-	snapshot QueueSnapshot
+	sentBatchesTotal          atomic.Int64
+	sentTransactionsTotal     atomic.Int64
+	receivedBatchesTotal      atomic.Int64
+	receivedTransactionsTotal atomic.Int64
 }
 
 type batchQueue struct {
@@ -76,14 +80,20 @@ func (send blockedChannelSend) wait(ctx context.Context) bool {
 }
 
 func (q *batchQueue) snapshot(now time.Time) QueueSnapshot {
+	measurements := QueueSnapshot{
+		Capacity:                  cap(q.ch),
+		DepthBatches:              len(q.ch),
+		SentBatchesTotal:          q.measurements.sentBatchesTotal.Load(),
+		SentTransactionsTotal:     q.measurements.sentTransactionsTotal.Load(),
+		ReceivedBatchesTotal:      q.measurements.receivedBatchesTotal.Load(),
+		ReceivedTransactionsTotal: q.measurements.receivedTransactionsTotal.Load(),
+	}
+	measurements.BufferedTransactions = measurements.DepthBatches * q.batchSize
+
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	measurements := q.measurements.snapshot
 	totalBlocked := q.measurements.blocked
-	measurements.Capacity = cap(q.ch)
-	measurements.DepthBatches = len(q.ch)
-	measurements.BufferedTransactions = measurements.DepthBatches * q.batchSize
 	measurements.BlockedSenders = len(q.measurements.blockedAt)
 	for _, since := range q.measurements.blockedAt {
 		blocked := now.Sub(since)
@@ -99,17 +109,13 @@ func (q *batchQueue) snapshot(now time.Time) QueueSnapshot {
 }
 
 func (q *batchQueue) recordSend(transactions int) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.measurements.snapshot.SentBatchesTotal++
-	q.measurements.snapshot.SentTransactionsTotal += int64(transactions)
+	q.measurements.sentBatchesTotal.Add(1)
+	q.measurements.sentTransactionsTotal.Add(int64(transactions))
 }
 
 func (q *batchQueue) recordReceive(transactions int) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.measurements.snapshot.ReceivedBatchesTotal++
-	q.measurements.snapshot.ReceivedTransactionsTotal += int64(transactions)
+	q.measurements.receivedBatchesTotal.Add(1)
+	q.measurements.receivedTransactionsTotal.Add(int64(transactions))
 }
 
 func (q *batchQueue) startBlocked(now time.Time) uint64 {
