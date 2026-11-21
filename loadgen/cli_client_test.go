@@ -249,6 +249,17 @@ func TestFormatSnapshot(t *testing.T) {
 	}
 }
 
+func TestWriteSnapshotChannelLargeTransactionEstimate(t *testing.T) {
+	var output strings.Builder
+	writeSnapshotChannel(&output, "Reader channel", channelSnapshot{
+		DepthBatches: maxExactJSONInteger,
+	}, maxExactJSONInteger, 1500, 1000)
+	if !strings.Contains(output.String(), "approximately 135107988821114") ||
+		!strings.Contains(output.String(), " transactions\n") {
+		t.Fatalf("large transaction estimate overflowed or changed format: %s", output.String())
+	}
+}
+
 func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 	status := runtimeSnapshot{
 		Config: configSnapshot{SourcePath: "source\r\n\x1b[31m"},
