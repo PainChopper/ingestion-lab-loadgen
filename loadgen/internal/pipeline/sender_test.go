@@ -60,7 +60,7 @@ func TestSenderPoolKeepsAcceptedBatchOwnedAcrossDownscale(t *testing.T) {
 				}
 				synctest.Wait()
 				states := pool.snapshot().WorkerStates
-				inFlight := projectWorkerStates(filterWorkerStates(states, func(state SenderWorkerState) bool { return state.Activity == SenderInFlight }), func(state SenderWorkerState) SenderActivity { return state.Activity })
+				inFlightCount := len(filterWorkerStates(states, senderInFlight))
 				received := queue.snapshot(time.Now()).ReceivedBatchesTotal
 				depth := len(batches)
 				bAttempted := false
@@ -69,10 +69,8 @@ func TestSenderPoolKeepsAcceptedBatchOwnedAcrossDownscale(t *testing.T) {
 					bAttempted = id == "B"
 				default:
 				}
-				oneInFlight := slices.Equal(inFlight, []SenderActivity{SenderInFlight})
-				twoInFlight := slices.Equal(inFlight, []SenderActivity{SenderInFlight, SenderInFlight})
-				owned := received == 1 && depth == 1 && !bAttempted && oneInFlight ||
-					received == 2 && depth == 0 && bAttempted && twoInFlight
+				owned := received == 1 && depth == 1 && !bAttempted && inFlightCount == 1 ||
+					received == 2 && depth == 0 && bAttempted && inFlightCount == 2
 				if !concurrent {
 					owned = owned && received == 1 && depth == 1
 				}
@@ -281,7 +279,8 @@ func TestSenderPoolParentCancellationStopsRetryBackoff(t *testing.T) {
 
 		batches <- []Transaction{{ClientID: "canceled-parent"}}
 		synctest.Wait()
-		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state SenderWorkerState) SenderActivity { return state.Activity }), []SenderActivity{SenderBackoff, SenderIdle})
+		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, senderActivity),
+			[]SenderActivity{SenderBackoff, SenderIdle})
 		cancel()
 		<-pool.done
 		pool.reconcile(3)
@@ -358,9 +357,11 @@ func TestSenderPoolReconcilesUpDownUpWithoutLosingAcceptedBatches(t *testing.T) 
 	<-entered
 	drainingWorker := pool.workers[0]
 	pool.reconcile(1)
-	assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state SenderWorkerState) bool { return state.Draining }), []bool{false, true})
+	assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, senderDraining),
+		[]bool{false, true})
 	pool.reconcile(2)
-	assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state SenderWorkerState) bool { return state.Draining }), []bool{false, false})
+	assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, senderDraining),
+		[]bool{false, false})
 	if pool.workers[0] != drainingWorker {
 		t.Fatal("scale up replaced the live draining worker")
 	}
@@ -538,7 +539,7 @@ func TestSenderPoolReactivatesOnlyNeededWorkers(t *testing.T) {
 				if len(during) != 3 {
 					t.Errorf("after scale up = %+v, want three live workers", during)
 				}
-				draining := filterWorkerStates(during, func(state SenderWorkerState) bool { return state.Draining })
+				draining := filterWorkerStates(during, senderDraining)
 				if len(draining) != 1 || (draining[0].Activity == SenderBackoff) != test.retryA {
 					t.Errorf("draining states = %+v, want one, backoff=%t", draining, test.retryA)
 				}
@@ -646,9 +647,10 @@ func TestSenderPoolEachDrainingWorkerAcceptsAtMostOneNewBatch(t *testing.T) {
 		if len(states) != 3 {
 			t.Fatalf("two marked workers must own their distinct batches: %+v", states)
 		}
-		assertWorkerStateMultiset(t, filterWorkerStates(states, func(state SenderWorkerState) bool { return state.Activity == SenderInFlight && state.Draining }), []SenderWorkerState{
-			{Activity: SenderInFlight, Draining: true}, {Activity: SenderInFlight, Draining: true},
-		})
+		assertWorkerStateMultiset(t, filterWorkerStates(states, senderInFlightAndDraining),
+			[]SenderWorkerState{
+				{Activity: SenderInFlight, Draining: true}, {Activity: SenderInFlight, Draining: true},
+			})
 		close(release)
 		synctest.Wait()
 		states = pool.snapshot().WorkerStates
@@ -704,7 +706,8 @@ func TestSenderPoolRetainsBatchBeyondConfiguredDelayList(t *testing.T) {
 		batches <- []Transaction{{ClientID: "failure"}}
 		time.Sleep(14 * time.Second)
 		synctest.Wait()
-		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state SenderWorkerState) SenderActivity { return state.Activity }), []SenderActivity{SenderIdle})
+		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, senderActivity),
+			[]SenderActivity{SenderIdle})
 		close(batches)
 		<-pool.done
 		if got := attempts.Load(); got != 7 {
