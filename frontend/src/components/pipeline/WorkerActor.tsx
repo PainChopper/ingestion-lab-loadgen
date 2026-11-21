@@ -124,8 +124,8 @@ export function WorkerActor({
 }: WorkerActorProps) {
   const suppressClick = useRef(false)
   const desiredWorkers = Math.min(
-    Math.round(workers.max),
-    Math.max(Math.round(workers.min), Math.round(desiredControl.desired)),
+    workers.max,
+    Math.max(workers.min, Math.round(desiredControl.desired)),
   )
   const desiredRef = useRef(desiredWorkers)
   // A batched rollback can leave the rendered value unchanged after the ref advances.
@@ -140,8 +140,8 @@ export function WorkerActor({
     desiredWorkers,
   )
   const overflowWorkers = (liveWorkers ?? 0) - layout.chips.length
-  const workerMin = Math.round(workers.min)
-  const workerMax = Math.round(workers.max)
+  const workerMin = workers.min
+  const workerMax = workers.max
   const workerControlDisabled = !desiredControl.available || desiredControl.phase === 'pending'
   const states =
     actor === 'reader'

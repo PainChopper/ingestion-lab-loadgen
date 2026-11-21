@@ -41,7 +41,10 @@ function formatDuration(elapsedMs: number): string {
 }
 
 function TopBar({ snapshot }: { snapshot: LoadgenSnapshot }) {
-  const state = snapshot.runState ?? snapshot.connectionState
+  const state =
+    snapshot.connectionState === 'connected'
+      ? (snapshot.runState ?? snapshot.connectionState)
+      : snapshot.connectionState
   return (
     <header className="topbar">
       <div className="brand">

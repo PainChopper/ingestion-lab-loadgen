@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createSimulationWireSnapshot, SimulationAdapter } from './SimulationAdapter'
+import {
+  createSimulationWireConfig,
+  createSimulationWireSnapshot,
+  SimulationAdapter,
+} from './SimulationAdapter'
 import { FixedStepSimulation } from '../model/simulation'
-import { wireSnapshotSchema } from '../model/wireSnapshot'
+import { wireConfigSchema, wireSnapshotSchema } from '../model/wireSnapshot'
 
 describe('SimulationAdapter', () => {
   afterEach(() => {
@@ -23,7 +27,10 @@ describe('SimulationAdapter', () => {
       3,
     )
     const first = createSimulationWireSnapshot(simulation)
+    const config = createSimulationWireConfig(simulation)
     expect(wireSnapshotSchema.parse(first)).toEqual(first)
+    expect(wireConfigSchema.parse(config)).toEqual(config)
+    expect(first).not.toHaveProperty('config')
     expect(first).toMatchObject({
       capturedAtMs: 0,
       run: { state: 'running', elapsedMs: 0, totalTransactions: 0 },
@@ -35,15 +42,15 @@ describe('SimulationAdapter', () => {
       },
       throttler: { installed: true, requestedTps: 50_000 },
       sender: { workers: 1, workerStates: [{ activity: 'idle', draining: false }] },
-      config: {
-        readerWorkersMax: 7,
-        senderWorkersMax: 32,
-        requestedTpsMax: 250_000,
-        readBatchSize: 1_000,
-        readerChannelCapacity: 2,
-        senderChannelCapacity: 3,
-        sourcePath: 'simulation',
-      },
+    })
+    expect(config).toEqual({
+      readerWorkersMax: 7,
+      senderWorkersMax: 32,
+      requestedTpsMax: 250_000,
+      readBatchSize: 1_000,
+      readerChannelCapacity: 2,
+      senderChannelCapacity: 3,
+      sourcePath: 'simulation',
     })
     simulation.updateConfig({
       readerWorkers: 3,
@@ -54,7 +61,7 @@ describe('SimulationAdapter', () => {
     for (let step = 0; step < 50; step += 1) simulation.advanceStep()
     const wire = createSimulationWireSnapshot(simulation)
     expect(wireSnapshotSchema.parse(wire)).toEqual(wire)
-    expect(wire.config).toEqual(first.config)
+    expect(createSimulationWireConfig(simulation)).toEqual(config)
     expect(wire.reader.workers).toBe(3)
     expect(wire.reader.workerStates).toHaveLength(3)
     expect(wire.sender.workers).toBe(2)
@@ -68,6 +75,10 @@ describe('SimulationAdapter', () => {
 
   it('accepts exact integer TPS and rejects values outside the integer range', async () => {
     const adapter = new SimulationAdapter()
+    const config = adapter.getConfig()
+    expect(wireConfigSchema.parse(config)).toEqual(config)
+    expect(config.sourcePath).toBe('simulation')
+    expect(Object.isFrozen(config)).toBe(true)
     for (const value of [0, 120_001, 250_000]) {
       expect((await adapter.dispatch({ type: 'set-requested-tps', value })).accepted).toBe(true)
       expect(adapter.getSnapshot().throttler.requestedTps.applied).toBe(value)
@@ -76,6 +87,7 @@ describe('SimulationAdapter', () => {
       expect((await adapter.dispatch({ type: 'set-requested-tps', value })).accepted).toBe(false)
       expect(adapter.getSnapshot().throttler.requestedTps.applied).toBe(250_000)
     }
+    expect(adapter.getConfig()).toBe(config)
     adapter.dispose()
   })
 

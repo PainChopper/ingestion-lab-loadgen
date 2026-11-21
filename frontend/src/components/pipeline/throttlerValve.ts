@@ -111,20 +111,21 @@ function capabilityIsFinite(capability: ValveCapability): boolean {
   )
 }
 
-export function getValveTargets(capability: ValveCapability): readonly number[] | null {
-  if (!capabilityIsFinite(capability)) return null
-
-  const span = capability.max - capability.min
-  let step = 1
+function valveStep(span: number): number {
   for (let magnitude = 1; ; magnitude *= 10) {
     const candidate = [1, 2, 5]
       .map((factor) => factor * magnitude)
       .find((value) => Math.ceil(span / value) <= MAX_OPENING_INDEX)
     if (candidate !== undefined) {
-      step = candidate
-      break
+      return candidate
     }
   }
+}
+
+export function getValveTargets(capability: ValveCapability): readonly number[] | null {
+  if (!capabilityIsFinite(capability)) return null
+
+  const step = valveStep(capability.max - capability.min)
 
   const targets = [capability.min]
   while (capability.max - targets[targets.length - 1] > step) {
