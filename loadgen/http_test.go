@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,6 +20,80 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
+	data, err := os.ReadFile("testdata/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want configSnapshot
+	if err := json.Unmarshal(data, &want); err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(t)
+	cfg.Reader.Workers.Max = want.ReaderWorkersMax
+	cfg.Sender.Workers.Max = want.SenderWorkersMax
+	cfg.Throttler.RequestedTPS.Max = want.RequestedTpsMax
+	cfg.Reader.ReadBatchSize = want.ReadBatchSize
+	cfg.ReaderChannel.Capacity = want.ReaderChannelCapacity
+	cfg.SenderChannel.Capacity = want.SenderChannelCapacity
+	cfg.Source.Path = want.SourcePath
+	for _, state := range []runState{runStateStarting, runStateRunning, runStateStopping, runStateFaulted} {
+		t.Run(string(state), func(t *testing.T) {
+			owner := newControlState(cfg, zap.NewNop())
+			owner.run.state = state
+			requests := make(chan runtimeRequest, 1)
+			done := make(chan struct{})
+			if state == runStateFaulted {
+				close(done)
+			}
+			mux := newServeMux(runtimeRequests{queue: requests, done: done}, newPrometheusMetrics(), owner.config, zap.NewNop())
+			// The response must retain the values captured before later owner changes.
+			owner.config.Reader.ReadBatchSize++
+			recorder := httptest.NewRecorder()
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			mux.ServeHTTP(recorder, httptest.NewRequestWithContext(ctx, http.MethodGet, configPath, nil))
+			var got configSnapshot
+			if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Type") != "application/json" || got != want {
+				t.Fatalf("config response = %d %v %+v, want %+v", recorder.Code, recorder.Header(), got, want)
+			}
+			var fields map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &fields); err != nil {
+				t.Fatal(err)
+			}
+			if len(fields) != 7 || len(requests) != 0 {
+				t.Fatalf("config fields=%v runtime requests=%d", fields, len(requests))
+			}
+		})
+	}
+}
+
+func TestConfigEndpointHeadAndUnsupportedMethod(t *testing.T) {
+	mux := newServeMux(runtimeRequests{}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	response, err := server.Client().Head(server.URL + configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/json" || len(body) != 0 {
+		t.Fatalf("HEAD config = %d %v %q", response.StatusCode, response.Header, body)
+	}
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, configPath, nil))
+	if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != "GET, HEAD" {
+		t.Fatalf("POST config = %d %v", recorder.Code, recorder.Header())
+	}
+}
 
 func TestCommandsHandlerRejectsGet(t *testing.T) {
 	commands := make(chan runtimeRequest, 1)
@@ -623,7 +698,6 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		Sender:        senderSnapshot{Workers: 32, WorkerStates: []senderWorkerState{}},
 		ReaderChannel: channelSnapshot{DepthBatches: 6, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, InputTransactionsTotal: 3, OutputTransactionsTotal: 1},
 		SenderChannel: channelSnapshot{DepthBatches: 4, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, InputTransactionsTotal: 4, OutputTransactionsTotal: 2},
-		Config:        snapshotConfig(testConfig(t)),
 	}
 	rec := httptest.NewRecorder()
 	go func() { (<-requests).(snapshotRequest).reply <- expected }()
@@ -641,6 +715,9 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	var raw map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatal(err)
+	}
+	if _, exists := raw["config"]; exists {
+		t.Fatal("snapshot contains immutable config")
 	}
 	reader := raw["reader"].(map[string]any)
 	if reader["workers"] != float64(1) || len(reader["workerStates"].([]any)) != 2 {

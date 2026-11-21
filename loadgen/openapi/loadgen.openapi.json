@@ -7,6 +7,28 @@
   },
   "servers": [{ "url": "/" }],
   "paths": {
+    "/api/loadgen/config": {
+      "head": {
+        "operationId": "headConfig",
+        "summary": "Read config headers without a response body",
+        "responses": {
+          "200": { "description": "Same headers as GET; empty body." },
+          "405": { "description": "Method not allowed. HEAD responses have no body.", "headers": { "Allow": { "schema": { "type": "string", "enum": ["GET, HEAD"] } } } }
+        }
+      },
+      "get": {
+        "operationId": "getConfig",
+        "summary": "Read immutable startup settings",
+        "description": "Available independently of the event loop, including starting, stopping and faulted states. Values do not change during the process lifetime.",
+        "responses": {
+          "200": {
+            "description": "Immutable startup settings",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConfigStatus" } } }
+          },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" }
+        }
+      }
+    },
     "/api/loadgen/snapshot": {
       "head": {
         "operationId": "headSnapshot",
@@ -38,7 +60,7 @@
       "post": {
         "operationId": "executeCommand",
         "summary": "Change a live setting",
-        "description": "Choose one action in the request body. Workers accept integers 1..max; TPS accepts any integer 0..max inclusive. Limits and immutable startup settings come from GET /api/loadgen/snapshot under config. Installed accepts true or false. Commands are only accepted while the pipeline is running. Unknown fields and trailing JSON are rejected. The server does not check Content-Type or Accept request headers.",
+        "description": "Choose one action in the request body. Workers accept integers 1..max; TPS accepts any integer 0..max inclusive. Limits and immutable startup settings come from GET /api/loadgen/config. Installed accepts true or false. Commands are only accepted while the pipeline is running. Unknown fields and trailing JSON are rejected. The server does not check Content-Type or Accept request headers.",
         "requestBody": {
           "required": true,
           "content": {
@@ -78,7 +100,7 @@
         "content": { "text/plain": { "schema": { "type": "string" } } }
       },
       "MethodNotAllowed": {
-        "description": "Method is not supported for this path. Allow is GET, HEAD for snapshot and POST for commands. Non-HEAD replies have a text/plain body with a trailing line feed.",
+        "description": "Method is not supported for this path. Allow is GET, HEAD for snapshot/config and POST for commands. Non-HEAD replies have a text/plain body with a trailing line feed.",
         "headers": { "Allow": { "schema": { "type": "string", "enum": ["GET, HEAD", "POST"] } } },
         "content": { "text/plain": { "schema": { "type": "string" } } }
       }
@@ -107,7 +129,7 @@
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-reader-workers"] },
-          "value": { "type": "integer", "format": "int64", "description": "Any integer from 1 through snapshot.config.readerWorkersMax." }
+          "value": { "type": "integer", "format": "int64", "description": "Any integer from 1 through readerWorkersMax from GET /api/loadgen/config." }
         }
       },
       "RequestedTPSCommand": {
@@ -116,7 +138,7 @@
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-requested-tps"] },
-          "value": { "type": "integer", "format": "int64", "description": "Any integer from 0 through snapshot.config.requestedTpsMax inclusive." }
+          "value": { "type": "integer", "format": "int64", "description": "Any integer from 0 through requestedTpsMax from GET /api/loadgen/config inclusive." }
         }
       },
       "SenderWorkersCommand": {
@@ -125,7 +147,7 @@
         "required": ["action", "value"],
         "properties": {
           "action": { "type": "string", "enum": ["set-sender-workers"] },
-          "value": { "type": "integer", "format": "int64", "description": "Any integer from 1 through snapshot.config.senderWorkersMax." }
+          "value": { "type": "integer", "format": "int64", "description": "Any integer from 1 through senderWorkersMax from GET /api/loadgen/config." }
         }
       },
       "InstalledCommand": {
@@ -138,7 +160,7 @@
       },
       "Snapshot": {
         "type": "object", "additionalProperties": false,
-        "required": ["capturedAtMs", "run", "reader", "throttler", "sender", "readerChannel", "senderChannel", "config"],
+        "required": ["capturedAtMs", "run", "reader", "throttler", "sender", "readerChannel", "senderChannel"],
         "properties": {
           "capturedAtMs": { "type": "integer", "format": "int64", "minimum": 0, "description": "Milliseconds since service startup measured by the server monotonic clock; shared across the snapshot." },
           "run": { "$ref": "#/components/schemas/RunStatus" },
@@ -146,8 +168,7 @@
           "throttler": { "$ref": "#/components/schemas/ThrottlerStatus" },
           "sender": { "$ref": "#/components/schemas/SenderStatus" },
           "readerChannel": { "$ref": "#/components/schemas/ChannelStatus" },
-          "senderChannel": { "$ref": "#/components/schemas/ChannelStatus" },
-          "config": { "$ref": "#/components/schemas/ConfigStatus" }
+          "senderChannel": { "$ref": "#/components/schemas/ChannelStatus" }
         }
       },
       "RunStatus": {

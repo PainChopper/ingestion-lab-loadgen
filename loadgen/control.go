@@ -173,7 +173,7 @@ func (s *controlState) runEventLoop(
 					s.applyCommand(run, request.command, metrics)
 			}
 		case <-ticker.C:
-			s.logger.Info("runtime summary", snapshotLogFields(s.snapshotAt(run, time.Now()))...)
+			s.logger.Info("runtime summary", snapshotLogFields(s.snapshotAt(run, time.Now()), s.config)...)
 		}
 	}
 }
@@ -271,7 +271,6 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 		},
 		ReaderChannel: snapshotChannel(readerChannel),
 		SenderChannel: snapshotChannel(senderChannel),
-		Config:        snapshotConfig(s.config),
 	}
 }
 

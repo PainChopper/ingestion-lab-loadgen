@@ -43,11 +43,6 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 			InputTransactionsTotal:  82,
 			OutputTransactionsTotal: 84,
 		},
-		Config: configSnapshot{
-			ReaderWorkersMax: 7, SenderWorkersMax: 32, RequestedTpsMax: 4000000,
-			ReadBatchSize: 20, ReaderChannelCapacity: 51, SenderChannelCapacity: 71,
-			SourcePath: "reader-source",
-		},
 	}
 
 	encoded, err := json.Marshal(want)
@@ -82,6 +77,9 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		t.Fatal(err)
 	}
+	config := testConfig(t)
+	config.ReaderChannel.Capacity = 51
+	config.SenderChannel.Capacity = 71
 	want := map[string]any{
 		"event": "runtime_summary", "state": "stopping", "captured_at_ms": int64(103),
 		"elapsed_ms": int64(102), "total_transactions": int64(101),
@@ -109,7 +107,7 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 				want["source_error_path"] = ""
 			}
 			core, entries := observer.New(zap.InfoLevel)
-			zap.New(core).Info("summary", snapshotLogFields(snapshot)...)
+			zap.New(core).Info("summary", snapshotLogFields(snapshot, config)...)
 			if got := entries.All()[0].ContextMap(); !reflect.DeepEqual(got, want) {
 				t.Fatalf("log fields = %#v, want %#v", got, want)
 			}

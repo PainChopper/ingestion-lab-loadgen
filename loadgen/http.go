@@ -22,11 +22,14 @@ const gracefulShutdownTimeout = 10 * time.Second
 
 const snapshotPath = "/api/loadgen/snapshot"
 
+const configPath = "/api/loadgen/config"
+
 const commandsPath = "/api/loadgen/commands"
 
 func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("GET "+snapshotPath, snapshotHandler(requests, logger))
+	mux.Handle("GET "+configPath, configHandler(snapshotConfig(config), logger))
 	mux.Handle("POST "+commandsPath, commandsHandler(requests, config))
 	registerDeveloperRoutes(mux)
 
@@ -152,6 +155,15 @@ func (r commandRequest) runtimeCommand(cfg config) (runtimeCommand, error) {
 	}
 	command.value = *value
 	return command, nil
+}
+
+func configHandler(config configSnapshot, logger *zap.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(config); err != nil {
+			logger.Warn("config response encoding failed", zap.Error(err))
+		}
+	})
 }
 
 func snapshotHandler(requests runtimeRequests, logger *zap.Logger) http.Handler {

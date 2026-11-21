@@ -64,9 +64,20 @@ func TestCLIBinaryArgsAndHelp(t *testing.T) {
 func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 	binary := buildCLIBinary(t)
 	snapshot := testRemoteSnapshot(t)
+	config := snapshotConfig(testConfig(t))
 
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.Path != snapshotPath {
+		if request.Method != http.MethodGet {
+			http.NotFound(writer, request)
+			return
+		}
+		if request.URL.Path == configPath {
+			if err := json.NewEncoder(writer).Encode(config); err != nil {
+				t.Errorf("encode config: %v", err)
+			}
+			return
+		}
+		if request.URL.Path != snapshotPath {
 			http.NotFound(writer, request)
 			return
 		}
@@ -96,7 +107,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 	}))
 	defer malformed.Close()
 	t.Run("invalid schema", func(t *testing.T) {
-		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", malformed.URL), cliExitRemote, "decode snapshot", "")
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", malformed.URL), cliExitRemote, "GET "+configPath+": decode config", "")
 	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -108,7 +119,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 		t.Fatalf("release network failure address: %v", err)
 	}
 	t.Run("network failure", func(t *testing.T) {
-		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", networkURL), cliExitRemote, "GET /api/loadgen/snapshot", "")
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", networkURL), cliExitRemote, "GET "+configPath, "")
 	})
 }
 
@@ -415,7 +426,14 @@ func TestRunCLIExitCodes(t *testing.T) {
 }
 
 func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
+	config := snapshotConfig(testConfig(t))
 	malformedServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == configPath {
+			if err := json.NewEncoder(writer).Encode(config); err != nil {
+				t.Errorf("encode config: %v", err)
+			}
+			return
+		}
 		_, _ = writer.Write([]byte(`{"unexpected":true}`))
 	}))
 	defer malformedServer.Close()
@@ -435,7 +453,7 @@ func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
 		wantStderr string
 	}{
 		{name: "malformed snapshot", url: malformedServer.URL, wantStderr: "decode snapshot"},
-		{name: "transport failure", url: transportURL, wantStderr: "GET /api/loadgen/snapshot"},
+		{name: "transport failure", url: transportURL, wantStderr: "GET /api/loadgen/config"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
