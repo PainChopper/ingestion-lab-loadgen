@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"loadgen/internal/pipeline"
 	"maps"
 	"os"
 	"reflect"
@@ -15,15 +16,20 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 	want := runtimeSnapshot{
 		Run: runSnapshot{State: runStateStopping, TotalTransactions: 101, ElapsedMs: 102},
 		Reader: readerSnapshot{
-			Workers: 11, LiveWorkers: 12, IdleWorkers: 13, ReadingWorkers: 14, BlockedWorkers: 15,
-			DrainingWorkers: 16, DrainingIdleWorkers: 17, DrainingReadingWorkers: 18, DrainingBlockedWorkers: 19,
+			Workers: 11, WorkerStates: []pipeline.ReaderWorkerState{
+				{Activity: pipeline.ReaderReading}, {Activity: pipeline.ReaderReading},
+				{Activity: pipeline.ReaderBlocked, Draining: true}, {Activity: pipeline.ReaderIdle},
+			},
 			ReadBatchSize: 20, ReadTps: 21.5, RowsRead: 22, SourceDirectory: "reader-source",
 			SourceError: &readerSourceError{Category: "reader-category", Operation: "reader-operation", RelativePath: "reader-path", Message: "reader-message"},
 		},
 		Throttler: throttlerSnapshot{RequestedTps: 31, AdmittedTps: 32.5, Installed: false},
 		Sender: senderSnapshot{
-			Workers: 41, LiveWorkers: 42, IdleWorkers: 43, InFlightWorkers: 44, BackoffWorkers: 45,
-			DrainingWorkers: 46, DrainingIdleWorkers: 47, DrainingInFlightWorkers: 48, DrainingBackoffWorkers: 49,
+			Workers: 41, WorkerStates: []pipeline.SenderWorkerState{
+				{Activity: pipeline.SenderInFlight, Draining: true},
+				{Activity: pipeline.SenderBackoff}, {Activity: pipeline.SenderBackoff},
+				{Activity: pipeline.SenderBackoff}, {Activity: pipeline.SenderIdle, Draining: true},
+			},
 		},
 		ReaderChannel: channelSnapshot{
 			Capacity: 51, DepthBatches: 52, BufferedTransactions: 53, BlockedSenders: 54, OldestBlockedSenderMs: 55,
@@ -56,6 +62,8 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 	if err := json.Unmarshal(expectedJSON, &expected); err != nil {
 		t.Fatal(err)
 	}
+	canonicalWorkerLists(t, actual)
+	canonicalWorkerLists(t, expected)
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("wire snapshot = %+v, want %+v", actual, expected)
 	}
@@ -74,8 +82,7 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 		"event": "runtime_summary", "state": "stopping",
 		"elapsed_ms": int64(102), "total_transactions": int64(101),
 		"reader_read_tps": 21.5, "reader_rows_read": int64(22),
-		"reader_workers": int64(11), "reader_live_workers": int64(12),
-		"reader_reading_workers": int64(14), "reader_blocked_workers": int64(15), "reader_draining_workers": int64(16),
+		"reader_workers": int64(11), "reader_live_workers": int64(4),
 		"throttler_requested_tps": int64(31), "throttler_admitted_tps": 32.5, "installed": false,
 		"reader_channel_capacity": int64(51), "reader_channel_depth_batches": int64(52),
 		"reader_channel_buffered_transactions": int64(53), "reader_channel_blocked_senders": int64(54),
@@ -85,8 +92,7 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 		"sender_channel_buffered_transactions": int64(73), "sender_channel_blocked_senders": int64(74),
 		"sender_channel_oldest_blocked_ms": int64(75), "sender_channel_blocked_ms": int64(76),
 		"sender_channel_input_tps": 82.5, "sender_channel_output_tps": 84.5,
-		"sender_workers": int64(41), "sender_live_workers": int64(42),
-		"sender_in_flight_workers": int64(44), "sender_backoff_workers": int64(45), "sender_draining_workers": int64(46),
+		"sender_workers": int64(41), "sender_live_workers": int64(5),
 		"source_error_category": "reader-category", "source_error_operation": "reader-operation", "source_error_relative_path": "reader-path",
 	}
 	for _, name := range []string{"source error", "no source error"} {

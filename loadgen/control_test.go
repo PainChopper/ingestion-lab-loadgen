@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,6 +66,10 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 				t.Fatalf("metrics window = %s, want %s", state.metricsWindow, want)
 			}
 			snapshot := state.snapshotAt(nil, time.Now())
+			if snapshot.Reader.WorkerStates == nil || len(snapshot.Reader.WorkerStates) != 0 ||
+				snapshot.Sender.WorkerStates == nil || len(snapshot.Sender.WorkerStates) != 0 {
+				t.Fatalf("before Start worker states must be []: %+v / %+v", snapshot.Reader, snapshot.Sender)
+			}
 			got := []int{
 				snapshot.Reader.ReadBatchSize, snapshot.Reader.Workers,
 				snapshot.ReaderChannel.Capacity, snapshot.SenderChannel.Capacity,
@@ -135,7 +140,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 		t.Fatal("autostarted Sender did not reach receiver")
 	}
 	status := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateRunning })
-	if status.ReaderChannel.DepthBatches != 0 || status.SenderChannel.DepthBatches != 0 || status.Sender.InFlightWorkers != 1 {
+	if status.ReaderChannel.DepthBatches != 0 || status.SenderChannel.DepthBatches != 0 || countSenderWorkers(status.Sender.WorkerStates).InFlightWorkers != 1 {
 		t.Fatalf("wanted two empty queues with an in-flight Sender: %+v", status)
 	}
 	updates := []string{
@@ -154,7 +159,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 
 	loop.cancel()
 	stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
-	if stopping.Sender.InFlightWorkers == 0 {
+	if countSenderWorkers(stopping.Sender.WorkerStates).InFlightWorkers == 0 {
 		t.Fatal("stopping prematurely canceled the HTTP attempt")
 	}
 	response := httptest.NewRecorder()
@@ -198,7 +203,7 @@ func TestSignalKeepsZeroTPSUntilGraceExpires(t *testing.T) {
 		stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
 		throttlerChanged := !stopping.Throttler.Installed || stopping.Throttler.RequestedTps != 0
 		senderHasWork := stopping.SenderChannel.DepthBatches != 0 ||
-			stopping.Sender.InFlightWorkers != 0 || stopping.Sender.BackoffWorkers != 0
+			countSenderWorkers(stopping.Sender.WorkerStates).InFlightWorkers != 0 || countSenderWorkers(stopping.Sender.WorkerStates).BackoffWorkers != 0
 		if throttlerChanged || senderHasWork || stopping.Run.TotalTransactions != 0 {
 			t.Fatalf("shutdown changed the zero-rate throttler: %+v", stopping)
 		}
@@ -254,7 +259,7 @@ func TestSignalDeadlineCancelsInFlightHTTP(t *testing.T) {
 	}
 	loop.cancel()
 	stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool {
-		return s.Run.State == runStateStopping && s.Reader.ReadingWorkers == 0
+		return s.Run.State == runStateStopping && countReaderWorkers(s.Reader.WorkerStates).ReadingWorkers == 0
 	})
 	if err := loop.awaitExit(t); err != nil {
 		t.Fatal(err)
@@ -296,7 +301,7 @@ func TestSignalDuringSourceDiscoveryPreventsReaderStart(t *testing.T) {
 				loop.cancel()
 				synctest.Wait()
 				stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
-				if stopping.Reader.LiveWorkers != 0 {
+				if countReaderWorkers(stopping.Reader.WorkerStates).LiveWorkers != 0 {
 					t.Fatal("Reader started during source discovery")
 				}
 				if held {
@@ -538,6 +543,12 @@ func TestRunStartupSourceErrorReturnsWithoutSignal(t *testing.T) {
 	if state.run.state != runStateFaulted || state.run.sourceError == nil {
 		t.Fatalf("startup fault state = %+v", state.run)
 	}
+	snapshot := state.snapshotAt(nil, time.Now())
+	if snapshot.Reader.WorkerStates == nil || len(snapshot.Reader.WorkerStates) != 0 ||
+		snapshot.Sender.WorkerStates == nil || len(snapshot.Sender.WorkerStates) != 0 ||
+		snapshot.Reader.Workers != cfg.Reader.Workers.Initial || snapshot.Sender.Workers != cfg.Sender.Workers.Initial {
+		t.Fatalf("startup source fault worker states/targets = %+v / %+v", snapshot.Reader, snapshot.Sender)
+	}
 	assertFinalTransactions(t, events, 0, 0)
 }
 
@@ -624,20 +635,20 @@ func TestEventLoopDrainsAfterUnexpectedHTTPServerExit(t *testing.T) {
 				synctest.Wait()
 				requests := runtimeRequests{queue: queue, done: done}
 				before, err := requestSnapshot(t.Context(), requests)
-				if err != nil || before.Run.State != runStateRunning || before.Sender.InFlightWorkers != 1 || reads != 2 {
+				if err != nil || before.Run.State != runStateRunning || countSenderWorkers(before.Sender.WorkerStates).InFlightWorkers != 1 || reads != 2 {
 					t.Fatalf("pipeline not held in delivery/read: snapshot=%+v reads=%d error=%v", before, reads, err)
 				}
 				failedAt := time.Now()
 				serverDone <- test.err
 				synctest.Wait()
 				faulted, err := requestSnapshot(t.Context(), requests)
-				if err != nil || faulted.Run.State != runStateFaulted || faulted.Sender.InFlightWorkers != 1 {
+				if err != nil || faulted.Run.State != runStateFaulted || countSenderWorkers(faulted.Sender.WorkerStates).InFlightWorkers != 1 {
 					t.Fatalf("fault lost in-flight batch: snapshot=%+v error=%v", faulted, err)
 				}
 				unblockRead()
 				synctest.Wait()
 				stoppedReader, err := requestSnapshot(t.Context(), requests)
-				if err != nil || stoppedReader.Reader.LiveWorkers != 0 || opens != 1 || reads != 2 {
+				if err != nil || countReaderWorkers(stoppedReader.Reader.WorkerStates).LiveWorkers != 0 || opens != 1 || reads != 2 {
 					t.Fatalf("reading/admission continued after server exit: snapshot=%+v opens=%d reads=%d error=%v", stoppedReader, opens, reads, err)
 				}
 				time.Sleep(grace - time.Nanosecond)
@@ -707,7 +718,7 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 		t.Fatal("valid source never reached receiver")
 	}
 	faulted := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateFaulted })
-	if faulted.Reader.SourceError == nil || faulted.Reader.SourceError.RelativePath != "b.parquet" || faulted.Sender.InFlightWorkers != 1 {
+	if faulted.Reader.SourceError == nil || faulted.Reader.SourceError.RelativePath != "b.parquet" || countSenderWorkers(faulted.Sender.WorkerStates).InFlightWorkers != 1 {
 		t.Fatalf("runtime fault lost source or in-flight diagnostic: %+v", faulted)
 	}
 	unblock()
@@ -723,6 +734,55 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 	if confirmed := total.GetCounter().GetValue(); confirmed != 1 {
 		t.Fatalf("Prometheus confirmed transactions = %v, want 1", confirmed)
 	}
+}
+
+func TestSnapshotRetainsLiveStatesAboveTargetsDuringShrink(t *testing.T) {
+	cfg := testConfig(t)
+	directory := t.TempDir()
+	for _, name := range []string{"a.parquet", "b.parquet"} {
+		if err := parquet.WriteFile(filepath.Join(directory, name), []pipeline.Transaction{{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	source, err := pipeline.DiscoverSource(filepath.Join(directory, "*.parquet"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	synctest.Test(t, func(t *testing.T) {
+		state := newControlState(cfg, zap.NewNop())
+		options := state.pipelineOptions
+		options.Source = source
+		options.Readers, options.Senders, options.BatchSize = 2, 2, 1
+		options.ReaderCapacity, options.SenderCapacity = 0, 0
+		options.Rate.Installed = false
+		options.RetryDelays, options.RetryJitterPercent = []time.Duration{time.Hour}, 0
+		options.Deliver = func(context.Context, []pipeline.Transaction, int) error { return io.ErrUnexpectedEOF }
+		ctx, cancel := context.WithCancel(t.Context())
+		run := pipeline.Start(ctx, options)
+		defer func() { cancel(); <-run.Done() }()
+		synctest.Wait()
+		run.SetReaders(1)
+		run.SetSenders(1)
+		state.controls.readerWorkers, state.controls.senderWorkers = 1, 1
+		snapshot := state.snapshotAt(run, time.Now())
+		readers, senders := make(map[pipeline.ReaderWorkerState]int), make(map[pipeline.SenderWorkerState]int)
+		for _, worker := range snapshot.Reader.WorkerStates {
+			readers[worker]++
+		}
+		for _, worker := range snapshot.Sender.WorkerStates {
+			senders[worker]++
+		}
+		if snapshot.Reader.Workers != 1 || !maps.Equal(readers, map[pipeline.ReaderWorkerState]int{
+			{Activity: pipeline.ReaderBlocked}: 1, {Activity: pipeline.ReaderBlocked, Draining: true}: 1,
+		}) {
+			t.Errorf("Reader shrink target/states = %+v", snapshot.Reader)
+		}
+		if snapshot.Sender.Workers != 1 || !maps.Equal(senders, map[pipeline.SenderWorkerState]int{
+			{Activity: pipeline.SenderBackoff}: 1, {Activity: pipeline.SenderBackoff, Draining: true}: 1,
+		}) {
+			t.Errorf("Sender shrink target/states = %+v", snapshot.Sender)
+		}
+	})
 }
 
 func TestSamplingUsesElapsedIntervalForChannelRatesAndActualTPS(t *testing.T) {

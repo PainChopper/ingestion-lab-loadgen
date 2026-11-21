@@ -135,6 +135,8 @@ The HTTP Sender posts a JSON array with `Content-Type: application/json` and tre
 - `GET /metrics`: Prometheus metrics.
 - `/debug/pprof/`: Go profiling.
 
+Reader and Sender snapshots expose `workerStates`: a list of live workers, each with `activity` and `draining`. Reader activities are `idle`, `reading`, and `blocked`; Sender activities are `idle`, `inFlight`, and `backoff`. A blocked Reader still owns its file, and a Sender in backoff still owns its batch. The independent `draining` flag prevents new work after current work finishes. Lists are empty (`[]`) before startup, allow repeated states, and have no ordering guarantee. `workers` remains the configured target; during downscale it can be smaller than the list length. CLI displays counts derived from these lists; runtime summaries log only the target and live count for each pool.
+
 Example command body:
 
 ```json

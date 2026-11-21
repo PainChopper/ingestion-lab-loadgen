@@ -25,20 +25,13 @@ type runSnapshot struct {
 }
 
 type readerSnapshot struct {
-	Workers                int                `json:"workers"`
-	LiveWorkers            int                `json:"liveWorkers"`
-	IdleWorkers            int                `json:"idleWorkers"`
-	ReadingWorkers         int                `json:"readingWorkers"`
-	BlockedWorkers         int                `json:"blockedWorkers"`
-	DrainingWorkers        int                `json:"drainingWorkers"`
-	DrainingIdleWorkers    int                `json:"drainingIdleWorkers"`
-	DrainingReadingWorkers int                `json:"drainingReadingWorkers"`
-	DrainingBlockedWorkers int                `json:"drainingBlockedWorkers"`
-	ReadBatchSize          int                `json:"readBatchSize"`
-	ReadTps                float64            `json:"readTps"`
-	RowsRead               int64              `json:"rowsRead"`
-	SourceDirectory        string             `json:"sourceDirectory"`
-	SourceError            *readerSourceError `json:"sourceError"`
+	Workers         int                `json:"workers"`
+	WorkerStates    readerWorkerStates `json:"workerStates"`
+	ReadBatchSize   int                `json:"readBatchSize"`
+	ReadTps         float64            `json:"readTps"`
+	RowsRead        int64              `json:"rowsRead"`
+	SourceDirectory string             `json:"sourceDirectory"`
+	SourceError     *readerSourceError `json:"sourceError"`
 }
 
 type readerSourceError struct {
@@ -55,15 +48,8 @@ type throttlerSnapshot struct {
 }
 
 type senderSnapshot struct {
-	Workers                 int `json:"workers"`
-	LiveWorkers             int `json:"liveWorkers"`
-	IdleWorkers             int `json:"idleWorkers"`
-	InFlightWorkers         int `json:"inFlightWorkers"`
-	BackoffWorkers          int `json:"backoffWorkers"`
-	DrainingWorkers         int `json:"drainingWorkers"`
-	DrainingIdleWorkers     int `json:"drainingIdleWorkers"`
-	DrainingInFlightWorkers int `json:"drainingInFlightWorkers"`
-	DrainingBackoffWorkers  int `json:"drainingBackoffWorkers"`
+	Workers      int                `json:"workers"`
+	WorkerStates senderWorkerStates `json:"workerStates"`
 }
 
 type channelSnapshot struct {
@@ -124,10 +110,7 @@ func snapshotLogFields(snapshot runtimeSnapshot) []zap.Field {
 		zap.Float64("reader_read_tps", snapshot.Reader.ReadTps),
 		zap.Int64("reader_rows_read", snapshot.Reader.RowsRead),
 		zap.Int("reader_workers", snapshot.Reader.Workers),
-		zap.Int("reader_live_workers", snapshot.Reader.LiveWorkers),
-		zap.Int("reader_reading_workers", snapshot.Reader.ReadingWorkers),
-		zap.Int("reader_blocked_workers", snapshot.Reader.BlockedWorkers),
-		zap.Int("reader_draining_workers", snapshot.Reader.DrainingWorkers),
+		zap.Int("reader_live_workers", len(snapshot.Reader.WorkerStates)),
 		zap.Int("throttler_requested_tps", snapshot.Throttler.RequestedTps),
 		zap.Float64("throttler_admitted_tps", snapshot.Throttler.AdmittedTps),
 		zap.Bool("installed", snapshot.Throttler.Installed),
@@ -148,10 +131,7 @@ func snapshotLogFields(snapshot runtimeSnapshot) []zap.Field {
 		zap.Int64("sender_channel_oldest_blocked_ms", snapshot.SenderChannel.OldestBlockedSenderMs),
 		zap.Int64("sender_channel_blocked_ms", snapshot.SenderChannel.BlockedMs),
 		zap.Int("sender_workers", snapshot.Sender.Workers),
-		zap.Int("sender_live_workers", snapshot.Sender.LiveWorkers),
-		zap.Int("sender_in_flight_workers", snapshot.Sender.InFlightWorkers),
-		zap.Int("sender_backoff_workers", snapshot.Sender.BackoffWorkers),
-		zap.Int("sender_draining_workers", snapshot.Sender.DrainingWorkers),
+		zap.Int("sender_live_workers", len(snapshot.Sender.WorkerStates)),
 		zap.String("source_error_category", sourceErrorCategory),
 		zap.String("source_error_operation", sourceErrorOperation),
 		zap.String("source_error_relative_path", sourceErrorRelativePath),

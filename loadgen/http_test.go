@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"loadgen/internal/pipeline"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -614,13 +615,14 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	expected := runtimeSnapshot{
 		Run: runSnapshot{State: runStateRunning, TotalTransactions: 46, ElapsedMs: 1234},
 		Reader: readerSnapshot{
-			Workers: 1, LiveWorkers: 2, ReadingWorkers: 2, DrainingWorkers: 1,
-			DrainingReadingWorkers: 1,
-			ReadBatchSize:          50000, ReadTps: 123.5, RowsRead: 47,
+			Workers: 1, WorkerStates: []pipeline.ReaderWorkerState{
+				{Activity: pipeline.ReaderReading}, {Activity: pipeline.ReaderReading, Draining: true},
+			},
+			ReadBatchSize: 50000, ReadTps: 123.5, RowsRead: 47,
 			SourceDirectory: "data/part", SourceError: &readerSourceError{Category: "source", Operation: "read", RelativePath: "input.parquet", Message: "corrupt parquet"},
 		},
 		Throttler:     throttlerSnapshot{RequestedTps: 200, AdmittedTps: 3, Installed: true},
-		Sender:        senderSnapshot{Workers: 32},
+		Sender:        senderSnapshot{Workers: 32, WorkerStates: []pipeline.SenderWorkerState{}},
 		ReaderChannel: channelSnapshot{Capacity: 8, DepthBatches: 6, BufferedTransactions: 300000, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, SentTransactionsPerSecond: 3, ReceivedTransactionsPerSecond: 1},
 		SenderChannel: channelSnapshot{Capacity: 16, DepthBatches: 4, BufferedTransactions: 100000, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, SentTransactionsPerSecond: 4, ReceivedTransactionsPerSecond: 2.5},
 		Config:        snapshotConfig(testConfig(t)),
@@ -638,12 +640,23 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	if got := actual; !reflect.DeepEqual(got, expected) {
 		t.Errorf("actual = %+v, want %+v", got, expected)
 	}
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	reader := raw["reader"].(map[string]any)
+	if reader["workers"] != float64(1) || len(reader["workerStates"].([]any)) != 2 {
+		t.Fatalf("shrink must retain target and both live workers: %v", reader)
+	}
+	if states, ok := raw["sender"].(map[string]any)["workerStates"].([]any); !ok || len(states) != 0 {
+		t.Fatalf("empty Sender must be [], got %v", raw["sender"])
+	}
 }
 
 func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	requests := make(chan runtimeRequest, 1)
 	go func() {
-		(<-requests).(snapshotRequest).reply <- runtimeSnapshot{Run: runSnapshot{State: runStateStarting}}
+		(<-requests).(snapshotRequest).reply <- runtimeSnapshot{Run: runSnapshot{State: runStateStarting}, Reader: readerSnapshot{WorkerStates: []pipeline.ReaderWorkerState{}}, Sender: senderSnapshot{WorkerStates: []pipeline.SenderWorkerState{}}}
 	}()
 	recorder := httptest.NewRecorder()
 	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
@@ -655,7 +668,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}
-	if want := (runtimeSnapshot{Run: runSnapshot{State: runStateStarting}}); !reflect.DeepEqual(actual, want) {
+	if want := (runtimeSnapshot{Run: runSnapshot{State: runStateStarting}, Reader: readerSnapshot{WorkerStates: []pipeline.ReaderWorkerState{}}, Sender: senderSnapshot{WorkerStates: []pipeline.SenderWorkerState{}}}); !reflect.DeepEqual(actual, want) {
 		t.Errorf("zero snapshot = %+v, want %+v", actual, want)
 	}
 	var run, reader map[string]json.RawMessage
@@ -664,6 +677,13 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	}
 	if err := json.Unmarshal(root["reader"], &reader); err != nil {
 		t.Fatal(err)
+	}
+	var sender map[string]json.RawMessage
+	if err := json.Unmarshal(root["sender"], &sender); err != nil {
+		t.Fatal(err)
+	}
+	if string(reader["workerStates"]) != "[]" || string(sender["workerStates"]) != "[]" {
+		t.Fatalf("starting worker lists = %s / %s", reader["workerStates"], sender["workerStates"])
 	}
 	if string(run["elapsedMs"]) != "0" || string(reader["readTps"]) != "0" || string(reader["rowsRead"]) != "0" || string(reader["sourceDirectory"]) != "\"\"" || string(reader["sourceError"]) != "null" {
 		t.Errorf("starting snapshot body = %v", root)

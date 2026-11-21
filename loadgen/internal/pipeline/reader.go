@@ -15,29 +15,33 @@ import (
 	"go.uber.org/zap"
 )
 
+type ReaderActivity string
+
+const (
+	ReaderIdle    ReaderActivity = "idle"
+	ReaderReading ReaderActivity = "reading"
+	ReaderBlocked ReaderActivity = "blocked"
+)
+
+type ReaderWorkerState struct {
+	Activity ReaderActivity `json:"activity"`
+	Draining bool           `json:"draining"`
+}
+
 // readerWorker holds the per-worker lifecycle state.
 type readerWorker struct {
 	id   int
 	wake chan struct{}
-	// Prevents the worker from claiming another file.
+	// Prevents the worker from accepting new work.
 	draining bool
-	// Indicates that the worker currently owns a source file.
-	busy bool
-	// Indicates that the worker is blocked while sending a batch.
-	blocked bool
+	// Reading and blocked both retain ownership of the current source file.
+	activity ReaderActivity
 }
 
 type ReaderSnapshot struct {
-	RowsRead               int64
-	ReadTPS                float64
-	LiveWorkers            int
-	IdleWorkers            int
-	ReadingWorkers         int
-	BlockedWorkers         int
-	DrainingWorkers        int
-	DrainingIdleWorkers    int
-	DrainingReadingWorkers int
-	DrainingBlockedWorkers int
+	RowsRead     int64
+	ReadTPS      float64
+	WorkerStates []ReaderWorkerState
 }
 
 type Source struct {
@@ -187,7 +191,7 @@ func (p *readerPool) reconcile(desired int) {
 				if active == desired {
 					break
 				}
-				if !worker.draining && worker.busy == busy {
+				if !worker.draining && (worker.activity != ReaderIdle) == busy {
 					worker.draining = true
 					active--
 				}
@@ -270,16 +274,16 @@ func (p *readerPool) reportSourceError(sourceError *SourceError) {
 
 func (p *readerPool) releaseFileLocked(worker *readerWorker, filePath string) {
 	delete(p.active, filePath)
-	worker.busy = false
+	worker.activity = ReaderIdle
 	for _, candidate := range p.workers {
-		if !candidate.busy && !candidate.draining {
+		if candidate.activity == ReaderIdle && !candidate.draining {
 			wakeReader(candidate)
 		}
 	}
 }
 
 func (p *readerPool) startWorkerLocked() {
-	worker := &readerWorker{id: p.nextWorkerID, wake: make(chan struct{}, 1)}
+	worker := &readerWorker{id: p.nextWorkerID, wake: make(chan struct{}, 1), activity: ReaderIdle}
 	p.nextWorkerID++
 	p.workers = append(p.workers, worker)
 	p.wg.Add(1)
@@ -312,7 +316,7 @@ func (p *readerPool) claimNextFile(worker *readerWorker) (string, bool) {
 			if !p.active[path] {
 				p.active[path] = true
 				p.nextFile = index + 1
-				worker.busy = true
+				worker.activity = ReaderReading
 				p.mu.Unlock()
 				return path, true
 			}
@@ -465,12 +469,12 @@ func (p *readerPool) sendBatch(worker *readerWorker, batch []Transaction) bool {
 
 	pending := p.channel.beginBlockedSend(batch)
 	p.mu.Lock()
-	worker.blocked = true
+	worker.activity = ReaderBlocked
 	p.mu.Unlock()
 
 	sent := pending.wait(p.ctx)
 	p.mu.Lock()
-	worker.blocked = false
+	worker.activity = ReaderReading
 	p.mu.Unlock()
 	return sent
 }
@@ -479,24 +483,11 @@ func (p *readerPool) snapshot() ReaderSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	snapshot := ReaderSnapshot{LiveWorkers: len(p.workers)}
+	snapshot := ReaderSnapshot{WorkerStates: make([]ReaderWorkerState, 0, len(p.workers))}
 	for _, worker := range p.workers {
-		var draining *int
-		switch {
-		case worker.blocked:
-			snapshot.BlockedWorkers++
-			draining = &snapshot.DrainingBlockedWorkers
-		case worker.busy:
-			snapshot.ReadingWorkers++
-			draining = &snapshot.DrainingReadingWorkers
-		default:
-			snapshot.IdleWorkers++
-			draining = &snapshot.DrainingIdleWorkers
-		}
-		if worker.draining {
-			snapshot.DrainingWorkers++
-			*draining++
-		}
+		snapshot.WorkerStates = append(snapshot.WorkerStates, ReaderWorkerState{
+			Activity: worker.activity, Draining: worker.draining,
+		})
 	}
 	return snapshot
 }

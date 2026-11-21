@@ -2,14 +2,12 @@
   "run": { "state": "stopping", "totalTransactions": 101, "elapsedMs": 102 },
   "reader": {
     "workers": 11,
-    "liveWorkers": 12,
-    "idleWorkers": 13,
-    "readingWorkers": 14,
-    "blockedWorkers": 15,
-    "drainingWorkers": 16,
-    "drainingIdleWorkers": 17,
-    "drainingReadingWorkers": 18,
-    "drainingBlockedWorkers": 19,
+    "workerStates": [
+      { "activity": "reading", "draining": false },
+      { "activity": "reading", "draining": false },
+      { "activity": "blocked", "draining": true },
+      { "activity": "idle", "draining": false }
+    ],
     "readBatchSize": 20,
     "readTps": 21.5,
     "rowsRead": 22,
@@ -24,14 +22,13 @@
   "throttler": { "requestedTps": 31, "admittedTps": 32.5, "installed": false },
   "sender": {
     "workers": 41,
-    "liveWorkers": 42,
-    "idleWorkers": 43,
-    "inFlightWorkers": 44,
-    "backoffWorkers": 45,
-    "drainingWorkers": 46,
-    "drainingIdleWorkers": 47,
-    "drainingInFlightWorkers": 48,
-    "drainingBackoffWorkers": 49
+    "workerStates": [
+      { "activity": "inFlight", "draining": true },
+      { "activity": "backoff", "draining": false },
+      { "activity": "backoff", "draining": false },
+      { "activity": "backoff", "draining": false },
+      { "activity": "idle", "draining": true }
+    ]
   },
   "readerChannel": {
     "capacity": 51,
