@@ -39,7 +39,7 @@ cd receiver
 go run .
 ```
 
-The default Receiver configuration uses configuration schema 2, listens on `127.0.0.1:8081`, accepts batches at `POST /internal/ingest`, and reports acceptance counters at `GET /status` (also supports HEAD). To migrate schema 1, set `schema_version = 2` and explicitly provide `lab.response_delay_ms`, including zero. Omit `lab.response_status` for 204; an explicit zero is invalid. See [configuration](docs/configuration.md#конфигурация-receiver) for exact paths and lab settings.
+The default Receiver configuration listens on `127.0.0.1:8081`, accepts batches at `POST /internal/ingest`, and reports acceptance counters at `GET /status` (also supports HEAD). Configuration is unversioned; unknown or missing required keys are rejected. Explicitly provide `lab.response_delay_ms`, including zero. Omit `lab.response_status` for 204; an explicit zero is invalid. See [configuration](docs/configuration.md#конфигурация-receiver) for exact paths and lab settings.
 
 Start LoadGen in another terminal.
 
@@ -106,7 +106,7 @@ go run . set throttle true --url http://127.0.0.1:8080
 
 ## Configuration and delivery
 
-See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. LoadGen accepts only schema 4; old or mixed configurations are rejected. Startup batch size, capacities and metrics window are scalars; workers use initial/max, TPS uses initial/max/step with a server-defined zero minimum, and installed is a boolean. Unknown or missing fields are rejected at startup. Explicit zero values are supported where valid.
+See [loadgen/config.toml](loadgen/config.toml) for the current configuration example. Configuration is unversioned. Startup batch size, capacities and metrics window are scalars; workers use initial/max, TPS uses initial/max/step with a server-defined zero minimum, and installed is a boolean. Unknown or missing fields are rejected at startup. Explicit zero values are supported where valid. Changes to a key's meaning, units or allowed values require a new key name, including for optional keys; the old name is rejected as unknown.
 
 | Setting | Purpose | When it can be changed |
 | --- | --- | --- |
@@ -118,7 +118,7 @@ See [loadgen/config.toml](loadgen/config.toml) for the current configuration exa
 | `throttler.requested_tps` | Requested transaction rate | At runtime |
 | `throttler.installed` | Enable or disable rate limiting | At runtime |
 | `sender.api.url` | HTTP delivery endpoint | At startup |
-| `sender.api.timeout_ms` | HTTP timeout per delivery attempt (default 30,000 ms in schema 4) | At startup |
+| `sender.api.timeout_ms` | HTTP timeout per delivery attempt (30,000 ms in the example) | At startup |
 | `sender.retry` | Positive, nondecreasing retry delays; jitter from 0% to 50% (example: 20%) | At startup |
 
 A capacity of `0` means an unbuffered Go channel. With the Throttler enabled, `0 TPS` holds batches; disabling the Throttler removes the rate limit. Rate limiting operates on whole batches: the delay is calculated from the batch size and requested TPS.

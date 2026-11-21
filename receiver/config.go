@@ -13,13 +13,10 @@ import (
 	"github.com/spf13/viper"
 )
 
-const currentSchemaVersion = 2
-
 type Config struct {
-	SchemaVersion int
-	Server        ServerConfig
-	Ingest        ingest.Config
-	Logging       LoggingConfig
+	Server  ServerConfig
+	Ingest  ingest.Config
+	Logging LoggingConfig
 }
 
 type ServerConfig struct {
@@ -32,11 +29,10 @@ type LoggingConfig struct {
 }
 
 type fileConfig struct {
-	SchemaVersion int              `mapstructure:"schema_version"`
-	Server        fileServerConfig `mapstructure:"server"`
-	Ingest        fileIngestConfig `mapstructure:"ingest"`
-	Logging       LoggingConfig    `mapstructure:"logging"`
-	Lab           fileLabConfig    `mapstructure:"lab"`
+	Server  fileServerConfig `mapstructure:"server"`
+	Ingest  fileIngestConfig `mapstructure:"ingest"`
+	Logging LoggingConfig    `mapstructure:"logging"`
+	Lab     fileLabConfig    `mapstructure:"lab"`
 }
 
 type fileIngestConfig struct {
@@ -93,7 +89,6 @@ func (c fileConfig) config() (Config, error) {
 		return Config{}, err
 	}
 	result := Config{
-		SchemaVersion: c.SchemaVersion,
 		Server: ServerConfig{
 			Address:         c.Server.Address,
 			ShutdownTimeout: shutdownTimeout,
@@ -141,9 +136,6 @@ func rejectFractionalInt(from, to reflect.Type, data any) (any, error) {
 }
 
 func validateConfig(config Config) error {
-	if config.SchemaVersion != currentSchemaVersion {
-		return fmt.Errorf("schema_version must be %d", currentSchemaVersion)
-	}
 	if config.Server.Address == "" {
 		return errors.New("server.address must not be empty")
 	}

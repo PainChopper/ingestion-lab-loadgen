@@ -513,7 +513,7 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 				t.Fatalf("runtime commands lost initial profiles or applied values: %+v", updated)
 			}
 			// The cross-client smoke reads this real handler response from the verbose run log.
-			t.Logf("schema4 snapshot: %s", response.Body.String())
+			t.Logf("snapshot: %s", response.Body.String())
 			assertCommandHTTP(t, mux, `{"action":"set-throttler-installed","value":false}`, http.StatusOK)
 
 			loop.cancel()

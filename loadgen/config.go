@@ -18,16 +18,14 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Configuration location and supported schema version.
+// Configuration location.
 const (
-	defaultConfigPath   = "config.toml"
-	configSchemaVersion = 4
+	defaultConfigPath = "config.toml"
 	// JSON numbers must stay exact in the browser's numeric controls and telemetry.
 	maxSnapshotInteger = 1<<53 - 1
 )
 
 type config struct {
-	SchemaVersion int             `mapstructure:"schema_version"`
 	HTTP          httpConfig      `mapstructure:"http"`
 	Source        sourceConfig    `mapstructure:"source"`
 	Reader        readerConfig    `mapstructure:"reader"`
@@ -115,9 +113,6 @@ func loadConfig(configPath string) (config, error) {
 	if !viperConfig.IsSet("http.addr") {
 		return config{}, errors.New("http.addr is required")
 	}
-	if viperConfig.Get("schema_version") != int64(configSchemaVersion) {
-		return config{}, fmt.Errorf("schema_version must be %d", configSchemaVersion)
-	}
 	var cfg config
 	if err := viperConfig.UnmarshalExact(&cfg, func(decoderConfig *mapstructure.DecoderConfig) {
 		decoderConfig.ErrorUnset = true
@@ -154,9 +149,6 @@ func rejectFractionalInt(from, to reflect.Type, data any) (any, error) {
 }
 
 func (c config) validate() error {
-	if c.SchemaVersion != configSchemaVersion {
-		return fmt.Errorf("schema_version must be %d", configSchemaVersion)
-	}
 	if err := c.HTTP.validate(); err != nil {
 		return fmt.Errorf("http.addr: %w", err)
 	}
