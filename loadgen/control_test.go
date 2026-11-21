@@ -66,26 +66,21 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 				t.Fatalf("before Start worker states must be []: %+v / %+v", snapshot.Reader, snapshot.Sender)
 			}
 			got := []int{
-				snapshot.Config.ReadBatchSize, snapshot.Reader.Workers,
-				snapshot.Config.ReaderChannelCapacity, snapshot.Config.SenderChannelCapacity,
+				snapshot.Reader.Workers,
 				snapshot.Throttler.RequestedTps, snapshot.Sender.Workers,
 			}
 			want := []int{
-				loaded.Reader.ReadBatchSize, loaded.Reader.Workers.Initial,
-				loaded.ReaderChannel.Capacity, loaded.SenderChannel.Capacity,
+				loaded.Reader.Workers.Initial,
 				loaded.Throttler.RequestedTPS.Initial, loaded.Sender.Workers.Initial,
 			}
 			if !slices.Equal(got, want) {
 				t.Fatalf("initial controls = %v, want %v", got, want)
 			}
-			if snapshot.Config.SourcePath != loaded.Source.Path {
-				t.Fatalf("source path = %q", snapshot.Config.SourcePath)
-			}
 			if got := snapshot.Throttler.Installed; got != loaded.Throttler.Installed {
 				t.Fatalf("initial installed = %t, want %t", got, loaded.Throttler.Installed)
 			}
 			core, entries := observer.New(zap.InfoLevel)
-			zap.New(core).Info("summary", snapshotLogFields(snapshot)...)
+			zap.New(core).Info("summary", snapshotLogFields(snapshot, loaded)...)
 			fields := entries.All()[0].ContextMap()
 			if fields["reader_channel_capacity"] != int64(loaded.ReaderChannel.Capacity) ||
 				fields["sender_channel_capacity"] != int64(loaded.SenderChannel.Capacity) {
@@ -295,9 +290,8 @@ func TestSignalDuringSourceDiscoveryPreventsReaderStart(t *testing.T) {
 				}
 				loop := startTestEventLoopWithSource(t, &state, gracefulShutdownTimeout, ready)
 				starting := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStarting })
-				if starting.Config.SourcePath != cfg.Source.Path ||
-					starting.Reader.SourceError != nil {
-					t.Fatalf("source path or initial source error unavailable before Start: %+v", starting.Reader)
+				if starting.Reader.SourceError != nil {
+					t.Fatalf("initial source error before Start: %+v", starting.Reader)
 				}
 
 				loop.cancel()
@@ -445,11 +439,11 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 				"[senderChannel]\ncapacity = 0", fmt.Sprintf("[senderChannel]\ncapacity = %d", tc.senderCapacity),
 				"[throttler]\ninstalled = true", "[throttler]\ninstalled = false",
 			).Replace(testConfigContents())
-			configPath := filepath.Join(dir, "config.toml")
-			if err := os.WriteFile(configPath, []byte(conf), 0o600); err != nil {
+			configFilePath := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(configFilePath, []byte(conf), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			cfg, err := loadConfig(configPath)
+			cfg, err := loadConfig(configFilePath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -471,9 +465,6 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 			status := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool {
 				return s.ReaderChannel.BlockedSenders > 0 && s.SenderChannel.BlockedSenders > 0
 			})
-			if status.Config.ReadBatchSize != batchSize {
-				t.Fatalf("snapshot batch size = %d, want %d", status.Config.ReadBatchSize, batchSize)
-			}
 
 			for _, queue := range []struct {
 				name     string
@@ -509,7 +500,13 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 				ReadBatchSize: batchSize, ReaderChannelCapacity: tc.readerCapacity, SenderChannelCapacity: tc.senderCapacity,
 				SourcePath: cfg.Source.Path,
 			}
-			if updated.Config != wantConfig || updated.Reader.Workers != 3 ||
+			configResponse := httptest.NewRecorder()
+			mux.ServeHTTP(configResponse, httptest.NewRequest(http.MethodGet, configPath, nil))
+			var gotConfig configSnapshot
+			if err := json.Unmarshal(configResponse.Body.Bytes(), &gotConfig); err != nil {
+				t.Fatal(err)
+			}
+			if gotConfig != wantConfig || updated.Reader.Workers != 3 ||
 				updated.Sender.Workers != 4 || updated.Throttler.RequestedTps != 0 || !updated.Throttler.Installed {
 				t.Fatalf("runtime commands changed immutable config or lost applied values: %+v", updated)
 			}

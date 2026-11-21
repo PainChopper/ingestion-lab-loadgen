@@ -41,7 +41,6 @@ func testRemoteSnapshot(t *testing.T) runtimeSnapshot {
 		Run:    runSnapshot{State: runStateRunning},
 		Reader: readerSnapshot{WorkerStates: []readerWorkerState{}},
 		Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
-		Config: snapshotConfig(testConfig(t)),
 	}
 }
 

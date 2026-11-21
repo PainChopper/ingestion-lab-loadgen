@@ -1,0 +1,9 @@
+{
+  "readerWorkersMax": 7,
+  "senderWorkersMax": 32,
+  "requestedTpsMax": 4000000,
+  "readBatchSize": 20,
+  "readerChannelCapacity": 51,
+  "senderChannelCapacity": 71,
+  "sourcePath": "reader-source"
+}

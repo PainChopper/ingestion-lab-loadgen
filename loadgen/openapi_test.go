@@ -30,10 +30,11 @@ func TestOpenAPIContract(t *testing.T) {
 		t.Errorf("servers = %v, want one same-origin root", servers)
 	}
 	paths := document["paths"].(map[string]any)
-	if !reflect.DeepEqual(stringSet(mapKeys(paths)), stringSet([]string{snapshotPath, commandsPath})) {
+	if !reflect.DeepEqual(stringSet(mapKeys(paths)), stringSet([]string{snapshotPath, configPath, commandsPath})) {
 		t.Errorf("paths = %v", mapKeys(paths))
 	}
 	if !reflect.DeepEqual(mapKeys(paths[snapshotPath].(map[string]any)), []string{"get", "head"}) ||
+		!reflect.DeepEqual(mapKeys(paths[configPath].(map[string]any)), []string{"get", "head"}) ||
 		!reflect.DeepEqual(mapKeys(paths[commandsPath].(map[string]any)), []string{"post"}) {
 		t.Errorf("methods do not match GET/HEAD snapshot and POST commands")
 	}
@@ -477,6 +478,36 @@ func checkFieldSchema(t *testing.T, name string, field reflect.Type, property ma
 
 func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[string]any, schemas map[string]any) {
 	t.Helper()
+	config := paths[configPath].(map[string]any)
+	for _, method := range []string{"get", "head"} {
+		operation := config[method].(map[string]any)["responses"].(map[string]any)
+		if !reflect.DeepEqual(stringSet(mapKeys(operation)), stringSet([]string{"200", "405"})) {
+			t.Errorf("config %s response codes = %v", method, mapKeys(operation))
+		}
+		if method == "head" {
+			for code, response := range operation {
+				if _, ok := response.(map[string]any)["content"]; ok {
+					t.Errorf("config HEAD %s must have no body", code)
+				}
+			}
+		} else {
+			content := operation["200"].(map[string]any)["content"].(map[string]any)["application/json"].(map[string]any)
+			if content["schema"].(map[string]any)["$ref"] != "#/components/schemas/ConfigStatus" {
+				t.Error("config GET must reference ConfigStatus")
+			}
+		}
+	}
+	data, err := os.ReadFile("testdata/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture any
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSchema(fixture, schemas["ConfigStatus"].(map[string]any), schemas); err != nil {
+		t.Errorf("shared config fixture violates ConfigStatus: %v", err)
+	}
 	head := paths[snapshotPath].(map[string]any)["head"].(map[string]any)["responses"].(map[string]any)
 	if !reflect.DeepEqual(stringSet(mapKeys(head)), stringSet([]string{"200", "405", "503"})) {
 		t.Errorf("HEAD response codes=%v", mapKeys(head))
@@ -500,19 +531,16 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 			"zero": {
 				Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
 				Run:    runSnapshot{State: runStateStarting}, Reader: readerSnapshot{WorkerStates: []readerWorkerState{}},
-				Config: snapshotConfig(testConfig(t)),
 			},
 			"populated": {
 				Run:       runSnapshot{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
 				Reader:    readerSnapshot{Workers: 1, WorkerStates: []readerWorkerState{{Activity: readerWireReading}, {Activity: readerWireBlocked, Draining: true}}, RowsRead: 47},
 				Throttler: throttlerSnapshot{RequestedTps: 200, Installed: true},
 				Sender:    senderSnapshot{Workers: 32, WorkerStates: []senderWorkerState{}},
-				Config:    snapshotConfig(testConfig(t)),
 			},
 			"source error": {
 				Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
 				Run:    runSnapshot{State: runStateFaulted},
-				Config: snapshotConfig(testConfig(t)),
 				Reader: readerSnapshot{WorkerStates: []readerWorkerState{}, SourceError: &readerSourceError{Operation: "read", Path: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}

@@ -30,8 +30,17 @@ func (err remoteHTTPError) Error() string {
 
 func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) error {
 	client := remoteCLIClient{baseURL: command.remoteURL, httpClient: &http.Client{Timeout: remoteClientTimeout}}
+	var config configSnapshot
 	switch command.remoteAction {
 	case "status":
+		data, err := client.getData(ctx, configPath)
+		if err != nil {
+			return err
+		}
+		config, err = decodeStrictConfig(bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("GET %s: %w", configPath, err)
+		}
 	case "set":
 		if err := client.commandWithValue(ctx, command.remoteSet.requestAction, command.remoteSet.value); err != nil {
 			return err
@@ -39,13 +48,13 @@ func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) err
 	default:
 		return fmt.Errorf("unknown remote action %q", command.remoteAction)
 	}
-	data, err := client.snapshotData(ctx)
+	data, err := client.getData(ctx, snapshotPath)
 	if err != nil {
 		return err
 	}
 	snapshot, err := decodeStrictSnapshot(bytes.NewReader(data))
 	if err != nil {
-		return err
+		return fmt.Errorf("GET %s: %w", snapshotPath, err)
 	}
 	if command.remoteAction == "set" {
 		if err := command.remoteSet.confirm(data); err != nil {
@@ -54,7 +63,7 @@ func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) err
 		_, err = fmt.Fprintf(stdout, "action=set target=%s value=%v state=%s\n", command.remoteSet.target, command.remoteSet.value, snapshot.Run.State)
 		return err
 	}
-	_, err = io.WriteString(stdout, formatSnapshot(snapshot))
+	_, err = io.WriteString(stdout, formatSnapshot(snapshot, config))
 	return err
 }
 
@@ -63,18 +72,18 @@ type remoteCLIClient struct {
 	httpClient *http.Client
 }
 
-func (c remoteCLIClient) snapshotData(ctx context.Context) ([]byte, error) {
-	response, err := c.do(ctx, http.MethodGet, snapshotPath, nil)
+func (c remoteCLIClient) getData(ctx context.Context, endpoint string) ([]byte, error) {
+	response, err := c.do(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, newRemoteHTTPError(response, http.MethodGet, snapshotPath)
+		return nil, newRemoteHTTPError(response, http.MethodGet, endpoint)
 	}
 	data, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read snapshot: %w", err)
+		return nil, fmt.Errorf("read GET %s: %w", endpoint, err)
 	}
 	return data, nil
 }
@@ -130,7 +139,7 @@ func (c remoteSetCommand) confirm(data []byte) error {
 func (c remoteCLIClient) do(ctx context.Context, method, endpoint string, body []byte) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, method, c.baseURL+endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("build %s request: %w", method, err)
+		return nil, fmt.Errorf("build %s %s request: %w", method, endpoint, err)
 	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
@@ -166,10 +175,26 @@ func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
 	return snapshot, nil
 }
 
-func formatSnapshot(snapshot runtimeSnapshot) string {
+func decodeStrictConfig(body io.Reader) (configSnapshot, error) {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	var config *configSnapshot
+	if err := decoder.Decode(&config); err != nil {
+		return configSnapshot{}, fmt.Errorf("decode config: %w", err)
+	}
+	if config == nil {
+		return configSnapshot{}, errors.New("decode config: expected object")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return configSnapshot{}, errors.New("decode config: trailing JSON")
+	}
+	return *config, nil
+}
+
+func formatSnapshot(snapshot runtimeSnapshot, config configSnapshot) string {
 	reader := countReaderWorkers(snapshot.Reader.WorkerStates)
 	sender := countSenderWorkers(snapshot.Sender.WorkerStates)
-	sourcePath := sanitizeSnapshotValue(snapshot.Config.SourcePath)
+	sourcePath := sanitizeSnapshotValue(config.SourcePath)
 	if sourcePath == "" {
 		sourcePath = "none"
 	}
@@ -212,16 +237,16 @@ func formatSnapshot(snapshot runtimeSnapshot) string {
 		&output,
 		"Reader channel",
 		snapshot.ReaderChannel,
-		snapshot.Config.ReaderChannelCapacity,
-		snapshot.Config.ReadBatchSize,
+		config.ReaderChannelCapacity,
+		config.ReadBatchSize,
 		snapshot.Run.ElapsedMs,
 	)
 	writeSnapshotChannel(
 		&output,
 		"Sender channel",
 		snapshot.SenderChannel,
-		snapshot.Config.SenderChannelCapacity,
-		snapshot.Config.ReadBatchSize,
+		config.SenderChannelCapacity,
+		config.ReadBatchSize,
 		snapshot.Run.ElapsedMs,
 	)
 	fmt.Fprintf(&output, "Sender\n")

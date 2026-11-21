@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode"
@@ -32,7 +34,9 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 			snapshot := testRemoteSnapshot(t)
 			test.update(&snapshot)
 			var requestBody commandRequest
+			requests := []string{}
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				requests = append(requests, request.Method+" "+request.URL.Path)
 				switch request.URL.Path {
 				case commandsPath:
 					if request.Method != http.MethodPost {
@@ -69,6 +73,9 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 			wantOutput := "action=set target=" + test.target + " value=" + fmt.Sprint(test.value) + " state=running\n"
 			if output.String() != wantOutput {
 				t.Fatalf("stdout = %q, want %q", output.String(), wantOutput)
+			}
+			if !reflect.DeepEqual(requests, []string{"POST " + commandsPath, "GET " + snapshotPath}) {
+				t.Fatalf("set requests = %v", requests)
 			}
 		})
 	}
@@ -168,10 +175,7 @@ func TestDecodeStrictSnapshotValidatesJSONAndState(t *testing.T) {
 		{name: "sender buffered transactions", body: `{"run":{"state":"running"},"senderChannel":{"bufferedTransactions":1}}`, wantErr: true},
 		{name: "source error category", body: `{"run":{"state":"running"},"reader":{"sourceError":{"category":"source"}}}`, wantErr: true},
 		{name: "source error relative path", body: `{"run":{"state":"running"},"reader":{"sourceError":{"relativePath":"a.parquet"}}}`, wantErr: true},
-		{name: "reader profile", body: `{"run":{"state":"running"},"config":{"readerWorkers":{"initial":1,"max":7}}}`, wantErr: true},
-		{name: "sender profile", body: `{"run":{"state":"running"},"config":{"senderWorkers":{"initial":1,"max":32}}}`, wantErr: true},
-		{name: "TPS profile", body: `{"run":{"state":"running"},"config":{"throttlerRequestedTps":{"initial":0,"max":4000000}}}`, wantErr: true},
-		{name: "initial in config", body: `{"run":{"state":"running"},"config":{"initial":1}}`, wantErr: true},
+		{name: "embedded config", body: `{"run":{"state":"running"},"config":{}}`, wantErr: true},
 		{name: "unknown root field", body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: true},
 		{name: "unknown nested field", body: `{"run":{"state":"running"},"reader":{"unexpected":true}}`, wantErr: true},
 		{name: "wrong known type", body: `{"run":{"state":"running"},"throttler":{"requestedTps":"0"}}`, wantErr: true},
@@ -200,10 +204,43 @@ func mustMarshalJSON(t *testing.T, value any) string {
 	return string(encoded)
 }
 
+func TestDecodeStrictConfig(t *testing.T) {
+	data, err := os.ReadFile("testdata/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeStrictConfig(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := configSnapshot{
+		ReaderWorkersMax: 7, SenderWorkersMax: 32, RequestedTpsMax: 4000000,
+		ReadBatchSize: 20, ReaderChannelCapacity: 51, SenderChannelCapacity: 71, SourcePath: "reader-source",
+	}
+	if got != want {
+		t.Fatalf("decoded config = %+v, want %+v", got, want)
+	}
+	for _, test := range []struct{ name, body string }{
+		{name: "unknown field", body: `{"initial":1}`},
+		{name: "wrong type", body: `{"readBatchSize":"20"}`},
+		{name: "array", body: `[]`},
+		{name: "null", body: `null`},
+		{name: "malformed", body: `{`},
+		{name: "second object", body: string(data) + `{}`},
+		{name: "trailing null", body: string(data) + `null`},
+		{name: "trailing garbage", body: string(data) + `broken`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := decodeStrictConfig(strings.NewReader(test.body)); err == nil {
+				t.Fatal("invalid config accepted")
+			}
+		})
+	}
+}
+
 func TestFormatSnapshot(t *testing.T) {
 	status := runtimeSnapshot{
-		Config: configSnapshot{ReadBatchSize: 10, ReaderChannelCapacity: 3, SenderChannelCapacity: 4},
-		Run:    runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
+		Run: runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
 		Reader: readerSnapshot{
 			Workers: 3, WorkerStates: []readerWorkerState{
 				{Activity: readerWireReading}, {Activity: readerWireIdle, Draining: true},
@@ -219,7 +256,7 @@ func TestFormatSnapshot(t *testing.T) {
 		}},
 	}
 
-	got := formatSnapshot(status)
+	got := formatSnapshot(status, configSnapshot{ReadBatchSize: 10, ReaderChannelCapacity: 3, SenderChannelCapacity: 4})
 	want := "INGESTION LAB LOADGEN STATUS\n" +
 		"State:                    faulted\n" +
 		"Elapsed:                  1.25s\n" +
@@ -262,8 +299,7 @@ func TestWriteSnapshotChannelLargeTransactionEstimate(t *testing.T) {
 
 func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 	status := runtimeSnapshot{
-		Config: configSnapshot{SourcePath: "source\r\n\x1b[31m"},
-		Run:    runSnapshot{State: runState("running\n\x1b[2J")},
+		Run: runSnapshot{State: runState("running\n\x1b[2J")},
 		Reader: readerSnapshot{
 			SourceError: &readerSourceError{
 				Operation: "operation\t",
@@ -273,7 +309,7 @@ func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 		},
 	}
 
-	got := formatSnapshot(status)
+	got := formatSnapshot(status, configSnapshot{SourcePath: "source\r\n\x1b[31m"})
 	if strings.IndexFunc(got, func(character rune) bool {
 		return character != '\n' && unicode.IsControl(character)
 	}) >= 0 {
@@ -282,7 +318,7 @@ func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 	if strings.Count(got, "\n") != strings.Count(formatSnapshot(runtimeSnapshot{
 		Run:       runSnapshot{State: runStateRunning},
 		Throttler: throttlerSnapshot{Installed: true},
-	}), "\n") || !strings.HasSuffix(got, "\n") {
+	}, configSnapshot{}), "\n") || !strings.HasSuffix(got, "\n") {
 		t.Fatalf("card layout changed or has no final newline: %q", got)
 	}
 	for _, want := range []string{
@@ -299,31 +335,58 @@ func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 func TestFormatSnapshotStartingSourceGolden(t *testing.T) {
 	card := formatSnapshot(runtimeSnapshot{
 		Run: runSnapshot{State: runStateStarting},
-	})
+	}, configSnapshot{})
 	if !strings.Contains(card, "Source:                   none\nSource error:             none\n\nReader channel\n") {
 		t.Fatalf("idle source fields are not adjacent golden values: %q", card)
 	}
 }
 
-func TestRunRemoteCLIStatusFetchesOneSnapshot(t *testing.T) {
+func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
+	configBody := mustMarshalJSON(t, snapshotConfig(testConfig(t)))
+	snapshotBody := mustMarshalJSON(t, testRemoteSnapshot(t))
 	for _, test := range []struct {
-		name, body string
-		status     int
-		wantErr    string
-		shortBody  bool
+		name, endpoint, body string
+		status               int
+		wantErr              string
+		shortBody            bool
 	}{
-		{name: "success", body: mustMarshalJSON(t, testRemoteSnapshot(t))},
-		{name: "invalid schema", body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: "decode snapshot"},
-		{name: "empty HTTP error", status: http.StatusServiceUnavailable, wantErr: "HTTP 503 Service Unavailable GET " + snapshotPath},
-		{name: "truncated response body", body: `{`, shortBody: true, wantErr: "read snapshot"},
+		{name: "success"},
+		{name: "invalid snapshot", endpoint: snapshotPath, body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: "GET " + snapshotPath + ": decode snapshot"},
+		{name: "invalid config", endpoint: configPath, body: `{"unexpected":true}`, wantErr: "GET " + configPath + ": decode config"},
+		{name: "snapshot HTTP error", endpoint: snapshotPath, status: http.StatusServiceUnavailable, wantErr: "HTTP 503 Service Unavailable GET " + snapshotPath},
+		{name: "config HTTP error", endpoint: configPath, status: http.StatusServiceUnavailable, wantErr: "HTTP 503 Service Unavailable GET " + configPath},
+		{name: "truncated snapshot", endpoint: snapshotPath, body: `{`, shortBody: true, wantErr: "read GET " + snapshotPath},
+		{name: "truncated config", endpoint: configPath, body: `{`, shortBody: true, wantErr: "read GET " + configPath},
+		{name: "snapshot transport error", endpoint: snapshotPath, wantErr: "GET " + snapshotPath},
+		{name: "config transport error", endpoint: configPath, wantErr: "GET " + configPath},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			requests := 0
+			requests := []string{}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests++
-				if r.Method != http.MethodGet || r.URL.Path != snapshotPath {
-					t.Errorf("request = %s %s, want GET %s", r.Method, r.URL.Path, snapshotPath)
+				requests = append(requests, r.URL.Path)
+				w.Header().Set("Connection", "close")
+				if r.Method != http.MethodGet || (r.URL.Path != snapshotPath && r.URL.Path != configPath) {
+					t.Errorf("unexpected request = %s %s", r.Method, r.URL.Path)
 					http.Error(w, "unexpected request", http.StatusInternalServerError)
+					return
+				}
+				if r.URL.Path != test.endpoint {
+					body := snapshotBody
+					if r.URL.Path == configPath {
+						body = configBody
+					}
+					_, _ = w.Write([]byte(body))
+					return
+				}
+				if strings.Contains(test.name, "transport") {
+					connection, _, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Errorf("hijack: %v", err)
+						return
+					}
+					if err := connection.Close(); err != nil {
+						t.Errorf("close: %v", err)
+					}
 					return
 				}
 				if test.shortBody {
@@ -347,11 +410,15 @@ func TestRunRemoteCLIStatusFetchesOneSnapshot(t *testing.T) {
 				if test.status != 0 && err.Error() != test.wantErr {
 					t.Fatalf("empty HTTP error = %q, want %q", err, test.wantErr)
 				}
-			} else if err != nil || !strings.HasPrefix(stdout.String(), "INGESTION LAB LOADGEN STATUS\n") {
+			} else if err != nil || stdout.String() != formatSnapshot(testRemoteSnapshot(t), snapshotConfig(testConfig(t))) {
 				t.Fatalf("error=%v stdout=%q", err, stdout.String())
 			}
-			if requests != 1 {
-				t.Fatalf("requests=%d, want 1", requests)
+			wantRequests := []string{configPath, snapshotPath}
+			if test.endpoint == configPath {
+				wantRequests = []string{configPath}
+			}
+			if !reflect.DeepEqual(requests, wantRequests) {
+				t.Fatalf("requests=%v, want %v", requests, wantRequests)
 			}
 		})
 	}
@@ -387,7 +454,7 @@ func TestRunRemoteCLISetReportsPOSTTransportError(t *testing.T) {
 
 func TestFormatSnapshotBeforeRunShowsZeroAverages(t *testing.T) {
 	snapshot := runtimeSnapshot{Reader: readerSnapshot{RowsRead: 9}, SenderChannel: channelSnapshot{InputTransactionsTotal: 12, OutputTransactionsTotal: 6}}
-	got := formatSnapshot(snapshot)
+	got := formatSnapshot(snapshot, configSnapshot{})
 	for _, line := range []string{"Average read TPS:         0.0", "Average admitted TPS:     0.0", "Average input/output TPS: 0.0 / 0.0"} {
 		if !strings.Contains(got, line) {
 			t.Fatalf("missing %q in %q", line, got)
