@@ -76,6 +76,38 @@ func testSenderOptions() Options {
 	}
 }
 
+func readerActivity(state ReaderWorkerState) ReaderActivity {
+	return state.Activity
+}
+
+func readerDraining(state ReaderWorkerState) bool {
+	return state.Draining
+}
+
+func readerBlockedAndDraining(state ReaderWorkerState) bool {
+	return state.Activity == ReaderBlocked && readerDraining(state)
+}
+
+func senderActivity(state SenderWorkerState) SenderActivity {
+	return state.Activity
+}
+
+func senderDraining(state SenderWorkerState) bool {
+	return state.Draining
+}
+
+func senderInFlight(state SenderWorkerState) bool {
+	return state.Activity == SenderInFlight
+}
+
+func senderInFlightAndDraining(state SenderWorkerState) bool {
+	return senderInFlight(state) && senderDraining(state)
+}
+
+func senderBackoff(state SenderWorkerState) bool {
+	return state.Activity == SenderBackoff
+}
+
 func projectWorkerStates[T, U any](states []T, project func(T) U) []U {
 	projected := make([]U, 0, len(states))
 	for _, state := range states {

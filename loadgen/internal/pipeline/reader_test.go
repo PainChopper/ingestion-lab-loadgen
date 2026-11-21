@@ -209,9 +209,10 @@ func TestReaderPoolReactivatesOnlyNeededBlockedWorkers(t *testing.T) {
 		if len(got) != 3 {
 			t.Fatalf("after 3 to 1: %+v", got)
 		}
-		assertWorkerStateMultiset(t, filterWorkerStates(got, func(state ReaderWorkerState) bool { return state.Activity == ReaderBlocked && state.Draining }), []ReaderWorkerState{
-			{Activity: ReaderBlocked, Draining: true}, {Activity: ReaderBlocked, Draining: true},
-		})
+		assertWorkerStateMultiset(t, filterWorkerStates(got, readerBlockedAndDraining),
+			[]ReaderWorkerState{
+				{Activity: ReaderBlocked, Draining: true}, {Activity: ReaderBlocked, Draining: true},
+			})
 		pool.reconcile(2)
 		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
 			{Activity: ReaderBlocked}, {Activity: ReaderBlocked}, {Activity: ReaderBlocked, Draining: true},
@@ -387,7 +388,8 @@ func TestReaderPoolStopReadingSendsPendingPartialBatch(t *testing.T) {
 		pool = startReaderPool(t.Context(), Source{files: []string{"one"}}, 2, 3,
 			queue, &readerTelemetry{}, openFile, nil, zap.NewNop())
 		synctest.Wait()
-		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state ReaderWorkerState) ReaderActivity { return state.Activity }), []ReaderActivity{ReaderReading, ReaderIdle, ReaderIdle})
+		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, readerActivity),
+			[]ReaderActivity{ReaderReading, ReaderIdle, ReaderIdle})
 		close(allowRead)
 		<-pool.done
 		if got := len(pool.snapshot().WorkerStates); got != 0 {
@@ -425,7 +427,8 @@ func TestReaderPoolImmediateSendKeepsWorkerReading(t *testing.T) {
 	if worker.activity == ReaderBlocked {
 		t.Fatal("immediate send marked worker blocked")
 	}
-	assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state ReaderWorkerState) ReaderActivity { return state.Activity }), []ReaderActivity{ReaderReading})
+	assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, readerActivity),
+		[]ReaderActivity{ReaderReading})
 	if measurements := channel.snapshot(time.Now()); measurements.BlockedSenders != 0 ||
 		measurements.SentBatchesTotal != 1 || measurements.SentTransactionsTotal != 1 {
 		t.Fatalf("immediate send channel measurements = %+v", measurements)
@@ -533,7 +536,8 @@ func TestReaderPoolCanceledBlockedSendClearsBlockedState(t *testing.T) {
 		if blocked {
 			t.Fatal("cancelled send left worker blocked")
 		}
-		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state ReaderWorkerState) ReaderActivity { return state.Activity }), []ReaderActivity{ReaderReading})
+		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, readerActivity),
+			[]ReaderActivity{ReaderReading})
 		if measurements := channel.snapshot(time.Now()); measurements.BlockedSenders != 0 || measurements.BlockedMS != blockedFor.Milliseconds() ||
 			measurements.SentBatchesTotal != 0 || measurements.SentTransactionsTotal != 0 {
 			t.Fatalf("cancelled send channel measurements = %+v", measurements)
@@ -656,7 +660,8 @@ func TestReaderPoolReleaseWakesAllIdleWorkersBeforeDownscale(t *testing.T) {
 		<-firstRead
 		pool.reconcile(3)
 		synctest.Wait()
-		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state ReaderWorkerState) ReaderActivity { return state.Activity }), []ReaderActivity{ReaderReading, ReaderIdle, ReaderIdle})
+		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, readerActivity),
+			[]ReaderActivity{ReaderReading, ReaderIdle, ReaderIdle})
 		blockClaims.Store(true)
 		close(releaseFirst)
 		seen := map[int]bool{}
@@ -703,7 +708,8 @@ func TestReaderPoolDownscaleSelectsIdleBeforeBusy(t *testing.T) {
 	pool.ctx = t.Context()
 
 	pool.reconcile(2)
-	assertWorkerStateMultiset(t, filterWorkerStates(pool.snapshot().WorkerStates, func(state ReaderWorkerState) bool { return state.Draining }), []ReaderWorkerState{{Activity: ReaderIdle, Draining: true}})
+	assertWorkerStateMultiset(t, filterWorkerStates(pool.snapshot().WorkerStates, readerDraining),
+		[]ReaderWorkerState{{Activity: ReaderIdle, Draining: true}})
 }
 
 func TestReaderPoolBusyDownscaleFinishesCurrentFileWithoutClaimingNext(t *testing.T) {
@@ -734,7 +740,8 @@ func TestReaderPoolBusyDownscaleFinishesCurrentFileWithoutClaimingNext(t *testin
 			t.Fatalf("first opened file = %q", path)
 		}
 		synctest.Wait()
-		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state ReaderWorkerState) ReaderActivity { return state.Activity }), []ReaderActivity{ReaderReading})
+		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, readerActivity),
+			[]ReaderActivity{ReaderReading})
 		pool.reconcile(0)
 		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
 			{Activity: ReaderReading, Draining: true},
@@ -785,7 +792,8 @@ func TestReaderPoolBlockedDownscaleFlushesEntireFile(t *testing.T) {
 		channel.batchSize = 2
 		pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 2, 2, batches, &telemetry, &channel)
 		assertBlockedSender(t, &channel)
-		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state ReaderWorkerState) ReaderActivity { return state.Activity }), []ReaderActivity{ReaderBlocked, ReaderIdle})
+		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, readerActivity),
+			[]ReaderActivity{ReaderBlocked, ReaderIdle})
 		pool.reconcile(1)
 		assertReaderLive(t, pool, 1)
 		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{{Activity: ReaderBlocked}})
@@ -967,10 +975,12 @@ func TestReaderPoolCancellationUnblocksDrainingWorkers(t *testing.T) {
 		var channel batchQueue
 		pool := startTestReaderPool(t, ctx, filepath.Join(dir, "*.parquet"), 1, 2, batches, &telemetry, &channel)
 		assertBlockedSender(t, &channel)
-		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state ReaderWorkerState) ReaderActivity { return state.Activity }), []ReaderActivity{ReaderBlocked, ReaderIdle})
+		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, readerActivity),
+			[]ReaderActivity{ReaderBlocked, ReaderIdle})
 		pool.reconcile(1)
 		synctest.Wait()
-		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, func(state ReaderWorkerState) ReaderActivity { return state.Activity }), []ReaderActivity{ReaderBlocked})
+		assertWorkerStateMultiset(t, projectWorkerStates(pool.snapshot().WorkerStates, readerActivity),
+			[]ReaderActivity{ReaderBlocked})
 		pool.reconcile(0)
 		assertWorkerStateMultiset(t, pool.snapshot().WorkerStates, []ReaderWorkerState{
 			{Activity: ReaderBlocked, Draining: true},
