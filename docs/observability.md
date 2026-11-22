@@ -12,12 +12,12 @@ The React UI and CLI read the [control API](api.md). `reader_source_failed` logs
 
 ## Prometheus and Grafana
 
-From the repository root, start the [Compose stack](../infra/docker-compose.yml):
+Set up `infra/.env` as described in [Local infrastructure](../readme.md#local-infrastructure). From the repository root, start the monitoring services:
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d
+docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --wait prometheus grafana
 ```
 
 The stack runs Prometheus at [localhost:9090](http://localhost:9090/) and Grafana at [localhost:3000](http://localhost:3000/), with a provisioned Prometheus data source. Start the Go services separately using the [quick start](../readme.md#quick-start). The bundled [scrape config](../infra/prometheus.yml) reads `/metrics` from `host.docker.internal:8080` every two seconds. If that address does not reach LoadGen from the container on your host, use a container-reachable scrape target and set `http.addr` to listen on the corresponding host interface in your [local LoadGen config](configuration.md#loadgen).
 
-Stop the stack with `docker compose -f infra/docker-compose.yml down`.
+Stop the monitoring services with `docker compose --env-file infra/.env -f infra/docker-compose.yml stop prometheus grafana`.

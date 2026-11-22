@@ -1,0 +1,20 @@
+[
+  {
+    "name": "receiver-host",
+    "listen": "0.0.0.0:18081",
+    "upstream": "host.docker.internal:8081",
+    "enabled": true
+  },
+  {
+    "name": "kafka-host",
+    "listen": "0.0.0.0:19092",
+    "upstream": "kafka:19092",
+    "enabled": true
+  },
+  {
+    "name": "kafka-container",
+    "listen": "0.0.0.0:29093",
+    "upstream": "kafka:29093",
+    "enabled": true
+  }
+]

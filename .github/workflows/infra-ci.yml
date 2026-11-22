@@ -1,0 +1,96 @@
+name: Infra CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect infrastructure changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      run: ${{ steps.paths.outputs.run }}
+    steps:
+      - name: Check pull request paths
+        id: paths
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if [[ $EVENT_NAME == workflow_dispatch ]]; then
+            run=true
+          else
+            run=$(gh api --paginate --slurp "repos/$GH_REPO/pulls/$PR_NUMBER/files?per_page=100" |
+              jq -r '
+                def relevant: startswith("infra/") or . == ".github/workflows/infra-ci.yml";
+                add |
+                if any(.[]; (.filename | relevant) or (.previous_filename // "" | relevant)) then true
+                elif length >= 3000 then error("The pull request files API may have truncated the diff")
+                else false end
+              ')
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  smoke:
+    name: Infra smoke
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.run != 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Require a valid change detection result
+        if: needs.changes.result != 'success' || needs.changes.outputs.run != 'true'
+        run: |
+          echo 'Could not determine whether infrastructure changed.' >&2
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: receiver/go.mod
+          cache: false
+      - name: Install host clients
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kcat redis-tools postgresql-client
+      - name: Start the disposable stack and run smoke
+        shell: bash
+        env:
+          COMPOSE_PROJECT_NAME: infra-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          COMPOSE_ENV_FILES: ${{ runner.temp }}/infra-ci.env
+        run: |
+          umask 077
+          printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 32)" > "$COMPOSE_ENV_FILES"
+          docker compose -f infra/docker-compose.yml up -d --wait --wait-timeout 180
+
+          # Docker Engine reaches the runner through its bridge gateway.
+          sed 's/127\.0\.0\.1:8081/0.0.0.0:8081/' receiver/config.toml > "$RUNNER_TEMP/receiver.toml"
+          go -C receiver build -o "$RUNNER_TEMP/receiver" .
+          "$RUNNER_TEMP/receiver" --config "$RUNNER_TEMP/receiver.toml" &
+          receiver_pid=$!
+          trap 'kill "$receiver_pid" 2>/dev/null || true; wait "$receiver_pid" || true' EXIT
+          curl --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1 \
+            --max-time 3 --output /dev/null http://127.0.0.1:8081/status
+          bash infra/smoke.sh
+      - name: Remove the disposable stack
+        if: always()
+        shell: bash
+        env:
+          COMPOSE_PROJECT_NAME: infra-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          COMPOSE_ENV_FILES: ${{ runner.temp }}/infra-ci.env
+        run: |
+          if [[ -s $COMPOSE_ENV_FILES ]]; then
+            trap 'rm -f -- "$COMPOSE_ENV_FILES"' EXIT
+            docker compose -f infra/docker-compose.yml down --volumes
+          fi

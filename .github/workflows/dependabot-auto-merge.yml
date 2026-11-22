@@ -1,0 +1,75 @@
+name: Dependabot auto-merge
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  auto-merge:
+    if: >-
+      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+      queue: max
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        id: metadata
+        with:
+          github-token: ${{ github.token }}
+      - name: Classify all dependency updates
+        id: classify
+        shell: bash
+        env:
+          ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        run: |
+          # fetch-metadata reports the Dependabot branch segment, not the config key.
+          case "$ECOSYSTEM" in
+            go_modules|github_actions|docker_compose) ;;
+            *) exit 0 ;;
+          esac
+          # The aggregate update type can hide unknown members of a group.
+          if jq -e --arg ecosystem "$ECOSYSTEM" '
+            type == "array" and length > 0 and all(.[];
+              .packageEcosystem == $ecosystem and
+              (.updateType == "version-update:semver-minor" or .updateType == "version-update:semver-patch")
+            )
+          ' <<< "$DEPENDENCIES" >/dev/null; then
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The group needs manual review."
+          fi
+      - name: Apply auto-merge policy to the current head
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          ELIGIBLE: ${{ steps.classify.outputs.eligible }}
+        run: |
+          # Disable has no SHA precondition. Serialize these jobs per PR and check the live head first.
+          current=$(gh pr view "$PR_NUMBER" --json baseRefName,headRefOid)
+          if ! jq -e --arg sha "$HEAD_SHA" '.baseRefName == "main" and .headRefOid == $sha' <<< "$current" >/dev/null; then
+            echo 'The PR base or head changed. Skipping this run.'
+            exit 0
+          fi
+
+          if [[ $ELIGIBLE == true ]]; then
+            gh pr merge "$PR_NUMBER" --auto --squash --match-head-commit "$HEAD_SHA"
+          else
+            gh pr merge --disable-auto "$PR_NUMBER" || true
+          fi
