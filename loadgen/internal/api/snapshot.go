@@ -34,7 +34,7 @@ type ReaderSnapshot struct {
 	// Workers is the configured worker count.
 	Workers int `json:"workers"`
 	// WorkerStates lists live states, including draining workers.
-	WorkerStates readerWorkerStates `json:"workerStates"`
+	WorkerStates ReaderWorkerStates `json:"workerStates"`
 	// RowsRead is the number of rows read from the source.
 	RowsRead int64 `json:"rowsRead"`
 	// SourceError is the source failure, when one occurred.
@@ -64,7 +64,7 @@ type SenderSnapshot struct {
 	// Workers is the configured worker count.
 	Workers int `json:"workers"`
 	// WorkerStates lists live states, including draining workers.
-	WorkerStates senderWorkerStates `json:"workerStates"`
+	WorkerStates SenderWorkerStates `json:"workerStates"`
 }
 
 // ChannelSnapshot reports queue occupancy, blocked time and transaction counters.

@@ -16,7 +16,8 @@ import (
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/control"
 )
 
-type runtimeControl interface {
+// RuntimeControl provides runtime snapshots and accepts validated live commands.
+type RuntimeControl interface {
 	// Snapshot returns the current runtime state.
 	Snapshot(context.Context) (api.Snapshot, error)
 	// ValidCommand reports whether a command is supported by the runtime.
@@ -38,7 +39,7 @@ type Options struct {
 }
 
 // NewHandler registers the API, developer routes and metrics on an HTTP mux.
-func NewHandler(requests runtimeControl, options Options) http.Handler {
+func NewHandler(requests RuntimeControl, options Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET "+api.SnapshotPath, snapshotHandler(requests, options.Logger))
 	mux.Handle("GET "+api.ConfigPath, configHandler(options.Startup, options.Logger))
@@ -58,7 +59,7 @@ func NewHandler(requests runtimeControl, options Options) http.Handler {
 
 const maxCommandBodyBytes = 4096
 
-func commandsHandler(requests runtimeControl) http.Handler {
+func commandsHandler(requests RuntimeControl) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCommandBodyBytes))
 		if err != nil {
@@ -129,7 +130,7 @@ func configHandler(config api.ConfigResponse, logger *zap.Logger) http.Handler {
 	})
 }
 
-func snapshotHandler(requests runtimeControl, logger *zap.Logger) http.Handler {
+func snapshotHandler(requests RuntimeControl, logger *zap.Logger) http.Handler {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		snapshot, err := requests.Snapshot(r.Context())
 		if err != nil {
