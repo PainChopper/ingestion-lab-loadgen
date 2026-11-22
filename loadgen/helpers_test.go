@@ -40,15 +40,6 @@ func waitForHTTPSnapshotState(t *testing.T, baseURL string, want api.RunState) {
 	t.Fatalf("wait for service state %q: %v", want, lastError)
 }
 
-func testRemoteSnapshot(t *testing.T) api.Snapshot {
-	t.Helper()
-	return api.Snapshot{
-		Run:    api.RunSnapshot{State: api.RunStateRunning},
-		Reader: api.ReaderSnapshot{WorkerStates: []api.ReaderWorkerState{}},
-		Sender: api.SenderSnapshot{WorkerStates: []api.SenderWorkerState{}},
-	}
-}
-
 const (
 	profileFixture = "testdata/profile.toml"
 	testSenderURL  = "http://127.0.0.1:8081/internal/ingest"

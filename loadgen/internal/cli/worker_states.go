@@ -1,49 +1,49 @@
-package main
+package cli
 
 import "github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 
 // Counts belong to presentation: the pipeline and wire retain individual states.
 type readerWorkerCounts struct {
-	LiveWorkers, IdleWorkers, ReadingWorkers, BlockedWorkers int
-	DrainingWorkers                                          int
+	liveWorkers, idleWorkers, readingWorkers, blockedWorkers int
+	drainingWorkers                                          int
 }
 
 func countReaderWorkers(states []api.ReaderWorkerState) readerWorkerCounts {
-	counts := readerWorkerCounts{LiveWorkers: len(states)}
+	counts := readerWorkerCounts{liveWorkers: len(states)}
 	for _, state := range states {
 		switch state.Activity {
 		case api.ReaderIdle:
-			counts.IdleWorkers++
+			counts.idleWorkers++
 		case api.ReaderReading:
-			counts.ReadingWorkers++
+			counts.readingWorkers++
 		case api.ReaderBlocked:
-			counts.BlockedWorkers++
+			counts.blockedWorkers++
 		}
 		if state.Draining {
-			counts.DrainingWorkers++
+			counts.drainingWorkers++
 		}
 	}
 	return counts
 }
 
 type senderWorkerCounts struct {
-	LiveWorkers, IdleWorkers, InFlightWorkers, BackoffWorkers int
-	DrainingWorkers                                           int
+	liveWorkers, idleWorkers, inFlightWorkers, backoffWorkers int
+	drainingWorkers                                           int
 }
 
 func countSenderWorkers(states []api.SenderWorkerState) senderWorkerCounts {
-	counts := senderWorkerCounts{LiveWorkers: len(states)}
+	counts := senderWorkerCounts{liveWorkers: len(states)}
 	for _, state := range states {
 		switch state.Activity {
 		case api.SenderIdle:
-			counts.IdleWorkers++
+			counts.idleWorkers++
 		case api.SenderInFlight:
-			counts.InFlightWorkers++
+			counts.inFlightWorkers++
 		case api.SenderBackoff:
-			counts.BackoffWorkers++
+			counts.backoffWorkers++
 		}
 		if state.Draining {
-			counts.DrainingWorkers++
+			counts.drainingWorkers++
 		}
 	}
 	return counts

@@ -2,36 +2,18 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/cli"
 )
 
 func main() {
-	os.Exit(runCLI(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr, serveWithSignals))
 }
 
-func runCLI(args []string, stdout, stderr io.Writer) int {
-	command, err := parseCLI(args)
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
-		_, _ = fmt.Fprintln(stderr, command.usage())
-		return cliExitUsage
-	}
-	if command.showUsage {
-		_, _ = fmt.Fprintln(stdout, command.usage())
-		return cliExitSuccess
-	}
-	if command.remoteAction != "" {
-		if err := runRemoteCLI(context.Background(), command, stdout); err != nil {
-			_, _ = fmt.Fprintln(stderr, err)
-			return cliExitCode(err)
-		}
-		return cliExitSuccess
-	}
-
+func serveWithSignals(configPath string) error {
 	appCtx, cancel := context.WithCancel(context.Background())
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -49,9 +31,5 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 		cancel()
 		<-signalsDone
 	}()
-	if err := runServe(appCtx, command.configPath); err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
-		return cliExitLocal
-	}
-	return cliExitSuccess
+	return runServe(appCtx, configPath)
 }

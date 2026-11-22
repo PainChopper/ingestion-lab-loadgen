@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"os"
@@ -32,8 +32,8 @@ func TestWorkerCountsAndCLI(t *testing.T) {
 			sender: []api.SenderWorkerState{
 				{Activity: api.SenderInFlight}, {Activity: api.SenderBackoff, Draining: true},
 			},
-			wantR: readerWorkerCounts{LiveWorkers: 2, ReadingWorkers: 1, BlockedWorkers: 1, DrainingWorkers: 1},
-			wantS: senderWorkerCounts{LiveWorkers: 2, InFlightWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
+			wantR: readerWorkerCounts{liveWorkers: 2, readingWorkers: 1, blockedWorkers: 1, drainingWorkers: 1},
+			wantS: senderWorkerCounts{liveWorkers: 2, inFlightWorkers: 1, backoffWorkers: 1, drainingWorkers: 1},
 			lineR: "configured=1 live=2 reading=1 idle=0 blocked=1 draining=1",
 			lineS: "configured=2 live=2 in-flight=1 idle=0 backoff=1 draining=1",
 		},
@@ -52,8 +52,8 @@ func TestWorkerCountsAndCLI(t *testing.T) {
 				{Activity: api.SenderInFlight},
 				{Activity: api.SenderBackoff}, {Activity: api.SenderIdle},
 			},
-			wantR: readerWorkerCounts{LiveWorkers: 6, ReadingWorkers: 1, BlockedWorkers: 2, IdleWorkers: 3, DrainingWorkers: 3},
-			wantS: senderWorkerCounts{LiveWorkers: 5, InFlightWorkers: 3, BackoffWorkers: 1, IdleWorkers: 1, DrainingWorkers: 2},
+			wantR: readerWorkerCounts{liveWorkers: 6, readingWorkers: 1, blockedWorkers: 2, idleWorkers: 3, drainingWorkers: 3},
+			wantS: senderWorkerCounts{liveWorkers: 5, inFlightWorkers: 3, backoffWorkers: 1, idleWorkers: 1, drainingWorkers: 2},
 			lineR: "configured=1 live=6 reading=1 idle=3 blocked=2 draining=3",
 			lineS: "configured=2 live=5 in-flight=3 idle=1 backoff=1 draining=2",
 		},
@@ -79,7 +79,7 @@ func TestWorkerCountsAndCLI(t *testing.T) {
 }
 
 func TestCLIWorkerCountsFromSharedFixture(t *testing.T) {
-	data, err := os.ReadFile("testdata/snapshot.json")
+	data, err := os.ReadFile("../../testdata/snapshot.json")
 	if err != nil {
 		t.Fatal(err)
 	}

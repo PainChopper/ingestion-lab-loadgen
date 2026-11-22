@@ -1,8 +1,11 @@
-package main
+// Package cli parses and executes LoadGen command-line commands.
+package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strconv"
 	"strings"
@@ -10,6 +13,34 @@ import (
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
+
+// Run executes the requested command and returns its process exit code.
+// The serve callback starts the local service for the requested configuration path.
+func Run(args []string, stdout, stderr io.Writer, serve func(configPath string) error) int {
+	command, err := parseCLI(args)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		_, _ = fmt.Fprintln(stderr, command.usage())
+		return cliExitUsage
+	}
+	if command.showUsage {
+		_, _ = fmt.Fprintln(stdout, command.usage())
+		return cliExitSuccess
+	}
+	if command.remoteAction != "" {
+		if err := runRemoteCLI(context.Background(), command, stdout); err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return cliExitCode(err)
+		}
+		return cliExitSuccess
+	}
+
+	if err := serve(command.configPath); err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return cliExitLocal
+	}
+	return cliExitSuccess
+}
 
 const cliUsage = `usage: ingestion-lab-loadgen <command> [arguments]
 

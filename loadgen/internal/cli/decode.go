@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"encoding/json"
@@ -11,8 +11,10 @@ type cliJSONTypeError struct {
 	message string
 }
 
+// Error returns the JSON type diagnostic.
 func (err cliJSONTypeError) Error() string { return err.message }
 
+// Unwrap returns the underlying JSON decoding error.
 func (err cliJSONTypeError) Unwrap() error { return err.cause }
 
 // Keep the CLI diagnostic stable when a JSON destination moves to another package.
