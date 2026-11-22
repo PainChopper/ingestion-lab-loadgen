@@ -233,35 +233,34 @@ describe('ThrottlerActor valve control', () => {
   it.each([
     { applied: 1, target: 0, action: 'Home' },
     { applied: 3_999_999, target: 4_000_000, action: 'pointer' },
-  ])('reaches $target from $applied with $action without repeating it', async ({
-    applied,
-    target,
-    action,
-  }) => {
-    const onCommand = vi.fn()
-    const control = requestedControl({ applied, max: 4_000_000 })
-    const view = renderHarness({ control, onCommand, confirmRequested: false })
-    const slider = screen.getByRole('slider', { name: 'Throttle opening' })
-    const activate = () => {
-      if (action === 'pointer') {
-        fireEvent.pointerDown(view.container.querySelector('[data-wheel-direction="increase"]')!)
-        fireEvent.pointerUp(window)
-      } else {
-        fireEvent.keyDown(slider, { key: action })
+  ])(
+    'reaches $target from $applied with $action without repeating it',
+    async ({ applied, target, action }) => {
+      const onCommand = vi.fn()
+      const control = requestedControl({ applied, max: 4_000_000 })
+      const view = renderHarness({ control, onCommand, confirmRequested: false })
+      const slider = screen.getByRole('slider', { name: 'Throttle opening' })
+      const activate = () => {
+        if (action === 'pointer') {
+          fireEvent.pointerDown(view.container.querySelector('[data-wheel-direction="increase"]')!)
+          fireEvent.pointerUp(window)
+        } else {
+          fireEvent.keyDown(slider, { key: action })
+        }
       }
-    }
 
-    activate()
-    await waitFor(() => expect(onCommand).toHaveBeenCalledExactlyOnceWith(target))
-    expect(slider.getAttribute('aria-disabled')).toBe('true')
-    activate()
-    expect(onCommand).toHaveBeenCalledTimes(1)
+      activate()
+      await waitFor(() => expect(onCommand).toHaveBeenCalledExactlyOnceWith(target))
+      expect(slider.getAttribute('aria-disabled')).toBe('true')
+      activate()
+      expect(onCommand).toHaveBeenCalledTimes(1)
 
-    view.rerender({ control: { ...control, applied: target }, onCommand })
-    expect(slider.getAttribute('aria-disabled')).toBe('false')
-    activate()
-    expect(onCommand).toHaveBeenCalledTimes(1)
-  })
+      view.rerender({ control: { ...control, applied: target }, onCommand })
+      expect(slider.getAttribute('aria-disabled')).toBe('false')
+      activate()
+      expect(onCommand).toHaveBeenCalledTimes(1)
+    },
+  )
 
   it('uses visible sides for the current config without issuing bypass commands', async () => {
     const onCommand = vi.fn()
