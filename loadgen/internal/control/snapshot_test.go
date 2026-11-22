@@ -1,4 +1,4 @@
-package main
+package control
 
 import (
 	"encoding/json"
@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 )
 
 func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
@@ -55,7 +56,7 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 	if err := json.Unmarshal(encoded, &actual); err != nil {
 		t.Fatal(err)
 	}
-	expectedJSON, err := os.ReadFile("testdata/snapshot.json")
+	expectedJSON, err := os.ReadFile("../../testdata/snapshot.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
 }
 
 func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
-	data, err := os.ReadFile("testdata/snapshot.json")
+	data, err := os.ReadFile("../../testdata/snapshot.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,9 +80,9 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	config := testConfig(t)
-	config.ReaderChannel.Capacity = 51
-	config.SenderChannel.Capacity = 71
+	var cfg config.Config
+	cfg.ReaderChannel.Capacity = 51
+	cfg.SenderChannel.Capacity = 71
 	want := map[string]any{
 		"event": "runtime_summary", "state": "stopping", "captured_at_ms": int64(103),
 		"elapsed_ms": int64(102), "total_transactions": int64(101),
@@ -109,7 +110,7 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 				want["source_error_path"] = ""
 			}
 			core, entries := observer.New(zap.InfoLevel)
-			zap.New(core).Info("summary", snapshotLogFields(snapshot, config)...)
+			zap.New(core).Info("summary", snapshotLogFields(snapshot, cfg)...)
 			if got := entries.All()[0].ContextMap(); !reflect.DeepEqual(got, want) {
 				t.Fatalf("log fields = %#v, want %#v", got, want)
 			}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/control"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	zaplogfmt "github.com/jsternberg/zap-logfmt"
@@ -29,25 +30,21 @@ func runServe(appCtx context.Context, configPath string) error {
 	}
 	defer func() { _ = logger.Sync() }()
 
-	state := newControlState(cfg, logger)
-	queue := make(chan runtimeRequest, 10)
-	loopDone := make(chan struct{})
-	requests := runtimeRequests{queue: queue, done: loopDone}
+	state := control.New(cfg, pipelineOptions(cfg, logger), logger)
 	metrics := newPrometheusMetrics()
 	metrics.targetTPS.Set(float64(cfg.Throttler.RequestedTPS.Initial))
 
-	server, serverDone, err := startHTTPServer(requests, metrics, cfg, logger)
+	server, serverDone, err := startHTTPServer(state, metrics, cfg, logger)
 	if err != nil {
 		return err
 	}
-	events := runtimeEvents{
-		requests:   queue,
-		source:     prepareSourceAsync(cfg.Source.Path),
-		serverDone: serverDone,
-		metrics:    metrics,
+	events := control.Events{
+		Source:              prepareSourceAsync(cfg.Source.Path),
+		ServerDone:          serverDone,
+		PipelineStarted:     metrics.run.Store,
+		RequestedTPSChanged: func(tps int) { metrics.targetTPS.Set(float64(tps)) },
 	}
-	deadline, runErr := state.runEventLoop(appCtx, events, gracefulShutdownTimeout)
-	close(loopDone)
+	deadline, runErr := state.Run(appCtx, events, gracefulShutdownTimeout)
 	if deadline.IsZero() {
 		deadline = time.Now().Add(gracefulShutdownTimeout)
 	}
@@ -66,16 +63,11 @@ func runServe(appCtx context.Context, configPath string) error {
 	return runErr
 }
 
-type sourceDiscovery struct {
-	source pipeline.Source
-	err    error
-}
-
-func prepareSourceAsync(path string) <-chan sourceDiscovery {
-	ready := make(chan sourceDiscovery, 1)
+func prepareSourceAsync(path string) <-chan control.SourceResult {
+	ready := make(chan control.SourceResult, 1)
 	go func() {
 		source, err := pipeline.DiscoverSource(path)
-		ready <- sourceDiscovery{source: source, err: err}
+		ready <- control.SourceResult{Source: source, Err: err}
 	}()
 	return ready
 }
@@ -106,8 +98,7 @@ type prometheusMetrics struct {
 
 	targetTPS prometheus.Gauge
 
-	run               atomic.Pointer[pipeline.Pipeline]
-	transactionsTotal prometheus.CounterFunc
+	run atomic.Pointer[pipeline.Pipeline]
 }
 
 func newPrometheusMetrics() *prometheusMetrics {
@@ -121,7 +112,6 @@ func newPrometheusMetrics() *prometheusMetrics {
 		}
 		return float64(run.CompletedTotal())
 	})
-	metrics.transactionsTotal = total
 	reg.MustRegister(target, total)
 	return metrics
 }

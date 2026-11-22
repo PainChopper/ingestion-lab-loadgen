@@ -1,4 +1,5 @@
-package main
+// Package control serializes LoadGen run state, live commands and snapshots.
+package control
 
 import (
 	"context"
@@ -6,21 +7,23 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"go.uber.org/zap"
-
-	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
-type controlState struct {
+// Controller owns run state and accepts requests while its event loop is active.
+type Controller struct {
 	startedAt       time.Time
 	run             controlRunState
 	config          config.Config
 	controls        configuredControls
 	pipelineOptions pipeline.Options
 	logger          *zap.Logger
+	queue           chan runtimeRequest
+	done            chan struct{}
 }
 
 type controlRunState struct {
@@ -36,15 +39,29 @@ type configuredControls struct {
 	senderWorkers int
 }
 
-type runtimeEvents struct {
-	requests   <-chan runtimeRequest
-	source     <-chan sourceDiscovery
-	serverDone <-chan error
-	metrics    *prometheusMetrics
+// SourceResult carries the outcome of startup Parquet source discovery.
+type SourceResult struct {
+	// Source is the discovered input.
+	Source pipeline.Source
+	// Err is the discovery failure, when one occurred.
+	Err error
 }
 
-func newControlState(cfg config.Config, logger *zap.Logger) controlState {
-	return controlState{
+// Events provides external inputs and callbacks for the controller's run.
+type Events struct {
+	// Source delivers the result of source discovery.
+	Source <-chan SourceResult
+	// ServerDone reports that the HTTP listener stopped.
+	ServerDone <-chan error
+	// PipelineStarted receives the newly started pipeline, when provided.
+	PipelineStarted func(*pipeline.Pipeline)
+	// RequestedTPSChanged receives each newly applied target TPS, when provided.
+	RequestedTPSChanged func(int)
+}
+
+// New prepares the controller with the validated configuration and pipeline options.
+func New(cfg config.Config, options pipeline.Options, logger *zap.Logger) *Controller {
+	return &Controller{
 		startedAt: time.Now(),
 		run:       controlRunState{state: api.RunStateStarting},
 		config:    cfg,
@@ -55,16 +72,19 @@ func newControlState(cfg config.Config, logger *zap.Logger) controlState {
 			senderWorkers: cfg.Sender.Workers.Initial,
 		},
 		logger:          logger,
-		pipelineOptions: pipelineOptions(cfg, logger),
+		pipelineOptions: options,
+		queue:           make(chan runtimeRequest, 10),
+		done:            make(chan struct{}),
 	}
 }
 
-func (s *controlState) runEventLoop(
+// Run processes controller events once and returns the HTTP shutdown deadline, if set, and run error.
+func (s *Controller) Run(
 	appCtx context.Context,
-	events runtimeEvents,
+	events Events,
 	grace time.Duration,
 ) (shutdownDeadline time.Time, runErr error) {
-	metrics := events.metrics
+	defer close(s.done)
 	ticker := time.NewTicker(snapshotLogInterval)
 	defer ticker.Stop()
 
@@ -112,8 +132,8 @@ func (s *controlState) runEventLoop(
 		select {
 		case <-appDone:
 			stopOnSignal()
-		case err := <-events.serverDone:
-			events.serverDone = nil
+		case err := <-events.ServerDone:
+			events.ServerDone = nil
 			if err == nil {
 				err = errors.New("http server stopped unexpectedly")
 			}
@@ -121,14 +141,14 @@ func (s *controlState) runEventLoop(
 			s.run.state = api.RunStateFaulted
 			s.logger.Error("HTTP server failed", zap.String("event", "http_server_failed"), zap.Error(err))
 			beginDrain()
-		case found := <-events.source:
-			events.source = nil
-			if found.err != nil {
+		case found := <-events.Source:
+			events.Source = nil
+			if found.Err != nil {
 				var sourceError *pipeline.SourceError
-				if errors.As(found.err, &sourceError) {
+				if errors.As(found.Err, &sourceError) {
 					s.recordSourceFault(sourceError)
 				}
-				return shutdownDeadline, errors.Join(runErr, fmt.Errorf("start run: %w", found.err))
+				return shutdownDeadline, errors.Join(runErr, fmt.Errorf("start run: %w", found.Err))
 			}
 			if s.run.state != api.RunStateStarting {
 				return shutdownDeadline, runErr
@@ -138,10 +158,12 @@ func (s *controlState) runEventLoop(
 				return shutdownDeadline, runErr
 			}
 			options := s.pipelineOptions
-			options.Source = found.source
+			options.Source = found.Source
 			s.run.runStartedAt = time.Now()
 			run = pipeline.Start(runCtx, options)
-			metrics.run.Store(run)
+			if events.PipelineStarted != nil {
+				events.PipelineStarted(run)
+			}
 			pipelineDone = run.Done()
 			sourceErrors = run.SourceErrors()
 			s.run.state = api.RunStateRunning
@@ -163,17 +185,13 @@ func (s *controlState) runEventLoop(
 			return shutdownDeadline, runErr
 		case <-pipelineDone:
 			return shutdownDeadline, runErr
-		case request, ok := <-events.requests:
-			if !ok {
-				events.requests = nil
-				continue
-			}
+		case request := <-s.queue:
 			switch request := request.(type) {
 			case snapshotRequest:
 				request.reply <- s.snapshotAt(run, time.Now())
 			case controlRequest:
 				request.reply <- s.run.state == api.RunStateRunning &&
-					s.applyCommand(run, request.command, metrics)
+					s.applyCommand(run, request.command, events.RequestedTPSChanged)
 			}
 		case <-ticker.C:
 			s.logger.Info("runtime summary", snapshotLogFields(s.snapshotAt(run, time.Now()), s.config)...)
@@ -181,37 +199,39 @@ func (s *controlState) runEventLoop(
 	}
 }
 
-func (s *controlState) applyCommand(run *pipeline.Pipeline, command runtimeCommand, metrics *prometheusMetrics) bool {
-	switch command.kind {
-	case setReaderWorkers:
-		if !s.config.Reader.Workers.Contains(command.value) {
+func (s *Controller) applyCommand(run *pipeline.Pipeline, command Command, requestedTPSChanged func(int)) bool {
+	switch command.Action {
+	case api.SetReaderWorkers:
+		if !s.config.Reader.Workers.Contains(command.Value) {
 			return false
 		}
-		s.controls.readerWorkers = command.value
-		run.SetReaders(command.value)
-	case setSenderWorkers:
-		if !s.config.Sender.Workers.Contains(command.value) {
+		s.controls.readerWorkers = command.Value
+		run.SetReaders(command.Value)
+	case api.SetSenderWorkers:
+		if !s.config.Sender.Workers.Contains(command.Value) {
 			return false
 		}
-		s.controls.senderWorkers = command.value
-		run.SetSenders(command.value)
-	case setRequestedTPS:
-		if !s.config.Throttler.RequestedTPS.Contains(command.value) {
+		s.controls.senderWorkers = command.Value
+		run.SetSenders(command.Value)
+	case api.SetRequestedTPS:
+		if !s.config.Throttler.RequestedTPS.Contains(command.Value) {
 			return false
 		}
-		if s.controls.requestedTPS != command.value {
-			s.controls.requestedTPS = command.value
-			metrics.targetTPS.Set(float64(command.value))
+		if s.controls.requestedTPS != command.Value {
+			s.controls.requestedTPS = command.Value
+			if requestedTPSChanged != nil {
+				requestedTPSChanged(command.Value)
+			}
 			run.SetRate(s.rate())
 			s.logger.Info("throttler rate changed",
-				zap.String("event", "throttler_rate_changed"), zap.Int("requested_tps", command.value))
+				zap.String("event", "throttler_rate_changed"), zap.Int("requested_tps", command.Value))
 		}
-	case setThrottlerInstalled:
-		if s.controls.installed != command.installed {
-			s.controls.installed = command.installed
+	case api.SetThrottlerInstalled:
+		if s.controls.installed != command.Installed {
+			s.controls.installed = command.Installed
 			run.SetRate(s.rate())
 			s.logger.Info("throttler mode changed",
-				zap.String("event", "throttler_mode_changed"), zap.Bool("installed", command.installed))
+				zap.String("event", "throttler_mode_changed"), zap.Bool("installed", command.Installed))
 		}
 	default:
 		return false
@@ -219,7 +239,7 @@ func (s *controlState) applyCommand(run *pipeline.Pipeline, command runtimeComma
 	return true
 }
 
-func (s *controlState) recordSourceFault(err error) {
+func (s *Controller) recordSourceFault(err error) {
 	var sourceError *pipeline.SourceError
 	if !errors.As(err, &sourceError) {
 		return
@@ -231,7 +251,7 @@ func (s *controlState) recordSourceFault(err error) {
 		zap.String("operation", sourceError.Op), zap.String("path", sourceError.Path), zap.Error(sourceError))
 }
 
-func (s *controlState) finishRun(run *pipeline.Pipeline, partial bool) {
+func (s *Controller) finishRun(run *pipeline.Pipeline, partial bool) {
 	var confirmed, rowsRead int64
 	if run != nil {
 		confirmed = run.CompletedTotal()
@@ -245,7 +265,7 @@ func (s *controlState) finishRun(run *pipeline.Pipeline, partial bool) {
 	)
 }
 
-func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) api.Snapshot {
+func (s *Controller) snapshotAt(run *pipeline.Pipeline, now time.Time) api.Snapshot {
 	var snapshot pipeline.Snapshot
 	if run != nil {
 		snapshot = run.Snapshot(now)
@@ -277,37 +297,27 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) api.Sna
 	}
 }
 
-func (s *controlState) rate() pipeline.Rate {
+func (s *Controller) rate() pipeline.Rate {
 	return pipeline.Rate{TPS: s.controls.requestedTPS, Installed: s.controls.installed}
 }
 
-func (s *controlState) elapsedMs(now time.Time) int64 {
+func (s *Controller) elapsedMs(now time.Time) int64 {
 	if s.run.runStartedAt.IsZero() {
 		return 0
 	}
 	return max(0, now.Sub(s.run.runStartedAt).Milliseconds())
 }
 
-type runtimeCommandKind int
-
-const (
-	setReaderWorkers runtimeCommandKind = iota + 1
-	setRequestedTPS
-	setThrottlerInstalled
-	setSenderWorkers
-)
-
 var errRuntimeUnavailable = errors.New("runtime unavailable")
 
-type runtimeRequests struct {
-	queue chan<- runtimeRequest
-	done  <-chan struct{}
-}
-
-type runtimeCommand struct {
-	kind      runtimeCommandKind
-	value     int
-	installed bool
+// Command is a validated live setting update submitted to the controller.
+type Command struct {
+	// Action identifies the setting to update.
+	Action string
+	// Value carries a worker count or requested TPS.
+	Value int
+	// Installed carries the requested pacing mode.
+	Installed bool
 }
 
 type runtimeRequest interface {
@@ -319,33 +329,35 @@ type snapshotRequest struct {
 }
 
 type controlRequest struct {
-	command runtimeCommand
+	command Command
 	reply   chan<- bool
 }
 
 func (snapshotRequest) isRuntimeRequest() {}
 func (controlRequest) isRuntimeRequest()  {}
 
-func requestSnapshot(ctx context.Context, requests runtimeRequests) (api.Snapshot, error) {
+// Snapshot asks the event loop for a point-in-time view of the run.
+func (s *Controller) Snapshot(ctx context.Context) (api.Snapshot, error) {
 	reply := make(chan api.Snapshot, 1)
-	return awaitRuntimeReply(ctx, requests, snapshotRequest{reply: reply}, reply)
+	return awaitRuntimeReply(ctx, s, snapshotRequest{reply: reply}, reply)
 }
 
-func executeRuntimeCommand(ctx context.Context, requests runtimeRequests, command runtimeCommand) (bool, error) {
+// Execute asks the event loop to apply a command and returns its receipt.
+func (s *Controller) Execute(ctx context.Context, command Command) (bool, error) {
 	reply := make(chan bool, 1)
-	return awaitRuntimeReply(ctx, requests, controlRequest{command: command, reply: reply}, reply)
+	return awaitRuntimeReply(ctx, s, controlRequest{command: command, reply: reply}, reply)
 }
 
-func awaitRuntimeReply[T any](ctx context.Context, requests runtimeRequests, request runtimeRequest, reply <-chan T) (T, error) {
+func awaitRuntimeReply[T any](ctx context.Context, controller *Controller, request runtimeRequest, reply <-chan T) (T, error) {
 	var zero T
 	select {
 	case <-ctx.Done():
 		return zero, ctx.Err()
-	case <-requests.done:
+	case <-controller.done:
 		return zero, errRuntimeUnavailable
-	case requests.queue <- request:
+	case controller.queue <- request:
 	}
-	return receiveRuntimeReply(ctx, requests.done, reply)
+	return receiveRuntimeReply(ctx, controller.done, reply)
 }
 
 func receiveRuntimeReply[T any](ctx context.Context, done <-chan struct{}, reply <-chan T) (T, error) {
