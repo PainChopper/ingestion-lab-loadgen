@@ -53,6 +53,7 @@ Parquet → Reader pool → Reader queue → Throttler → Sender queue → Send
 Readers emit batches of up to the configured size. The Throttler paces whole batches by transaction count, and the Sender retries failed HTTP deliveries. A `204 No Content` acknowledges a batch.
 
 - The [control package](loadgen/internal/control) serializes run transitions, live commands, and snapshot requests in its event loop.
+- Receiver's [configuration package](receiver/internal/config) loads and validates its TOML settings before startup.
 - Bounded channels propagate backpressure upstream when the next stage falls behind.
 - Monotonic time and cumulative counters let clients calculate rates across polls.
 - Strict TOML and control API parsing surface invalid settings and commands.

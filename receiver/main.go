@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/receiver/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/receiver/internal/ingest"
 )
 
@@ -49,7 +50,7 @@ func main() {
 }
 
 func run(ctx context.Context, configPath string, output io.Writer) error {
-	cfg, err := LoadConfig(configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config %q: %w", configPath, err)
 	}
