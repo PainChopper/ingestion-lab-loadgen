@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/control"
 )
 
 func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
@@ -43,16 +44,24 @@ func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
 	cfg.Source.Path = want.SourcePath
 	for _, state := range []api.RunState{api.RunStateStarting, api.RunStateRunning, api.RunStateStopping, api.RunStateFaulted} {
 		t.Run(string(state), func(t *testing.T) {
-			owner := newControlState(cfg, zap.NewNop())
-			owner.run.state = state
-			requests := make(chan runtimeRequest, 1)
-			done := make(chan struct{})
-			if state == api.RunStateFaulted {
-				close(done)
+			startup := cfg
+			requests := 0
+			port := testRuntime{
+				snapshot: func(context.Context) (api.Snapshot, error) {
+					requests++
+					if state == api.RunStateFaulted {
+						return api.Snapshot{}, errTestRuntimeUnavailable
+					}
+					return api.Snapshot{Run: api.RunSnapshot{State: state}}, nil
+				},
+				execute: func(context.Context, control.Command) (bool, error) {
+					requests++
+					return false, nil
+				},
 			}
-			mux := newServeMux(runtimeRequests{queue: requests, done: done}, newPrometheusMetrics(), owner.config, zap.NewNop())
+			mux := newServeMux(port, newPrometheusMetrics(), startup, zap.NewNop())
 			// The response must retain the values captured before later owner changes.
-			owner.config.Reader.ReadBatchSize++
+			startup.Reader.ReadBatchSize++
 			recorder := httptest.NewRecorder()
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
@@ -68,15 +77,15 @@ func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
 			if err := json.Unmarshal(recorder.Body.Bytes(), &fields); err != nil {
 				t.Fatal(err)
 			}
-			if len(fields) != 7 || len(requests) != 0 {
-				t.Fatalf("config fields=%v runtime requests=%d", fields, len(requests))
+			if len(fields) != 7 || requests != 0 {
+				t.Fatalf("config fields=%v runtime requests=%d", fields, requests)
 			}
 		})
 	}
 }
 
 func TestConfigEndpointHeadAndUnsupportedMethod(t *testing.T) {
-	mux := newServeMux(runtimeRequests{}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	mux := newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	response, err := server.Client().Head(server.URL + api.ConfigPath)
@@ -103,11 +112,10 @@ func TestConfigEndpointHeadAndUnsupportedMethod(t *testing.T) {
 }
 
 func TestCommandsHandlerRejectsGet(t *testing.T) {
-	commands := make(chan runtimeRequest, 1)
 	req := httptest.NewRequest(http.MethodGet, api.CommandsPath, nil)
 	rec := httptest.NewRecorder()
 
-	newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
+	newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
 	response := rec.Result()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %v, want %v", rec.Code, http.StatusMethodNotAllowed)
@@ -132,11 +140,11 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan runtimeRequest, 1)
+			var commands []control.Command
 			body := strings.NewReader(test.body)
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, body)
 			rec := httptest.NewRecorder()
-			newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
+			newServeMux(recordCommands(&commands), newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
 			response := rec.Result()
 			if response.StatusCode != http.StatusBadRequest {
 				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusBadRequest)
@@ -159,9 +167,7 @@ func TestCommandsHandlerRejectsOversizedBody(t *testing.T) {
 		{"JSON exceeds limit", `{"action":"` + strings.Repeat("x", limit) + `","value":2}`},
 		{"trailing whitespace exceeds limit", command + strings.Repeat(" ", limit+1-len(command))},
 	}
-	done := make(chan struct{})
-	close(done)
-	handler := newServeMux(runtimeRequests{done: done}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	handler := newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
@@ -176,11 +182,11 @@ func TestCommandsHandlerRejectsOversizedBody(t *testing.T) {
 }
 
 func TestCommandsHandlerRejectsBodyReadFailure(t *testing.T) {
-	commands := make(chan runtimeRequest, 1)
+	var commands []control.Command
 	req := httptest.NewRequest(http.MethodPost, api.CommandsPath, nil)
 	req.Body = io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))
 	rec := httptest.NewRecorder()
-	commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(rec, req)
+	commandsHandler(recordCommands(&commands), testConfig(t)).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || rec.Body.String() != "invalid request body\n" || len(commands) != 0 {
 		t.Fatalf("status=%d body=%q dispatched=%d", rec.Code, rec.Body.String(), len(commands))
 	}
@@ -191,7 +197,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		name      string
 		body      string
 		want      int
-		kind      runtimeCommandKind
+		kind      string
 		installed bool
 		value     int
 	}{
@@ -209,52 +215,35 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		{name: "quoted bool", body: `{"action":"set-throttler-installed","value":"false"}`, want: http.StatusBadRequest},
 		{name: "installed trailing JSON", body: `{"action":"set-throttler-installed","value":false}{}`, want: http.StatusBadRequest},
 		{name: "mode extra field", body: `{"action":"set-throttler-installed","value":false,"other":1}`, want: http.StatusBadRequest},
-		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: setRequestedTPS},
-		{name: "TPS arbitrary integer", body: `{"action":"set-requested-tps","value":2000001}`, want: http.StatusOK, kind: setRequestedTPS, value: 2000001},
-		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: setRequestedTPS, value: 4000000},
-		{name: "mode installed", body: `{"action":"set-throttler-installed","value":true}`, want: http.StatusOK, kind: setThrottlerInstalled, installed: true},
-		{name: "mode bypass", body: `{"action":"set-throttler-installed","value":false}`, want: http.StatusOK, kind: setThrottlerInstalled},
+		{name: "TPS zero", body: `{"action":"set-requested-tps","value":0}`, want: http.StatusOK, kind: api.SetRequestedTPS},
+		{name: "TPS arbitrary integer", body: `{"action":"set-requested-tps","value":2000001}`, want: http.StatusOK, kind: api.SetRequestedTPS, value: 2000001},
+		{name: "TPS maximum", body: `{"action":"set-requested-tps","value":4000000}`, want: http.StatusOK, kind: api.SetRequestedTPS, value: 4000000},
+		{name: "mode installed", body: `{"action":"set-throttler-installed","value":true}`, want: http.StatusOK, kind: api.SetThrottlerInstalled, installed: true},
+		{name: "mode bypass", body: `{"action":"set-throttler-installed","value":false}`, want: http.StatusOK, kind: api.SetThrottlerInstalled},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan runtimeRequest, 1)
+			var commands []control.Command
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
-			done := make(chan struct{})
-			config := testConfig(t)
-			go func() {
-				defer close(done)
-				newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), config, zap.NewNop()).ServeHTTP(recorder, req)
-			}()
-			if test.want == http.StatusOK {
-				select {
-				case request := <-commands:
-					dispatch := request.(controlRequest)
-					command := dispatch.command
-					if command.kind != test.kind {
-						t.Errorf("command kind = %v, want %v", command.kind, test.kind)
-					}
-					if command.kind == setRequestedTPS && command.value != test.value {
-						t.Errorf("TPS value = %d, want %d", command.value, test.value)
-					}
-					if command.kind == setThrottlerInstalled && command.installed != test.installed {
-						t.Errorf("installed = %t, want %t", command.installed, test.installed)
-					}
-					dispatch.reply <- true
-				case <-time.After(time.Second):
-					t.Fatal("valid command was not dispatched")
-				}
-			}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("command handler did not return")
-			}
+			newServeMux(recordCommands(&commands), newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
 			if recorder.Code != test.want {
 				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
 			}
-			if test.want == http.StatusBadRequest && len(commands) != 0 {
-				t.Fatal("invalid command was dispatched")
+			if test.want == http.StatusBadRequest {
+				if len(commands) != 0 {
+					t.Fatalf("invalid command was dispatched: %+v", commands)
+				}
+				return
+			}
+			if len(commands) != 1 {
+				t.Fatalf("dispatched %d commands, want one", len(commands))
+			}
+			command := commands[0]
+			if command.Action != test.kind ||
+				command.Action == api.SetRequestedTPS && command.Value != test.value ||
+				command.Action == api.SetThrottlerInstalled && command.Installed != test.installed {
+				t.Errorf("command = %+v, want action %q, value %d, installed %t", command, test.kind, test.value, test.installed)
 			}
 		})
 	}
@@ -264,50 +253,41 @@ func TestSenderCommandValidation(t *testing.T) {
 	tests := []struct {
 		name, body string
 		want       int
-		kind       runtimeCommandKind
+		kind       string
 		value      int
 	}{
-		{"workers minimum", `{"action":"set-sender-workers","value":1}`, http.StatusOK, setSenderWorkers, 1},
-		{"workers initial", `{"action":"set-sender-workers","value":32}`, http.StatusOK, setSenderWorkers, 32},
-		{"missing", `{"action":"set-sender-workers"}`, http.StatusBadRequest, 0, 0},
-		{"null", `{"action":"set-sender-workers","value":null}`, http.StatusBadRequest, 0, 0},
-		{"fractional", `{"action":"set-sender-workers","value":1.5}`, http.StatusBadRequest, 0, 0},
-		{"string", `{"action":"set-sender-workers","value":"1"}`, http.StatusBadRequest, 0, 0},
-		{"under minimum", `{"action":"set-sender-workers","value":0}`, http.StatusBadRequest, 0, 0},
-		{"over maximum", `{"action":"set-sender-workers","value":33}`, http.StatusBadRequest, 0, 0},
-		{"extra key", `{"action":"set-sender-workers","value":1,"other":1}`, http.StatusBadRequest, 0, 0},
-		{"trailing JSON", `{"action":"set-sender-workers","value":1}{}`, http.StatusBadRequest, 0, 0},
+		{"workers minimum", `{"action":"set-sender-workers","value":1}`, http.StatusOK, api.SetSenderWorkers, 1},
+		{"workers initial", `{"action":"set-sender-workers","value":32}`, http.StatusOK, api.SetSenderWorkers, 32},
+		{"missing", `{"action":"set-sender-workers"}`, http.StatusBadRequest, "", 0},
+		{"null", `{"action":"set-sender-workers","value":null}`, http.StatusBadRequest, "", 0},
+		{"fractional", `{"action":"set-sender-workers","value":1.5}`, http.StatusBadRequest, "", 0},
+		{"string", `{"action":"set-sender-workers","value":"1"}`, http.StatusBadRequest, "", 0},
+		{"under minimum", `{"action":"set-sender-workers","value":0}`, http.StatusBadRequest, "", 0},
+		{"over maximum", `{"action":"set-sender-workers","value":33}`, http.StatusBadRequest, "", 0},
+		{"extra key", `{"action":"set-sender-workers","value":1,"other":1}`, http.StatusBadRequest, "", 0},
+		{"trailing JSON", `{"action":"set-sender-workers","value":1}{}`, http.StatusBadRequest, "", 0},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan runtimeRequest, 1)
+			var commands []control.Command
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
-			}()
-			if test.want == http.StatusOK {
-				select {
-				case request := <-commands:
-					dispatch := request.(controlRequest)
-					command := dispatch.command
-					if command.kind != test.kind || command.value != test.value {
-						t.Errorf("command = %+v, want kind %v value %d", command, test.kind, test.value)
-					}
-					dispatch.reply <- true
-				case <-time.After(time.Second):
-					t.Fatal("valid command was not dispatched")
+			newServeMux(recordCommands(&commands), newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
+			if recorder.Code != test.want {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
+			}
+			if test.want == http.StatusBadRequest {
+				if len(commands) != 0 {
+					t.Fatalf("invalid command was dispatched: %+v", commands)
 				}
+				return
 			}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("command handler did not return")
+			if len(commands) != 1 {
+				t.Fatalf("dispatched %d commands, want one", len(commands))
 			}
-			if recorder.Code != test.want || len(commands) != 0 {
-				t.Fatalf("status = %d, queued commands = %d, want %d and zero", recorder.Code, len(commands), test.want)
+			command := commands[0]
+			if command.Action != test.kind || command.Value != test.value {
+				t.Errorf("command = %+v, want action %q and value %d", command, test.kind, test.value)
 			}
 		})
 	}
@@ -334,42 +314,43 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			commands := make(chan runtimeRequest, 1)
+			var commands []control.Command
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
-			}()
-			if test.want == http.StatusOK {
-				select {
-				case request := <-commands:
-					dispatch := request.(controlRequest)
-					command := dispatch.command
-					if command.kind != setReaderWorkers || command.value != test.value {
-						t.Errorf("command = %+v, want Reader workers %d", command, test.value)
-					}
-					dispatch.reply <- true
-				case <-time.After(time.Second):
-					t.Fatal("valid Reader command was not dispatched")
+			newServeMux(recordCommands(&commands), newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
+			if recorder.Code != test.want {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
+			}
+			if test.want == http.StatusBadRequest {
+				if len(commands) != 0 {
+					t.Fatalf("invalid command was dispatched: %+v", commands)
 				}
+				return
 			}
-			select {
-			case <-done:
-			case <-time.After(time.Second):
-				t.Fatal("Reader command handler did not return")
+			if len(commands) != 1 {
+				t.Fatalf("dispatched %d commands, want one", len(commands))
 			}
-			if recorder.Code != test.want || len(commands) != 0 {
-				t.Fatalf("status = %d, queued = %d, want %d and zero", recorder.Code, len(commands), test.want)
+			command := commands[0]
+			if command.Action != api.SetReaderWorkers || command.Value != test.value {
+				t.Errorf("command = %+v, want Reader workers %d", command, test.value)
 			}
 		})
 	}
 }
 
 func TestDeveloperRoutes(t *testing.T) {
-	requests := make(chan runtimeRequest, 1)
-	mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	requests := 0
+	port := testRuntime{
+		snapshot: func(context.Context) (api.Snapshot, error) {
+			requests++
+			return api.Snapshot{}, errTestRuntimeUnavailable
+		},
+		execute: func(context.Context, control.Command) (bool, error) {
+			requests++
+			return false, errTestRuntimeUnavailable
+		},
+	}
+	mux := newServeMux(port, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 	// Swagger uses the platform MIME database for JavaScript assets.
 	javascriptContentType := mime.TypeByExtension(".js")
 	tests := []struct {
@@ -399,7 +380,7 @@ func TestDeveloperRoutes(t *testing.T) {
 			}
 		})
 	}
-	if len(requests) != 0 {
+	if requests != 0 {
 		t.Fatal("developer GET dispatched a runtime command")
 	}
 	specRecorder := httptest.NewRecorder()
@@ -417,13 +398,9 @@ func TestDeveloperRoutes(t *testing.T) {
 }
 
 func TestServeMuxHEADUsesSnapshotAndReturnsNoBody(t *testing.T) {
-	requests := make(chan runtimeRequest)
-	mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	mux := newServeMux(snapshotRuntime(api.Snapshot{Run: api.RunSnapshot{State: api.RunStateRunning}}), newPrometheusMetrics(), testConfig(t), zap.NewNop())
 	server := httptest.NewServer(mux)
 	defer server.Close()
-	go func() {
-		(<-requests).(snapshotRequest).reply <- api.Snapshot{Run: api.RunSnapshot{State: api.RunStateRunning}}
-	}()
 	for _, test := range []struct {
 		path, allow string
 		status      int
@@ -449,42 +426,56 @@ func TestServeMuxHEADUsesSnapshotAndReturnsNoBody(t *testing.T) {
 func TestHTTPWaitFailuresReturnServiceUnavailable(t *testing.T) {
 	cfg := testConfig(t)
 	for _, path := range []string{api.SnapshotPath, api.CommandsPath} {
-		for _, stage := range []string{"send", "reply"} {
-			for _, cause := range []string{"cancel", "deadline", "event loop exit"} {
-				t.Run(path+"/"+stage+"/"+cause, func(t *testing.T) {
-					synctest.Test(t, func(t *testing.T) {
-						ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
-						defer cancel()
-						queue := make(chan runtimeRequest)
-						loopDone := make(chan struct{})
-						mux := newServeMux(runtimeRequests{queue: queue, done: loopDone}, newPrometheusMetrics(), cfg, zap.NewNop())
-						method, body := http.MethodGet, ""
-						if path == api.CommandsPath {
-							method, body = http.MethodPost, `{"action":"set-reader-workers","value":1}`
+		for _, cause := range []string{"cancel", "deadline", "event loop exit"} {
+			t.Run(path+"/"+cause, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+					defer cancel()
+					loopDone := make(chan struct{})
+					awaitFailure := func(ctx context.Context) error {
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						case <-loopDone:
+							return errTestRuntimeUnavailable
 						}
-						request := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
-						recorder := httptest.NewRecorder()
-						returned := make(chan struct{})
-						go func() { mux.ServeHTTP(recorder, request); close(returned) }()
-						if stage == "reply" {
-							<-queue
-						}
-						synctest.Wait()
-						switch cause {
-						case "cancel":
-							cancel()
-						case "deadline":
-							time.Sleep(time.Millisecond)
-						case "event loop exit":
-							close(loopDone)
-						}
-						<-returned
-						if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != "runtime unavailable\n" {
-							t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
-						}
-					})
+					}
+					port := testRuntime{
+						snapshot: func(ctx context.Context) (api.Snapshot, error) { return api.Snapshot{}, awaitFailure(ctx) },
+						execute:  func(ctx context.Context, _ control.Command) (bool, error) { return false, awaitFailure(ctx) },
+					}
+					mux := newServeMux(port, newPrometheusMetrics(), cfg, zap.NewNop())
+					method, body := http.MethodGet, ""
+					if path == api.CommandsPath {
+						method, body = http.MethodPost, `{"action":"set-reader-workers","value":1}`
+					}
+					request := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
+					recorder := httptest.NewRecorder()
+					returned := make(chan struct{})
+					go func() {
+						mux.ServeHTTP(recorder, request)
+						close(returned)
+					}()
+					synctest.Wait()
+					select {
+					case <-returned:
+						t.Fatal("handler returned before the runtime wait failed")
+					default:
+					}
+					switch cause {
+					case "cancel":
+						cancel()
+					case "deadline":
+						time.Sleep(time.Millisecond)
+					case "event loop exit":
+						close(loopDone)
+					}
+					<-returned
+					if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != "runtime unavailable\n" {
+						t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+					}
 				})
-			}
+			})
 		}
 	}
 }
@@ -499,9 +490,8 @@ func TestHTTPCommandReceiptsHaveEmptyBody(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			applied := test.applied
-			requests := make(chan runtimeRequest)
-			mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
-			go func() { (<-requests).(controlRequest).reply <- applied }()
+			port := testRuntime{execute: func(context.Context, control.Command) (bool, error) { return applied, nil }}
+			mux := newServeMux(port, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 			recorder := httptest.NewRecorder()
 			mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(`{"action":"set-reader-workers","value":1}`)))
 			want := http.StatusOK
@@ -520,7 +510,7 @@ func TestStartHTTPServerLogsActualListenerAddress(t *testing.T) {
 	// The loader still rejects port zero; directly start the listener to distinguish actual from configured address.
 	cfg.HTTP.Addr = "127.0.0.1:0"
 	core, logs := observer.New(zap.InfoLevel)
-	server, done, err := startHTTPServer(runtimeRequests{}, newPrometheusMetrics(), cfg, zap.New(core))
+	server, done, err := startHTTPServer(testRuntime{}, newPrometheusMetrics(), cfg, zap.New(core))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +539,7 @@ func TestStartHTTPServerLogsActualListenerAddress(t *testing.T) {
 }
 
 func TestServeMuxHasNoLocalIngest(t *testing.T) {
-	mux := newServeMux(runtimeRequests{queue: make(chan runtimeRequest)}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	mux := newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 	for _, path := range []string{"/internal/test/ingest", "/internal/ingest", api.SnapshotPath + "/extra", api.CommandsPath + "/extra"} {
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
@@ -570,7 +560,7 @@ func TestStartHTTPServerUsesConfiguredAddressAndShutsDown(t *testing.T) {
 	}
 	loaded := testConfig(t)
 	loaded.HTTP.Addr = addr
-	server, done, err := startHTTPServer(runtimeRequests{queue: make(chan runtimeRequest)}, newPrometheusMetrics(), loaded, zap.NewNop())
+	server, done, err := startHTTPServer(testRuntime{}, newPrometheusMetrics(), loaded, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,7 +615,7 @@ func TestStartHTTPServerReturnsOccupiedAddressError(t *testing.T) {
 	})
 	loaded := testConfig(t)
 	loaded.HTTP.Addr = listener.Addr().String()
-	server, done, err := startHTTPServer(runtimeRequests{queue: make(chan runtimeRequest)}, newPrometheusMetrics(), loaded, zap.NewNop())
+	server, done, err := startHTTPServer(testRuntime{}, newPrometheusMetrics(), loaded, zap.NewNop())
 	if server != nil || done != nil {
 		t.Fatal("failed startup returned server or done channel")
 	}
@@ -697,12 +687,9 @@ func TestConfigEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
 }
 
 func TestSnapshotEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
-	requests := make(chan runtimeRequest)
-	go func() {
-		(<-requests).(snapshotRequest).reply <- api.Snapshot{Run: api.RunSnapshot{State: api.RunStateRunning}}
-	}()
+	port := snapshotRuntime(api.Snapshot{Run: api.RunSnapshot{State: api.RunStateRunning}})
 	core, events := observer.New(zap.WarnLevel)
-	snapshotHandler(runtimeRequests{queue: requests}, zap.New(core)).ServeHTTP(
+	snapshotHandler(port, zap.New(core)).ServeHTTP(
 		failingSnapshotWriter{ResponseRecorder: httptest.NewRecorder()},
 		httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil),
 	)
@@ -713,7 +700,6 @@ func TestSnapshotEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
 }
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
-	requests := make(chan runtimeRequest, 1)
 	expected := api.Snapshot{
 		Run: api.RunSnapshot{State: api.RunStateRunning, TotalTransactions: 46, ElapsedMs: 1234},
 		Reader: api.ReaderSnapshot{
@@ -729,8 +715,7 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 		SenderChannel: api.ChannelSnapshot{DepthBatches: 4, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, InputTransactionsTotal: 4, OutputTransactionsTotal: 2},
 	}
 	rec := httptest.NewRecorder()
-	go func() { (<-requests).(snapshotRequest).reply <- expected }()
-	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil))
+	snapshotHandler(snapshotRuntime(expected), zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reply code = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -758,12 +743,9 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 }
 
 func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
-	requests := make(chan runtimeRequest, 1)
-	go func() {
-		(<-requests).(snapshotRequest).reply <- api.Snapshot{Run: api.RunSnapshot{State: api.RunStateStarting}, Reader: api.ReaderSnapshot{WorkerStates: []api.ReaderWorkerState{}}, Sender: api.SenderSnapshot{WorkerStates: []api.SenderWorkerState{}}}
-	}()
+	port := snapshotRuntime(api.Snapshot{Run: api.RunSnapshot{State: api.RunStateStarting}, Reader: api.ReaderSnapshot{WorkerStates: []api.ReaderWorkerState{}}, Sender: api.SenderSnapshot{WorkerStates: []api.SenderWorkerState{}}})
 	recorder := httptest.NewRecorder()
-	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil))
+	snapshotHandler(port, zap.NewNop()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil))
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
@@ -802,9 +784,8 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 }
 
 func TestSnapshotHandlerRejectsPost(t *testing.T) {
-	requests := make(chan runtimeRequest, 1)
 	rec := httptest.NewRecorder()
-	newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, api.SnapshotPath, nil))
+	newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, api.SnapshotPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
@@ -814,4 +795,36 @@ func TestSnapshotHandlerRejectsPost(t *testing.T) {
 	if rec.Body.String() != "Method Not Allowed\n" {
 		t.Errorf("405 body=%q", rec.Body.String())
 	}
+}
+
+var errTestRuntimeUnavailable = errors.New("runtime unavailable")
+
+type testRuntime struct {
+	snapshot func(context.Context) (api.Snapshot, error)
+	execute  func(context.Context, control.Command) (bool, error)
+}
+
+func (rt testRuntime) Snapshot(ctx context.Context) (api.Snapshot, error) {
+	if rt.snapshot == nil {
+		return api.Snapshot{}, errTestRuntimeUnavailable
+	}
+	return rt.snapshot(ctx)
+}
+
+func (rt testRuntime) Execute(ctx context.Context, command control.Command) (bool, error) {
+	if rt.execute == nil {
+		return false, errTestRuntimeUnavailable
+	}
+	return rt.execute(ctx, command)
+}
+
+func snapshotRuntime(snapshot api.Snapshot) testRuntime {
+	return testRuntime{snapshot: func(context.Context) (api.Snapshot, error) { return snapshot, nil }}
+}
+
+func recordCommands(commands *[]control.Command) testRuntime {
+	return testRuntime{execute: func(_ context.Context, command control.Command) (bool, error) {
+		*commands = append(*commands, command)
+		return true, nil
+	}}
 }

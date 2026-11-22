@@ -1,14 +1,13 @@
-package main
+package control
 
 import (
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"go.uber.org/zap"
-
-	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func snapshotChannel(measurements pipeline.QueueSnapshot) api.ChannelSnapshot {

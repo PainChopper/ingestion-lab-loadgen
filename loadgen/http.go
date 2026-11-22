@@ -17,14 +17,19 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
-	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
-
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/control"
 )
 
 const gracefulShutdownTimeout = 10 * time.Second
 
-func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, cfg config.Config, logger *zap.Logger) *http.ServeMux {
+type runtimeControl interface {
+	Snapshot(context.Context) (api.Snapshot, error)
+	Execute(context.Context, control.Command) (bool, error)
+}
+
+func newServeMux(requests runtimeControl, metrics *prometheusMetrics, cfg config.Config, logger *zap.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("GET "+api.SnapshotPath, snapshotHandler(requests, logger))
 	mux.Handle("GET "+api.ConfigPath, configHandler(newConfigResponse(cfg), logger))
@@ -42,7 +47,7 @@ func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, cfg confi
 	return mux
 }
 
-func startHTTPServer(requests runtimeRequests, metrics *prometheusMetrics, cfg config.Config, logger *zap.Logger) (*http.Server, <-chan error, error) {
+func startHTTPServer(requests runtimeControl, metrics *prometheusMetrics, cfg config.Config, logger *zap.Logger) (*http.Server, <-chan error, error) {
 	server := &http.Server{
 		Addr:              cfg.HTTP.Addr,
 		Handler:           newServeMux(requests, metrics, cfg, logger),
@@ -82,7 +87,7 @@ func shutdownHTTPServer(ctx context.Context, server *http.Server) error {
 
 const maxCommandBodyBytes = 4096
 
-func commandsHandler(requests runtimeRequests, cfg config.Config) http.Handler {
+func commandsHandler(requests runtimeControl, cfg config.Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCommandBodyBytes))
 		if err != nil {
@@ -104,7 +109,7 @@ func commandsHandler(requests runtimeRequests, cfg config.Config) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		applied, err := executeRuntimeCommand(r.Context(), requests, command)
+		applied, err := requests.Execute(r.Context(), command)
 		if err != nil {
 			http.Error(w, "runtime unavailable", http.StatusServiceUnavailable)
 			return
@@ -115,31 +120,31 @@ func commandsHandler(requests runtimeRequests, cfg config.Config) http.Handler {
 	})
 }
 
-func parseRuntimeCommand(r api.CommandRequest, cfg config.Config) (runtimeCommand, error) {
-	var command runtimeCommand
+func parseRuntimeCommand(r api.CommandRequest, cfg config.Config) (control.Command, error) {
+	var command control.Command
 	var contains func(int) bool
 	var invalid string
 	switch r.Action {
 	case api.SetReaderWorkers:
-		command.kind, contains, invalid = setReaderWorkers, cfg.Reader.Workers.Contains, "invalid reader workers"
+		command.Action, contains, invalid = api.SetReaderWorkers, cfg.Reader.Workers.Contains, "invalid reader workers"
 	case api.SetSenderWorkers:
-		command.kind, contains, invalid = setSenderWorkers, cfg.Sender.Workers.Contains, "invalid sender workers"
+		command.Action, contains, invalid = api.SetSenderWorkers, cfg.Sender.Workers.Contains, "invalid sender workers"
 	case api.SetRequestedTPS:
-		command.kind, contains, invalid = setRequestedTPS, cfg.Throttler.RequestedTPS.Contains, "invalid requested tps"
+		command.Action, contains, invalid = api.SetRequestedTPS, cfg.Throttler.RequestedTPS.Contains, "invalid requested tps"
 	case api.SetThrottlerInstalled:
 		var value *bool
 		if err := json.Unmarshal(r.Value, &value); err != nil || value == nil {
-			return runtimeCommand{}, errors.New("invalid throttler installed value")
+			return control.Command{}, errors.New("invalid throttler installed value")
 		}
-		return runtimeCommand{kind: setThrottlerInstalled, installed: *value}, nil
+		return control.Command{Action: api.SetThrottlerInstalled, Installed: *value}, nil
 	default:
-		return runtimeCommand{}, errors.New("unknown command")
+		return control.Command{}, errors.New("unknown command")
 	}
 	var value *int
 	if err := json.Unmarshal(r.Value, &value); err != nil || value == nil || !contains(*value) {
-		return runtimeCommand{}, errors.New(invalid)
+		return control.Command{}, errors.New(invalid)
 	}
-	command.value = *value
+	command.Value = *value
 	return command, nil
 }
 
@@ -164,9 +169,9 @@ func configHandler(config api.ConfigResponse, logger *zap.Logger) http.Handler {
 	})
 }
 
-func snapshotHandler(requests runtimeRequests, logger *zap.Logger) http.Handler {
+func snapshotHandler(requests runtimeControl, logger *zap.Logger) http.Handler {
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		snapshot, err := requestSnapshot(r.Context(), requests)
+		snapshot, err := requests.Snapshot(r.Context())
 		if err != nil {
 			http.Error(w, "runtime unavailable", http.StatusServiceUnavailable)
 			return

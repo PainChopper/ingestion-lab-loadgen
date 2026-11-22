@@ -12,11 +12,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/control"
 )
 
 func TestOpenAPIContract(t *testing.T) {
@@ -102,11 +102,11 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 		t.Fatalf("branches/examples/mapping = %d/%d/%d, want 4", len(branches), len(examples), len(mapping))
 	}
 	seen := map[string]bool{}
-	expected := map[string]runtimeCommand{
-		"set-reader-workers":      {kind: setReaderWorkers, value: 2},
-		"set-requested-tps":       {kind: setRequestedTPS, value: 2000001},
-		"set-throttler-installed": {kind: setThrottlerInstalled, installed: true},
-		"set-sender-workers":      {kind: setSenderWorkers, value: 32},
+	expected := map[string]control.Command{
+		"set-reader-workers":      {Action: api.SetReaderWorkers, Value: 2},
+		"set-requested-tps":       {Action: api.SetRequestedTPS, Value: 2000001},
+		"set-throttler-installed": {Action: api.SetThrottlerInstalled, Installed: true},
+		"set-sender-workers":      {Action: api.SetSenderWorkers, Value: 32},
 	}
 	if got := stringSet(mapKeys(mapping)); !reflect.DeepEqual(got, stringSet(mapKeysFromRuntimeCommands(expected))) {
 		t.Errorf("discriminator actions = %v, want actions accepted by commandsHandler %v", mapKeys(mapping), mapKeysFromRuntimeCommands(expected))
@@ -190,7 +190,7 @@ func checkCommandsSchema(t *testing.T, operation map[string]any, schemas map[str
 	}
 }
 
-func mapKeysFromRuntimeCommands(commands map[string]runtimeCommand) []string {
+func mapKeysFromRuntimeCommands(commands map[string]control.Command) []string {
 	keys := make([]string, 0, len(commands))
 	for action := range commands {
 		keys = append(keys, action)
@@ -199,37 +199,19 @@ func mapKeysFromRuntimeCommands(commands map[string]runtimeCommand) []string {
 	return keys
 }
 
-func assertExampleDispatches(t *testing.T, body map[string]any, want runtimeCommand) {
+func assertExampleDispatches(t *testing.T, body map[string]any, want control.Command) {
 	t.Helper()
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requests := make(chan runtimeRequest, 1)
+	var commands []control.Command
 	commandConfig := testConfig(t)
 	request := httptest.NewRequest(http.MethodPost, api.CommandsPath, bytes.NewReader(encoded))
 	recorder := httptest.NewRecorder()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), commandConfig, zap.NewNop()).ServeHTTP(recorder, request)
-	}()
-	var dispatched controlRequest
-	select {
-	case queued := <-requests:
-		dispatched = queued.(controlRequest)
-	case <-time.After(time.Second):
-		t.Fatalf("example %q was not dispatched by commandsHandler", body["action"])
-	}
-	got := dispatched.command
-	if got.kind != want.kind || got.value != want.value || got.installed != want.installed {
-		t.Errorf("example %q dispatched %+v, want kind %v value %d installed %t", body["action"], got, want.kind, want.value, want.installed)
-	}
-	dispatched.reply <- true
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatalf("handler did not complete for example %q", body["action"])
+	newServeMux(recordCommands(&commands), newPrometheusMetrics(), commandConfig, zap.NewNop()).ServeHTTP(recorder, request)
+	if len(commands) != 1 || commands[0] != want {
+		t.Errorf("example %q dispatched %+v, want %+v", body["action"], commands, want)
 	}
 	if recorder.Code != http.StatusOK {
 		t.Errorf("example %q returned HTTP %d, want 200", body["action"], recorder.Code)
