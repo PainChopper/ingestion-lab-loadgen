@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"loadgen/internal/pipeline"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"go.uber.org/zap"
 )

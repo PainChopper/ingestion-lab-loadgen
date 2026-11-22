@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"slices"
 
-	"loadgen/internal/pipeline"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 )
 
 type readerWireActivity string

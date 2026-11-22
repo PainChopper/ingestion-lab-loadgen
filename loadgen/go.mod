@@ -1,4 +1,4 @@
-module loadgen
+module github.com/PainChopper/ingestion-lab-loadgen/loadgen
 
 go 1.27.0
 

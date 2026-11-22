@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"loadgen/internal/pipeline"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"github.com/parquet-go/parquet-go"
 )
@@ -154,14 +154,15 @@ func TestCLIBinaryServeStartsDeliveryAutomatically(t *testing.T) {
 
 func buildCLIBinary(t *testing.T) string {
 	t.Helper()
+	const buildTimeout = 2 * time.Minute
 	buildDirectory := t.TempDir()
 	binary := filepath.Join(buildDirectory, "ingestion-lab-loadgen.exe")
-	ctx, cancel := context.WithTimeout(context.Background(), blackBoxTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), buildTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, "go", "build", "-o", binary, ".")
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("build CLI binary: %v\n%s", err, output)
+		t.Fatalf("build CLI binary: %v\n%s", errors.Join(err, ctx.Err()), output)
 	}
 	return binary
 }

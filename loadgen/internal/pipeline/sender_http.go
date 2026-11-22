@@ -45,7 +45,8 @@ func (c senderClient) deliver(ctx context.Context, batch []Transaction, _ int) e
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	// A cleanup error after an accepted batch must not trigger another delivery.
+	defer func() { _ = response.Body.Close() }()
 	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, maxSenderResponseDrainBytes)); err != nil {
 		return err
 	}

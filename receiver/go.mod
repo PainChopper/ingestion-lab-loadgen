@@ -1,4 +1,4 @@
-module receiver
+module github.com/PainChopper/ingestion-lab-loadgen/receiver
 
 go 1.27.0
 

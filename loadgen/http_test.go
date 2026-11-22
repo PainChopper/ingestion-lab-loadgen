@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -80,7 +81,11 @@ func TestConfigEndpointHeadAndUnsupportedMethod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatal(err)
@@ -363,6 +368,8 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 func TestDeveloperRoutes(t *testing.T) {
 	requests := make(chan runtimeRequest, 1)
 	mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	// Swagger uses the platform MIME database for JavaScript assets.
+	javascriptContentType := mime.TypeByExtension(".js")
 	tests := []struct {
 		name        string
 		path        string
@@ -371,8 +378,8 @@ func TestDeveloperRoutes(t *testing.T) {
 	}{
 		{"spec", developerOpenAPIPath, "application/json", `"openapi": "3.0.3"`},
 		{"swagger", developerSwaggerUIPath, "text/html; charset=utf-8", `swagger-ui-bundle.js`},
-		{"swagger initializer", developerSwaggerUIPath + "swagger-initializer.js", "application/javascript", developerOpenAPIPath},
-		{"swagger bundle", developerSwaggerUIPath + "swagger-ui-bundle.js", "application/javascript", "SwaggerUIBundle"},
+		{"swagger initializer", developerSwaggerUIPath + "swagger-initializer.js", javascriptContentType, developerOpenAPIPath},
+		{"swagger bundle", developerSwaggerUIPath + "swagger-ui-bundle.js", javascriptContentType, "SwaggerUIBundle"},
 		{"swagger stylesheet", developerSwaggerUIPath + "swagger-ui.css", "text/css; charset=utf-8", "swagger-ui"},
 	}
 	for _, test := range tests {
@@ -593,7 +600,11 @@ func TestStartHTTPServerUsesConfiguredAddressAndShutsDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("configured server GET = %d, want %d", response.StatusCode, http.StatusMethodNotAllowed)
 	}
@@ -605,7 +616,11 @@ func TestStartHTTPServerReturnsOccupiedAddressError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Errorf("close listener: %v", err)
+		}
+	})
 	loaded := testConfig(t)
 	loaded.HTTP.Addr = listener.Addr().String()
 	server, done, err := startHTTPServer(runtimeRequests{queue: make(chan runtimeRequest)}, newPrometheusMetrics(), loaded, zap.NewNop())

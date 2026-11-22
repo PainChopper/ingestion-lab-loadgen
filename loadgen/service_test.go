@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"loadgen/internal/pipeline"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
@@ -100,7 +100,11 @@ func TestRunServeFailsBeforePipelineWhenListenerOccupied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserve HTTP listener: %v", err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Errorf("close listener: %v", err)
+		}
+	})
 
 	configPath := filepath.Join(t.TempDir(), "config.toml")
 	content := strings.Replace(testConfigContents(), `addr = "127.0.0.1:8080"`, `addr = "`+listener.Addr().String()+`"`, 1)

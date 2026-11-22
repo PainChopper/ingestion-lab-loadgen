@@ -77,7 +77,8 @@ func (c remoteCLIClient) getData(ctx context.Context, endpoint string) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	// The read and status checks report the result; closing releases the body.
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, newRemoteHTTPError(response, http.MethodGet, endpoint)
 	}
@@ -100,7 +101,8 @@ func (c remoteCLIClient) commandWithValue(ctx context.Context, action string, va
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	// The command outcome comes from the HTTP status.
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return newRemoteHTTPError(response, http.MethodPost, commandsPath)
 	}

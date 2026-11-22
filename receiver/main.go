@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"receiver/internal/ingest"
+	"github.com/PainChopper/ingestion-lab-loadgen/receiver/internal/ingest"
 )
 
 func main() {
