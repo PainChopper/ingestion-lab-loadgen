@@ -188,7 +188,6 @@ export class SimulationAdapter implements LoadgenAdapter {
   }
 
   getSnapshot = (): LoadgenTelemetrySnapshot => this.snapshot
-  getConfig = (): Readonly<WireConfig> => this.config
 
   subscribe = (listener: LoadgenSnapshotListener): (() => void) => {
     if (this.disposed) return () => undefined

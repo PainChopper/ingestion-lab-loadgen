@@ -73,7 +73,6 @@ it('preserves the pressure history across rerenders and starts fresh on adapter 
       const adapter: LoadgenAdapter = {
         kind: base.adapterKind,
         getSnapshot: () => snapshot,
-        getConfig: simulation.getConfig,
         subscribe: (listener) => {
           listeners.add(listener)
           return () => {

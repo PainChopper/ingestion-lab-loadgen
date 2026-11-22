@@ -1,3 +1,4 @@
+import type { ZodMiniType } from 'zod/mini'
 import { CounterRateCalculator, type CounterRates } from '../model/counterRates'
 import {
   wireConfigSchema,
@@ -242,14 +243,18 @@ function isSuccessfulStatus(status: number): boolean {
   return status >= 200 && status <= 299
 }
 
-async function decodeResponse(response: Response, kind: 'snapshot' | 'config') {
+async function decodeResponse<T>(
+  response: Response,
+  schema: ZodMiniType<T>,
+  kind: 'snapshot' | 'config',
+): Promise<T> {
   const mediaType = response.headers.get('Content-Type')?.split(';', 1)[0].trim().toLowerCase()
   if (mediaType !== 'application/json') {
     throw new Error(`${kind} response must be JSON`)
   }
 
   const body: unknown = await response.json()
-  const parsed = (kind === 'snapshot' ? wireSnapshotSchema : wireConfigSchema).safeParse(body)
+  const parsed = schema.safeParse(body)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]!
     const path = issue.path.reduce<string>(appendFieldPath, '')
@@ -272,7 +277,6 @@ export class HttpAdapter implements LoadgenAdapter {
   private activeCommand: ActiveRequest | null = null
   private lastWire: WireSnapshot | null = null
   private config: Readonly<WireConfig> | null = null
-  private generation = 0
   private snapshotFailed = false
   private configFailed = false
   private lastDecodeError: string | null = null
@@ -285,7 +289,6 @@ export class HttpAdapter implements LoadgenAdapter {
   }
 
   getSnapshot = (): LoadgenTelemetrySnapshot => this.snapshot
-  getConfig = (): Readonly<WireConfig> | null => this.config
 
   subscribe = (listener: LoadgenSnapshotListener): (() => void) => {
     if (this.disposed) return () => undefined
@@ -312,8 +315,7 @@ export class HttpAdapter implements LoadgenAdapter {
       return Promise.resolve(this.rejectCommand('unavailable', UNAVAILABLE_COMMAND_MESSAGE))
     }
 
-    const generation = this.generation
-    const receipt = this.commandChannel.then(() => this.sendCommand(command, generation))
+    const receipt = this.commandChannel.then(() => this.sendCommand(command))
     this.commandChannel = receipt.then(
       () => undefined,
       () => undefined,
@@ -353,7 +355,7 @@ export class HttpAdapter implements LoadgenAdapter {
       })
       if (!request.signal.aborted && isSuccessfulStatus(response.status)) {
         decoding = true
-        wire = (await decodeResponse(response, 'snapshot')) as WireSnapshot
+        wire = await decodeResponse(response, wireSnapshotSchema, 'snapshot')
       }
     } catch (error) {
       if (decoding && !request.signal.aborted) {
@@ -375,7 +377,6 @@ export class HttpAdapter implements LoadgenAdapter {
     if (this.disposed) return
 
     if (wire === null || request.signal.aborted) {
-      this.invalidateConfig()
       this.snapshotFailed = true
       this.publishCurrent()
       return
@@ -396,18 +397,15 @@ export class HttpAdapter implements LoadgenAdapter {
   }
 
   private invalidateConfig(): void {
-    this.generation += 1
     this.config = null
     this.configFailed = false
     this.activeConfigRequest?.abort()
     this.activeConfigRequest = null
-    this.activeCommand?.abort()
   }
 
   private loadConfig = async (): Promise<void> => {
     if (this.disposed || this.config !== null || this.activeConfigRequest !== null) return
 
-    const generation = this.generation
     const request = startRequest(SNAPSHOT_TIMEOUT_MS)
     this.activeConfigRequest = request
     let config: WireConfig | null = null
@@ -418,7 +416,7 @@ export class HttpAdapter implements LoadgenAdapter {
         signal: request.signal,
       })
       if (!request.signal.aborted && isSuccessfulStatus(response.status)) {
-        config = (await decodeResponse(response, 'config')) as WireConfig
+        config = await decodeResponse(response, wireConfigSchema, 'config')
       }
     } catch {
       // A failed config request is retried by the next snapshot poll.
@@ -427,8 +425,7 @@ export class HttpAdapter implements LoadgenAdapter {
       else request.finish()
     }
 
-    if (this.disposed || this.generation !== generation || this.activeConfigRequest !== request)
-      return
+    if (this.disposed || this.activeConfigRequest !== request) return
     this.activeConfigRequest = null
     if (request.signal.aborted) config = null
     this.config = config === null ? null : deepFreeze(config)
@@ -454,18 +451,12 @@ export class HttpAdapter implements LoadgenAdapter {
     )
   }
 
-  private sendCommand = async (
-    command: SupportedCommand,
-    generation: number,
-  ): Promise<CommandReceipt> => {
+  private sendCommand = async (command: SupportedCommand): Promise<CommandReceipt> => {
     if (this.disposed) {
       return this.rejectCommand('disposed', DISPOSED_COMMAND_MESSAGE)
     }
 
-    if (
-      generation !== this.generation ||
-      !canDispatchConfigCommand(command, this.snapshot, this.config)
-    ) {
+    if (!canDispatchConfigCommand(command, this.snapshot, this.config)) {
       return this.rejectCommand('unavailable', UNAVAILABLE_COMMAND_MESSAGE)
     }
 
@@ -494,9 +485,6 @@ export class HttpAdapter implements LoadgenAdapter {
 
     if (this.disposed) {
       return this.rejectCommand('disposed', DISPOSED_COMMAND_MESSAGE)
-    }
-    if (generation !== this.generation) {
-      return this.rejectCommand('unavailable', UNAVAILABLE_COMMAND_MESSAGE)
     }
     if (abortedBeforeCleanup || response === null) {
       return this.rejectCommand(
