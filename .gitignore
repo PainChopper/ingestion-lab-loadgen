@@ -23,5 +23,6 @@ vendor/
 # Go workspace files
 go.work
 
-# Data files
+# One MBD-mini Parquet sample and its NOTICE are intentionally tracked in data/MBD-mini/trx/fold=0/.
+# Ignore additional datasets and files.
 data/

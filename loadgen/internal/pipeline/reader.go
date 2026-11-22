@@ -7,11 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
-	"slices"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
@@ -395,68 +392,15 @@ func openParquetReader(file *os.File) (reader *parquet.GenericReader[Transaction
 		return nil, fmt.Errorf("open parquet reader: %w", err)
 	}
 
-	const eventTimeColumn = "event_time"
 	column, ok := input.Schema().Lookup(eventTimeColumn)
 	if !ok || column.Node.Type().Kind() != parquet.Int96 {
 		return parquet.NewGenericReader[Transaction](input), nil
 	}
-
-	// Keep the transaction projection, but read event_time as INT96 to
-	// preserve the Julian day that a conversion to INT64 would drop.
-	schema := parquet.SchemaOf(Transaction{})
-	fields := slices.Clone(schema.Fields())
-	for i, field := range fields {
-		if field.Name() == eventTimeColumn {
-			fields[i] = int96TimestampField{
-				Field:  field,
-				source: column.Node,
-			}
-			break
-		}
+	projection, err := int96EventTimeProjection(parquet.SchemaOf(Transaction{}), column.Node)
+	if err != nil {
+		return nil, fmt.Errorf("open parquet reader: %w", err)
 	}
-	projection := parquet.NewSchema(schema.Name(), &parquetProjection{Node: schema, fields: fields})
 	return parquet.NewGenericReader[Transaction](input, projection), nil
-}
-
-type parquetProjection struct {
-	parquet.Node
-	fields []parquet.Field
-}
-
-func (p *parquetProjection) Fields() []parquet.Field { return p.fields }
-
-type int96TimestampField struct {
-	parquet.Field
-	source parquet.Node
-}
-
-func (f int96TimestampField) Type() parquet.Type { return int96Timestamp{Type: f.source.Type()} }
-
-// Keep a missing timestamp null through projection so it reconstructs as zero time.
-func (f int96TimestampField) Optional() bool { return f.source.Optional() }
-func (f int96TimestampField) Required() bool { return !f.Optional() }
-
-type int96Timestamp struct{ parquet.Type }
-
-func (int96Timestamp) AssignValue(dst reflect.Value, src parquet.Value) error {
-	if src.IsNull() {
-		dst.SetZero()
-		return nil
-	}
-	if size := len(src.ByteArray()); size != 12 {
-		return fmt.Errorf("invalid int96 timestamp: %d bytes", size)
-	}
-	value := src.Int96()
-	const unixEpochJulianDay = 2440588
-	const day = 24 * time.Hour
-	// The low 64 bits hold the nanoseconds since midnight; the high word holds the day.
-	nanosOfDay := value.Int64()
-	if nanosOfDay < 0 || nanosOfDay >= int64(day) {
-		return fmt.Errorf("invalid int96 timestamp: nanoseconds of day %d", nanosOfDay)
-	}
-	seconds := (int64(value[2]) - unixEpochJulianDay) * int64(day/time.Second)
-	dst.Set(reflect.ValueOf(time.Unix(seconds, nanosOfDay).UTC()))
-	return nil
 }
 
 func (p *readerPool) closeResources(
