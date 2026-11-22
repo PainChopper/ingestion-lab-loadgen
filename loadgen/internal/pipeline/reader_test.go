@@ -17,6 +17,42 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
+func TestReaderMBDMiniEventTime(t *testing.T) {
+	const path = "../../../data/MBD-mini/trx/fold=0/" +
+		"part-00001-f1f2463d-80e2-4335-8981-4fc9e73f56f4.c000.snappy.parquet"
+	file, err := openReaderFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	reader, err := file.OpenRows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	var rows [1]Transaction
+	n, err := reader.Read(rows[:])
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	if n != len(rows) {
+		t.Fatalf("read %d transactions, want %d", n, len(rows))
+	}
+	const want = "2022-10-26T13:58:59.938408Z"
+	if got := rows[0].EventTime.Format(time.RFC3339Nano); got != want {
+		t.Errorf("first event_time = %s, want %s", got, want)
+	}
+}
+
 func TestReaderResourcesAndSourceErrors(t *testing.T) {
 	for _, test := range []struct {
 		name             string
