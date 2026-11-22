@@ -29,7 +29,7 @@ const commandsPath = "/api/loadgen/commands"
 func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("GET "+snapshotPath, snapshotHandler(requests, logger))
-	mux.Handle("GET "+configPath, configHandler(snapshotConfig(config), logger))
+	mux.Handle("GET "+configPath, configHandler(newConfigResponse(config), logger))
 	mux.Handle("POST "+commandsPath, commandsHandler(requests, config))
 	registerDeveloperRoutes(mux)
 
@@ -157,11 +157,11 @@ func (r commandRequest) runtimeCommand(cfg config) (runtimeCommand, error) {
 	return command, nil
 }
 
-func configHandler(config configSnapshot, logger *zap.Logger) http.Handler {
+func configHandler(config configResponse, logger *zap.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(config); err != nil {
-			logger.Warn("config response encoding failed", zap.Error(err))
+			logger.Warn("config response encoding failed", zap.String("event", "config_response_failed"), zap.Error(err))
 		}
 	})
 }

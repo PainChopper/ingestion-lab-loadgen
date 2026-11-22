@@ -64,7 +64,7 @@ func TestCLIBinaryArgsAndHelp(t *testing.T) {
 func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 	binary := buildCLIBinary(t)
 	snapshot := testRemoteSnapshot(t)
-	config := snapshotConfig(testConfig(t))
+	config := newConfigResponse(testConfig(t))
 
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
@@ -426,7 +426,7 @@ func TestRunCLIExitCodes(t *testing.T) {
 }
 
 func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
-	config := snapshotConfig(testConfig(t))
+	config := newConfigResponse(testConfig(t))
 	malformedServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == configPath {
 			if err := json.NewEncoder(writer).Encode(config); err != nil {

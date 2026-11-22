@@ -30,7 +30,7 @@ func (err remoteHTTPError) Error() string {
 
 func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) error {
 	client := remoteCLIClient{baseURL: command.remoteURL, httpClient: &http.Client{Timeout: remoteClientTimeout}}
-	var config configSnapshot
+	var config configResponse
 	switch command.remoteAction {
 	case "status":
 		data, err := client.getData(ctx, configPath)
@@ -158,14 +158,9 @@ func newRemoteHTTPError(response *http.Response, method, endpoint string) remote
 }
 
 func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
-	decoder := json.NewDecoder(body)
-	decoder.DisallowUnknownFields()
-	var snapshot runtimeSnapshot
-	if err := decoder.Decode(&snapshot); err != nil {
-		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: trailing JSON")
+	snapshot, err := decodeStrictJSON[runtimeSnapshot](body, "snapshot")
+	if err != nil {
+		return runtimeSnapshot{}, err
 	}
 	switch snapshot.Run.State {
 	case runStateStarting, runStateRunning, runStateStopping, runStateFaulted:
@@ -175,23 +170,28 @@ func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
 	return snapshot, nil
 }
 
-func decodeStrictConfig(body io.Reader) (configSnapshot, error) {
-	decoder := json.NewDecoder(body)
-	decoder.DisallowUnknownFields()
-	var config *configSnapshot
-	if err := decoder.Decode(&config); err != nil {
-		return configSnapshot{}, fmt.Errorf("decode config: %w", err)
-	}
-	if config == nil {
-		return configSnapshot{}, errors.New("decode config: expected object")
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return configSnapshot{}, errors.New("decode config: trailing JSON")
-	}
-	return *config, nil
+func decodeStrictConfig(body io.Reader) (configResponse, error) {
+	return decodeStrictJSON[configResponse](body, "config")
 }
 
-func formatSnapshot(snapshot runtimeSnapshot, config configSnapshot) string {
+func decodeStrictJSON[T any](body io.Reader, name string) (T, error) {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	var value *T
+	var zero T
+	if err := decoder.Decode(&value); err != nil {
+		return zero, fmt.Errorf("decode %s: %w", name, err)
+	}
+	if value == nil {
+		return zero, fmt.Errorf("decode %s: expected object", name)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return zero, fmt.Errorf("decode %s: trailing JSON", name)
+	}
+	return *value, nil
+}
+
+func formatSnapshot(snapshot runtimeSnapshot, config configResponse) string {
 	reader := countReaderWorkers(snapshot.Reader.WorkerStates)
 	sender := countSenderWorkers(snapshot.Sender.WorkerStates)
 	sourcePath := sanitizeSnapshotValue(config.SourcePath)

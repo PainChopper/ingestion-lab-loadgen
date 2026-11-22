@@ -26,7 +26,7 @@ func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var want configSnapshot
+	var want configResponse
 	if err := json.Unmarshal(data, &want); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			mux.ServeHTTP(recorder, httptest.NewRequestWithContext(ctx, http.MethodGet, configPath, nil))
-			var got configSnapshot
+			var got configResponse
 			if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
@@ -666,6 +666,18 @@ func TestShutdownHTTPServerClosesAnActiveRequestAtDeadline(t *testing.T) {
 type failingSnapshotWriter struct{ *httptest.ResponseRecorder }
 
 func (w failingSnapshotWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestConfigEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
+	core, events := observer.New(zap.WarnLevel)
+	configHandler(configResponse{}, zap.New(core)).ServeHTTP(
+		failingSnapshotWriter{ResponseRecorder: httptest.NewRecorder()},
+		httptest.NewRequest(http.MethodGet, configPath, nil),
+	)
+	entries := events.FilterMessage("config response encoding failed").All()
+	if len(entries) != 1 || entries[0].ContextMap()["event"] != "config_response_failed" || entries[0].ContextMap()["error"] != io.ErrClosedPipe.Error() {
+		t.Fatalf("encoding failure log=%v", entries)
+	}
+}
 
 func TestSnapshotEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
 	requests := make(chan runtimeRequest)

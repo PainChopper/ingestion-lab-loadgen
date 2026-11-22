@@ -213,7 +213,7 @@ func TestDecodeStrictConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := configSnapshot{
+	want := configResponse{
 		ReaderWorkersMax: 7, SenderWorkersMax: 32, RequestedTpsMax: 4000000,
 		ReadBatchSize: 20, ReaderChannelCapacity: 51, SenderChannelCapacity: 71, SourcePath: "reader-source",
 	}
@@ -238,6 +238,13 @@ func TestDecodeStrictConfig(t *testing.T) {
 	}
 }
 
+func TestDecodeStrictJSONRejectsNullSnapshot(t *testing.T) {
+	_, err := decodeStrictJSON[runtimeSnapshot](strings.NewReader(`null`), "snapshot")
+	if err == nil || err.Error() != "decode snapshot: expected object" {
+		t.Fatalf("decode error = %v, want expected object", err)
+	}
+}
+
 func TestFormatSnapshot(t *testing.T) {
 	status := runtimeSnapshot{
 		Run: runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
@@ -256,7 +263,7 @@ func TestFormatSnapshot(t *testing.T) {
 		}},
 	}
 
-	got := formatSnapshot(status, configSnapshot{ReadBatchSize: 10, ReaderChannelCapacity: 3, SenderChannelCapacity: 4})
+	got := formatSnapshot(status, configResponse{ReadBatchSize: 10, ReaderChannelCapacity: 3, SenderChannelCapacity: 4})
 	want := "INGESTION LAB LOADGEN STATUS\n" +
 		"State:                    faulted\n" +
 		"Elapsed:                  1.25s\n" +
@@ -309,7 +316,7 @@ func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 		},
 	}
 
-	got := formatSnapshot(status, configSnapshot{SourcePath: "source\r\n\x1b[31m"})
+	got := formatSnapshot(status, configResponse{SourcePath: "source\r\n\x1b[31m"})
 	if strings.IndexFunc(got, func(character rune) bool {
 		return character != '\n' && unicode.IsControl(character)
 	}) >= 0 {
@@ -318,7 +325,7 @@ func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 	if strings.Count(got, "\n") != strings.Count(formatSnapshot(runtimeSnapshot{
 		Run:       runSnapshot{State: runStateRunning},
 		Throttler: throttlerSnapshot{Installed: true},
-	}, configSnapshot{}), "\n") || !strings.HasSuffix(got, "\n") {
+	}, configResponse{}), "\n") || !strings.HasSuffix(got, "\n") {
 		t.Fatalf("card layout changed or has no final newline: %q", got)
 	}
 	for _, want := range []string{
@@ -335,14 +342,14 @@ func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 func TestFormatSnapshotStartingSourceGolden(t *testing.T) {
 	card := formatSnapshot(runtimeSnapshot{
 		Run: runSnapshot{State: runStateStarting},
-	}, configSnapshot{})
+	}, configResponse{})
 	if !strings.Contains(card, "Source:                   none\nSource error:             none\n\nReader channel\n") {
 		t.Fatalf("idle source fields are not adjacent golden values: %q", card)
 	}
 }
 
 func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
-	configBody := mustMarshalJSON(t, snapshotConfig(testConfig(t)))
+	configBody := mustMarshalJSON(t, newConfigResponse(testConfig(t)))
 	snapshotBody := mustMarshalJSON(t, testRemoteSnapshot(t))
 	for _, test := range []struct {
 		name, endpoint, body string
@@ -410,7 +417,7 @@ func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
 				if test.status != 0 && err.Error() != test.wantErr {
 					t.Fatalf("empty HTTP error = %q, want %q", err, test.wantErr)
 				}
-			} else if err != nil || stdout.String() != formatSnapshot(testRemoteSnapshot(t), snapshotConfig(testConfig(t))) {
+			} else if err != nil || stdout.String() != formatSnapshot(testRemoteSnapshot(t), newConfigResponse(testConfig(t))) {
 				t.Fatalf("error=%v stdout=%q", err, stdout.String())
 			}
 			wantRequests := []string{configPath, snapshotPath}
@@ -454,7 +461,7 @@ func TestRunRemoteCLISetReportsPOSTTransportError(t *testing.T) {
 
 func TestFormatSnapshotBeforeRunShowsZeroAverages(t *testing.T) {
 	snapshot := runtimeSnapshot{Reader: readerSnapshot{RowsRead: 9}, SenderChannel: channelSnapshot{InputTransactionsTotal: 12, OutputTransactionsTotal: 6}}
-	got := formatSnapshot(snapshot, configSnapshot{})
+	got := formatSnapshot(snapshot, configResponse{})
 	for _, line := range []string{"Average read TPS:         0.0", "Average admitted TPS:     0.0", "Average input/output TPS: 0.0 / 0.0"} {
 		if !strings.Contains(got, line) {
 			t.Fatalf("missing %q in %q", line, got)
