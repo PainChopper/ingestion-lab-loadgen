@@ -27,24 +27,28 @@ import (
 )
 
 func TestNewControlStateInitializesControls(t *testing.T) {
-	for _, name := range []string{"nonzero initial values", "zero initial values"} {
-		t.Run(name, func(t *testing.T) {
+	for _, test := range []struct {
+		name                           string
+		readerCapacity, senderCapacity int
+		requestedTPS                   int
+	}{
+		{name: "nonzero initial values", readerCapacity: 2, senderCapacity: 4, requestedTPS: 1_000},
+		{name: "zero initial values"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			loaded := controllerConfig()
 			loaded.Reader.ReadBatchSize = 2000
 			loaded.Reader.Workers.Initial = 3
 			loaded.Sender.Workers.Initial = 7
-			loaded.SenderChannel.Capacity = 4
+			loaded.ReaderChannel.Capacity = test.readerCapacity
+			loaded.SenderChannel.Capacity = test.senderCapacity
+			loaded.Throttler.RequestedTPS.Initial = test.requestedTPS
 			loaded.Throttler.Installed = false
-			if name == "zero initial values" {
-				loaded.ReaderChannel.Capacity = 0
-				loaded.SenderChannel.Capacity = 0
-				loaded.Throttler.RequestedTPS.Initial = 0
-			}
 			state := newTestController(loaded, zap.NewNop())
-			if got := state.run.state; got != api.RunStateStarting {
+			snapshot := state.snapshotAt(nil, time.Now())
+			if got := snapshot.Run.State; got != api.RunStateStarting {
 				t.Fatalf("initial run state = %q, want %q", got, api.RunStateStarting)
 			}
-			snapshot := state.snapshotAt(nil, time.Now())
 			if snapshot.Reader.WorkerStates == nil || len(snapshot.Reader.WorkerStates) != 0 ||
 				snapshot.Sender.WorkerStates == nil || len(snapshot.Sender.WorkerStates) != 0 {
 				t.Fatalf("before Start worker states must be []: %+v / %+v", snapshot.Reader, snapshot.Sender)
@@ -85,13 +89,15 @@ func TestSignalKeepsZeroTPSUntilGraceExpires(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		state := newTestController(cfg, zap.New(core))
 		loop := startTestEventLoop(t, state, testGrace)
+		synctest.Wait()
 		// Each batch has one row; rows beyond the queue and active Readers have reached the Throttler.
-		loop.awaitSnapshot(t, func(s api.Snapshot) bool {
-			return s.Reader.RowsRead > int64(cfg.ReaderChannel.Capacity+cfg.Reader.Workers.Initial)
-		})
+		before := loop.snapshotInState(t, api.RunStateRunning)
+		if before.Reader.RowsRead <= int64(cfg.ReaderChannel.Capacity+cfg.Reader.Workers.Initial) {
+			t.Fatalf("pipeline did not reach the zero-rate Throttler: %+v", before)
+		}
 		loop.cancel()
 		synctest.Wait()
-		stopping := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
+		stopping := loop.snapshotInState(t, api.RunStateStopping)
 		throttlerChanged := !stopping.Throttler.Installed || stopping.Throttler.RequestedTps != 0
 		senderHasWork := stopping.SenderChannel.DepthBatches != 0 ||
 			senderActivityCount(stopping.Sender.WorkerStates, api.SenderInFlight) != 0 || senderActivityCount(stopping.Sender.WorkerStates, api.SenderBackoff) != 0
@@ -122,45 +128,48 @@ func TestSignalDeadlineCancelsInFlightHTTP(t *testing.T) {
 	cfg.SenderChannel.Capacity = 0
 	cfg.Sender.Workers.Initial = 1
 
-	entered := make(chan struct{})
-	canceled := make(chan struct{})
-	release := make(chan struct{})
-	receiver := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		if _, err := io.Copy(io.Discard, r.Body); err != nil {
-			return
-		}
-		close(entered)
+	synctest.Test(t, func(t *testing.T) {
+		entered := make(chan struct{})
+		canceled := make(chan struct{})
+		release := make(chan struct{})
+		defer close(release)
+		receiver := httptest.NewTestServer(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if _, err := io.Copy(io.Discard, r.Body); err != nil {
+				return
+			}
+			close(entered)
+			select {
+			case <-r.Context().Done():
+				close(canceled)
+			case <-release:
+			}
+		}))
+		core, events := observer.New(zap.InfoLevel)
+		loop := startTestEventLoopWithTestReceiver(t, cfg, zap.New(core), receiver)
 		select {
-		case <-r.Context().Done():
-			close(canceled)
-		case <-release:
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("Sender did not enter HTTP")
 		}
-	}))
-	defer receiver.Close()
-	defer close(release)
-
-	cfg.Sender.API.URL = receiver.URL
-	core, events := observer.New(zap.InfoLevel)
-	state := newTestController(cfg, zap.New(core))
-	loop := startTestEventLoop(t, state, 50*time.Millisecond)
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("Sender did not enter HTTP")
-	}
-	loop.cancel()
-	stopping := loop.awaitSnapshot(t, func(s api.Snapshot) bool {
-		return s.Run.State == api.RunStateStopping && !slices.ContainsFunc(s.Reader.WorkerStates, func(w api.ReaderWorkerState) bool { return w.Activity == api.ReaderReading })
+		loop.cancel()
+		synctest.Wait()
+		stopping := loop.snapshotInState(t, api.RunStateStopping)
+		if slices.ContainsFunc(stopping.Reader.WorkerStates, func(w api.ReaderWorkerState) bool { return w.Activity == api.ReaderReading }) {
+			t.Fatalf("Reader is still reading after stop: %+v", stopping.Reader)
+		}
+		select {
+		case <-canceled:
+			t.Fatal("HTTP request canceled before the grace deadline")
+		default:
+		}
+		assertExitAtDeadline(t, loop)
+		select {
+		case <-canceled:
+		default:
+			t.Fatal("forwarded HTTP request context was not canceled")
+		}
+		assertFinalTransactions(t, events, 0, stopping.Reader.RowsRead)
 	})
-	if err := loop.awaitExit(t); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-canceled:
-	case <-time.After(time.Second):
-		t.Fatal("forwarded HTTP request context was not canceled")
-	}
-	assertFinalTransactions(t, events, 0, stopping.Reader.RowsRead)
 }
 
 func TestSignalDuringSourceDiscoveryPreventsReaderStart(t *testing.T) {
@@ -183,14 +192,15 @@ func TestSignalDuringSourceDiscoveryPreventsReaderStart(t *testing.T) {
 					return nil, errors.New("unexpected open after stop")
 				}
 				loop := startTestEventLoopWithSource(t, state, testGrace, ready)
-				starting := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStarting })
+				synctest.Wait()
+				starting := loop.snapshotInState(t, api.RunStateStarting)
 				if starting.Reader.SourceError != nil {
 					t.Fatalf("initial source error before Start: %+v", starting.Reader)
 				}
 
 				loop.cancel()
 				synctest.Wait()
-				stopping := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
+				stopping := loop.snapshotInState(t, api.RunStateStopping)
 				if len(stopping.Reader.WorkerStates) != 0 {
 					t.Fatal("Reader started during source discovery")
 				}
@@ -250,11 +260,11 @@ func TestSignalDeadlineDoesNotWaitForBlockedReader(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("Reader did not enter blocking read")
 		}
-		loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateRunning })
+		loop.snapshotInState(t, api.RunStateRunning)
 
 		loop.cancel()
 		synctest.Wait()
-		loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
+		loop.snapshotInState(t, api.RunStateStopping)
 		assertExitAtDeadline(t, loop)
 		if final := assertFinalTransactions(t, events, 0, 1); final["partial"] != true {
 			t.Fatalf("blocked Reader must produce a partial final log: %v", final)
@@ -283,7 +293,7 @@ func assertExitAtDeadline(t *testing.T, loop testEventLoop) {
 			t.Fatal(err)
 		}
 	default:
-		t.Fatal("event loop waited for filesystem I/O after the deadline")
+		t.Fatal("event loop did not exit at the deadline")
 	}
 }
 
@@ -294,13 +304,14 @@ func TestRunStartupSourceErrorReturnsWithoutSignal(t *testing.T) {
 	state := newTestController(cfg, zap.New(core))
 	loop := startTestEventLoop(t, state, testGrace)
 	var sourceError *pipeline.SourceError
-	if err := loop.awaitExit(t); !errors.As(err, &sourceError) || sourceError.Op != "glob" {
+	if err := loop.awaitExit(t); !errors.As(err, &sourceError) || sourceError.Op != "glob" || sourceError.Path != cfg.Source.Path {
 		t.Fatalf("run error = %v, want missing source diagnostic", err)
 	}
-	if state.run.state != api.RunStateFaulted || state.run.sourceError == nil {
-		t.Fatalf("startup fault state = %+v", state.run)
+	snapshot := state.snapshotAt(nil, time.Now())
+	if snapshot.Run.State != api.RunStateFaulted {
+		t.Fatalf("startup snapshot state = %q, want %q", snapshot.Run.State, api.RunStateFaulted)
 	}
-	if got := state.run.sourceError; got.Operation != "glob" || got.Path != cfg.Source.Path || got.Message != sourceError.Error() {
+	if got := snapshot.Reader.SourceError; got == nil || got.Operation != "glob" || got.Path != cfg.Source.Path || got.Message != sourceError.Error() {
 		t.Fatalf("startup source diagnostic = %+v, want original glob and cause", got)
 	}
 	faults := events.FilterField(zap.String("event", "reader_source_failed")).All()
@@ -310,13 +321,14 @@ func TestRunStartupSourceErrorReturnsWithoutSignal(t *testing.T) {
 	if fields := faults[0].ContextMap(); fields["operation"] != "glob" || fields["path"] != cfg.Source.Path || fields["error"] != sourceError.Error() {
 		t.Fatalf("source fault log = %v", fields)
 	}
-	snapshot := state.snapshotAt(nil, time.Now())
 	if snapshot.Reader.WorkerStates == nil || len(snapshot.Reader.WorkerStates) != 0 ||
 		snapshot.Sender.WorkerStates == nil || len(snapshot.Sender.WorkerStates) != 0 ||
 		snapshot.Reader.Workers != cfg.Reader.Workers.Initial || snapshot.Sender.Workers != cfg.Sender.Workers.Initial {
 		t.Fatalf("startup source fault worker states/targets = %+v / %+v", snapshot.Reader, snapshot.Sender)
 	}
-	assertFinalTransactions(t, events, 0, 0)
+	if final := assertFinalTransactions(t, events, 0, 0); final["state"] != string(api.RunStateFaulted) {
+		t.Fatalf("startup fault final event = %v", final)
+	}
 }
 
 func TestEventLoopDrainsAfterUnexpectedHTTPServerExit(t *testing.T) {
@@ -434,11 +446,11 @@ func TestEventLoopDrainsAfterUnexpectedHTTPServerExit(t *testing.T) {
 					(test.err == nil && !strings.Contains(runErr.Error(), "http server stopped unexpectedly")) {
 					t.Fatalf("server exit error=%v, want cause %v", runErr, test.err)
 				}
-				if state.run.state != api.RunStateFaulted || deadline != failedAt.Add(grace) || !time.Now().Before(deadline) || delivered != 1 {
-					t.Fatalf("state=%s deadline=%s now=%s delivered=%d", state.run.state, deadline, time.Now(), delivered)
+				if deadline != failedAt.Add(grace) || !time.Now().Before(deadline) || delivered != 1 {
+					t.Fatalf("deadline=%s now=%s delivered=%d", deadline, time.Now(), delivered)
 				}
-				if final := assertFinalTransactions(t, logs, 1, 0); final["partial"] != false {
-					t.Fatalf("accepted batch did not drain completely: %v", final)
+				if final := assertFinalTransactions(t, logs, 1, 0); final["state"] != string(api.RunStateFaulted) || final["partial"] != false {
+					t.Fatalf("faulted run did not drain the accepted batch completely: %v", final)
 				}
 			})
 		})
@@ -542,6 +554,24 @@ func startTestEventLoop(t *testing.T, state *Controller, grace time.Duration) te
 	return startTestEventLoopWithSource(t, state, grace, ready)
 }
 
+func startTestEventLoopWithTestReceiver(t *testing.T, cfg config.Config, logger *zap.Logger, receiver *httptest.Server) testEventLoop {
+	t.Helper()
+	// Keep the Sender's request construction and cancellation path. Only the
+	// dialer is replaced until the Sender has cloned the test transport.
+	dialer := receiver.Client().Transport.(*http.Transport).DialContext
+	cfg.Sender.API.URL = receiver.URL
+	original := http.DefaultTransport
+	transport := original.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = dialer
+	http.DefaultTransport = transport
+	defer func() { http.DefaultTransport = original }()
+
+	loop := startTestEventLoop(t, newTestController(cfg, logger), testGrace)
+	synctest.Wait()
+	return loop
+}
+
 func startTestEventLoopWithSource(
 	t *testing.T, state *Controller, grace time.Duration, source <-chan SourceResult,
 ) testEventLoop {
@@ -563,22 +593,18 @@ func startTestEventLoopWithSource(
 	return testEventLoop{controller: state, cancel: cancel, result: result}
 }
 
-func (h testEventLoop) awaitSnapshot(t *testing.T, ready func(api.Snapshot) bool) api.Snapshot {
+func (h testEventLoop) snapshotInState(t *testing.T, state api.RunState) api.Snapshot {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	for ctx.Err() == nil {
-		status, err := h.controller.Snapshot(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ready(status) {
-			return status
-		}
-		time.Sleep(time.Millisecond)
+	status, err := h.controller.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("runtime snapshot did not reach expected state")
-	return api.Snapshot{}
+	if status.Run.State != state {
+		t.Fatalf("snapshot state = %q, want %q", status.Run.State, state)
+	}
+	return status
 }
 
 func (h testEventLoop) awaitExit(t *testing.T) error {

@@ -5,14 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -30,6 +31,47 @@ type blackBoxResult struct {
 	stdout   string
 	stderr   string
 	exitCode int
+}
+
+// logfmtFields keeps quoted values together, including escaped quotes.
+var logfmtFields = regexp.MustCompile(`(?:[^\s"]+|"(?:[^"\\]|\\.)*")+`)
+
+type eventLog struct {
+	output  bytes.Buffer
+	scanned int
+	events  map[string]chan struct{}
+}
+
+func newEventLog(names ...string) *eventLog {
+	log := &eventLog{events: make(map[string]chan struct{}, len(names))}
+	for _, name := range names {
+		log.events[name] = make(chan struct{})
+	}
+	return log
+}
+
+func (log *eventLog) Write(data []byte) (int, error) {
+	n, _ := log.output.Write(data)
+	pending := log.output.Bytes()[log.scanned:]
+	for {
+		line, rest, found := bytes.Cut(pending, []byte{'\n'})
+		if !found {
+			break
+		}
+		pending = rest
+		log.scanned += len(line) + 1
+		fields := logfmtFields.FindAllString(string(line), -1)
+		for name, ready := range log.events {
+			if slices.Contains(fields, "event="+name) {
+				select {
+				case <-ready:
+				default:
+					close(ready)
+				}
+			}
+		}
+	}
+	return n, nil
 }
 
 func TestCLIBinaryArgsAndHelp(t *testing.T) {
@@ -80,7 +122,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot.Run.State = api.RunStateRunning
-	config := newConfigResponse(testConfig(t))
+	config := newConfigResponse(testConfig())
 
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
@@ -157,9 +199,8 @@ func TestCLIBinaryServeStartsDeliveryAutomatically(t *testing.T) {
 	}))
 	defer receiver.Close()
 
-	configPath := writeBlackBoxConfig(t, receiver.URL+"/internal/ingest")
-	baseURL := startCLIServe(t, binary, configPath)
-	waitForHTTPSnapshotState(t, baseURL, api.RunStateRunning)
+	cfg := blackBoxConfig(t, receiver.URL+"/internal/ingest")
+	startCLIServe(t, binary, cfg)
 
 	select {
 	case <-received:
@@ -211,8 +252,9 @@ func assertCLIBinaryFailure(t *testing.T, result blackBoxResult, wantExit int, w
 	}
 }
 
-func startCLIServe(t *testing.T, binary, configPath string) string {
+func startCLIServe(t *testing.T, binary string, cfg config.Config) string {
 	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "config.toml")
 	for attempt := range 3 {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -222,25 +264,13 @@ func startCLIServe(t *testing.T, binary, configPath string) string {
 		if err := listener.Close(); err != nil {
 			t.Fatal(err)
 		}
-		loaded, err := config.Load(configPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		contents, err := os.ReadFile(configPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		updated := strings.Replace(string(contents), fmt.Sprintf("addr = %q", loaded.HTTP.Addr), fmt.Sprintf("addr = %q", addr), 1)
-		if updated == string(contents) {
-			t.Fatal("HTTP address replacement did not apply")
-		}
-		if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		cfg.HTTP.Addr = addr
+		writeTestConfig(t, configPath, cfg)
 		command := exec.Command(binary, "serve", "--config", configPath)
 		command.Dir = filepath.Dir(configPath)
-		var stdout, stderr bytes.Buffer
-		command.Stdout, command.Stderr = &stdout, &stderr
+		stdout := newEventLog("run_started")
+		var stderr bytes.Buffer
+		command.Stdout, command.Stderr = stdout, &stderr
 		if err := command.Start(); err != nil {
 			t.Fatalf("start serve: %v", err)
 		}
@@ -249,7 +279,7 @@ func startCLIServe(t *testing.T, binary, configPath string) string {
 		var waitError error
 		go func() {
 			waitError = command.Wait()
-			result = blackBoxResult{stdout: stdout.String(), stderr: stderr.String()}
+			result = blackBoxResult{stdout: stdout.output.String(), stderr: stderr.String()}
 			var exitError *exec.ExitError
 			if errors.As(waitError, &exitError) {
 				result.exitCode = exitError.ExitCode()
@@ -274,53 +304,52 @@ func startCLIServe(t *testing.T, binary, configPath string) string {
 				t.Errorf("service start log must appear once with actual listener %s: %s", addr, result.stdout)
 			}
 		})
-		baseURL := "http://" + addr
-		client := &http.Client{Timeout: 100 * time.Millisecond}
-		deadline := time.Now().Add(blackBoxTimeout)
-		retry := false
-		for time.Now().Before(deadline) {
-			select {
-			case <-finished:
-				if isBindConflict(result, addr) {
-					retry = true
-					break
-				}
-				t.Fatalf("serve exited before readiness: wait=%v result=%+v", waitError, result)
-			default:
+		select {
+		case <-stdout.events["run_started"]:
+		case <-finished:
+			if isBindConflict(result, addr) {
+				t.Logf("retry %d after own subprocess bind conflict at %s", attempt+1, addr)
+				continue
 			}
-			if retry {
-				break
-			}
-			response, err := client.Get(baseURL + api.SnapshotPath)
-			if err == nil {
-				var snapshot api.Snapshot
-				decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
-				closeErr := response.Body.Close()
-				if response.StatusCode == http.StatusOK && decodeErr == nil && closeErr == nil && snapshot.Run.State == api.RunStateRunning {
-					ready = true
-					t.Logf("serve attempt %d ready at %s", attempt+1, baseURL)
-					return baseURL
-				}
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		if !retry {
+			t.Fatalf("serve exited before readiness: wait=%v result=%+v", waitError, result)
+		case <-time.After(blackBoxTimeout):
 			stop()
-			t.Fatalf("serve readiness timeout: %+v", result)
+			t.Fatalf("serve readiness timeout waiting for run_started: %+v", result)
 		}
-		t.Logf("retry %d after own subprocess bind conflict at %s", attempt+1, addr)
+		baseURL := "http://" + addr
+		client := &http.Client{Timeout: blackBoxTimeout}
+		response, err := client.Get(baseURL + api.SnapshotPath)
+		if err != nil {
+			stop()
+			t.Fatalf("GET snapshot after run_started: %v, result=%+v", err, result)
+		}
+		var snapshot api.Snapshot
+		decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
+		closeErr := response.Body.Close()
+		if response.StatusCode != http.StatusOK || decodeErr != nil || closeErr != nil || snapshot.Run.State != api.RunStateRunning {
+			stop()
+			t.Fatalf("snapshot after run_started: HTTP %d, state=%q, decode=%v, close=%v, result=%+v",
+				response.StatusCode, snapshot.Run.State, decodeErr, closeErr, result)
+		}
+		ready = true
+		t.Logf("serve attempt %d ready at %s", attempt+1, baseURL)
+		return baseURL
 	}
 	t.Fatal("serve exhausted three bind-conflict attempts")
 	return ""
 }
 
 func isBindConflict(result blackBoxResult, addr string) bool {
-	message := syscall.EADDRINUSE.Error()
-	if runtime.GOOS == "windows" {
-		message = syscall.Errno(10048).Error()
-	}
 	return result.exitCode == 1 && strings.Contains(result.stderr, "listen HTTP server") &&
-		strings.Contains(result.stderr, addr) && strings.Contains(strings.ToLower(result.stderr), strings.ToLower(message))
+		strings.Contains(result.stderr, addr) &&
+		strings.Contains(strings.ToLower(result.stderr), strings.ToLower(addressInUseError().Error()))
+}
+
+func addressInUseError() syscall.Errno {
+	if runtime.GOOS == "windows" {
+		return syscall.Errno(10048)
+	}
+	return syscall.EADDRINUSE
 }
 
 func TestCLIBinaryServeReportsRealBindConflict(t *testing.T) {
@@ -335,15 +364,10 @@ func TestCLIBinaryServeReportsRealBindConflict(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(receiver.Close)
-	configPath := writeBlackBoxConfig(t, receiver.URL+"/internal/ingest")
-	contents, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	updated := strings.Replace(string(contents), "addr = \"127.0.0.1:8080\"", fmt.Sprintf("addr = %q", addr), 1)
-	if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	cfg := blackBoxConfig(t, receiver.URL+"/internal/ingest")
+	cfg.HTTP.Addr = addr
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	writeTestConfig(t, configPath, cfg)
 	result := runCLIBinary(t, binary, "serve", "--config", configPath)
 	if !isBindConflict(result, addr) || isBindConflict(result, "127.0.0.1:0") {
 		t.Fatalf("real bind conflict misclassified: %+v", result)
@@ -351,41 +375,26 @@ func TestCLIBinaryServeReportsRealBindConflict(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
-	baseURL := startCLIServe(t, binary, configPath)
-	waitForHTTPSnapshotState(t, baseURL, api.RunStateRunning)
+	baseURL := startCLIServe(t, binary, cfg)
 	t.Logf("real bind conflict at %s detected; ordinary helper restarted at %s", addr, baseURL)
 }
 
-func writeBlackBoxConfig(t *testing.T, senderURL string) string {
+func blackBoxConfig(t *testing.T, senderURL string) config.Config {
 	t.Helper()
-	directory := t.TempDir()
-	parquetPath := filepath.Join(directory, "input.parquet")
-	if err := parquet.WriteFile(parquetPath, []pipeline.Transaction{{ClientID: "black-box"}}); err != nil {
+	cfg := testConfig()
+	cfg.Source.Path = filepath.Join(t.TempDir(), "input.parquet")
+	cfg.Sender.API.URL = senderURL
+	if err := parquet.WriteFile(cfg.Source.Path, []pipeline.Transaction{{ClientID: "black-box"}}); err != nil {
 		t.Fatalf("write parquet fixture: %v", err)
 	}
-	config := strings.Replace(
-		testConfigContents(t),
-		"../data/MBD-mini/trx/fold=*/*.parquet",
-		filepath.ToSlash(filepath.Join(directory, "*.parquet")),
-		1,
-	)
-	config = strings.Replace(config, testSenderURL, senderURL, 1)
-	configPath := filepath.Join(directory, "config.toml")
-	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
-		t.Fatalf("write serve config: %v", err)
-	}
-	return configPath
+	return cfg
 }
 
 func occupyDefaultServePort(t *testing.T) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:8080")
 	if err != nil {
-		message := syscall.EADDRINUSE.Error()
-		if runtime.GOOS == "windows" {
-			message = syscall.Errno(10048).Error()
-		}
-		if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(message)) {
+		if !errors.Is(err, addressInUseError()) {
 			t.Fatalf("reserve default port: %v", err)
 		}
 		t.Logf("default 8080 already occupied; existing listener left untouched: %v", err)
@@ -408,8 +417,10 @@ func TestRunCLIReportsLocalStartupFailure(t *testing.T) {
 }
 
 func TestDefaultServeUsesCurrentDefaultConfig(t *testing.T) {
-	path := writeConfigInput(t, testConfigContents(t))
-	t.Chdir(filepath.Dir(path))
+	cfg := testConfig()
+	cfg.Sender.API.URL = "http://127.0.0.1:50001/ingest"
+	t.Chdir(t.TempDir())
+	writeTestConfig(t, "config.toml", cfg)
 
 	var stdout, stderr bytes.Buffer
 	var loaded config.Config
@@ -418,7 +429,7 @@ func TestDefaultServeUsesCurrentDefaultConfig(t *testing.T) {
 		loaded, err = config.Load(path)
 		return err
 	})
-	if code != 0 || loaded.Sender.API.URL != testSenderURL {
-		t.Fatalf("default Sender URL = %q, want %q (exit=%d, stderr=%q)", loaded.Sender.API.URL, testSenderURL, code, stderr.String())
+	if code != 0 || loaded.Sender.API.URL != cfg.Sender.API.URL {
+		t.Fatalf("default Sender URL = %q, want %q (exit=%d, stderr=%q)", loaded.Sender.API.URL, cfg.Sender.API.URL, code, stderr.String())
 	}
 }

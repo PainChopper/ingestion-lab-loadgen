@@ -16,7 +16,7 @@ import (
 
 func TestConfirmedMetricIsCurrentWithoutTicks(t *testing.T) {
 	const batchSize = 3
-	cfg := testConfig(t)
+	cfg := testConfig()
 	cfg.Reader.ReadBatchSize = batchSize
 	cfg.Reader.Workers.Initial = 1
 	cfg.Sender.Workers.Initial = 1
