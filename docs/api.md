@@ -2,6 +2,8 @@
 
 LoadGen serves its control API at `http://127.0.0.1:8080` with the bundled configuration. With LoadGen running, open [Swagger UI](http://127.0.0.1:8080/developer/swagger/ui/) to try the API or fetch [the OpenAPI JSON](http://127.0.0.1:8080/developer/openapi.json). The [checked-in specification](../loadgen/openapi/loadgen.openapi.json) is also available offline.
 
+[The API package](../loadgen/internal/api) defines the JSON types shared by the HTTP server and CLI.
+
 ## LoadGen endpoints
 
 | Method and path | Response |

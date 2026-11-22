@@ -18,21 +18,17 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 const gracefulShutdownTimeout = 10 * time.Second
 
-const snapshotPath = "/api/loadgen/snapshot"
-
-const configPath = "/api/loadgen/config"
-
-const commandsPath = "/api/loadgen/commands"
-
 func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, cfg config.Config, logger *zap.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("GET "+snapshotPath, snapshotHandler(requests, logger))
-	mux.Handle("GET "+configPath, configHandler(newConfigResponse(cfg), logger))
-	mux.Handle("POST "+commandsPath, commandsHandler(requests, cfg))
+	mux.Handle("GET "+api.SnapshotPath, snapshotHandler(requests, logger))
+	mux.Handle("GET "+api.ConfigPath, configHandler(newConfigResponse(cfg), logger))
+	mux.Handle("POST "+api.CommandsPath, commandsHandler(requests, cfg))
 	registerDeveloperRoutes(mux)
 
 	mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))
@@ -86,11 +82,6 @@ func shutdownHTTPServer(ctx context.Context, server *http.Server) error {
 
 const maxCommandBodyBytes = 4096
 
-type commandRequest struct {
-	Action string          `json:"action"`
-	Value  json.RawMessage `json:"value"`
-}
-
 func commandsHandler(requests runtimeRequests, cfg config.Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCommandBodyBytes))
@@ -103,19 +94,12 @@ func commandsHandler(requests runtimeRequests, cfg config.Config) http.Handler {
 			}
 			return
 		}
-		// Decode instead of Unmarshal to reject unknown fields as well as trailing JSON.
-		decoder := json.NewDecoder(bytes.NewReader(body))
-		decoder.DisallowUnknownFields()
-		var request commandRequest
-		if err := decoder.Decode(&request); err != nil {
+		request, err := api.DecodeCommand(bytes.NewReader(body))
+		if err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
-			return
-		}
-		command, err := request.runtimeCommand(cfg)
+		command, err := parseRuntimeCommand(request, cfg)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -131,18 +115,18 @@ func commandsHandler(requests runtimeRequests, cfg config.Config) http.Handler {
 	})
 }
 
-func (r commandRequest) runtimeCommand(cfg config.Config) (runtimeCommand, error) {
+func parseRuntimeCommand(r api.CommandRequest, cfg config.Config) (runtimeCommand, error) {
 	var command runtimeCommand
 	var contains func(int) bool
 	var invalid string
 	switch r.Action {
-	case "set-reader-workers":
+	case api.SetReaderWorkers:
 		command.kind, contains, invalid = setReaderWorkers, cfg.Reader.Workers.Contains, "invalid reader workers"
-	case "set-sender-workers":
+	case api.SetSenderWorkers:
 		command.kind, contains, invalid = setSenderWorkers, cfg.Sender.Workers.Contains, "invalid sender workers"
-	case "set-requested-tps":
+	case api.SetRequestedTPS:
 		command.kind, contains, invalid = setRequestedTPS, cfg.Throttler.RequestedTPS.Contains, "invalid requested tps"
-	case "set-throttler-installed":
+	case api.SetThrottlerInstalled:
 		var value *bool
 		if err := json.Unmarshal(r.Value, &value); err != nil || value == nil {
 			return runtimeCommand{}, errors.New("invalid throttler installed value")
@@ -159,18 +143,8 @@ func (r commandRequest) runtimeCommand(cfg config.Config) (runtimeCommand, error
 	return command, nil
 }
 
-type configResponse struct {
-	ReaderWorkersMax      int    `json:"readerWorkersMax"`
-	SenderWorkersMax      int    `json:"senderWorkersMax"`
-	RequestedTpsMax       int    `json:"requestedTpsMax"`
-	ReadBatchSize         int    `json:"readBatchSize"`
-	ReaderChannelCapacity int    `json:"readerChannelCapacity"`
-	SenderChannelCapacity int    `json:"senderChannelCapacity"`
-	SourcePath            string `json:"sourcePath"`
-}
-
-func newConfigResponse(cfg config.Config) configResponse {
-	return configResponse{
+func newConfigResponse(cfg config.Config) api.ConfigResponse {
+	return api.ConfigResponse{
 		ReaderWorkersMax:      cfg.Reader.Workers.Max,
 		SenderWorkersMax:      cfg.Sender.Workers.Max,
 		RequestedTpsMax:       cfg.Throttler.RequestedTPS.Max,
@@ -181,7 +155,7 @@ func newConfigResponse(cfg config.Config) configResponse {
 	}
 }
 
-func configHandler(config configResponse, logger *zap.Logger) http.Handler {
+func configHandler(config api.ConfigResponse, logger *zap.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(config); err != nil {

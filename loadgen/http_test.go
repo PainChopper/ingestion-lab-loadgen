@@ -20,6 +20,8 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
@@ -27,7 +29,7 @@ func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var want configResponse
+	var want api.ConfigResponse
 	if err := json.Unmarshal(data, &want); err != nil {
 		t.Fatal(err)
 	}
@@ -39,13 +41,13 @@ func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
 	cfg.ReaderChannel.Capacity = want.ReaderChannelCapacity
 	cfg.SenderChannel.Capacity = want.SenderChannelCapacity
 	cfg.Source.Path = want.SourcePath
-	for _, state := range []runState{runStateStarting, runStateRunning, runStateStopping, runStateFaulted} {
+	for _, state := range []api.RunState{api.RunStateStarting, api.RunStateRunning, api.RunStateStopping, api.RunStateFaulted} {
 		t.Run(string(state), func(t *testing.T) {
 			owner := newControlState(cfg, zap.NewNop())
 			owner.run.state = state
 			requests := make(chan runtimeRequest, 1)
 			done := make(chan struct{})
-			if state == runStateFaulted {
+			if state == api.RunStateFaulted {
 				close(done)
 			}
 			mux := newServeMux(runtimeRequests{queue: requests, done: done}, newPrometheusMetrics(), owner.config, zap.NewNop())
@@ -54,8 +56,8 @@ func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
-			mux.ServeHTTP(recorder, httptest.NewRequestWithContext(ctx, http.MethodGet, configPath, nil))
-			var got configResponse
+			mux.ServeHTTP(recorder, httptest.NewRequestWithContext(ctx, http.MethodGet, api.ConfigPath, nil))
+			var got api.ConfigResponse
 			if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
@@ -77,7 +79,7 @@ func TestConfigEndpointHeadAndUnsupportedMethod(t *testing.T) {
 	mux := newServeMux(runtimeRequests{}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 	server := httptest.NewServer(mux)
 	defer server.Close()
-	response, err := server.Client().Head(server.URL + configPath)
+	response, err := server.Client().Head(server.URL + api.ConfigPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +96,7 @@ func TestConfigEndpointHeadAndUnsupportedMethod(t *testing.T) {
 		t.Fatalf("HEAD config = %d %v %q", response.StatusCode, response.Header, body)
 	}
 	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, configPath, nil))
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, api.ConfigPath, nil))
 	if recorder.Code != http.StatusMethodNotAllowed || recorder.Header().Get("Allow") != "GET, HEAD" {
 		t.Fatalf("POST config = %d %v", recorder.Code, recorder.Header())
 	}
@@ -102,7 +104,7 @@ func TestConfigEndpointHeadAndUnsupportedMethod(t *testing.T) {
 
 func TestCommandsHandlerRejectsGet(t *testing.T) {
 	commands := make(chan runtimeRequest, 1)
-	req := httptest.NewRequest(http.MethodGet, commandsPath, nil)
+	req := httptest.NewRequest(http.MethodGet, api.CommandsPath, nil)
 	rec := httptest.NewRecorder()
 
 	newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
@@ -132,7 +134,7 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			commands := make(chan runtimeRequest, 1)
 			body := strings.NewReader(test.body)
-			req := httptest.NewRequest(http.MethodPost, commandsPath, body)
+			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, body)
 			rec := httptest.NewRecorder()
 			newServeMux(runtimeRequests{queue: commands}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
 			response := rec.Result()
@@ -162,7 +164,7 @@ func TestCommandsHandlerRejectsOversizedBody(t *testing.T) {
 	handler := newServeMux(runtimeRequests{done: done}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
+			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
 			req.ContentLength = -1
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
@@ -175,7 +177,7 @@ func TestCommandsHandlerRejectsOversizedBody(t *testing.T) {
 
 func TestCommandsHandlerRejectsBodyReadFailure(t *testing.T) {
 	commands := make(chan runtimeRequest, 1)
-	req := httptest.NewRequest(http.MethodPost, commandsPath, nil)
+	req := httptest.NewRequest(http.MethodPost, api.CommandsPath, nil)
 	req.Body = io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))
 	rec := httptest.NewRecorder()
 	commandsHandler(runtimeRequests{queue: commands}, testConfig(t)).ServeHTTP(rec, req)
@@ -217,7 +219,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			commands := make(chan runtimeRequest, 1)
 			recorder := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
+			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
 			config := testConfig(t)
 			go func() {
@@ -280,7 +282,7 @@ func TestSenderCommandValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			commands := make(chan runtimeRequest, 1)
 			recorder := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
+			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
@@ -334,7 +336,7 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			commands := make(chan runtimeRequest, 1)
 			recorder := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(test.body))
+			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
@@ -420,14 +422,14 @@ func TestServeMuxHEADUsesSnapshotAndReturnsNoBody(t *testing.T) {
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	go func() {
-		(<-requests).(snapshotRequest).reply <- runtimeSnapshot{Run: runSnapshot{State: runStateRunning}}
+		(<-requests).(snapshotRequest).reply <- api.Snapshot{Run: api.RunSnapshot{State: api.RunStateRunning}}
 	}()
 	for _, test := range []struct {
 		path, allow string
 		status      int
 	}{
-		{path: snapshotPath, status: http.StatusOK},
-		{path: commandsPath, status: http.StatusMethodNotAllowed, allow: http.MethodPost},
+		{path: api.SnapshotPath, status: http.StatusOK},
+		{path: api.CommandsPath, status: http.StatusMethodNotAllowed, allow: http.MethodPost},
 	} {
 		response, err := server.Client().Head(server.URL + test.path)
 		if err != nil {
@@ -446,7 +448,7 @@ func TestServeMuxHEADUsesSnapshotAndReturnsNoBody(t *testing.T) {
 
 func TestHTTPWaitFailuresReturnServiceUnavailable(t *testing.T) {
 	cfg := testConfig(t)
-	for _, path := range []string{snapshotPath, commandsPath} {
+	for _, path := range []string{api.SnapshotPath, api.CommandsPath} {
 		for _, stage := range []string{"send", "reply"} {
 			for _, cause := range []string{"cancel", "deadline", "event loop exit"} {
 				t.Run(path+"/"+stage+"/"+cause, func(t *testing.T) {
@@ -457,7 +459,7 @@ func TestHTTPWaitFailuresReturnServiceUnavailable(t *testing.T) {
 						loopDone := make(chan struct{})
 						mux := newServeMux(runtimeRequests{queue: queue, done: loopDone}, newPrometheusMetrics(), cfg, zap.NewNop())
 						method, body := http.MethodGet, ""
-						if path == commandsPath {
+						if path == api.CommandsPath {
 							method, body = http.MethodPost, `{"action":"set-reader-workers","value":1}`
 						}
 						request := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
@@ -501,7 +503,7 @@ func TestHTTPCommandReceiptsHaveEmptyBody(t *testing.T) {
 			mux := newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
 			go func() { (<-requests).(controlRequest).reply <- applied }()
 			recorder := httptest.NewRecorder()
-			mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, commandsPath, strings.NewReader(`{"action":"set-reader-workers","value":1}`)))
+			mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(`{"action":"set-reader-workers","value":1}`)))
 			want := http.StatusOK
 			if !applied {
 				want = http.StatusConflict
@@ -548,7 +550,7 @@ func TestStartHTTPServerLogsActualListenerAddress(t *testing.T) {
 
 func TestServeMuxHasNoLocalIngest(t *testing.T) {
 	mux := newServeMux(runtimeRequests{queue: make(chan runtimeRequest)}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
-	for _, path := range []string{"/internal/test/ingest", "/internal/ingest", snapshotPath + "/extra", commandsPath + "/extra"} {
+	for _, path := range []string{"/internal/test/ingest", "/internal/ingest", api.SnapshotPath + "/extra", api.CommandsPath + "/extra"} {
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
 		if recorder.Code != http.StatusNotFound {
@@ -596,7 +598,7 @@ func TestStartHTTPServerUsesConfiguredAddressAndShutsDown(t *testing.T) {
 		t.Logf("shutdown released %s", addr)
 	})
 	client := &http.Client{Timeout: time.Second}
-	response, err := client.Get("http://" + addr + commandsPath)
+	response, err := client.Get("http://" + addr + api.CommandsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +610,7 @@ func TestStartHTTPServerUsesConfiguredAddressAndShutsDown(t *testing.T) {
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("configured server GET = %d, want %d", response.StatusCode, http.StatusMethodNotAllowed)
 	}
-	t.Logf("configured server %s answered GET %s with %d", addr, commandsPath, response.StatusCode)
+	t.Logf("configured server %s answered GET %s with %d", addr, api.CommandsPath, response.StatusCode)
 }
 
 func TestStartHTTPServerReturnsOccupiedAddressError(t *testing.T) {
@@ -684,9 +686,9 @@ func (w failingSnapshotWriter) Write([]byte) (int, error) { return 0, io.ErrClos
 
 func TestConfigEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
 	core, events := observer.New(zap.WarnLevel)
-	configHandler(configResponse{}, zap.New(core)).ServeHTTP(
+	configHandler(api.ConfigResponse{}, zap.New(core)).ServeHTTP(
 		failingSnapshotWriter{ResponseRecorder: httptest.NewRecorder()},
-		httptest.NewRequest(http.MethodGet, configPath, nil),
+		httptest.NewRequest(http.MethodGet, api.ConfigPath, nil),
 	)
 	entries := events.FilterMessage("config response encoding failed").All()
 	if len(entries) != 1 || entries[0].ContextMap()["event"] != "config_response_failed" || entries[0].ContextMap()["error"] != io.ErrClosedPipe.Error() {
@@ -697,12 +699,12 @@ func TestConfigEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
 func TestSnapshotEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
 	requests := make(chan runtimeRequest)
 	go func() {
-		(<-requests).(snapshotRequest).reply <- runtimeSnapshot{Run: runSnapshot{State: runStateRunning}}
+		(<-requests).(snapshotRequest).reply <- api.Snapshot{Run: api.RunSnapshot{State: api.RunStateRunning}}
 	}()
 	core, events := observer.New(zap.WarnLevel)
 	snapshotHandler(runtimeRequests{queue: requests}, zap.New(core)).ServeHTTP(
 		failingSnapshotWriter{ResponseRecorder: httptest.NewRecorder()},
-		httptest.NewRequest(http.MethodGet, snapshotPath, nil),
+		httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil),
 	)
 	entries := events.FilterMessage("snapshot response encoding failed").All()
 	if len(entries) != 1 || entries[0].ContextMap()["event"] != "snapshot_response_failed" || entries[0].ContextMap()["error"] != io.ErrClosedPipe.Error() {
@@ -712,27 +714,27 @@ func TestSnapshotEncodingFailureLogsItsOwnEventAndCause(t *testing.T) {
 
 func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 	requests := make(chan runtimeRequest, 1)
-	expected := runtimeSnapshot{
-		Run: runSnapshot{State: runStateRunning, TotalTransactions: 46, ElapsedMs: 1234},
-		Reader: readerSnapshot{
-			Workers: 1, WorkerStates: []readerWorkerState{
-				{Activity: readerWireReading}, {Activity: readerWireReading, Draining: true},
+	expected := api.Snapshot{
+		Run: api.RunSnapshot{State: api.RunStateRunning, TotalTransactions: 46, ElapsedMs: 1234},
+		Reader: api.ReaderSnapshot{
+			Workers: 1, WorkerStates: []api.ReaderWorkerState{
+				{Activity: api.ReaderReading}, {Activity: api.ReaderReading, Draining: true},
 			},
 			RowsRead:    47,
-			SourceError: &readerSourceError{Operation: "read", Path: "input.parquet", Message: "corrupt parquet"},
+			SourceError: &api.SourceError{Operation: "read", Path: "input.parquet", Message: "corrupt parquet"},
 		},
-		Throttler:     throttlerSnapshot{RequestedTps: 200, Installed: true},
-		Sender:        senderSnapshot{Workers: 32, WorkerStates: []senderWorkerState{}},
-		ReaderChannel: channelSnapshot{DepthBatches: 6, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, InputTransactionsTotal: 3, OutputTransactionsTotal: 1},
-		SenderChannel: channelSnapshot{DepthBatches: 4, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, InputTransactionsTotal: 4, OutputTransactionsTotal: 2},
+		Throttler:     api.ThrottlerSnapshot{RequestedTps: 200, Installed: true},
+		Sender:        api.SenderSnapshot{Workers: 32, WorkerStates: []api.SenderWorkerState{}},
+		ReaderChannel: api.ChannelSnapshot{DepthBatches: 6, BlockedSenders: 1, OldestBlockedSenderMs: 12, BlockedMs: 34, InputTransactionsTotal: 3, OutputTransactionsTotal: 1},
+		SenderChannel: api.ChannelSnapshot{DepthBatches: 4, BlockedSenders: 2, OldestBlockedSenderMs: 13, BlockedMs: 35, InputTransactionsTotal: 4, OutputTransactionsTotal: 2},
 	}
 	rec := httptest.NewRecorder()
 	go func() { (<-requests).(snapshotRequest).reply <- expected }()
-	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("reply code = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var actual runtimeSnapshot
+	var actual api.Snapshot
 	if err := json.Unmarshal(rec.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}
@@ -758,19 +760,19 @@ func TestSnapshotHandlerReturnsOwnerSnapshot(t *testing.T) {
 func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 	requests := make(chan runtimeRequest, 1)
 	go func() {
-		(<-requests).(snapshotRequest).reply <- runtimeSnapshot{Run: runSnapshot{State: runStateStarting}, Reader: readerSnapshot{WorkerStates: []readerWorkerState{}}, Sender: senderSnapshot{WorkerStates: []senderWorkerState{}}}
+		(<-requests).(snapshotRequest).reply <- api.Snapshot{Run: api.RunSnapshot{State: api.RunStateStarting}, Reader: api.ReaderSnapshot{WorkerStates: []api.ReaderWorkerState{}}, Sender: api.SenderSnapshot{WorkerStates: []api.SenderWorkerState{}}}
 	}()
 	recorder := httptest.NewRecorder()
-	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
+	snapshotHandler(runtimeRequests{queue: requests}, zap.NewNop()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil))
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(recorder.Body.Bytes(), &root); err != nil {
 		t.Fatal(err)
 	}
-	var actual runtimeSnapshot
+	var actual api.Snapshot
 	if err := json.Unmarshal(recorder.Body.Bytes(), &actual); err != nil {
 		t.Fatal(err)
 	}
-	if want := (runtimeSnapshot{Run: runSnapshot{State: runStateStarting}, Reader: readerSnapshot{WorkerStates: []readerWorkerState{}}, Sender: senderSnapshot{WorkerStates: []senderWorkerState{}}}); !reflect.DeepEqual(actual, want) {
+	if want := (api.Snapshot{Run: api.RunSnapshot{State: api.RunStateStarting}, Reader: api.ReaderSnapshot{WorkerStates: []api.ReaderWorkerState{}}, Sender: api.SenderSnapshot{WorkerStates: []api.SenderWorkerState{}}}); !reflect.DeepEqual(actual, want) {
 		t.Errorf("zero snapshot = %+v, want %+v", actual, want)
 	}
 	var run, reader map[string]json.RawMessage
@@ -802,7 +804,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 func TestSnapshotHandlerRejectsPost(t *testing.T) {
 	requests := make(chan runtimeRequest, 1)
 	rec := httptest.NewRecorder()
-	newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, snapshotPath, nil))
+	newServeMux(runtimeRequests{queue: requests}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, api.SnapshotPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}

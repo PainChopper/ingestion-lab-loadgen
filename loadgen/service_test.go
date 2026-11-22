@@ -17,6 +17,8 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func TestPipelineOptionsPreservesConfiguration(t *testing.T) {
@@ -156,7 +158,7 @@ func TestRunServeDrainsAndReleasesListener(t *testing.T) {
 			t.Error("runServe did not stop after cancellation")
 		}
 	})
-	waitForHTTPSnapshotState(t, "http://"+addr, runStateRunning)
+	waitForHTTPSnapshotState(t, "http://"+addr, api.RunStateRunning)
 	cancel()
 	select {
 	case <-done:

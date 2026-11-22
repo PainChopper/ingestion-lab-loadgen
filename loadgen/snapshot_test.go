@@ -9,35 +9,37 @@ import (
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func TestSnapshotWirePreservesDistinctRuntimeValues(t *testing.T) {
-	want := runtimeSnapshot{
+	want := api.Snapshot{
 		CapturedAtMs: 103,
-		Run:          runSnapshot{State: runStateStopping, TotalTransactions: 101, ElapsedMs: 102},
-		Reader: readerSnapshot{
-			Workers: 11, WorkerStates: []readerWorkerState{
-				{Activity: readerWireReading}, {Activity: readerWireReading},
-				{Activity: readerWireBlocked, Draining: true}, {Activity: readerWireIdle},
+		Run:          api.RunSnapshot{State: api.RunStateStopping, TotalTransactions: 101, ElapsedMs: 102},
+		Reader: api.ReaderSnapshot{
+			Workers: 11, WorkerStates: []api.ReaderWorkerState{
+				{Activity: api.ReaderReading}, {Activity: api.ReaderReading},
+				{Activity: api.ReaderBlocked, Draining: true}, {Activity: api.ReaderIdle},
 			},
 			RowsRead:    22,
-			SourceError: &readerSourceError{Operation: "reader-operation", Path: "reader-path", Message: "reader-message"},
+			SourceError: &api.SourceError{Operation: "reader-operation", Path: "reader-path", Message: "reader-message"},
 		},
-		Throttler: throttlerSnapshot{RequestedTps: 31, Installed: false},
-		Sender: senderSnapshot{
-			Workers: 41, WorkerStates: []senderWorkerState{
-				{Activity: senderWireInFlight, Draining: true},
-				{Activity: senderWireBackoff}, {Activity: senderWireBackoff},
-				{Activity: senderWireBackoff}, {Activity: senderWireIdle, Draining: true},
+		Throttler: api.ThrottlerSnapshot{RequestedTps: 31, Installed: false},
+		Sender: api.SenderSnapshot{
+			Workers: 41, WorkerStates: []api.SenderWorkerState{
+				{Activity: api.SenderInFlight, Draining: true},
+				{Activity: api.SenderBackoff}, {Activity: api.SenderBackoff},
+				{Activity: api.SenderBackoff}, {Activity: api.SenderIdle, Draining: true},
 			},
 		},
-		ReaderChannel: channelSnapshot{
+		ReaderChannel: api.ChannelSnapshot{
 			DepthBatches: 52, BlockedSenders: 54, OldestBlockedSenderMs: 55,
 			BlockedMs:               56,
 			InputTransactionsTotal:  62,
 			OutputTransactionsTotal: 64,
 		},
-		SenderChannel: channelSnapshot{
+		SenderChannel: api.ChannelSnapshot{
 			DepthBatches: 72, BlockedSenders: 74, OldestBlockedSenderMs: 75,
 			BlockedMs:               76,
 			InputTransactionsTotal:  82,
@@ -73,7 +75,7 @@ func TestSnapshotLogFieldsPreserveDistinctRuntimeValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var snapshot runtimeSnapshot
+	var snapshot api.Snapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
 		t.Fatal(err)
 	}

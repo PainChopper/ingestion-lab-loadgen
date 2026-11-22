@@ -10,6 +10,8 @@ import (
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"go.uber.org/zap"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 type controlState struct {
@@ -23,8 +25,8 @@ type controlState struct {
 
 type controlRunState struct {
 	runStartedAt time.Time
-	sourceError  *readerSourceError
-	state        runState
+	sourceError  *api.SourceError
+	state        api.RunState
 }
 
 type configuredControls struct {
@@ -44,7 +46,7 @@ type runtimeEvents struct {
 func newControlState(cfg config.Config, logger *zap.Logger) controlState {
 	return controlState{
 		startedAt: time.Now(),
-		run:       controlRunState{state: runStateStarting},
+		run:       controlRunState{state: api.RunStateStarting},
 		config:    cfg,
 		controls: configuredControls{
 			readerWorkers: cfg.Reader.Workers.Initial,
@@ -88,7 +90,7 @@ func (s *controlState) runEventLoop(
 		}
 	}
 	stopOnSignal := func() {
-		s.run.state = runStateStopping
+		s.run.state = api.RunStateStopping
 		beginDrain()
 		s.logger.Info("service stopping", zap.String("event", "service_stopping"))
 	}
@@ -116,7 +118,7 @@ func (s *controlState) runEventLoop(
 				err = errors.New("http server stopped unexpectedly")
 			}
 			runErr = errors.Join(runErr, err)
-			s.run.state = runStateFaulted
+			s.run.state = api.RunStateFaulted
 			s.logger.Error("HTTP server failed", zap.String("event", "http_server_failed"), zap.Error(err))
 			beginDrain()
 		case found := <-events.source:
@@ -128,7 +130,7 @@ func (s *controlState) runEventLoop(
 				}
 				return shutdownDeadline, errors.Join(runErr, fmt.Errorf("start run: %w", found.err))
 			}
-			if s.run.state != runStateStarting {
+			if s.run.state != api.RunStateStarting {
 				return shutdownDeadline, runErr
 			}
 			if appCtx.Err() != nil {
@@ -142,7 +144,7 @@ func (s *controlState) runEventLoop(
 			metrics.run.Store(run)
 			pipelineDone = run.Done()
 			sourceErrors = run.SourceErrors()
-			s.run.state = runStateRunning
+			s.run.state = api.RunStateRunning
 			s.logger.Info("run started", zap.String("event", "run_started"))
 		case sourceError := <-sourceErrors:
 			sourceErrors = nil
@@ -170,7 +172,7 @@ func (s *controlState) runEventLoop(
 			case snapshotRequest:
 				request.reply <- s.snapshotAt(run, time.Now())
 			case controlRequest:
-				request.reply <- s.run.state == runStateRunning &&
+				request.reply <- s.run.state == api.RunStateRunning &&
 					s.applyCommand(run, request.command, metrics)
 			}
 		case <-ticker.C:
@@ -222,8 +224,8 @@ func (s *controlState) recordSourceFault(err error) {
 	if !errors.As(err, &sourceError) {
 		return
 	}
-	s.run.state = runStateFaulted
-	s.run.sourceError = &readerSourceError{Operation: sourceError.Op,
+	s.run.state = api.RunStateFaulted
+	s.run.sourceError = &api.SourceError{Operation: sourceError.Op,
 		Path: sourceError.Path, Message: sourceError.Error()}
 	s.logger.Error("reader source failed", zap.String("event", "reader_source_failed"),
 		zap.String("operation", sourceError.Op), zap.String("path", sourceError.Path), zap.Error(sourceError))
@@ -243,7 +245,7 @@ func (s *controlState) finishRun(run *pipeline.Pipeline, partial bool) {
 	)
 }
 
-func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtimeSnapshot {
+func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) api.Snapshot {
 	var snapshot pipeline.Snapshot
 	if run != nil {
 		snapshot = run.Snapshot(now)
@@ -251,23 +253,23 @@ func (s *controlState) snapshotAt(run *pipeline.Pipeline, now time.Time) runtime
 	readerPool, senderPool := snapshot.Reader, snapshot.Sender
 	readerChannel, senderChannel := snapshot.ReaderQueue, snapshot.SenderQueue
 
-	return runtimeSnapshot{
+	return api.Snapshot{
 		CapturedAtMs: max(0, now.Sub(s.startedAt).Milliseconds()),
-		Run: runSnapshot{
+		Run: api.RunSnapshot{
 			State:             s.run.state,
 			TotalTransactions: snapshot.CompletedTransactions,
 			ElapsedMs:         s.elapsedMs(now),
 		},
-		Reader: readerSnapshot{
+		Reader: api.ReaderSnapshot{
 			Workers: s.controls.readerWorkers, WorkerStates: snapshotReaderWorkers(readerPool.WorkerStates),
 			RowsRead:    readerPool.RowsRead,
 			SourceError: s.run.sourceError,
 		},
-		Throttler: throttlerSnapshot{
+		Throttler: api.ThrottlerSnapshot{
 			RequestedTps: s.controls.requestedTPS,
 			Installed:    s.controls.installed,
 		},
-		Sender: senderSnapshot{
+		Sender: api.SenderSnapshot{
 			Workers: s.controls.senderWorkers, WorkerStates: snapshotSenderWorkers(senderPool.WorkerStates),
 		},
 		ReaderChannel: snapshotChannel(readerChannel),
@@ -285,15 +287,6 @@ func (s *controlState) elapsedMs(now time.Time) int64 {
 	}
 	return max(0, now.Sub(s.run.runStartedAt).Milliseconds())
 }
-
-type runState string
-
-const (
-	runStateStarting runState = "starting"
-	runStateRunning  runState = "running"
-	runStateStopping runState = "stopping"
-	runStateFaulted  runState = "faulted"
-)
 
 type runtimeCommandKind int
 
@@ -322,7 +315,7 @@ type runtimeRequest interface {
 }
 
 type snapshotRequest struct {
-	reply chan<- runtimeSnapshot
+	reply chan<- api.Snapshot
 }
 
 type controlRequest struct {
@@ -333,8 +326,8 @@ type controlRequest struct {
 func (snapshotRequest) isRuntimeRequest() {}
 func (controlRequest) isRuntimeRequest()  {}
 
-func requestSnapshot(ctx context.Context, requests runtimeRequests) (runtimeSnapshot, error) {
-	reply := make(chan runtimeSnapshot, 1)
+func requestSnapshot(ctx context.Context, requests runtimeRequests) (api.Snapshot, error) {
+	reply := make(chan api.Snapshot, 1)
 	return awaitRuntimeReply(ctx, requests, snapshotRequest{reply: reply}, reply)
 }
 

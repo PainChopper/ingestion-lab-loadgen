@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func TestSnapshotReaderWorkerMapping(t *testing.T) {
@@ -85,8 +87,8 @@ func TestSnapshotSenderWorkerMapping(t *testing.T) {
 func TestWorkerCountsAndCLI(t *testing.T) {
 	for _, test := range []struct {
 		name   string
-		reader []readerWorkerState
-		sender []senderWorkerState
+		reader []api.ReaderWorkerState
+		sender []api.SenderWorkerState
 		wantR  readerWorkerCounts
 		wantS  senderWorkerCounts
 		lineR  string
@@ -94,17 +96,17 @@ func TestWorkerCountsAndCLI(t *testing.T) {
 	}{
 		{
 			name:   "empty",
-			reader: []readerWorkerState{}, sender: []senderWorkerState{},
+			reader: []api.ReaderWorkerState{}, sender: []api.SenderWorkerState{},
 			lineR: "configured=1 live=0 reading=0 idle=0 blocked=0 draining=0",
 			lineS: "configured=2 live=0 in-flight=0 idle=0 backoff=0 draining=0",
 		},
 		{
 			name: "two owned workers",
-			reader: []readerWorkerState{
-				{Activity: readerWireReading}, {Activity: readerWireBlocked, Draining: true},
+			reader: []api.ReaderWorkerState{
+				{Activity: api.ReaderReading}, {Activity: api.ReaderBlocked, Draining: true},
 			},
-			sender: []senderWorkerState{
-				{Activity: senderWireInFlight}, {Activity: senderWireBackoff, Draining: true},
+			sender: []api.SenderWorkerState{
+				{Activity: api.SenderInFlight}, {Activity: api.SenderBackoff, Draining: true},
 			},
 			wantR: readerWorkerCounts{LiveWorkers: 2, ReadingWorkers: 1, BlockedWorkers: 1, DrainingWorkers: 1},
 			wantS: senderWorkerCounts{LiveWorkers: 2, InFlightWorkers: 1, BackoffWorkers: 1, DrainingWorkers: 1},
@@ -113,18 +115,18 @@ func TestWorkerCountsAndCLI(t *testing.T) {
 		},
 		{
 			name: "distinct counts and draining false",
-			reader: []readerWorkerState{
-				{Activity: readerWireReading},
-				{Activity: readerWireBlocked}, {Activity: readerWireBlocked},
-				{Activity: readerWireIdle, Draining: true},
-				{Activity: readerWireIdle, Draining: true},
-				{Activity: readerWireIdle, Draining: true},
+			reader: []api.ReaderWorkerState{
+				{Activity: api.ReaderReading},
+				{Activity: api.ReaderBlocked}, {Activity: api.ReaderBlocked},
+				{Activity: api.ReaderIdle, Draining: true},
+				{Activity: api.ReaderIdle, Draining: true},
+				{Activity: api.ReaderIdle, Draining: true},
 			},
-			sender: []senderWorkerState{
-				{Activity: senderWireInFlight, Draining: true},
-				{Activity: senderWireInFlight, Draining: true},
-				{Activity: senderWireInFlight},
-				{Activity: senderWireBackoff}, {Activity: senderWireIdle},
+			sender: []api.SenderWorkerState{
+				{Activity: api.SenderInFlight, Draining: true},
+				{Activity: api.SenderInFlight, Draining: true},
+				{Activity: api.SenderInFlight},
+				{Activity: api.SenderBackoff}, {Activity: api.SenderIdle},
 			},
 			wantR: readerWorkerCounts{LiveWorkers: 6, ReadingWorkers: 1, BlockedWorkers: 2, IdleWorkers: 3, DrainingWorkers: 3},
 			wantS: senderWorkerCounts{LiveWorkers: 5, InFlightWorkers: 3, BackoffWorkers: 1, IdleWorkers: 1, DrainingWorkers: 2},
@@ -139,10 +141,10 @@ func TestWorkerCountsAndCLI(t *testing.T) {
 			if got := countSenderWorkers(test.sender); got != test.wantS {
 				t.Errorf("Sender counts = %+v, want %+v", got, test.wantS)
 			}
-			card := formatSnapshot(runtimeSnapshot{
-				Reader: readerSnapshot{Workers: 1, WorkerStates: test.reader},
-				Sender: senderSnapshot{Workers: 2, WorkerStates: test.sender},
-			}, configResponse{})
+			card := formatSnapshot(api.Snapshot{
+				Reader: api.ReaderSnapshot{Workers: 1, WorkerStates: test.reader},
+				Sender: api.SenderSnapshot{Workers: 2, WorkerStates: test.sender},
+			}, api.ConfigResponse{})
 			for _, line := range []string{test.lineR, test.lineS} {
 				if !strings.Contains(card, "Workers:                  "+line+"\n") {
 					t.Errorf("CLI missing %q: %s", line, card)
@@ -157,11 +159,11 @@ func TestCLIWorkerCountsFromSharedFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := decodeStrictSnapshot(strings.NewReader(string(data)))
+	snapshot, err := api.DecodeSnapshot(strings.NewReader(string(data)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	card := formatSnapshot(snapshot, configResponse{})
+	card := formatSnapshot(snapshot, api.ConfigResponse{})
 	for _, line := range []string{
 		"configured=11 live=4 reading=2 idle=1 blocked=1 draining=1",
 		"configured=41 live=5 in-flight=1 idle=1 backoff=3 draining=2",
@@ -169,48 +171,6 @@ func TestCLIWorkerCountsFromSharedFixture(t *testing.T) {
 		if !strings.Contains(card, line) {
 			t.Errorf("fixture CLI missing %q: %s", line, card)
 		}
-	}
-}
-
-func TestDecodeStrictSnapshotWorkerStates(t *testing.T) {
-	for _, pool := range []string{"reader", "sender"} {
-		t.Run(pool, func(t *testing.T) {
-			for _, test := range []struct {
-				name, list string
-				valid      bool
-			}{
-				{name: "empty", list: `[]`, valid: true},
-				{name: "duplicates", list: `[{"activity":"idle","draining":false},{"activity":"idle","draining":false}]`, valid: true},
-				{name: "null list", list: `null`},
-				{name: "object list", list: `{}`},
-				{name: "null item", list: `[null]`},
-				{name: "unknown activity", list: `[{"activity":"unknown","draining":false}]`},
-				{name: "missing activity", list: `[{"draining":false}]`},
-				{name: "null activity", list: `[{"activity":null,"draining":false}]`},
-				{name: "numeric activity", list: `[{"activity":1,"draining":false}]`},
-				{name: "missing draining", list: `[{"activity":"idle"}]`},
-				{name: "null draining", list: `[{"activity":"idle","draining":null}]`},
-				{name: "string draining", list: `[{"activity":"idle","draining":"false"}]`},
-				{name: "extra id", list: `[{"activity":"idle","draining":false,"id":1}]`},
-			} {
-				t.Run(test.name, func(t *testing.T) {
-					body := `{"run":{"state":"running"},"` + pool + `":{"workerStates":` + test.list + `}}`
-					_, err := decodeStrictSnapshot(strings.NewReader(body))
-					if (err == nil) != test.valid {
-						t.Fatalf("decode error = %v, want valid=%t", err, test.valid)
-					}
-				})
-			}
-			for _, activity := range []string{"reading", "blocked", "inFlight", "backoff"} {
-				body := `{"run":{"state":"running"},"` + pool + `":{"workerStates":[{"activity":"` + activity + `","draining":true}]}}`
-				_, err := decodeStrictSnapshot(strings.NewReader(body))
-				valid := pool == "reader" && (activity == "reading" || activity == "blocked") ||
-					pool == "sender" && (activity == "inFlight" || activity == "backoff")
-				if (err == nil) != valid {
-					t.Errorf("activity %s: error = %v, want valid=%t", activity, err, valid)
-				}
-			}
-		})
 	}
 }
 
