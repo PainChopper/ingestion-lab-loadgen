@@ -1,0 +1,13 @@
+MBD-mini sample data
+
+This directory includes one unmodified original Parquet file from MBD-mini:
+  trx/fold=0/part-00001-f1f2463d-80e2-4335-8981-4fc9e73f56f4.c000.snappy.parquet
+
+Creator: sb-ai-lab
+Source: https://huggingface.co/datasets/ai-lab/MBD-mini
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+License text: https://creativecommons.org/licenses/by/4.0/
+Citation: arXiv:2409.17587, https://arxiv.org/abs/2409.17587
+
+The file is redistributed without changes. The root MIT license applies to
+the project code, not to this dataset.
