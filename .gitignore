@@ -26,3 +26,6 @@ go.work
 # One MBD-mini Parquet sample and its NOTICE are intentionally tracked in data/MBD-mini/trx/fold=0/.
 # Ignore additional datasets and files.
 data/
+
+# Local Compose credentials
+/infra/.env

@@ -1,1 +1,2 @@
 frontend/** text=auto eol=lf
+infra/smoke.sh text eol=lf
