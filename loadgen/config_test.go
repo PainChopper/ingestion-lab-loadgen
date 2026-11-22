@@ -383,8 +383,8 @@ func TestLoadConfigScalarValuesAndBounds(t *testing.T) {
 	}
 }
 
-func TestLoadConfigCheckedInProfile(t *testing.T) {
-	cfg, err := loadConfig(defaultConfigPath)
+func TestLoadConfigProfileFixture(t *testing.T) {
+	cfg, err := loadConfig(filepath.Join("testdata", "profile.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,40 @@
+[http]
+addr = "127.0.0.1:8080"
+
+[source]
+path = "../data/MBD-mini/trx/fold=*/*.parquet"
+
+[reader]
+read_batch_size = 1000
+
+[reader.workers]
+initial = 1
+max = 7
+
+[readerChannel]
+capacity = 2
+
+[senderChannel]
+capacity = 0
+
+[throttler]
+installed = true
+
+[throttler.requested_tps]
+initial = 2000000
+max = 4000000
+
+[sender.workers]
+initial = 32
+max = 32
+
+[sender.api]
+timeout_ms = 30000
+url = "http://127.0.0.1:8081/internal/ingest"
+
+[sender.retry]
+delays_ms = [250, 500, 1000, 2000, 5000]
+jitter_percent = 20
+
+[logging]
+level = "info"
