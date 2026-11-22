@@ -295,6 +295,7 @@ func TestFormatSnapshot(t *testing.T) {
 }
 
 func TestWriteSnapshotChannelLargeTransactionEstimate(t *testing.T) {
+	const maxExactJSONInteger = 1<<53 - 1
 	var output strings.Builder
 	writeSnapshotChannel(&output, "Reader channel", channelSnapshot{
 		DepthBatches: maxExactJSONInteger,

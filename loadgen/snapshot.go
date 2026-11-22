@@ -3,6 +3,7 @@ package main
 import (
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"go.uber.org/zap"
@@ -69,7 +70,7 @@ func snapshotChannel(measurements pipeline.QueueSnapshot) channelSnapshot {
 
 const snapshotLogInterval = time.Minute
 
-func snapshotLogFields(snapshot runtimeSnapshot, config config) []zap.Field {
+func snapshotLogFields(snapshot runtimeSnapshot, cfg config.Config) []zap.Field {
 	sourceErrorOperation := ""
 	sourceErrorPath := ""
 	if snapshot.Reader.SourceError != nil {
@@ -88,14 +89,14 @@ func snapshotLogFields(snapshot runtimeSnapshot, config config) []zap.Field {
 		zap.Int("reader_live_workers", len(snapshot.Reader.WorkerStates)),
 		zap.Int("throttler_requested_tps", snapshot.Throttler.RequestedTps),
 		zap.Bool("installed", snapshot.Throttler.Installed),
-		zap.Int("reader_channel_capacity", config.ReaderChannel.Capacity),
+		zap.Int("reader_channel_capacity", cfg.ReaderChannel.Capacity),
 		zap.Int("reader_channel_depth_batches", snapshot.ReaderChannel.DepthBatches),
 		zap.Int64("reader_channel_input_transactions_total", snapshot.ReaderChannel.InputTransactionsTotal),
 		zap.Int64("reader_channel_output_transactions_total", snapshot.ReaderChannel.OutputTransactionsTotal),
 		zap.Int("reader_channel_blocked_senders", snapshot.ReaderChannel.BlockedSenders),
 		zap.Int64("reader_channel_oldest_blocked_ms", snapshot.ReaderChannel.OldestBlockedSenderMs),
 		zap.Int64("reader_channel_blocked_ms", snapshot.ReaderChannel.BlockedMs),
-		zap.Int("sender_channel_capacity", config.SenderChannel.Capacity),
+		zap.Int("sender_channel_capacity", cfg.SenderChannel.Capacity),
 		zap.Int("sender_channel_depth_batches", snapshot.SenderChannel.DepthBatches),
 		zap.Int64("sender_channel_input_transactions_total", snapshot.SenderChannel.InputTransactionsTotal),
 		zap.Int64("sender_channel_output_transactions_total", snapshot.SenderChannel.OutputTransactionsTotal),

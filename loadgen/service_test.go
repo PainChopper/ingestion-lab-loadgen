@@ -25,7 +25,7 @@ func TestPipelineOptionsPreservesConfiguration(t *testing.T) {
 	cfg.ReaderChannel.Capacity = 3
 	cfg.SenderChannel.Capacity = 2
 	cfg.Reader.Workers.Initial = 4
-	cfg.Sender.Workers = workersConfig{Initial: 7, Max: 112}
+	cfg.Sender.Workers.Initial, cfg.Sender.Workers.Max = 7, 112
 	cfg.Throttler.Installed = false
 	cfg.Sender.API.TimeoutMS = 1234
 	options := pipelineOptions(cfg, nil)
@@ -107,7 +107,7 @@ func TestRunServeFailsBeforePipelineWhenListenerOccupied(t *testing.T) {
 	})
 
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	content := strings.Replace(testConfigContents(), `addr = "127.0.0.1:8080"`, `addr = "`+listener.Addr().String()+`"`, 1)
+	content := strings.Replace(testConfigContents(t), `addr = "127.0.0.1:8080"`, `addr = "`+listener.Addr().String()+`"`, 1)
 	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -135,11 +135,11 @@ func TestRunServeDrainsAndReleasesListener(t *testing.T) {
 	}
 	input := strings.NewReplacer(
 		"127.0.0.1:8080", addr,
-		`C:\dataset\*.parquet`, filepath.ToSlash(source),
+		"../data/MBD-mini/trx/fold=*/*.parquet", filepath.ToSlash(source),
 		testSenderURL, receiver.URL,
 		"installed = true", "installed = false",
 		"initial = 32", "initial = 1",
-	).Replace(testConfigContents())
+	).Replace(testConfigContents(t))
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	var runErr error

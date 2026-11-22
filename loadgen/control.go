@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"go.uber.org/zap"
@@ -14,7 +15,7 @@ import (
 type controlState struct {
 	startedAt       time.Time
 	run             controlRunState
-	config          config
+	config          config.Config
 	controls        configuredControls
 	pipelineOptions pipeline.Options
 	logger          *zap.Logger
@@ -40,7 +41,7 @@ type runtimeEvents struct {
 	metrics    *prometheusMetrics
 }
 
-func newControlState(cfg config, logger *zap.Logger) controlState {
+func newControlState(cfg config.Config, logger *zap.Logger) controlState {
 	return controlState{
 		startedAt: time.Now(),
 		run:       controlRunState{state: runStateStarting},
@@ -181,19 +182,19 @@ func (s *controlState) runEventLoop(
 func (s *controlState) applyCommand(run *pipeline.Pipeline, command runtimeCommand, metrics *prometheusMetrics) bool {
 	switch command.kind {
 	case setReaderWorkers:
-		if !s.config.Reader.Workers.contains(command.value) {
+		if !s.config.Reader.Workers.Contains(command.value) {
 			return false
 		}
 		s.controls.readerWorkers = command.value
 		run.SetReaders(command.value)
 	case setSenderWorkers:
-		if !s.config.Sender.Workers.contains(command.value) {
+		if !s.config.Sender.Workers.Contains(command.value) {
 			return false
 		}
 		s.controls.senderWorkers = command.value
 		run.SetSenders(command.value)
 	case setRequestedTPS:
-		if !s.config.Throttler.RequestedTPS.contains(command.value) {
+		if !s.config.Throttler.RequestedTPS.Contains(command.value) {
 			return false
 		}
 		if s.controls.requestedTPS != command.value {

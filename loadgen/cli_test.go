@@ -1,8 +1,11 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 )
 
 func TestParseRemoteCLI(t *testing.T) {
@@ -143,11 +146,13 @@ func TestParseCLI(t *testing.T) {
 }
 
 func TestDefaultServeUsesCurrentDefaultConfig(t *testing.T) {
+	path := writeConfigInput(t, testConfigContents(t))
+	t.Chdir(filepath.Dir(path))
 	command, err := parseCLI(nil)
 	if err != nil {
 		t.Fatalf("parse default CLI: %v", err)
 	}
-	loaded, err := loadConfig(command.configPath)
+	loaded, err := config.Load(command.configPath)
 	if err != nil {
 		t.Fatalf("load default serve config: %v", err)
 	}

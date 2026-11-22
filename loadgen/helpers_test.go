@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 )
 
 const blackBoxTimeout = 10 * time.Second
@@ -44,67 +47,27 @@ func testRemoteSnapshot(t *testing.T) runtimeSnapshot {
 	}
 }
 
-const testSenderURL = "http://127.0.0.1:8081/internal/ingest"
+const (
+	profileFixture = "testdata/profile.toml"
+	testSenderURL  = "http://127.0.0.1:8081/internal/ingest"
+)
 
-func testConfig(t *testing.T) config {
+func testConfig(t *testing.T) config.Config {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte(testConfigContents()), 0o600); err != nil {
-		t.Fatalf("write test config: %v", err)
-	}
-	loaded, err := loadConfig(path)
+	loaded, err := config.Load(profileFixture)
 	if err != nil {
 		t.Fatalf("load test config: %v", err)
 	}
 	return loaded
 }
 
-func testConfigContents() string {
-	return `[http]
-addr = "127.0.0.1:8080"
-
-[source]
-path = 'C:\dataset\*.parquet'
-
-[reader]
-read_batch_size = 1000
-
-[reader.workers]
-initial = 1
-max = 7
-
-[readerChannel]
-capacity = 2
-
-[senderChannel]
-capacity = 0
-
-[throttler]
-installed = true
-
-[throttler.requested_tps]
-initial = 2000000
-max = 4000000
-
-
-[sender.workers]
-initial = 32
-max = 32
-
-[sender.api]
-timeout_ms = 30000
-url = "http://127.0.0.1:8081/internal/ingest"
-
-[sender.retry]
-# After the final delay, retries continue at that delay until delivery succeeds
-# or the operator explicitly stops or resets the run.
-delays_ms = [250, 500, 1000, 2000, 5000]
-jitter_percent = 20
-
-
-[logging]
-level = "info"
-`
+func testConfigContents(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(profileFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }
 
 func writeConfigInput(t *testing.T, input string) string {
