@@ -29,88 +29,99 @@ const (
 // Config is the validated LoadGen startup configuration.
 type Config struct {
 	// HTTP sets the control server's listen address.
-	HTTP httpConfig `mapstructure:"http"`
+	HTTP HTTP `mapstructure:"http"`
 	// Source selects the input Parquet files.
-	Source sourceConfig `mapstructure:"source"`
+	Source Source `mapstructure:"source"`
 	// Reader configures Parquet reading.
-	Reader readerConfig `mapstructure:"reader"`
+	Reader Reader `mapstructure:"reader"`
 	// ReaderChannel configures the queue after the Reader.
-	ReaderChannel channelConfig `mapstructure:"readerChannel"`
+	ReaderChannel Channel `mapstructure:"readerChannel"`
 	// SenderChannel configures the queue before the Sender.
-	SenderChannel channelConfig `mapstructure:"senderChannel"`
+	SenderChannel Channel `mapstructure:"senderChannel"`
 	// Throttler configures transaction pacing.
-	Throttler throttlerConfig `mapstructure:"throttler"`
+	Throttler Throttler `mapstructure:"throttler"`
 	// Sender configures HTTP delivery.
-	Sender senderConfig `mapstructure:"sender"`
+	Sender Sender `mapstructure:"sender"`
 	// Logging configures the service logger.
-	Logging loggingConfig `mapstructure:"logging"`
+	Logging Logging `mapstructure:"logging"`
 }
 
-type httpConfig struct {
+// HTTP configures the LoadGen control server.
+type HTTP struct {
 	// Addr is the listener host and port.
 	Addr string `mapstructure:"addr"`
 }
 
-type sourceConfig struct {
+// Source selects the input Parquet files.
+type Source struct {
 	// Path is the input Parquet path or glob.
 	Path string `mapstructure:"path"`
 }
 
-type readerConfig struct {
+// Reader configures Parquet reading.
+type Reader struct {
 	// ReadBatchSize limits the number of transactions in each batch.
 	ReadBatchSize int `mapstructure:"read_batch_size"`
 	// Workers sets the initial and maximum worker counts.
-	Workers workersConfig `mapstructure:"workers"`
+	Workers Workers `mapstructure:"workers"`
 }
 
-type channelConfig struct {
+// Channel configures a pipeline queue.
+type Channel struct {
 	// Capacity sets the queue capacity in batches.
 	Capacity int `mapstructure:"capacity"`
 }
 
-type throttlerConfig struct {
+// Throttler configures transaction pacing.
+type Throttler struct {
 	// RequestedTPS sets the initial and maximum transaction rate.
-	RequestedTPS tpsConfig `mapstructure:"requested_tps"`
+	RequestedTPS TPS `mapstructure:"requested_tps"`
 	// Installed enables pacing when true.
 	Installed bool `mapstructure:"installed"`
 }
 
-type loggingConfig struct {
+// Logging configures the service logger.
+type Logging struct {
 	// Level sets the minimum log level.
 	Level string `mapstructure:"level"`
 }
 
-type senderConfig struct {
+// Sender configures HTTP delivery.
+type Sender struct {
 	// Workers sets the initial and maximum worker counts.
-	Workers workersConfig `mapstructure:"workers"`
+	Workers Workers `mapstructure:"workers"`
 	// API configures the HTTP Receiver endpoint.
-	API senderAPIConfig `mapstructure:"api"`
+	API SenderAPI `mapstructure:"api"`
 	// Retry configures retry delays.
-	Retry senderRetryConfig `mapstructure:"retry"`
+	Retry SenderRetry `mapstructure:"retry"`
 }
 
-type senderAPIConfig struct {
+// SenderAPI configures the HTTP Receiver endpoint.
+type SenderAPI struct {
 	// URL is the Receiver ingestion URL.
 	URL string `mapstructure:"url"`
 	// TimeoutMS is the timeout for a delivery attempt in milliseconds.
 	TimeoutMS int64 `mapstructure:"timeout_ms"`
 }
 
-type senderRetryConfig struct {
+// SenderRetry configures retry delays.
+type SenderRetry struct {
 	// DelaysMS lists the retry delays in milliseconds.
 	DelaysMS []int `mapstructure:"delays_ms"`
 	// JitterPercent sets the maximum delay jitter as a percentage.
 	JitterPercent int `mapstructure:"jitter_percent"`
 }
 
-type workersConfig struct {
+// Workers sets the initial and maximum worker counts.
+type Workers struct {
 	// Initial is the startup value.
 	Initial int `mapstructure:"initial"`
 	// Max is the inclusive upper bound.
 	Max int `mapstructure:"max"`
 }
 
-type tpsConfig struct {
+// TPS sets the initial and maximum transaction rate.
+type TPS struct {
 	// Initial is the startup value.
 	Initial int `mapstructure:"initial"`
 	// Max is the inclusive upper bound.
@@ -225,7 +236,7 @@ func (c Config) validate() error {
 	return nil
 }
 
-func (c httpConfig) validate() error {
+func (c HTTP) validate() error {
 	host, rawPort, err := net.SplitHostPort(c.Addr)
 	if err != nil {
 		return fmt.Errorf("must be host:port: %w", err)
@@ -240,14 +251,14 @@ func (c httpConfig) validate() error {
 	return nil
 }
 
-func (c loggingConfig) validate() error {
+func (c Logging) validate() error {
 	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Level) {
 		return errors.New("level must be debug, info, warn, or error")
 	}
 	return nil
 }
 
-func (c senderConfig) validate() error {
+func (c Sender) validate() error {
 	if err := c.Workers.validateWorkers(); err != nil {
 		return fmt.Errorf("workers: %w", err)
 	}
@@ -257,7 +268,7 @@ func (c senderConfig) validate() error {
 	return c.Retry.validate()
 }
 
-func (c senderRetryConfig) validate() error {
+func (c SenderRetry) validate() error {
 	if c.JitterPercent < 0 || c.JitterPercent > 50 {
 		return errors.New("jitter_percent must be between 0 and 50")
 	}
@@ -286,7 +297,7 @@ func senderRetryMaxDelayMS(jitterPercent int) int64 {
 	return math.MaxInt64 / factor
 }
 
-func (c senderAPIConfig) validate() error {
+func (c SenderAPI) validate() error {
 	if c.URL == "" {
 		return errors.New("url must not be empty")
 	}
@@ -311,7 +322,7 @@ func (c senderAPIConfig) validate() error {
 	return nil
 }
 
-func (c workersConfig) validateWorkers() error {
+func (c Workers) validateWorkers() error {
 	if c.Max < 1 || int64(c.Max) > maxExactJSONInteger || !c.Contains(c.Initial) {
 		return errors.New("initial and max must be positive safe JSON integers, with initial <= max")
 	}
@@ -319,11 +330,11 @@ func (c workersConfig) validateWorkers() error {
 }
 
 // Contains reports whether value is within the configured worker bounds.
-func (c workersConfig) Contains(value int) bool {
+func (c Workers) Contains(value int) bool {
 	return value >= 1 && value <= c.Max
 }
 
-func (c tpsConfig) validateRequestedTPS() error {
+func (c TPS) validateRequestedTPS() error {
 	validMax := c.Max > 0 && int64(c.Max) <= maxExactJSONInteger
 	if !validMax {
 		return errors.New("max must be a positive safe JSON integer")
@@ -335,6 +346,6 @@ func (c tpsConfig) validateRequestedTPS() error {
 }
 
 // Contains reports whether value is within the configured TPS bounds.
-func (c tpsConfig) Contains(value int) bool {
+func (c TPS) Contains(value int) bool {
 	return value >= 0 && value <= c.Max
 }

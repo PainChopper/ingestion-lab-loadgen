@@ -27,15 +27,16 @@ type ReaderWorkerState struct {
 	Draining bool `json:"draining"`
 }
 
-type readerWorkerStates []ReaderWorkerState
+// ReaderWorkerStates is a list of Reader worker states.
+type ReaderWorkerStates []ReaderWorkerState
 
-// UnmarshalJSON validates the ordered list of Reader worker states.
-func (states *readerWorkerStates) UnmarshalJSON(data []byte) error {
+// UnmarshalJSON validates Reader worker states.
+func (states *ReaderWorkerStates) UnmarshalJSON(data []byte) error {
 	items, err := decodeWorkerStateItems(data)
 	if err != nil {
 		return fmt.Errorf("reader.workerStates: %w", err)
 	}
-	result := make(readerWorkerStates, 0, len(items))
+	result := make(ReaderWorkerStates, 0, len(items))
 	for index, item := range items {
 		activity := ReaderActivity(*item.Activity)
 		switch activity {
@@ -69,15 +70,16 @@ type SenderWorkerState struct {
 	Draining bool `json:"draining"`
 }
 
-type senderWorkerStates []SenderWorkerState
+// SenderWorkerStates is a list of Sender worker states.
+type SenderWorkerStates []SenderWorkerState
 
-// UnmarshalJSON validates the ordered list of Sender worker states.
-func (states *senderWorkerStates) UnmarshalJSON(data []byte) error {
+// UnmarshalJSON validates Sender worker states.
+func (states *SenderWorkerStates) UnmarshalJSON(data []byte) error {
 	items, err := decodeWorkerStateItems(data)
 	if err != nil {
 		return fmt.Errorf("sender.workerStates: %w", err)
 	}
-	result := make(senderWorkerStates, 0, len(items))
+	result := make(SenderWorkerStates, 0, len(items))
 	for index, item := range items {
 		activity := SenderActivity(*item.Activity)
 		switch activity {

@@ -243,7 +243,7 @@ func TestSenderRetryConfigDurationBounds(t *testing.T) {
 				{name: "milliseconds conversion overflow", delayMS: int(math.MaxInt64/int64(time.Millisecond) + 1), wantErr: true},
 			} {
 				t.Run(test.name, func(t *testing.T) {
-					config := senderRetryConfig{DelaysMS: []int{test.delayMS}, JitterPercent: jitter}
+					config := SenderRetry{DelaysMS: []int{test.delayMS}, JitterPercent: jitter}
 					if err := config.validate(); (err != nil) != test.wantErr {
 						t.Fatalf("validate error=%v,wantErr=%t", err, test.wantErr)
 					}
@@ -253,7 +253,7 @@ func TestSenderRetryConfigDurationBounds(t *testing.T) {
 	}
 	for _, jitter := range []int{-1, 51} {
 		t.Run(fmt.Sprintf("invalid jitter %d", jitter), func(t *testing.T) {
-			config := senderRetryConfig{DelaysMS: []int{1}, JitterPercent: jitter}
+			config := SenderRetry{DelaysMS: []int{1}, JitterPercent: jitter}
 			if err := config.validate(); err == nil {
 				t.Errorf("accepted jitter %d", jitter)
 			}
@@ -372,8 +372,8 @@ func TestLoadConfigProfileFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Reader.ReadBatchSize != 1000 || cfg.ReaderChannel.Capacity != 2 || cfg.SenderChannel.Capacity != 0 ||
-		cfg.Reader.Workers != (workersConfig{Initial: 1, Max: 7}) || cfg.Sender.Workers != (workersConfig{Initial: 32, Max: 32}) ||
-		cfg.Throttler.RequestedTPS != (tpsConfig{Initial: 2000000, Max: 4000000}) || !cfg.Throttler.Installed ||
+		cfg.Reader.Workers != (Workers{Initial: 1, Max: 7}) || cfg.Sender.Workers != (Workers{Initial: 32, Max: 32}) ||
+		cfg.Throttler.RequestedTPS != (TPS{Initial: 2000000, Max: 4000000}) || !cfg.Throttler.Installed ||
 		cfg.Source.Path != "../data/MBD-mini/trx/fold=*/*.parquet" {
 		t.Fatalf("example profile changed: %+v", cfg)
 	}

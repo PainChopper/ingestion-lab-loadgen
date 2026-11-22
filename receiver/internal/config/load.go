@@ -18,21 +18,23 @@ import (
 // Config contains the settings used to start the Receiver service.
 type Config struct {
 	// Server configures the listener and graceful shutdown.
-	Server serverConfig
+	Server Server
 	// Ingest configures the batch endpoint and its responses.
 	Ingest ingest.Config
 	// Logging configures the service logger.
-	Logging loggingConfig
+	Logging Logging
 }
 
-type serverConfig struct {
+// Server configures the listener and graceful shutdown.
+type Server struct {
 	// Address is the listener host and port.
 	Address string
 	// ShutdownTimeout limits the time to finish active HTTP requests.
 	ShutdownTimeout time.Duration
 }
 
-type loggingConfig struct {
+// Logging configures the service logger.
+type Logging struct {
 	// Level sets the minimum log level.
 	Level string `mapstructure:"level"`
 }
@@ -43,7 +45,7 @@ type fileConfig struct {
 	// Ingest contains the endpoint settings from TOML.
 	Ingest fileIngestConfig `mapstructure:"ingest"`
 	// Logging contains the logging settings from TOML.
-	Logging loggingConfig `mapstructure:"logging"`
+	Logging Logging `mapstructure:"logging"`
 	// Lab contains the response settings from TOML.
 	Lab fileLabConfig `mapstructure:"lab"`
 }
@@ -115,7 +117,7 @@ func (c fileConfig) config() (Config, error) {
 		return Config{}, err
 	}
 	result := Config{
-		Server: serverConfig{
+		Server: Server{
 			Address:         c.Server.Address,
 			ShutdownTimeout: shutdownTimeout,
 		},
