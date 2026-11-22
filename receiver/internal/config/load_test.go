@@ -1,4 +1,4 @@
-package main
+package config_test
 
 import (
 	"fmt"
@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/receiver/internal/config"
 )
 
 func TestLoadConfigRejectsUnknownNames(t *testing.T) {
@@ -21,7 +23,7 @@ func TestLoadConfigRejectsUnknownNames(t *testing.T) {
 		{"additional wrong-case key", strings.Replace(base, "[server]", "[server]\nAddress = \"127.0.0.1:18080\"", 1), "Address"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := LoadConfig(writeConfig(t, test.contents))
+			_, err := config.Load(writeConfig(t, test.contents))
 			if err == nil || !strings.Contains(err.Error(), "invalid keys: "+test.unknown) {
 				t.Fatalf("error = %v, want unknown key %q", err, test.unknown)
 			}
@@ -52,7 +54,7 @@ func TestLoadConfigStrictRequiredTypes(t *testing.T) {
 			if content == validTOMLConfig() {
 				t.Fatal("replacement did not apply")
 			}
-			if _, err := LoadConfig(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "decode config") {
+			if _, err := config.Load(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "decode config") {
 				t.Fatalf("expected strict decode error, got %v", err)
 			}
 		})
@@ -72,7 +74,7 @@ func TestLoadConfigDurationBounds(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", field.line, value), func(t *testing.T) {
 				key := strings.Split(field.line, " = ")[0]
 				content := strings.Replace(validTOMLConfig(), field.line, fmt.Sprintf("%s = %d", key, value), 1)
-				_, err := LoadConfig(writeConfig(t, content))
+				_, err := config.Load(writeConfig(t, content))
 				if (err != nil) != (value < field.minimum || value > maximum) {
 					t.Fatalf("duration error=%v value=%d", err, value)
 				}
@@ -83,7 +85,7 @@ func TestLoadConfigDurationBounds(t *testing.T) {
 
 func TestLoadConfigRejectsInvalidIngestPath(t *testing.T) {
 	content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, `path = "/v1/a!b"`, 1)
-	if _, err := LoadConfig(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "ingest.path") {
+	if _, err := config.Load(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "ingest.path") {
 		t.Fatalf("invalid path error=%v", err)
 	}
 }
@@ -91,7 +93,7 @@ func TestLoadConfigRejectsInvalidIngestPath(t *testing.T) {
 func TestLoadConfigMapsExactPath(t *testing.T) {
 	const path = "/AZaz09._~-/.hidden/..."
 	content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, fmt.Sprintf("path = %q", path), 1)
-	config, err := LoadConfig(writeConfig(t, content))
+	config, err := config.Load(writeConfig(t, content))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,12 +107,12 @@ func TestLoadConfig(t *testing.T) {
 		name    string
 		content string
 		wantErr bool
-		check   func(t *testing.T, config Config)
+		check   func(*testing.T, config.Config)
 	}{
 		{
 			name:    "accepts complete strict configuration",
 			content: validTOMLConfig(),
-			check: func(t *testing.T, config Config) {
+			check: func(t *testing.T, config config.Config) {
 				t.Helper()
 				if config.Logging.Level != "info" {
 					t.Fatalf("logging level=%q, want info", config.Logging.Level)
@@ -176,15 +178,15 @@ func TestLoadConfig(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			path := writeConfig(t, test.content)
 
-			config, err := LoadConfig(path)
+			config, err := config.Load(path)
 			if test.wantErr {
 				if err == nil {
-					t.Fatal("LoadConfig() error = nil, want validation error")
+					t.Fatal("config.Load() error = nil, want validation error")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("LoadConfig() error = %v", err)
+				t.Fatalf("config.Load() error = %v", err)
 			}
 			test.check(t, config)
 		})
@@ -238,7 +240,7 @@ func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			content := strings.Replace(validTOMLConfig(), "response_status = 204", test.line, 1)
-			config, err := LoadConfig(writeConfig(t, content))
+			config, err := config.Load(writeConfig(t, content))
 			if test.wantErr {
 				if err == nil {
 					t.Fatal("unsupported toml response status accepted")

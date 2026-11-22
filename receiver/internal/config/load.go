@@ -1,4 +1,5 @@
-package main
+// Package config loads and validates Receiver settings.
+package config
 
 import (
 	"errors"
@@ -14,44 +15,62 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// Config contains the settings used to start the Receiver service.
 type Config struct {
-	Server  ServerConfig
-	Ingest  ingest.Config
-	Logging LoggingConfig
+	// Server configures the listener and graceful shutdown.
+	Server serverConfig
+	// Ingest configures the batch endpoint and its responses.
+	Ingest ingest.Config
+	// Logging configures the service logger.
+	Logging loggingConfig
 }
 
-type ServerConfig struct {
-	Address         string
+type serverConfig struct {
+	// Address is the listener host and port.
+	Address string
+	// ShutdownTimeout limits the time to finish active HTTP requests.
 	ShutdownTimeout time.Duration
 }
 
-type LoggingConfig struct {
+type loggingConfig struct {
+	// Level sets the minimum log level.
 	Level string `mapstructure:"level"`
 }
 
 type fileConfig struct {
-	Server  fileServerConfig `mapstructure:"server"`
-	Ingest  fileIngestConfig `mapstructure:"ingest"`
-	Logging LoggingConfig    `mapstructure:"logging"`
-	Lab     fileLabConfig    `mapstructure:"lab"`
+	// Server contains the listener and shutdown settings from TOML.
+	Server fileServerConfig `mapstructure:"server"`
+	// Ingest contains the endpoint settings from TOML.
+	Ingest fileIngestConfig `mapstructure:"ingest"`
+	// Logging contains the logging settings from TOML.
+	Logging loggingConfig `mapstructure:"logging"`
+	// Lab contains the response settings from TOML.
+	Lab fileLabConfig `mapstructure:"lab"`
 }
 
 type fileIngestConfig struct {
-	Path         string `mapstructure:"path"`
-	MaxBodyBytes int64  `mapstructure:"max_body_bytes"`
+	// Path is the exact route for receiving batches.
+	Path string `mapstructure:"path"`
+	// MaxBodyBytes limits the size of each batch request body.
+	MaxBodyBytes int64 `mapstructure:"max_body_bytes"`
 }
 
 type fileServerConfig struct {
-	Address           string `mapstructure:"address"`
-	ShutdownTimeoutMS int64  `mapstructure:"shutdown_timeout_ms"`
+	// Address is the listener host and port.
+	Address string `mapstructure:"address"`
+	// ShutdownTimeoutMS limits graceful shutdown in milliseconds.
+	ShutdownTimeoutMS int64 `mapstructure:"shutdown_timeout_ms"`
 }
 
 type fileLabConfig struct {
+	// ResponseDelayMS is the delay before responding to a valid batch.
 	ResponseDelayMS int64 `mapstructure:"response_delay_ms"`
-	ResponseStatus  *int  `mapstructure:"response_status"`
+	// ResponseStatus overrides the default HTTP 204 for valid batches.
+	ResponseStatus *int `mapstructure:"response_status"`
 }
 
-func LoadConfig(path string) (Config, error) {
+// Load reads, decodes, and validates the Receiver TOML configuration at path.
+func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("read config: %w", err)
@@ -96,7 +115,7 @@ func (c fileConfig) config() (Config, error) {
 		return Config{}, err
 	}
 	result := Config{
-		Server: ServerConfig{
+		Server: serverConfig{
 			Address:         c.Server.Address,
 			ShutdownTimeout: shutdownTimeout,
 		},

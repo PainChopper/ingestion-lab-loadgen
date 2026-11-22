@@ -42,7 +42,7 @@ On Ctrl+C or SIGTERM, LoadGen stops reading new rows and gives queued and in-fli
 
 ## Receiver
 
-From `receiver/`, run `go run .` to read the bundled [`config.toml`](../receiver/config.toml), or `go run . --config /path/to/receiver.toml` for a different file. Receiver uses the same case-sensitive, unversioned TOML policy. All example keys are required except `lab.response_status`. Unknown keys and sections, including empty tables, are rejected. Strings, booleans, and fractional values are invalid for integer fields.
+From `receiver/`, run `go run .` to read the bundled [`config.toml`](../receiver/config.toml), or `go run . --config /path/to/receiver.toml` for a different file. The [Receiver configuration package](../receiver/internal/config) loads and validates settings before startup. Receiver uses the same case-sensitive, unversioned TOML policy. All example keys are required except `lab.response_status`. Unknown keys and sections, including empty tables, are rejected. Strings, booleans, and fractional values are invalid for integer fields.
 
 | Key | Meaning and bundled value |
 | --- | --- |
