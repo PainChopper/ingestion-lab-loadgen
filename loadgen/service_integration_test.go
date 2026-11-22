@@ -319,7 +319,7 @@ func startServiceLoop(t *testing.T, cfg config.Config) serviceLoop {
 	}
 	owner := control.New(cfg, pipelineOptions(cfg, logger), logger)
 	metrics := newPrometheusMetrics()
-	mux := newServeMux(owner, metrics, cfg, zap.NewNop())
+	mux := newServiceHandler(owner, metrics, cfg, zap.NewNop())
 	events := control.Events{
 		Source:              prepareSourceAsync(cfg.Source.Path),
 		PipelineStarted:     metrics.run.Store,

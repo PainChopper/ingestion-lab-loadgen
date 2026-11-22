@@ -2,22 +2,32 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sync/atomic"
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/control"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/httpapi"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	zaplogfmt "github.com/jsternberg/zap-logfmt"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+const gracefulShutdownTimeout = 10 * time.Second
+
+//go:embed openapi/loadgen.openapi.json
+var openAPISpec []byte
 
 func runServe(appCtx context.Context, configPath string) error {
 	cfg, err := config.Load(configPath)
@@ -34,7 +44,8 @@ func runServe(appCtx context.Context, configPath string) error {
 	metrics := newPrometheusMetrics()
 	metrics.targetTPS.Set(float64(cfg.Throttler.RequestedTPS.Initial))
 
-	server, serverDone, err := startHTTPServer(state, metrics, cfg, logger)
+	handler := newServiceHandler(state, metrics, cfg, logger)
+	server, serverDone, err := httpapi.Start(cfg.HTTP.Addr, handler, logger)
 	if err != nil {
 		return err
 	}
@@ -50,7 +61,7 @@ func runServe(appCtx context.Context, configPath string) error {
 	}
 	shutdownCtx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
-	if err := shutdownHTTPServer(shutdownCtx, server); err != nil {
+	if err := httpapi.Shutdown(shutdownCtx, server); err != nil {
 		logger.Error("graceful HTTP shutdown failed", zap.String("event", "http_shutdown_failed"), zap.Error(err))
 		runErr = errors.Join(runErr, fmt.Errorf("shutdown http server: %w", err))
 	}
@@ -135,4 +146,25 @@ func newApplicationLogger(level string, output io.Writer) (*zap.Logger, error) {
 		atomicLevel,
 	)
 	return zap.New(core), nil
+}
+
+func newServiceHandler(owner *control.Controller, metrics *prometheusMetrics, cfg config.Config, logger *zap.Logger) http.Handler {
+	return httpapi.NewHandler(owner, httpapi.Options{
+		Startup:     newConfigResponse(cfg),
+		Metrics:     promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}),
+		OpenAPISpec: openAPISpec,
+		Logger:      logger,
+	})
+}
+
+func newConfigResponse(cfg config.Config) api.ConfigResponse {
+	return api.ConfigResponse{
+		ReaderWorkersMax:      cfg.Reader.Workers.Max,
+		SenderWorkersMax:      cfg.Sender.Workers.Max,
+		RequestedTpsMax:       cfg.Throttler.RequestedTPS.Max,
+		ReadBatchSize:         cfg.Reader.ReadBatchSize,
+		ReaderChannelCapacity: cfg.ReaderChannel.Capacity,
+		SenderChannelCapacity: cfg.SenderChannel.Capacity,
+		SourcePath:            cfg.Source.Path,
+	}
 }

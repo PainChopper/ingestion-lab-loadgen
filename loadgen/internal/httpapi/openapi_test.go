@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 
 func TestOpenAPIContract(t *testing.T) {
 	var document map[string]any
-	if err := json.Unmarshal(openAPISpec, &document); err != nil {
+	if err := json.Unmarshal(readOpenAPISpec(t), &document); err != nil {
 		t.Fatal(err)
 	}
 	if got := document["openapi"]; got != "3.0.3" {
@@ -206,10 +206,10 @@ func assertExampleDispatches(t *testing.T, body map[string]any, want control.Com
 		t.Fatal(err)
 	}
 	var commands []control.Command
-	commandConfig := testConfig(t)
+	commandConfig := testStartupConfig(t)
 	request := httptest.NewRequest(http.MethodPost, api.CommandsPath, bytes.NewReader(encoded))
 	recorder := httptest.NewRecorder()
-	newServeMux(recordCommands(&commands), newPrometheusMetrics(), commandConfig, zap.NewNop()).ServeHTTP(recorder, request)
+	newTestMux(t, recordCommands(&commands), commandConfig, zap.NewNop()).ServeHTTP(recorder, request)
 	if len(commands) != 1 || commands[0] != want {
 		t.Errorf("example %q dispatched %+v, want %+v", body["action"], commands, want)
 	}
@@ -481,7 +481,7 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 			}
 		}
 	}
-	data, err := os.ReadFile("testdata/config.json")
+	data, err := os.ReadFile("../../testdata/config.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +604,7 @@ func TestSchemaExampleValidationRejectsContractDrift(t *testing.T) {
 
 func TestOpenAPIWorkerStates(t *testing.T) {
 	var document map[string]any
-	if err := json.Unmarshal(openAPISpec, &document); err != nil {
+	if err := json.Unmarshal(readOpenAPISpec(t), &document); err != nil {
 		t.Fatal(err)
 	}
 	schemas := document["components"].(map[string]any)["schemas"].(map[string]any)
@@ -656,7 +656,7 @@ func TestOpenAPIWorkerStates(t *testing.T) {
 			}
 		})
 	}
-	data, err := os.ReadFile("testdata/snapshot.json")
+	data, err := os.ReadFile("../../testdata/snapshot.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -692,4 +692,13 @@ func stringSet(values []string) map[string]struct{} {
 		set[value] = struct{}{}
 	}
 	return set
+}
+
+func readOpenAPISpec(t *testing.T) []byte {
+	t.Helper()
+	spec, err := os.ReadFile("../../openapi/loadgen.openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return spec
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -159,6 +160,20 @@ func TestRunServeDrainsAndReleasesListener(t *testing.T) {
 		}
 	})
 	waitForHTTPSnapshotState(t, "http://"+addr, api.RunStateRunning)
+	wantSpec, err := os.ReadFile("openapi/loadgen.openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: time.Second}
+	response, err := client.Get("http://" + addr + "/developer/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotSpec, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if response.StatusCode != http.StatusOK || readErr != nil || closeErr != nil || !bytes.Equal(gotSpec, wantSpec) {
+		t.Fatalf("embedded OpenAPI document differs from source: status=%d read=%v close=%v", response.StatusCode, readErr, closeErr)
+	}
 	cancel()
 	select {
 	case <-done:
