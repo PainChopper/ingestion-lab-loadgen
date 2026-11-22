@@ -75,10 +75,15 @@ describe('SimulationAdapter', () => {
 
   it('accepts exact integer TPS and rejects values outside the integer range', async () => {
     const adapter = new SimulationAdapter()
-    const config = adapter.getConfig()
-    expect(wireConfigSchema.parse(config)).toEqual(config)
-    expect(config.sourcePath).toBe('simulation')
-    expect(Object.isFrozen(config)).toBe(true)
+    const before = adapter.getSnapshot()
+    expect(before).toMatchObject({
+      reader: { sourcePath: 'simulation', readBatchSize: 1_000, workers: { max: 7 } },
+      sender: { workers: { max: 32 } },
+      throttler: { requestedTps: { max: 250_000 } },
+      readerChannel: { capacity: 4 },
+      senderChannel: { capacity: 100 },
+    })
+    expect(Object.isFrozen(before)).toBe(true)
     for (const value of [0, 120_001, 250_000]) {
       expect((await adapter.dispatch({ type: 'set-requested-tps', value })).accepted).toBe(true)
       expect(adapter.getSnapshot().throttler.requestedTps.applied).toBe(value)
@@ -87,7 +92,10 @@ describe('SimulationAdapter', () => {
       expect((await adapter.dispatch({ type: 'set-requested-tps', value })).accepted).toBe(false)
       expect(adapter.getSnapshot().throttler.requestedTps.applied).toBe(250_000)
     }
-    expect(adapter.getConfig()).toBe(config)
+    expect(adapter.getSnapshot().reader.sourcePath).toBe('simulation')
+    expect(adapter.getSnapshot().reader.readBatchSize).toBe(before.reader.readBatchSize)
+    expect(adapter.getSnapshot().readerChannel.capacity).toBe(before.readerChannel.capacity)
+    expect(adapter.getSnapshot().senderChannel.capacity).toBe(before.senderChannel.capacity)
     adapter.dispose()
   })
 

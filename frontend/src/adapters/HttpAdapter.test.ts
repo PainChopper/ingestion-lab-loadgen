@@ -274,13 +274,22 @@ describe('HttpAdapter', () => {
     vi.useRealTimers()
   })
 
-  it('keeps config separate, frozen and fetched once across polls and subscriptions', async () => {
+  it('composes immutable config into the snapshot and fetches it once across polls and subscriptions', async () => {
     fetchMock.mockResolvedValue(mockResponse(WIRE))
     const adapter = new HttpAdapter()
     await flushPoll()
-    const config = adapter.getConfig()
-    expect(config).toEqual(CONFIG)
-    expectDeepFrozen(config)
+    expect(adapter.getSnapshot()).toMatchObject({
+      reader: {
+        readBatchSize: CONFIG.readBatchSize,
+        sourcePath: CONFIG.sourcePath,
+        workers: { max: CONFIG.readerWorkersMax },
+      },
+      sender: { workers: { max: CONFIG.senderWorkersMax } },
+      throttler: { requestedTps: { max: CONFIG.requestedTpsMax } },
+      readerChannel: { capacity: CONFIG.readerChannelCapacity },
+      senderChannel: { capacity: CONFIG.senderChannelCapacity },
+    })
+    expectDeepFrozen(adapter.getSnapshot())
     const first = vi.fn()
     const last = vi.fn()
     const detachFirst = adapter.subscribe(first)
@@ -293,7 +302,7 @@ describe('HttpAdapter', () => {
     await vi.advanceTimersByTimeAsync(1_000)
     expect(snapshotFetchCalls()).toHaveLength(3)
     expect(configFetchMock).toHaveBeenCalledTimes(1)
-    expect(adapter.getConfig()).toBe(config)
+    expect(adapter.getSnapshot().reader.readBatchSize).toBe(CONFIG.readBatchSize)
     adapter.dispose()
   })
 
@@ -366,15 +375,17 @@ describe('HttpAdapter', () => {
     fetchMock.mockResolvedValue(mockResponse(WIRE))
     const adapter = new HttpAdapter()
     await flushPoll()
-    expect(adapter.getConfig()).toBeNull()
     expect(adapter.getSnapshot()).toMatchObject({
       connectionState: 'error',
-      reader: { rowsRead: WIRE.reader.rowsRead },
+      reader: { rowsRead: WIRE.reader.rowsRead, readBatchSize: null },
+      readerChannel: { capacity: null },
     })
     expect(configFetchMock).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(adapter.getConfig()).toEqual(CONFIG)
-    expect(adapter.getSnapshot().connectionState).toBe('connected')
+    expect(adapter.getSnapshot()).toMatchObject({
+      connectionState: 'connected',
+      reader: { readBatchSize: CONFIG.readBatchSize },
+    })
     expect(configFetchMock).toHaveBeenCalledTimes(2)
     expect(snapshotFetchCalls()).toHaveLength(2)
     adapter.dispose()
@@ -395,19 +406,60 @@ describe('HttpAdapter', () => {
       )
       const adapter = new HttpAdapter()
       await flushPoll()
-      expect(adapter.getConfig()).toEqual(CONFIG)
-      await vi.advanceTimersByTimeAsync(restart === 'time decrease' ? 1_000 : 2_000)
-      expect(adapter.getConfig()).toBeNull()
+      const before = adapter.getSnapshot()
+      if (restart === 'poll recovery') {
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(adapter.getSnapshot()).toEqual({
+          ...before,
+          revision: before.revision + 1,
+          connectionState: 'error',
+          reader: {
+            ...before.reader,
+            workers: { ...before.reader.workers, applyMode: 'unavailable' },
+          },
+          sender: {
+            ...before.sender,
+            workers: { ...before.sender.workers, applyMode: 'unavailable' },
+          },
+          throttler: {
+            ...before.throttler,
+            requestedTps: { ...before.throttler.requestedTps, applyMode: 'unavailable' },
+            installed: { ...before.throttler.installed, applyMode: 'unavailable' },
+          },
+        })
+        expect(configFetchMock).toHaveBeenCalledTimes(1)
+        expect(await adapter.dispatch({ type: 'set-reader-workers', value: 1 })).toMatchObject({
+          accepted: false,
+          error: { code: 'unavailable' },
+        })
+      }
+      await vi.advanceTimersByTimeAsync(1_000)
       expect(adapter.getSnapshot()).toMatchObject({
         connectionState: 'connecting',
-        reader: { readBatchSize: null },
+        reader: { readBatchSize: null, workers: { max: 0, applyMode: 'unavailable' } },
         readerChannel: { capacity: null },
+        senderChannel: { capacity: null },
       })
-      fresh.resolve(mockResponse({ ...CONFIG, readBatchSize: 999 }))
+      fresh.resolve(
+        mockResponse({
+          ...CONFIG,
+          readBatchSize: 999,
+          sourcePath: 'restarted-source',
+          readerChannelCapacity: 2,
+          senderChannelCapacity: 3,
+          readerWorkersMax: 4,
+          senderWorkersMax: 5,
+          requestedTpsMax: 100,
+        }),
+      )
       await flushPoll()
       expect(adapter.getSnapshot()).toMatchObject({
         connectionState: 'connected',
-        reader: { readBatchSize: 999 },
+        reader: { readBatchSize: 999, sourcePath: 'restarted-source', workers: { max: 4 } },
+        sender: { workers: { max: 5 } },
+        throttler: { requestedTps: { max: 100 } },
+        readerChannel: { capacity: 2 },
+        senderChannel: { capacity: 3 },
       })
       expect(configFetchMock).toHaveBeenCalledTimes(2)
       adapter.dispose()
@@ -442,11 +494,10 @@ describe('HttpAdapter', () => {
         adapter.dispose()
         return
       }
-      expect(adapter.getConfig()).toBeNull()
       expect(adapter.getSnapshot()).toMatchObject({
         connectionState: 'error',
         runState: 'running',
-        reader: { rowsRead: WIRE.reader.rowsRead },
+        reader: { rowsRead: WIRE.reader.rowsRead, readBatchSize: null },
       })
       expect(configFetchMock).toHaveBeenCalledTimes(1)
       const polls = snapshotFetchCalls().length
@@ -481,12 +532,12 @@ describe('HttpAdapter', () => {
       expect((configFetchMock.mock.calls[0]![1] as RequestInit).signal?.aborted).toBe(true)
       oldBody.resolve(CONFIG)
       await flushPoll()
-      expect(adapter.getConfig()).toBeNull()
+      expect(adapter.getSnapshot().reader.readBatchSize).toBeNull()
       await vi.advanceTimersByTimeAsync(1_000)
       expect(configFetchMock).toHaveBeenCalledTimes(2)
       fresh.resolve(mockResponse({ ...CONFIG, readBatchSize: 999 }))
       await flushPoll()
-      expect(adapter.getConfig()?.readBatchSize).toBe(999)
+      expect(adapter.getSnapshot().reader.readBatchSize).toBe(999)
       adapter.dispose()
     },
   )
@@ -512,37 +563,73 @@ describe('HttpAdapter', () => {
       headers.resolve(mockResponse(CONFIG))
       body.resolve(CONFIG)
       await flushPoll()
-      expect(adapter.getConfig()).toBeNull()
       expect(adapter.getSnapshot()).toBe(before)
       expect(listener).toHaveBeenCalledTimes(1)
       expect(vi.getTimerCount()).toBe(0)
     },
   )
 
-  it('rejects active and queued commands from before restart after config is reloaded', async () => {
-    const post = deferred<Response>()
-    fetchMock.mockImplementation((input) =>
-      input === COMMAND_ENDPOINT ? post.promise : Promise.resolve(mockResponse(WIRE)),
-    )
-    const adapter = new HttpAdapter()
-    await flushPoll()
-    const active = adapter.dispatch({ type: 'set-reader-workers', value: 1 })
-    const queued = adapter.dispatch({ type: 'set-sender-workers', value: 1 })
-    await flushPoll()
-    fetchMock.mockImplementation((input) =>
-      input === COMMAND_ENDPOINT
-        ? post.promise
-        : Promise.resolve(mockResponse({ ...WIRE, capturedAtMs: 0 })),
-    )
-    await vi.advanceTimersByTimeAsync(1_000)
-    expect(adapter.getSnapshot().connectionState).toBe('connected')
-    expect((commandFetchCalls()[0]![1] as RequestInit).signal?.aborted).toBe(true)
-    post.resolve(mockCommandResponse())
-    expect(await active).toMatchObject({ accepted: false, error: { code: 'unavailable' } })
-    expect(await queued).toMatchObject({ accepted: false, error: { code: 'unavailable' } })
-    expect(commandFetchCalls()).toHaveLength(1)
-    adapter.dispose()
-  })
+  it.each(['poll failure', 'config recovery'] as const)(
+    'accepts an in-flight POST response after %s',
+    async (stage) => {
+      const post = deferred<Response>()
+      fetchMock.mockImplementation((input) =>
+        input === COMMAND_ENDPOINT ? post.promise : Promise.resolve(mockResponse(WIRE)),
+      )
+      const adapter = new HttpAdapter()
+      await flushPoll()
+      const active = adapter.dispatch({ type: 'set-reader-workers', value: 1 })
+      await flushPoll()
+      fetchMock.mockRejectedValueOnce(new TypeError('offline'))
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(adapter.getSnapshot().connectionState).toBe('error')
+      expect(commandFetchCalls()[0]![1]?.signal?.aborted).toBe(false)
+      if (stage === 'config recovery') {
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(adapter.getSnapshot().connectionState).toBe('connected')
+        expect(configFetchMock).toHaveBeenCalledTimes(2)
+        expect(commandFetchCalls()[0]![1]?.signal?.aborted).toBe(false)
+      }
+      post.resolve(mockCommandResponse())
+      expect(await active).toMatchObject({ accepted: true, error: null })
+      expect(commandFetchCalls()).toHaveLength(1)
+      adapter.dispose()
+    },
+  )
+
+  it.each([
+    { value: 2, accepted: true },
+    { value: 7, accepted: false },
+  ])(
+    'checks queued value $value against the current config before POST',
+    async ({ value, accepted }) => {
+      const post = deferred<Response>()
+      fetchMock.mockImplementation((input) =>
+        input === COMMAND_ENDPOINT ? post.promise : Promise.resolve(mockResponse(WIRE)),
+      )
+      configFetchMock
+        .mockResolvedValueOnce(mockResponse(CONFIG))
+        .mockResolvedValue(mockResponse({ ...CONFIG, senderWorkersMax: 3 }))
+      const adapter = new HttpAdapter()
+      await flushPoll()
+      const active = adapter.dispatch({ type: 'set-reader-workers', value: 1 })
+      const queued = adapter.dispatch({ type: 'set-sender-workers', value })
+      await flushPoll()
+      fetchMock.mockImplementation((input) =>
+        input === COMMAND_ENDPOINT
+          ? post.promise
+          : Promise.resolve(mockResponse({ ...WIRE, capturedAtMs: 0 })),
+      )
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(adapter.getSnapshot().sender.workers.max).toBe(3)
+      expect(commandFetchCalls()).toHaveLength(1)
+      post.resolve(mockCommandResponse())
+      expect(await active).toMatchObject({ accepted: true })
+      expect(await queued).toMatchObject({ accepted })
+      expect(commandFetchCalls()).toHaveLength(accepted ? 2 : 1)
+      adapter.dispose()
+    },
+  )
 
   it('keeps previous worker lists unchanged when a later response has empty pools', async () => {
     const body = structuredClone(WIRE)
@@ -953,7 +1040,7 @@ describe('HttpAdapter', () => {
       totalTransactions: first.totalTransactions,
       reader: {
         readTps: first.reader.readTps,
-        workers: { applied: null, applyMode: 'unavailable' },
+        workers: { applied: first.reader.workers.applied, applyMode: 'unavailable' },
       },
       senderChannel: {
         outputTransactionsPerSecond: first.senderChannel.outputTransactionsPerSecond,
@@ -1285,7 +1372,7 @@ describe('HttpAdapter', () => {
   it.each([
     { type: 'set-requested-tps', value: 25 } as const,
     { type: 'set-throttler-installed', value: false } as const,
-  ])('does not send buffered $type after snapshot invalidation', async (command) => {
+  ])('does not send buffered $type while snapshot polling has failed', async (command) => {
     const firstCommand = deferred<Response>()
     let snapshotRequests = 0
     fetchMock.mockImplementation((input) => {
@@ -1309,7 +1396,7 @@ describe('HttpAdapter', () => {
     await flushPoll()
     firstCommand.resolve(mockCommandResponse())
 
-    await expect(first).resolves.toMatchObject({ accepted: false, error: { code: 'unavailable' } })
+    await expect(first).resolves.toMatchObject({ accepted: true, error: null })
     await expect(buffered).resolves.toMatchObject({
       accepted: false,
       error: { code: 'unavailable' },
