@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"unicode"
 )
@@ -368,9 +369,12 @@ func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
 		{name: "config transport error", endpoint: configPath, wantErr: "GET " + configPath},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			var requestsMu sync.Mutex
 			requests := []string{}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestsMu.Lock()
 				requests = append(requests, r.URL.Path)
+				requestsMu.Unlock()
 				w.Header().Set("Connection", "close")
 				if r.Method != http.MethodGet || (r.URL.Path != snapshotPath && r.URL.Path != configPath) {
 					t.Errorf("unexpected request = %s %s", r.Method, r.URL.Path)
@@ -424,6 +428,8 @@ func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
 			if test.endpoint == configPath {
 				wantRequests = []string{configPath}
 			}
+			requestsMu.Lock()
+			defer requestsMu.Unlock()
 			if !reflect.DeepEqual(requests, wantRequests) {
 				t.Fatalf("requests=%v, want %v", requests, wantRequests)
 			}

@@ -84,7 +84,11 @@ func TestRunLogsBindFailureWithoutStartedEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Errorf("close listener: %v", err)
+		}
+	})
 	var output bytes.Buffer
 	err = run(t.Context(), receiverConfigAt(t, listener.Addr().String()), &output)
 	if err == nil || !strings.Contains(output.String(), "event=http_server_failed") || strings.Contains(output.String(), "event=service_started") {

@@ -157,6 +157,28 @@ func (r commandRequest) runtimeCommand(cfg config) (runtimeCommand, error) {
 	return command, nil
 }
 
+type configResponse struct {
+	ReaderWorkersMax      int    `json:"readerWorkersMax"`
+	SenderWorkersMax      int    `json:"senderWorkersMax"`
+	RequestedTpsMax       int    `json:"requestedTpsMax"`
+	ReadBatchSize         int    `json:"readBatchSize"`
+	ReaderChannelCapacity int    `json:"readerChannelCapacity"`
+	SenderChannelCapacity int    `json:"senderChannelCapacity"`
+	SourcePath            string `json:"sourcePath"`
+}
+
+func newConfigResponse(config config) configResponse {
+	return configResponse{
+		ReaderWorkersMax:      config.Reader.Workers.Max,
+		SenderWorkersMax:      config.Sender.Workers.Max,
+		RequestedTpsMax:       config.Throttler.RequestedTPS.Max,
+		ReadBatchSize:         config.Reader.ReadBatchSize,
+		ReaderChannelCapacity: config.ReaderChannel.Capacity,
+		SenderChannelCapacity: config.SenderChannel.Capacity,
+		SourcePath:            config.Source.Path,
+	}
+}
+
 func configHandler(config configResponse, logger *zap.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

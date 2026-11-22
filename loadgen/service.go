@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"loadgen/internal/pipeline"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	zaplogfmt "github.com/jsternberg/zap-logfmt"
 	"github.com/prometheus/client_golang/prometheus"

@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"time"
 
-	"receiver/internal/ingest"
+	"github.com/PainChopper/ingestion-lab-loadgen/receiver/internal/ingest"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/pelletier/go-toml/v2"

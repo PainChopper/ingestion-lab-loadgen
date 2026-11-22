@@ -19,28 +19,13 @@ import (
 	"testing/synctest"
 	"time"
 
-	"loadgen/internal/pipeline"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"github.com/parquet-go/parquet-go"
 	dto "github.com/prometheus/client_model/go"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
-
-func newTestControlState(t *testing.T) controlState {
-	t.Helper()
-	loaded := testConfig(t)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	t.Cleanup(server.Close)
-	loaded.Source.Path = filepath.Join(t.TempDir(), "source.parquet")
-	if err := parquet.WriteFile(loaded.Source.Path, []pipeline.Transaction{}); err != nil {
-		t.Fatal(err)
-	}
-	loaded.Sender.API.URL = server.URL
-	return newControlState(loaded, zap.NewNop())
-}
 
 func TestNewControlStateInitializesControls(t *testing.T) {
 	for _, name := range []string{"nonzero initial values", "zero initial values"} {
@@ -1091,7 +1076,10 @@ func TestSnapshotLogCadence(t *testing.T) {
 		}()
 		go func() {
 			defer close(done)
-			state.runEventLoop(ctx, runtimeEvents{metrics: newPrometheusMetrics()}, gracefulShutdownTimeout)
+			_, err := state.runEventLoop(ctx, runtimeEvents{metrics: newPrometheusMetrics()}, gracefulShutdownTimeout)
+			if err != nil {
+				t.Errorf("event loop: %v", err)
+			}
 		}()
 		synctest.Wait()
 		time.Sleep(time.Minute - time.Millisecond)
@@ -1118,11 +1106,4 @@ func TestSnapshotLogCadence(t *testing.T) {
 			t.Fatalf("next summary missing: %+v", entries.All())
 		}
 	})
-}
-
-func awaitSnapshotLogTick(t *testing.T, requests runtimeRequests) {
-	t.Helper()
-	if _, err := requestSnapshot(t.Context(), requests); err != nil {
-		t.Fatal(err)
-	}
 }

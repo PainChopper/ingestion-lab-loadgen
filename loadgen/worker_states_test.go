@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"loadgen/internal/pipeline"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 )
 
 func TestSnapshotReaderWorkerMapping(t *testing.T) {

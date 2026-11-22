@@ -3,7 +3,7 @@ package main
 import (
 	"time"
 
-	"loadgen/internal/pipeline"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"go.uber.org/zap"
 )
@@ -56,16 +56,6 @@ type channelSnapshot struct {
 	OutputTransactionsTotal int64 `json:"outputTransactionsTotal"`
 }
 
-type configResponse struct {
-	ReaderWorkersMax      int    `json:"readerWorkersMax"`
-	SenderWorkersMax      int    `json:"senderWorkersMax"`
-	RequestedTpsMax       int    `json:"requestedTpsMax"`
-	ReadBatchSize         int    `json:"readBatchSize"`
-	ReaderChannelCapacity int    `json:"readerChannelCapacity"`
-	SenderChannelCapacity int    `json:"senderChannelCapacity"`
-	SourcePath            string `json:"sourcePath"`
-}
-
 func snapshotChannel(measurements pipeline.QueueSnapshot) channelSnapshot {
 	return channelSnapshot{
 		DepthBatches:            measurements.DepthBatches,
@@ -74,18 +64,6 @@ func snapshotChannel(measurements pipeline.QueueSnapshot) channelSnapshot {
 		BlockedMs:               measurements.BlockedMS,
 		InputTransactionsTotal:  measurements.SentTransactionsTotal,
 		OutputTransactionsTotal: measurements.ReceivedTransactionsTotal,
-	}
-}
-
-func newConfigResponse(config config) configResponse {
-	return configResponse{
-		ReaderWorkersMax:      config.Reader.Workers.Max,
-		SenderWorkersMax:      config.Sender.Workers.Max,
-		RequestedTpsMax:       config.Throttler.RequestedTPS.Max,
-		ReadBatchSize:         config.Reader.ReadBatchSize,
-		ReaderChannelCapacity: config.ReaderChannel.Capacity,
-		SenderChannelCapacity: config.SenderChannel.Capacity,
-		SourcePath:            config.Source.Path,
 	}
 }
 
