@@ -2,7 +2,7 @@
 addr = "127.0.0.1:8080"
 
 [source]
-path = "../data/MBD-mini/trx/fold=*/*.parquet"
+path = 'C:\dataset\*.parquet'
 
 [reader]
 read_batch_size = 1000

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -14,30 +15,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"github.com/parquet-go/parquet-go"
 	"go.uber.org/zap"
-
-	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func TestPipelineOptionsPreservesConfiguration(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Reader.ReadBatchSize = 1500
-	cfg.ReaderChannel.Capacity = 3
-	cfg.SenderChannel.Capacity = 2
-	cfg.Reader.Workers.Initial = 4
-	cfg.Sender.Workers.Initial, cfg.Sender.Workers.Max = 7, 112
-	cfg.Throttler.Installed = false
-	cfg.Sender.API.TimeoutMS = 1234
-	options := pipelineOptions(cfg, nil)
-	if options.BatchSize != 1500 || options.ReaderCapacity != 3 || options.SenderCapacity != 2 ||
-		options.Readers != 4 || options.Senders != 7 || options.SenderMaxConns != 112 ||
-		options.Rate.TPS != 2000000 || options.Rate.Installed || options.SenderURL != testSenderURL ||
-		options.SenderTimeout != 1234*time.Millisecond || options.RetryJitterPercent != 20 ||
-		!slices.Equal(options.RetryDelays, []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second, 5 * time.Second}) {
-		t.Fatalf("pool limit changed: %+v", options)
+	for _, test := range []struct {
+		name      string
+		installed bool
+	}{
+		{name: "throttler installed", installed: true},
+		{name: "throttler bypassed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Reader.ReadBatchSize = 1500
+			cfg.ReaderChannel.Capacity = 3
+			cfg.SenderChannel.Capacity = 2
+			cfg.Reader.Workers.Initial = 4
+			cfg.Sender.Workers.Initial, cfg.Sender.Workers.Max = 7, 112
+			cfg.Throttler.Installed = test.installed
+			cfg.Throttler.RequestedTPS.Initial = 125_000
+			cfg.Sender.API.URL = "https://receiver.example.test/ingest"
+			cfg.Sender.API.TimeoutMS = 1234
+			cfg.Sender.Retry.JitterPercent = 15
+			cfg.Sender.Retry.DelaysMS = []int{70, 300, 1100}
+			options := pipelineOptions(cfg, nil)
+			if options.BatchSize != cfg.Reader.ReadBatchSize || options.ReaderCapacity != cfg.ReaderChannel.Capacity ||
+				options.SenderCapacity != cfg.SenderChannel.Capacity || options.Readers != cfg.Reader.Workers.Initial ||
+				options.Senders != cfg.Sender.Workers.Initial || options.SenderMaxConns != cfg.Sender.Workers.Max ||
+				options.Rate.TPS != cfg.Throttler.RequestedTPS.Initial || options.Rate.Installed != cfg.Throttler.Installed ||
+				options.SenderURL != cfg.Sender.API.URL || options.SenderTimeout != 1234*time.Millisecond ||
+				options.RetryJitterPercent != cfg.Sender.Retry.JitterPercent ||
+				!slices.Equal(options.RetryDelays, []time.Duration{70 * time.Millisecond, 300 * time.Millisecond, 1100 * time.Millisecond}) {
+				t.Fatalf("pipeline options = %+v, config = %+v", options, cfg)
+			}
+		})
 	}
 }
 
@@ -110,18 +126,23 @@ func TestRunServeFailsBeforePipelineWhenListenerOccupied(t *testing.T) {
 	})
 
 	configPath := filepath.Join(t.TempDir(), "config.toml")
-	content := strings.Replace(testConfigContents(t), `addr = "127.0.0.1:8080"`, `addr = "`+listener.Addr().String()+`"`, 1)
-	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	if err := runServe(context.Background(), configPath); err == nil || !strings.Contains(err.Error(), "listen HTTP server") {
+	cfg := testConfig()
+	cfg.HTTP.Addr = listener.Addr().String()
+	cfg.Source.Path = filepath.Join(t.TempDir(), "missing.parquet")
+	writeTestConfig(t, configPath, cfg)
+	if err := runServe(t.Context(), configPath); !errors.Is(err, addressInUseError()) {
 		t.Fatalf("runServe error = %v, want listener startup failure", err)
 	}
 }
 
 func TestRunServeDrainsAndReleasesListener(t *testing.T) {
+	delivered := make(chan struct{}, 1)
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
+		select {
+		case delivered <- struct{}{}:
+		default:
+		}
 	}))
 	t.Cleanup(receiver.Close)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -136,17 +157,16 @@ func TestRunServeDrainsAndReleasesListener(t *testing.T) {
 	if err := parquet.WriteFile(source, []pipeline.Transaction{{ClientID: "drain"}}); err != nil {
 		t.Fatal(err)
 	}
-	input := strings.NewReplacer(
-		"127.0.0.1:8080", addr,
-		"../data/MBD-mini/trx/fold=*/*.parquet", filepath.ToSlash(source),
-		testSenderURL, receiver.URL,
-		"installed = true", "installed = false",
-		"initial = 32", "initial = 1",
-	).Replace(testConfigContents(t))
+	cfg := testConfig()
+	cfg.HTTP.Addr = addr
+	cfg.Source.Path = source
+	cfg.Sender.API.URL = receiver.URL
+	cfg.Throttler.Installed = false
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	var runErr error
-	configPath := writeConfigInput(t, input)
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	writeTestConfig(t, configPath, cfg)
 	go func() {
 		runErr = runServe(ctx, configPath)
 		close(done)
@@ -159,12 +179,27 @@ func TestRunServeDrainsAndReleasesListener(t *testing.T) {
 			t.Error("runServe did not stop after cancellation")
 		}
 	})
-	waitForHTTPSnapshotState(t, "http://"+addr, api.RunStateRunning)
+	select {
+	case <-delivered:
+	case <-done:
+		t.Fatalf("runServe exited before delivery: %v", runErr)
+	case <-time.After(blackBoxTimeout):
+		t.Fatal("runServe did not begin delivery")
+	}
+	client := &http.Client{Timeout: time.Second}
+	snapshotResponse, err := client.Get("http://" + addr + api.SnapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := api.DecodeSnapshot(snapshotResponse.Body)
+	snapshotCloseErr := snapshotResponse.Body.Close()
+	if snapshotResponse.StatusCode != http.StatusOK || err != nil || snapshotCloseErr != nil || snapshot.Run.State != api.RunStateRunning {
+		t.Fatalf("running snapshot = %+v, status=%d, decode=%v, close=%v", snapshot, snapshotResponse.StatusCode, err, snapshotCloseErr)
+	}
 	wantSpec, err := os.ReadFile("openapi/loadgen.openapi.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &http.Client{Timeout: time.Second}
 	response, err := client.Get("http://" + addr + "/developer/openapi.json")
 	if err != nil {
 		t.Fatal(err)

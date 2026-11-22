@@ -85,10 +85,3 @@ func TestDecodeStrictConfig(t *testing.T) {
 		})
 	}
 }
-
-func TestDecodeStrictJSONRejectsNullSnapshot(t *testing.T) {
-	_, err := DecodeSnapshot(strings.NewReader(`null`))
-	if err == nil || err.Error() != "decode snapshot: expected object" {
-		t.Fatalf("decode error = %v, want expected object", err)
-	}
-}

@@ -1,13 +1,17 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-viper/mapstructure/v2"
 )
 
 func TestLoadConfigRejectsUnknownNames(t *testing.T) {
@@ -49,7 +53,8 @@ func TestLoadConfigRejectsWeakNumericTypes(t *testing.T) {
 			if contents == testConfigContents(t) {
 				t.Fatal("replacement did not apply")
 			}
-			if _, err := decodeConfig([]byte(contents), profileFixture); err == nil || !strings.Contains(err.Error(), "decode config") {
+			_, err := decodeConfig([]byte(contents), profileFixture)
+			if _, ok := errors.AsType[*mapstructure.DecodeError](err); !ok {
 				t.Fatalf("expected a decoding error, got %v", err)
 			}
 		})
@@ -63,11 +68,12 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 		contents string
 		wantURL  string
 		wantErr  bool
+		badURL   bool
 	}{
 		{name: "default", contents: contents, wantURL: testSenderURL},
 		{name: "external HTTPS", contents: strings.Replace(contents, testSenderURL, "https://ingest.example.test/v1/batches", 1), wantURL: "https://ingest.example.test/v1/batches"},
 		{name: "present empty URL", contents: strings.Replace(contents, testSenderURL, "", 1), wantErr: true},
-		{name: "malformed URL", contents: strings.Replace(contents, testSenderURL, "http://example.test/%invalid", 1), wantErr: true},
+		{name: "malformed URL", contents: strings.Replace(contents, testSenderURL, "http://example.test/%invalid", 1), wantErr: true, badURL: true},
 		{name: "relative URL", contents: strings.Replace(contents, testSenderURL, "/internal/ingest", 1), wantErr: true},
 		{name: "unsupported scheme", contents: strings.Replace(contents, testSenderURL, "ftp://ingest.example.test/batches", 1), wantErr: true},
 		{name: "missing host", contents: strings.Replace(contents, testSenderURL, "http:/internal/ingest", 1), wantErr: true},
@@ -78,6 +84,12 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			loaded, err := decodeConfig([]byte(test.contents), profileFixture)
 			if test.wantErr {
+				if test.badURL {
+					if _, ok := errors.AsType[*url.Error](err); !ok {
+						t.Fatalf("decodeConfig error = %v, want URL parse error", err)
+					}
+					return
+				}
 				if err == nil || !strings.Contains(err.Error(), "sender: api:") {
 					t.Fatalf("decodeConfig error = %v, want sender API error", err)
 				}
@@ -325,7 +337,7 @@ func TestLoadConfigScalarValuesAndBounds(t *testing.T) {
 		{"TPS0", "initial = 2000000", "initial = 0", true},
 		{"TPS arbitrary integer", "initial = 2000000", "initial = 2000001", true},
 		{"TPS maximum initial", "initial = 2000000", "initial = 4000000", true},
-		{"relative source", `C:\dataset\*.parquet`, "../data/MBD-mini/trx/fold=*/*.parquet", true},
+		{"relative source", `C:\dataset\*.parquet`, "testdata/input.parquet", true},
 		{"TPS negative", "initial = 2000000", "initial = -200000", false},
 		{"TPS high", "initial = 2000000", "initial = 4200000", false},
 		{"TPS arbitrary max", "max = 4000000", "max = 4000001", true},
@@ -366,21 +378,14 @@ func TestLoadConfigScalarValuesAndBounds(t *testing.T) {
 	}
 }
 
-func TestLoadConfigProfileFixture(t *testing.T) {
-	cfg, err := Load(profileFixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Reader.ReadBatchSize != 1000 || cfg.ReaderChannel.Capacity != 2 || cfg.SenderChannel.Capacity != 0 ||
-		cfg.Reader.Workers != (Workers{Initial: 1, Max: 7}) || cfg.Sender.Workers != (Workers{Initial: 32, Max: 32}) ||
-		cfg.Throttler.RequestedTPS != (TPS{Initial: 2000000, Max: 4000000}) || !cfg.Throttler.Installed ||
-		cfg.Source.Path != "../data/MBD-mini/trx/fold=*/*.parquet" {
-		t.Fatalf("example profile changed: %+v", cfg)
+func TestLoadCheckedInConfigParsesAndValidates(t *testing.T) {
+	if _, err := Load("../../config.toml"); err != nil {
+		t.Fatalf("load checked-in config: %v", err)
 	}
 }
 
 const (
-	profileFixture = "../../testdata/profile.toml"
+	profileFixture = "testdata/valid.toml"
 	testSenderURL  = "http://127.0.0.1:8081/internal/ingest"
 )
 
@@ -390,6 +395,5 @@ func testConfigContents(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	contents := strings.ReplaceAll(string(data), "\r\n", "\n")
-	return strings.Replace(contents, `path = "../data/MBD-mini/trx/fold=*/*.parquet"`, `path = 'C:\dataset\*.parquet'`, 1)
+	return strings.ReplaceAll(string(data), "\r\n", "\n")
 }

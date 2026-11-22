@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -139,9 +141,22 @@ func TestSenderClientRejectsInvalidPayloadAndRequest(t *testing.T) {
 	for _, test := range []struct {
 		name, url string
 		amount    float32
+		wantError func(error) bool
 	}{
-		{name: "JSON marshal", url: "http://example.test/ingest", amount: float32(math.NaN())},
-		{name: "invalid URL", url: "://invalid"},
+		{
+			name: "JSON marshal", url: "http://example.test/ingest", amount: float32(math.NaN()),
+			wantError: func(err error) bool {
+				_, ok := errors.AsType[*json.UnsupportedValueError](err)
+				return ok
+			},
+		},
+		{
+			name: "invalid URL", url: "://invalid",
+			wantError: func(err error) bool {
+				_, ok := errors.AsType[*url.Error](err)
+				return ok
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			calls := 0
@@ -150,7 +165,7 @@ func TestSenderClientRejectsInvalidPayloadAndRequest(t *testing.T) {
 				return nil, io.ErrUnexpectedEOF
 			})}
 			sender := newSenderClient(test.url, client)
-			if err := sender.deliver(t.Context(), []Transaction{{Amount: test.amount}}, 1); err == nil || calls != 0 {
+			if err := sender.deliver(t.Context(), []Transaction{{Amount: test.amount}}, 1); !test.wantError(err) || calls != 0 {
 				t.Fatalf("error=%v transport calls=%d", err, calls)
 			}
 		})

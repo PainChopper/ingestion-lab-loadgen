@@ -7,19 +7,6 @@ import (
 	"time"
 )
 
-func TestBatchQueueReportsDepthBatches(t *testing.T) {
-	batches := make(chan []Transaction, 3)
-	batches <- make([]Transaction, 3)
-	batches <- make([]Transaction, 3)
-
-	var telemetry batchQueue
-	telemetry.ch = batches
-	measurements := telemetry.snapshot(time.Now())
-	if measurements.DepthBatches != 2 {
-		t.Fatalf("readerChannel measurements = %+v", measurements)
-	}
-}
-
 func TestBatchQueueMeasuresBlockedSendUntilQueueReceives(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		batches := make(chan []Transaction, 1)
@@ -131,7 +118,7 @@ func TestBatchQueueConcurrentSendsKeepSecondWriterBlocked(t *testing.T) {
 }
 
 func TestBatchQueueCountsSuccessfulTransfers(t *testing.T) {
-	batches := make(chan []Transaction, 2)
+	batches := make(chan []Transaction, 3)
 	var telemetry batchQueue
 	telemetry.ch = batches
 	if !telemetry.trySend(make([]Transaction, 3)) {
@@ -140,7 +127,14 @@ func TestBatchQueueCountsSuccessfulTransfers(t *testing.T) {
 	if !telemetry.trySend(make([]Transaction, 2)) {
 		t.Fatal("second send failed")
 	}
-	telemetry.recordReceive(len(<-batches))
+	if got := telemetry.snapshot(time.Now()).DepthBatches; got != 2 {
+		t.Fatalf("queue contains %d batches, want 2", got)
+	}
+	batch := <-batches
+	if got := telemetry.snapshot(time.Now()).DepthBatches; got != 1 {
+		t.Fatalf("queue contains %d batches before recording receive, want 1", got)
+	}
+	telemetry.recordReceive(len(batch))
 
 	beforeSample := telemetry.snapshot(time.Now())
 	if beforeSample.BlockedSenders != 0 || beforeSample.BlockedMS != 0 ||
@@ -148,7 +142,6 @@ func TestBatchQueueCountsSuccessfulTransfers(t *testing.T) {
 		beforeSample.ReceivedBatchesTotal != 1 || beforeSample.ReceivedTransactionsTotal != 3 {
 		t.Fatalf("before sample = %+v", beforeSample)
 	}
-
 }
 
 func TestBatchQueueUnbufferedHandoffCountsOnlyAfterSend(t *testing.T) {

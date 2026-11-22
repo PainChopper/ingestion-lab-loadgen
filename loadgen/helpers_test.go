@@ -1,73 +1,47 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 
-	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/pelletier/go-toml/v2"
 )
 
 const blackBoxTimeout = 10 * time.Second
 
-func waitForHTTPSnapshotState(t *testing.T, baseURL string, want api.RunState) {
-	t.Helper()
-	deadline := time.Now().Add(blackBoxTimeout)
-	client := &http.Client{Timeout: time.Second}
-	var lastError error
-	for time.Now().Before(deadline) {
-		response, err := client.Get(baseURL + api.SnapshotPath)
-		if err == nil {
-			var snapshot api.Snapshot
-			decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
-			closeErr := response.Body.Close()
-			if decodeErr == nil && closeErr == nil && snapshot.Run.State == want {
-				return
-			}
-			lastError = fmt.Errorf("snapshot state = %q, want %q; decode=%v; close=%v", snapshot.Run.State, want, decodeErr, closeErr)
-		} else {
-			lastError = err
-		}
-		time.Sleep(10 * time.Millisecond)
+func testConfig() config.Config {
+	return config.Config{
+		HTTP:          config.HTTP{Addr: "127.0.0.1:8080"},
+		Source:        config.Source{Path: "input.parquet"},
+		Reader:        config.Reader{ReadBatchSize: 1000, Workers: config.Workers{Initial: 1, Max: 7}},
+		ReaderChannel: config.Channel{Capacity: 2},
+		SenderChannel: config.Channel{Capacity: 0},
+		Throttler:     config.Throttler{Installed: true, RequestedTPS: config.TPS{Initial: 2_000_000, Max: 4_000_000}},
+		Sender: config.Sender{
+			Workers: config.Workers{Initial: 1, Max: 32},
+			API:     config.SenderAPI{URL: "http://127.0.0.1:8081/internal/ingest", TimeoutMS: 30_000},
+			Retry:   config.SenderRetry{DelaysMS: []int{250, 500, 1000, 2000, 5000}, JitterPercent: 20},
+		},
+		Logging: config.Logging{Level: "info"},
 	}
-	t.Fatalf("wait for service state %q: %v", want, lastError)
 }
 
-const (
-	profileFixture = "testdata/profile.toml"
-	testSenderURL  = "http://127.0.0.1:8081/internal/ingest"
-)
-
-func testConfig(t *testing.T) config.Config {
+func writeTestConfig(t *testing.T, path string, cfg config.Config) {
 	t.Helper()
-	loaded, err := config.Load(profileFixture)
-	if err != nil {
-		t.Fatalf("load test config: %v", err)
+	// The service entry point takes a TOML path. Encode the same field names it decodes.
+	var values map[string]any
+	if err := mapstructure.Decode(cfg, &values); err != nil {
+		t.Fatal(err)
 	}
-	return loaded
-}
-
-func testConfigContents(t *testing.T) string {
-	t.Helper()
-	data, err := os.ReadFile(profileFixture)
+	input, err := toml.Marshal(values)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return strings.ReplaceAll(string(data), "\r\n", "\n")
-}
-
-func writeConfigInput(t *testing.T, input string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+	if err := os.WriteFile(path, input, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return path
 }

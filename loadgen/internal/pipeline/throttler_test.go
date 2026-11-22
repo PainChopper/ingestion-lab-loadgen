@@ -436,7 +436,6 @@ func TestThrottlerDoesNotAccumulateCreditWhileOutputBlocked(t *testing.T) {
 		senderBatches := make(chan []Transaction)
 		senderChannel.ch = senderBatches
 		readerChannel.ch = readerBatches
-		senderChannel.ch = senderBatches
 		stage := startThrottler(ctx, &readerChannel, senderChannel, Rate{TPS: 25, Installed: true})
 		time.Sleep(120 * time.Millisecond)
 		synctest.Wait()

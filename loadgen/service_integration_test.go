@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
@@ -28,7 +28,7 @@ import (
 )
 
 func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := testConfig()
 	cfg.ReaderChannel.Capacity = 0
 	cfg.SenderChannel.Capacity = 0
 	cfg.Sender.Workers.Initial = 1
@@ -71,7 +71,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("autostarted Sender did not reach receiver")
 	}
-	status := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateRunning })
+	status := loop.snapshotInState(t, api.RunStateRunning)
 	if status.ReaderChannel.DepthBatches != 0 || status.SenderChannel.DepthBatches != 0 || inFlightSenders(status) != 1 {
 		t.Fatalf("wanted two empty queues with an in-flight Sender: %+v", status)
 	}
@@ -84,13 +84,14 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	for _, body := range updates {
 		assertCommandHTTP(t, mux, body, http.StatusOK)
 	}
-	status = loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateRunning })
+	status = loop.snapshotInState(t, api.RunStateRunning)
 	if status.Reader.Workers != 2 || status.Sender.Workers != 2 || status.Throttler.RequestedTps != 2_400_000 || !status.Throttler.Installed {
 		t.Fatalf("live controls not applied: %+v", status)
 	}
 
 	loop.cancel()
-	stopping := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
+	loop.awaitEvent(t, "service_stopping")
+	stopping := loop.snapshotInState(t, api.RunStateStopping)
 	if inFlightSenders(stopping) == 0 {
 		t.Fatal("stopping prematurely canceled the HTTP attempt")
 	}
@@ -111,7 +112,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	if err := loop.awaitExit(t); err != nil {
 		t.Fatal(err)
 	}
-	assertServiceDrainLog(t, loop.logs.String(), deliveredRows.Load(), false)
+	assertServiceDrainLog(t, loop.logs.output.String(), deliveredRows.Load(), false)
 	assertCommandHTTP(t, mux, updates[0], http.StatusServiceUnavailable)
 }
 
@@ -131,123 +132,117 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			received := make(chan int, 1)
-			release := make(chan struct{})
-			var releaseOnce sync.Once
-			unblock := func() { releaseOnce.Do(func() { close(release) }) }
-			var deliveredRows atomic.Int64
-			receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var rows []pipeline.Transaction
-				if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
+			synctest.Test(t, func(t *testing.T) {
+				received := make(chan int, 1)
+				release := make(chan struct{})
+				var releaseOnce sync.Once
+				unblock := func() { releaseOnce.Do(func() { close(release) }) }
+				var deliveredRows atomic.Int64
+				receiver := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var rows []pipeline.Transaction
+					if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					select {
+					case received <- len(rows):
+					default:
+					}
+					<-release
+					deliveredRows.Add(int64(len(rows)))
+					w.WriteHeader(http.StatusNoContent)
+				}))
+				defer unblock()
+
+				cfg := testConfig()
+				cfg.Source.Path = parquetPath
+				cfg.Reader.ReadBatchSize = batchSize
+				cfg.ReaderChannel.Capacity = tc.readerCapacity
+				cfg.SenderChannel.Capacity = tc.senderCapacity
+				cfg.Throttler.Installed = false
+				cfg.Reader.Workers.Initial, cfg.Reader.Workers.Max = 1, 13
+				cfg.Sender.Workers.Initial, cfg.Sender.Workers.Max = 2, 19
+				cfg.Throttler.RequestedTPS.Initial, cfg.Throttler.RequestedTPS.Max = 200_001, 400_001
+				loop := startServiceLoopWithTestReceiver(t, cfg, receiver)
+
+				// Both writers must have parked while the original Senders are held in HTTP.
 				select {
-				case received <- len(rows):
+				case got := <-received:
+					if got != batchSize {
+						t.Fatalf("Sender got %d rows per full batch, want %d", got, batchSize)
+					}
 				default:
+					t.Fatal("Sender received no full batch")
 				}
-				<-release
-				deliveredRows.Add(int64(len(rows)))
-				w.WriteHeader(http.StatusNoContent)
-			}))
-			defer receiver.Close()
-			defer unblock()
-
-			conf := strings.NewReplacer(
-				"../data/MBD-mini/trx/fold=*/*.parquet", filepath.ToSlash(parquetPath),
-				testSenderURL, receiver.URL,
-				"[reader]\nread_batch_size = 1000", fmt.Sprintf("[reader]\nread_batch_size = %d", batchSize),
-				"[readerChannel]\ncapacity = 2", fmt.Sprintf("[readerChannel]\ncapacity = %d", tc.readerCapacity),
-				"[senderChannel]\ncapacity = 0", fmt.Sprintf("[senderChannel]\ncapacity = %d", tc.senderCapacity),
-				"[throttler]\ninstalled = true", "[throttler]\ninstalled = false",
-			).Replace(testConfigContents(t))
-			configFilePath := filepath.Join(dir, "config.toml")
-			if err := os.WriteFile(configFilePath, []byte(conf), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			cfg, err := config.Load(configFilePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cfg.Reader.Workers.Initial, cfg.Reader.Workers.Max = 1, 13
-			cfg.Sender.Workers.Initial, cfg.Sender.Workers.Max = 2, 19
-			cfg.Throttler.RequestedTPS.Initial, cfg.Throttler.RequestedTPS.Max = 200_001, 400_001
-			loop := startServiceLoop(t, cfg)
-
-			select {
-			case got := <-received:
-				if got != batchSize {
-					t.Fatalf("Sender got %d rows per full batch, want %d", got, batchSize)
+				status := loop.snapshotInState(t, api.RunStateRunning)
+				if status.ReaderChannel.BlockedSenders == 0 || status.SenderChannel.BlockedSenders == 0 {
+					t.Fatalf("expected blocked writers in both queues: Reader=%+v Sender=%+v", status.ReaderChannel, status.SenderChannel)
 				}
-			case <-time.After(2 * time.Second):
-				t.Fatal("Sender received no full batch")
-			}
-			status := loop.awaitSnapshot(t, func(s api.Snapshot) bool {
-				return s.ReaderChannel.BlockedSenders > 0 && s.SenderChannel.BlockedSenders > 0
+
+				for _, queue := range []struct {
+					name     string
+					snapshot api.ChannelSnapshot
+					capacity int
+				}{
+					{name: "Reader", snapshot: status.ReaderChannel, capacity: tc.readerCapacity},
+					{name: "Sender", snapshot: status.SenderChannel, capacity: tc.senderCapacity},
+				} {
+					q := queue.snapshot
+					if q.DepthBatches != queue.capacity {
+						t.Errorf("%s did not report its filled channel: %+v", queue.name, q)
+					}
+				}
+
+				mux := loop.mux
+				for _, body := range []string{
+					`{"action":"set-reader-workers","value":3}`,
+					`{"action":"set-sender-workers","value":4}`,
+					`{"action":"set-requested-tps","value":0}`,
+					`{"action":"set-throttler-installed","value":true}`,
+				} {
+					assertCommandHTTP(t, mux, body, http.StatusOK)
+				}
+				response := httptest.NewRecorder()
+				mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil))
+				var updated api.Snapshot
+				if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
+					t.Fatal(err)
+				}
+				wantConfig := api.ConfigResponse{
+					ReaderWorkersMax: 13, SenderWorkersMax: 19, RequestedTpsMax: 400_001,
+					ReadBatchSize: batchSize, ReaderChannelCapacity: tc.readerCapacity, SenderChannelCapacity: tc.senderCapacity,
+					SourcePath: cfg.Source.Path,
+				}
+				configRecorder := httptest.NewRecorder()
+				mux.ServeHTTP(configRecorder, httptest.NewRequest(http.MethodGet, api.ConfigPath, nil))
+				var gotConfig api.ConfigResponse
+				if err := json.Unmarshal(configRecorder.Body.Bytes(), &gotConfig); err != nil {
+					t.Fatal(err)
+				}
+				if gotConfig != wantConfig || updated.Reader.Workers != 3 ||
+					updated.Sender.Workers != 4 || updated.Throttler.RequestedTps != 0 || !updated.Throttler.Installed {
+					t.Fatalf("runtime commands changed immutable config or lost applied values: %+v", updated)
+				}
+				// The cross-client smoke reads this real handler response from the verbose run log.
+				t.Logf("snapshot: %s", response.Body.String())
+				assertCommandHTTP(t, mux, `{"action":"set-throttler-installed","value":false}`, http.StatusOK)
+
+				loop.cancel()
+				loop.awaitEvent(t, "service_stopping")
+				loop.snapshotInState(t, api.RunStateStopping)
+				unblock()
+				if err := loop.awaitExit(t); err != nil {
+					t.Fatal(err)
+				}
+				assertServiceDrainLog(t, loop.logs.output.String(), deliveredRows.Load(), true)
+				assertConfirmedMetric(t, loop.metrics, deliveredRows.Load())
 			})
-
-			for _, queue := range []struct {
-				name     string
-				snapshot api.ChannelSnapshot
-				capacity int
-			}{
-				{name: "Reader", snapshot: status.ReaderChannel, capacity: tc.readerCapacity},
-				{name: "Sender", snapshot: status.SenderChannel, capacity: tc.senderCapacity},
-			} {
-				q := queue.snapshot
-				if q.DepthBatches != queue.capacity {
-					t.Errorf("%s did not report its filled channel: %+v", queue.name, q)
-				}
-			}
-
-			mux := loop.mux
-			for _, body := range []string{
-				`{"action":"set-reader-workers","value":3}`,
-				`{"action":"set-sender-workers","value":4}`,
-				`{"action":"set-requested-tps","value":0}`,
-				`{"action":"set-throttler-installed","value":true}`,
-			} {
-				assertCommandHTTP(t, mux, body, http.StatusOK)
-			}
-			response := httptest.NewRecorder()
-			mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil))
-			var updated api.Snapshot
-			if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
-				t.Fatal(err)
-			}
-			wantConfig := api.ConfigResponse{
-				ReaderWorkersMax: 13, SenderWorkersMax: 19, RequestedTpsMax: 400_001,
-				ReadBatchSize: batchSize, ReaderChannelCapacity: tc.readerCapacity, SenderChannelCapacity: tc.senderCapacity,
-				SourcePath: cfg.Source.Path,
-			}
-			configRecorder := httptest.NewRecorder()
-			mux.ServeHTTP(configRecorder, httptest.NewRequest(http.MethodGet, api.ConfigPath, nil))
-			var gotConfig api.ConfigResponse
-			if err := json.Unmarshal(configRecorder.Body.Bytes(), &gotConfig); err != nil {
-				t.Fatal(err)
-			}
-			if gotConfig != wantConfig || updated.Reader.Workers != 3 ||
-				updated.Sender.Workers != 4 || updated.Throttler.RequestedTps != 0 || !updated.Throttler.Installed {
-				t.Fatalf("runtime commands changed immutable config or lost applied values: %+v", updated)
-			}
-			// The cross-client smoke reads this real handler response from the verbose run log.
-			t.Logf("snapshot: %s", response.Body.String())
-			assertCommandHTTP(t, mux, `{"action":"set-throttler-installed","value":false}`, http.StatusOK)
-
-			loop.cancel()
-			loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
-			unblock()
-			if err := loop.awaitExit(t); err != nil {
-				t.Fatal(err)
-			}
-			assertServiceDrainLog(t, loop.logs.String(), deliveredRows.Load(), true)
-			assertConfirmedMetric(t, loop.metrics, deliveredRows.Load())
 		})
 	}
 }
 
 func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := testConfig()
 	directory := t.TempDir()
 	cfg.Source.Path = filepath.Join(directory, "*.parquet")
 	if err := parquet.WriteFile(filepath.Join(directory, "a.parquet"), []pipeline.Transaction{{}}); err != nil {
@@ -278,7 +273,8 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("valid source never reached receiver")
 	}
-	faulted := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateFaulted })
+	loop.awaitEvent(t, "reader_source_failed")
+	faulted := loop.snapshotInState(t, api.RunStateFaulted)
 	if faulted.Reader.SourceError == nil || faulted.Reader.SourceError.Path != filepath.Join(directory, "b.parquet") || inFlightSenders(faulted) != 1 {
 		t.Fatalf("runtime fault lost source or in-flight diagnostic: %+v", faulted)
 	}
@@ -287,7 +283,7 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 	if err := loop.awaitExit(t); !errors.As(err, &sourceError) || sourceError.Op != "open" {
 		t.Fatalf("run error = %v, want corrupt source diagnostic", err)
 	}
-	assertServiceDrainLog(t, loop.logs.String(), 1, false)
+	assertServiceDrainLog(t, loop.logs.output.String(), 1, false)
 	assertConfirmedMetric(t, loop.metrics, 1)
 }
 
@@ -305,14 +301,33 @@ func assertCommandHTTP(t *testing.T, mux http.Handler, body string, want int) {
 type serviceLoop struct {
 	mux     http.Handler
 	metrics *prometheusMetrics
-	logs    *bytes.Buffer
+	logs    *eventLog
 	cancel  context.CancelFunc
 	result  <-chan error
+	done    <-chan struct{}
+}
+
+func startServiceLoopWithTestReceiver(t *testing.T, cfg config.Config, receiver *httptest.Server) serviceLoop {
+	t.Helper()
+	// The real Sender clones the default transport at startup. Use the in-memory
+	// dialer until all pipeline goroutines are parked so synctest can see the backpressure.
+	dialer := receiver.Client().Transport.(*http.Transport).DialContext
+	cfg.Sender.API.URL = receiver.URL
+	original := http.DefaultTransport
+	transport := original.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = dialer
+	http.DefaultTransport = transport
+	defer func() { http.DefaultTransport = original }()
+
+	loop := startServiceLoop(t, cfg)
+	synctest.Wait()
+	return loop
 }
 
 func startServiceLoop(t *testing.T, cfg config.Config) serviceLoop {
 	t.Helper()
-	logs := new(bytes.Buffer)
+	logs := newEventLog("service_stopping", "reader_source_failed")
 	logger, err := newApplicationLogger("info", zapcore.Lock(zapcore.AddSync(logs)))
 	if err != nil {
 		t.Fatal(err)
@@ -341,30 +356,37 @@ func startServiceLoop(t *testing.T, cfg config.Config) serviceLoop {
 			t.Error("service loop failed to exit")
 		}
 	})
-	return serviceLoop{mux: mux, metrics: metrics, logs: logs, cancel: cancel, result: result}
+	return serviceLoop{mux: mux, metrics: metrics, logs: logs, cancel: cancel, result: result, done: done}
 }
 
-func (h serviceLoop) awaitSnapshot(t *testing.T, ready func(api.Snapshot) bool) api.Snapshot {
+func (h serviceLoop) awaitEvent(t *testing.T, name string) {
+	t.Helper()
+	select {
+	case <-h.logs.events[name]:
+	case <-h.done:
+		t.Fatalf("service exited before %s: %v\n%s", name, <-h.result, h.logs.output.String())
+	case <-time.After(2 * time.Second):
+		t.Fatalf("service did not log %s", name)
+	}
+}
+
+func (h serviceLoop) snapshotInState(t *testing.T, state api.RunState) api.Snapshot {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	for ctx.Err() == nil {
-		response := httptest.NewRecorder()
-		h.mux.ServeHTTP(response, httptest.NewRequestWithContext(ctx, http.MethodGet, api.SnapshotPath, nil))
-		if response.Code != http.StatusOK {
-			t.Fatalf("snapshot HTTP = %d, body %q", response.Code, response.Body.String())
-		}
-		value, err := api.DecodeSnapshot(response.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ready(value) {
-			return value
-		}
-		time.Sleep(time.Millisecond)
+	response := httptest.NewRecorder()
+	h.mux.ServeHTTP(response, httptest.NewRequestWithContext(ctx, http.MethodGet, api.SnapshotPath, nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("snapshot HTTP = %d, body %q", response.Code, response.Body.String())
 	}
-	t.Fatal("service snapshot did not reach expected state")
-	return api.Snapshot{}
+	value, err := api.DecodeSnapshot(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.Run.State != state {
+		t.Fatalf("snapshot state = %q, want %q", value.Run.State, state)
+	}
+	return value
 }
 
 func (h serviceLoop) awaitExit(t *testing.T) error {
