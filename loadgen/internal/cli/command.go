@@ -2,8 +2,10 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -17,15 +19,20 @@ import (
 // Run executes the requested command and returns its process exit code.
 // The serve callback starts the local service for the requested configuration path.
 func Run(args []string, stdout, stderr io.Writer, serve func(configPath string) error) int {
-	command, err := parseCLI(args)
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
-		_, _ = fmt.Fprintln(stderr, command.usage())
-		return cliExitUsage
-	}
-	if command.showUsage {
-		_, _ = fmt.Fprintln(stdout, command.usage())
+	var diagnostics bytes.Buffer
+	command, err := parseCommand(args, &diagnostics)
+	if err == flag.ErrHelp {
+		_, _ = diagnostics.WriteTo(stdout)
 		return cliExitSuccess
+	}
+	if err != nil {
+		if diagnostics.Len() != 0 {
+			_, _ = diagnostics.WriteTo(stderr)
+		} else {
+			_, _ = fmt.Fprintln(stderr, err)
+			_, _ = fmt.Fprintln(stderr, command.usage())
+		}
+		return cliExitUsage
 	}
 	if command.remoteAction != "" {
 		if err := runRemoteCLI(context.Background(), command, stdout); err != nil {
@@ -54,52 +61,58 @@ const cliUsage = `usage: ingestion-lab-loadgen <command> [arguments]
   --url <url>  for status and set (default: http://127.0.0.1:8080)
   --help       show this help`
 
-type cliCommand struct {
+type command struct {
 	configPath   string
-	showUsage    bool
 	remoteAction string
 	remoteURL    string
 	remoteSet    remoteSetCommand
 }
 
-func parseCLI(args []string) (cliCommand, error) {
+func parseCommand(args []string, output io.Writer) (command, error) {
 	if len(args) == 0 {
-		return cliCommand{}, nil
-	}
-	if len(args) == 1 && (args[0] == "help" || args[0] == "--help") {
-		return cliCommand{showUsage: true}, nil
+		return command{}, nil
 	}
 
-	if args[0] == "status" {
-		return parseRemoteCLI(args)
-	}
-	if args[0] == "set" {
-		return parseSetCLI(args)
-	}
-	if args[0] != "serve" {
-		return cliCommand{}, fmt.Errorf("unexpected command %q", args[0])
+	switch args[0] {
+	case "serve":
+		return parseServe(newCommandFlags("serve", output, cliUsage), args[1:])
+	case "status":
+		cmd := command{remoteAction: "status"}
+		return parseURL(cmd, newCommandFlags("status", output, cmd.usage()), args[1:])
+	case "set":
+		return parseSet(newCommandFlags("set", output, cliSetUsage), args[1:])
 	}
 
-	command := cliCommand{}
-	for index := 1; index < len(args); index++ {
-		switch args[index] {
-		case "--help":
-			if len(args) == 2 {
-				command.showUsage = true
-				return command, nil
-			}
-			return cliCommand{}, errors.New("invalid serve arguments")
-		case "--config":
-			if command.configPath != "" || index+1 >= len(args) || args[index+1] == "" || strings.HasPrefix(args[index+1], "-") {
-				return cliCommand{}, errors.New("invalid serve arguments: --config requires one non-empty path")
-			}
-			index++
-			command.configPath = args[index]
-		default:
-			return cliCommand{}, fmt.Errorf("unexpected argument %q", args[index])
-		}
+	fs := newCommandFlags("ingestion-lab-loadgen", output, cliUsage)
+	if err := fs.Parse(args); err != nil {
+		return command{}, err
 	}
-	return command, nil
+	if fs.NArg() == 1 && fs.Arg(0) == "help" {
+		fs.Usage()
+		return command{}, flag.ErrHelp
+	}
+	return command{}, fmt.Errorf("unexpected command %q", args[0])
+}
+
+func parseServe(fs *flag.FlagSet, args []string) (command, error) {
+	path := fs.String("config", "", "path to the LoadGen TOML configuration")
+	if err := fs.Parse(args); err != nil {
+		return command{}, err
+	}
+	if *path == "" && fs.NFlag() != 0 {
+		return command{}, errors.New("invalid serve arguments: --config requires one non-empty path")
+	}
+	if fs.NArg() != 0 {
+		return command{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	return command{configPath: *path}, nil
+}
+
+func newCommandFlags(name string, output io.Writer, usage string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(output)
+	fs.Usage = func() { _, _ = fmt.Fprintln(fs.Output(), usage) }
+	return fs
 }
 
 const (
@@ -121,7 +134,7 @@ func cliExitCode(err error) int {
 	return cliExitRemote
 }
 
-func (c cliCommand) usage() string {
+func (c command) usage() string {
 	if c.remoteAction == "set" {
 		return cliSetUsage
 	}
@@ -145,68 +158,57 @@ type remoteSetCommand struct {
 	actual        func(remoteSetSnapshot) any
 }
 
-func parseRemoteCLI(args []string) (cliCommand, error) {
-	command := cliCommand{remoteAction: args[0], remoteURL: defaultCLIBaseURL}
-	if len(args) == 2 && args[1] == "--help" {
-		command.showUsage = true
-		return command, nil
+func parseURL(cmd command, fs *flag.FlagSet, args []string) (command, error) {
+	rawURL := fs.String("url", defaultCLIBaseURL, "base URL of the LoadGen HTTP API")
+	if err := fs.Parse(args); err != nil {
+		return cmd, err
 	}
-	if len(args) == 1 {
-		return command, nil
+	if fs.NArg() != 0 || *rawURL == "" {
+		return cmd, fmt.Errorf("invalid %s arguments", cmd.remoteAction)
 	}
-	if len(args) != 3 || args[1] != "--url" || args[2] == "" {
-		return command, fmt.Errorf("invalid %s arguments", args[0])
-	}
-	baseURL, err := validateCLIBaseURL(args[2])
+	baseURL, err := validateCLIBaseURL(*rawURL)
 	if err != nil {
-		return command, err
+		return cmd, err
 	}
-	command.remoteURL = baseURL
-	return command, nil
+	cmd.remoteURL = baseURL
+	return cmd, nil
 }
 
-func parseSetCLI(args []string) (cliCommand, error) {
-	command := cliCommand{remoteAction: "set", remoteURL: defaultCLIBaseURL}
-	if len(args) == 2 && args[1] == "--help" {
-		command.showUsage = true
-		return command, nil
-	}
-	if len(args) < 2 {
-		return command, errors.New("invalid set arguments")
-	}
-	setting, ok := remoteSetTargets()[args[1]]
-	if !ok {
-		return command, fmt.Errorf("unknown set target %q", args[1])
-	}
-	if len(args) == 3 && args[2] == "--help" {
-		command.showUsage = true
-		return command, nil
-	}
-	if len(args) != 3 && len(args) != 5 {
-		return command, errors.New("invalid set arguments")
-	}
-	if args[2] == "" {
-		return command, errors.New("invalid set arguments")
-	}
-	if len(args) == 5 {
-		if args[3] != "--url" || args[4] == "" {
-			return command, errors.New("invalid set arguments")
+func parseSet(fs *flag.FlagSet, args []string) (command, error) {
+	cmd := command{remoteAction: "set"}
+	var target, rawValue string
+	var setting remoteSetTarget
+	if len(args) != 0 && !strings.HasPrefix(args[0], "-") {
+		target, args = args[0], args[1:]
+		var ok bool
+		setting, ok = remoteSetTargets()[target]
+		if !ok {
+			return cmd, fmt.Errorf("unknown set target %q", target)
 		}
-		baseURL, err := validateCLIBaseURL(args[4])
-		if err != nil {
-			return command, err
+		if len(args) != 0 {
+			// A negative integer occupies the value position before the flags.
+			_, err := strconv.Atoi(args[0])
+			if err == nil || !strings.HasPrefix(args[0], "-") {
+				rawValue, args = args[0], args[1:]
+			}
 		}
-		command.remoteURL = baseURL
 	}
-	value, err := setting.parse(args[2])
+	cmd, err := parseURL(cmd, fs, args)
 	if err != nil {
-		return command, fmt.Errorf("invalid %s value %q", args[1], args[2])
+		return cmd, err
 	}
-	command.remoteSet = remoteSetCommand{
-		target: args[1], requestAction: setting.action, value: value,
+	if rawValue == "" {
+		return cmd, errors.New("invalid set arguments")
+	}
+	value, err := setting.parse(rawValue)
+	if err != nil {
+		return cmd, fmt.Errorf("invalid %s value %q", target, rawValue)
+	}
+	cmd.remoteSet = remoteSetCommand{
+		target: target, requestAction: setting.action, value: value,
 		field: setting.field, actual: setting.actual,
 	}
-	return command, nil
+	return cmd, nil
 }
 
 type remoteSetTarget struct {

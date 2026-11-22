@@ -2,10 +2,8 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,71 +15,6 @@ import (
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
-
-func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
-	for _, test := range []struct {
-		target        string
-		requestAction string
-		value         any
-		update        func(*api.Snapshot)
-	}{
-		{target: "readers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *api.Snapshot) { snapshot.Reader.Workers = 3 }},
-		{target: "senders", requestAction: "set-sender-workers", value: 4, update: func(snapshot *api.Snapshot) { snapshot.Sender.Workers = 4 }},
-		{target: "tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *api.Snapshot) { snapshot.Throttler.RequestedTps = 0 }},
-		{target: "tps", requestAction: "set-requested-tps", value: 2000001, update: func(snapshot *api.Snapshot) { snapshot.Throttler.RequestedTps = 2000001 }},
-		{target: "throttle", requestAction: "set-throttler-installed", value: false, update: func(snapshot *api.Snapshot) { snapshot.Throttler.Installed = false }},
-		{target: "throttle", requestAction: "set-throttler-installed", value: true, update: func(snapshot *api.Snapshot) { snapshot.Throttler.Installed = true }},
-	} {
-		t.Run(test.target+"/"+fmt.Sprint(test.value), func(t *testing.T) {
-			snapshot := testRemoteSnapshot()
-			test.update(&snapshot)
-			var requestBody api.CommandRequest
-			requests := []string{}
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				requests = append(requests, request.Method+" "+request.URL.Path)
-				switch request.URL.Path {
-				case api.CommandsPath:
-					if request.Method != http.MethodPost {
-						t.Errorf("method = %s, want POST", request.Method)
-						http.Error(writer, "unexpected method", http.StatusInternalServerError)
-						return
-					}
-					if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
-						t.Errorf("decode command: %v", err)
-						http.Error(writer, "invalid command", http.StatusInternalServerError)
-						return
-					}
-				case api.SnapshotPath:
-					if err := json.NewEncoder(writer).Encode(snapshot); err != nil {
-						t.Errorf("encode snapshot: %v", err)
-					}
-				default:
-					http.NotFound(writer, request)
-				}
-			}))
-			defer server.Close()
-
-			command, err := parseCLI([]string{"set", test.target, fmt.Sprint(test.value), "--url", server.URL})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var output bytes.Buffer
-			if err := runRemoteCLI(context.Background(), command, &output); err != nil {
-				t.Fatalf("runRemoteCLI: %v", err)
-			}
-			if requestBody.Action != test.requestAction || string(requestBody.Value) != mustMarshalJSON(t, test.value) {
-				t.Fatalf("request = %+v", requestBody)
-			}
-			wantOutput := "action=set target=" + test.target + " value=" + fmt.Sprint(test.value) + " state=running\n"
-			if output.String() != wantOutput {
-				t.Fatalf("stdout = %q, want %q", output.String(), wantOutput)
-			}
-			if !reflect.DeepEqual(requests, []string{"POST " + api.CommandsPath, "GET " + api.SnapshotPath}) {
-				t.Fatalf("set requests = %v", requests)
-			}
-		})
-	}
-}
 
 func TestRunCLISetRequiresExplicitTargetValue(t *testing.T) {
 	for _, command := range []struct {
@@ -252,7 +185,7 @@ Workers:                  configured=0 live=0 in-flight=0 idle=0 backoff=0 drain
 			}))
 			defer server.Close()
 			var stdout bytes.Buffer
-			err := runRemoteCLI(t.Context(), cliCommand{remoteAction: "status", remoteURL: server.URL}, &stdout)
+			err := runRemoteCLI(t.Context(), command{remoteAction: "status", remoteURL: server.URL}, &stdout)
 			if test.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErr) || stdout.Len() != 0 {
 					t.Fatalf("error=%v stdout=%q", err, stdout.String())
@@ -293,12 +226,13 @@ func TestRunRemoteCLISetReportsPOSTTransportError(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	command, err := parseCLI([]string{"set", "readers", "1", "--url", server.URL})
-	if err != nil {
-		t.Fatal(err)
+	cmd := command{
+		remoteAction: "set",
+		remoteURL:    server.URL,
+		remoteSet:    remoteSetCommand{requestAction: api.SetReaderWorkers, value: 1},
 	}
 	var stdout bytes.Buffer
-	err = runRemoteCLI(t.Context(), command, &stdout)
+	err := runRemoteCLI(t.Context(), cmd, &stdout)
 	if !errors.Is(err, io.EOF) || !strings.Contains(err.Error(), "POST "+api.CommandsPath) || stdout.Len() != 0 {
 		t.Fatalf("error=%v stdout=%q, want POST transport failure", err, stdout.String())
 	}

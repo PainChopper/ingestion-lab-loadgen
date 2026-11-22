@@ -28,7 +28,7 @@ func (err remoteHTTPError) Error() string {
 	return message
 }
 
-func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) error {
+func runRemoteCLI(ctx context.Context, command command, stdout io.Writer) error {
 	client := remoteCLIClient{baseURL: command.remoteURL, httpClient: &http.Client{Timeout: remoteClientTimeout}}
 	var config api.ConfigResponse
 	switch command.remoteAction {
