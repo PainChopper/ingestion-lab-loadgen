@@ -1,4 +1,4 @@
-package main
+package httpapi
 
 import (
 	"bytes"
@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"mime"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,33 +17,22 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/control"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 )
 
 func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
-	data, err := os.ReadFile("testdata/config.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var want api.ConfigResponse
-	if err := json.Unmarshal(data, &want); err != nil {
-		t.Fatal(err)
-	}
-	cfg := testConfig(t)
-	cfg.Reader.Workers.Max = want.ReaderWorkersMax
-	cfg.Sender.Workers.Max = want.SenderWorkersMax
-	cfg.Throttler.RequestedTPS.Max = want.RequestedTpsMax
-	cfg.Reader.ReadBatchSize = want.ReadBatchSize
-	cfg.ReaderChannel.Capacity = want.ReaderChannelCapacity
-	cfg.SenderChannel.Capacity = want.SenderChannelCapacity
-	cfg.Source.Path = want.SourcePath
+	want := testStartupConfig(t)
 	for _, state := range []api.RunState{api.RunStateStarting, api.RunStateRunning, api.RunStateStopping, api.RunStateFaulted} {
 		t.Run(string(state), func(t *testing.T) {
-			startup := cfg
+			startup := want
 			requests := 0
 			port := testRuntime{
 				snapshot: func(context.Context) (api.Snapshot, error) {
@@ -59,9 +47,9 @@ func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
 					return false, nil
 				},
 			}
-			mux := newServeMux(port, newPrometheusMetrics(), startup, zap.NewNop())
+			mux := newTestMux(t, port, startup, zap.NewNop())
 			// The response must retain the values captured before later owner changes.
-			startup.Reader.ReadBatchSize++
+			startup.ReadBatchSize++
 			recorder := httptest.NewRecorder()
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
@@ -85,7 +73,7 @@ func TestConfigEndpointIndependentOfRuntime(t *testing.T) {
 }
 
 func TestConfigEndpointHeadAndUnsupportedMethod(t *testing.T) {
-	mux := newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	mux := newTestMux(t, testRuntime{}, testStartupConfig(t), zap.NewNop())
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	response, err := server.Client().Head(server.URL + api.ConfigPath)
@@ -115,7 +103,7 @@ func TestCommandsHandlerRejectsGet(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, api.CommandsPath, nil)
 	rec := httptest.NewRecorder()
 
-	newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
+	newTestMux(t, testRuntime{}, testStartupConfig(t), zap.NewNop()).ServeHTTP(rec, req)
 	response := rec.Result()
 	if response.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %v, want %v", rec.Code, http.StatusMethodNotAllowed)
@@ -144,7 +132,7 @@ func TestCommandsHandlerRejectsInvalidRequest(t *testing.T) {
 			body := strings.NewReader(test.body)
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, body)
 			rec := httptest.NewRecorder()
-			newServeMux(recordCommands(&commands), newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, req)
+			newTestMux(t, recordCommands(&commands), testStartupConfig(t), zap.NewNop()).ServeHTTP(rec, req)
 			response := rec.Result()
 			if response.StatusCode != http.StatusBadRequest {
 				t.Errorf("reply code = %v, want %v", response.StatusCode, http.StatusBadRequest)
@@ -167,7 +155,7 @@ func TestCommandsHandlerRejectsOversizedBody(t *testing.T) {
 		{"JSON exceeds limit", `{"action":"` + strings.Repeat("x", limit) + `","value":2}`},
 		{"trailing whitespace exceeds limit", command + strings.Repeat(" ", limit+1-len(command))},
 	}
-	handler := newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	handler := newTestMux(t, testRuntime{}, testStartupConfig(t), zap.NewNop())
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
@@ -186,7 +174,7 @@ func TestCommandsHandlerRejectsBodyReadFailure(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, api.CommandsPath, nil)
 	req.Body = io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))
 	rec := httptest.NewRecorder()
-	commandsHandler(recordCommands(&commands), testConfig(t)).ServeHTTP(rec, req)
+	commandsHandler(recordCommands(&commands)).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || rec.Body.String() != "invalid request body\n" || len(commands) != 0 {
 		t.Fatalf("status=%d body=%q dispatched=%d", rec.Code, rec.Body.String(), len(commands))
 	}
@@ -226,7 +214,7 @@ func TestThrottlerCommandValidation(t *testing.T) {
 			var commands []control.Command
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
-			newServeMux(recordCommands(&commands), newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
+			newTestMux(t, recordCommands(&commands), testStartupConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
 			if recorder.Code != test.want {
 				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
 			}
@@ -272,7 +260,7 @@ func TestSenderCommandValidation(t *testing.T) {
 			var commands []control.Command
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
-			newServeMux(recordCommands(&commands), newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
+			newTestMux(t, recordCommands(&commands), testStartupConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
 			if recorder.Code != test.want {
 				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
 			}
@@ -317,7 +305,7 @@ func TestReaderWorkersCommandValidation(t *testing.T) {
 			var commands []control.Command
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(test.body))
-			newServeMux(recordCommands(&commands), newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
+			newTestMux(t, recordCommands(&commands), testStartupConfig(t), zap.NewNop()).ServeHTTP(recorder, req)
 			if recorder.Code != test.want {
 				t.Fatalf("status = %d, want %d", recorder.Code, test.want)
 			}
@@ -350,7 +338,7 @@ func TestDeveloperRoutes(t *testing.T) {
 			return false, errTestRuntimeUnavailable
 		},
 	}
-	mux := newServeMux(port, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	mux := newTestMux(t, port, testStartupConfig(t), zap.NewNop())
 	// Swagger uses the platform MIME database for JavaScript assets.
 	javascriptContentType := mime.TypeByExtension(".js")
 	tests := []struct {
@@ -385,8 +373,8 @@ func TestDeveloperRoutes(t *testing.T) {
 	}
 	specRecorder := httptest.NewRecorder()
 	mux.ServeHTTP(specRecorder, httptest.NewRequest(http.MethodGet, developerOpenAPIPath, nil))
-	if !bytes.Equal(specRecorder.Body.Bytes(), openAPISpec) {
-		t.Error("served OpenAPI document differs from embedded bytes")
+	if !bytes.Equal(specRecorder.Body.Bytes(), readOpenAPISpec(t)) {
+		t.Error("served OpenAPI document differs from the checked-in spec")
 	}
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, developerSwaggerUIPath+"swagger-initializer.js", nil))
@@ -398,7 +386,7 @@ func TestDeveloperRoutes(t *testing.T) {
 }
 
 func TestServeMuxHEADUsesSnapshotAndReturnsNoBody(t *testing.T) {
-	mux := newServeMux(snapshotRuntime(api.Snapshot{Run: api.RunSnapshot{State: api.RunStateRunning}}), newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	mux := newTestMux(t, snapshotRuntime(api.Snapshot{Run: api.RunSnapshot{State: api.RunStateRunning}}), testStartupConfig(t), zap.NewNop())
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	for _, test := range []struct {
@@ -424,7 +412,7 @@ func TestServeMuxHEADUsesSnapshotAndReturnsNoBody(t *testing.T) {
 }
 
 func TestHTTPWaitFailuresReturnServiceUnavailable(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := testStartupConfig(t)
 	for _, path := range []string{api.SnapshotPath, api.CommandsPath} {
 		for _, cause := range []string{"cancel", "deadline", "event loop exit"} {
 			t.Run(path+"/"+cause, func(t *testing.T) {
@@ -444,7 +432,7 @@ func TestHTTPWaitFailuresReturnServiceUnavailable(t *testing.T) {
 						snapshot: func(ctx context.Context) (api.Snapshot, error) { return api.Snapshot{}, awaitFailure(ctx) },
 						execute:  func(ctx context.Context, _ control.Command) (bool, error) { return false, awaitFailure(ctx) },
 					}
-					mux := newServeMux(port, newPrometheusMetrics(), cfg, zap.NewNop())
+					mux := newTestMux(t, port, cfg, zap.NewNop())
 					method, body := http.MethodGet, ""
 					if path == api.CommandsPath {
 						method, body = http.MethodPost, `{"action":"set-reader-workers","value":1}`
@@ -491,7 +479,7 @@ func TestHTTPCommandReceiptsHaveEmptyBody(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			applied := test.applied
 			port := testRuntime{execute: func(context.Context, control.Command) (bool, error) { return applied, nil }}
-			mux := newServeMux(port, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+			mux := newTestMux(t, port, testStartupConfig(t), zap.NewNop())
 			recorder := httptest.NewRecorder()
 			mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, api.CommandsPath, strings.NewReader(`{"action":"set-reader-workers","value":1}`)))
 			want := http.StatusOK
@@ -505,168 +493,14 @@ func TestHTTPCommandReceiptsHaveEmptyBody(t *testing.T) {
 	}
 }
 
-func TestStartHTTPServerLogsActualListenerAddress(t *testing.T) {
-	cfg := testConfig(t)
-	// The loader still rejects port zero; directly start the listener to distinguish actual from configured address.
-	cfg.HTTP.Addr = "127.0.0.1:0"
-	core, logs := observer.New(zap.InfoLevel)
-	server, done, err := startHTTPServer(testRuntime{}, newPrometheusMetrics(), cfg, zap.New(core))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-		defer cancel()
-		if err := shutdownHTTPServer(ctx, server); err != nil {
-			t.Error(err)
-		}
-		if err := <-done; err != nil {
-			t.Error(err)
-		}
-	}()
-	entries := logs.FilterMessage("service started").All()
-	if len(entries) != 1 {
-		t.Fatalf("service start logs=%d", len(entries))
-	}
-	fields := entries[0].ContextMap()
-	addr, ok := fields["http_addr"].(string)
-	if !ok || addr == cfg.HTTP.Addr || fields["event"] != "service_started" {
-		t.Fatalf("start fields=%v", fields)
-	}
-	if _, _, err := net.SplitHostPort(addr); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestServeMuxHasNoLocalIngest(t *testing.T) {
-	mux := newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop())
+	mux := newTestMux(t, testRuntime{}, testStartupConfig(t), zap.NewNop())
 	for _, path := range []string{"/internal/test/ingest", "/internal/ingest", api.SnapshotPath + "/extra", api.CommandsPath + "/extra"} {
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
 		if recorder.Code != http.StatusNotFound {
 			t.Errorf("POST %s = %d, want 404", path, recorder.Code)
 		}
-	}
-}
-
-func TestStartHTTPServerUsesConfiguredAddressAndShutsDown(t *testing.T) {
-	available, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := available.Addr().String()
-	if err := available.Close(); err != nil {
-		t.Fatal(err)
-	}
-	loaded := testConfig(t)
-	loaded.HTTP.Addr = addr
-	server, done, err := startHTTPServer(testRuntime{}, newPrometheusMetrics(), loaded, zap.NewNop())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if err := shutdownHTTPServer(ctx, server); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatal(err)
-			}
-		case <-ctx.Done():
-			t.Fatal("HTTP server did not exit")
-		}
-		listener, err := net.Listen("tcp", addr)
-		if err != nil {
-			t.Fatalf("configured address not released after shutdown: %v", err)
-		}
-		if err := listener.Close(); err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("shutdown released %s", addr)
-	})
-	client := &http.Client{Timeout: time.Second}
-	response, err := client.Get("http://" + addr + api.CommandsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := response.Body.Close(); err != nil {
-			t.Errorf("close response body: %v", err)
-		}
-	}()
-	if response.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("configured server GET = %d, want %d", response.StatusCode, http.StatusMethodNotAllowed)
-	}
-	t.Logf("configured server %s answered GET %s with %d", addr, api.CommandsPath, response.StatusCode)
-}
-
-func TestStartHTTPServerReturnsOccupiedAddressError(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := listener.Close(); err != nil {
-			t.Errorf("close listener: %v", err)
-		}
-	})
-	loaded := testConfig(t)
-	loaded.HTTP.Addr = listener.Addr().String()
-	server, done, err := startHTTPServer(testRuntime{}, newPrometheusMetrics(), loaded, zap.NewNop())
-	if server != nil || done != nil {
-		t.Fatal("failed startup returned server or done channel")
-	}
-	var listenError *net.OpError
-	if !errors.As(err, &listenError) || listenError.Op != "listen" {
-		t.Fatalf("startup error = %v, want wrapped listen error", err)
-	}
-	t.Logf("occupied address %s returned %v", loaded.HTTP.Addr, err)
-}
-
-func TestShutdownHTTPServerClosesAnActiveRequestAtDeadline(t *testing.T) {
-	entered := make(chan struct{})
-	left := make(chan struct{})
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		close(entered)
-		<-r.Context().Done()
-		close(left)
-	}))
-	server.Start()
-	t.Cleanup(server.Close)
-	requestCtx, cancelRequest := context.WithTimeout(t.Context(), time.Second)
-	defer cancelRequest()
-	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, server.URL, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := make(chan error, 1)
-	go func() {
-		response, err := server.Client().Do(request)
-		if response != nil {
-			_ = response.Body.Close()
-		}
-		result <- err
-	}()
-	select {
-	case <-entered:
-	case <-requestCtx.Done():
-		t.Fatal("HTTP request did not enter handler")
-	}
-	shutdownCtx, cancelShutdown := context.WithDeadline(t.Context(), time.Now())
-	defer cancelShutdown()
-	if err := shutdownHTTPServer(shutdownCtx, server.Config); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-left:
-	case <-requestCtx.Done():
-		t.Fatal("HTTP handler remained active past force-close")
-	}
-	if err := <-result; err == nil || requestCtx.Err() != nil {
-		t.Fatalf("request error = %v, client context = %v, want server-side close", err, requestCtx.Err())
 	}
 }
 
@@ -785,7 +619,7 @@ func TestSnapshotHandlerIncludesZeroAndNullValues(t *testing.T) {
 
 func TestSnapshotHandlerRejectsPost(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newServeMux(testRuntime{}, newPrometheusMetrics(), testConfig(t), zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, api.SnapshotPath, nil))
+	newTestMux(t, testRuntime{}, testStartupConfig(t), zap.NewNop()).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, api.SnapshotPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("reply code = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
@@ -802,6 +636,7 @@ var errTestRuntimeUnavailable = errors.New("runtime unavailable")
 type testRuntime struct {
 	snapshot func(context.Context) (api.Snapshot, error)
 	execute  func(context.Context, control.Command) (bool, error)
+	valid    func(control.Command) bool
 }
 
 func (rt testRuntime) Snapshot(ctx context.Context) (api.Snapshot, error) {
@@ -818,6 +653,10 @@ func (rt testRuntime) Execute(ctx context.Context, command control.Command) (boo
 	return rt.execute(ctx, command)
 }
 
+func (rt testRuntime) ValidCommand(command control.Command) bool {
+	return rt.valid(command)
+}
+
 func snapshotRuntime(snapshot api.Snapshot) testRuntime {
 	return testRuntime{snapshot: func(context.Context) (api.Snapshot, error) { return snapshot, nil }}
 }
@@ -827,4 +666,33 @@ func recordCommands(commands *[]control.Command) testRuntime {
 		*commands = append(*commands, command)
 		return true, nil
 	}}
+}
+
+func newTestMux(t *testing.T, port testRuntime, cfg api.ConfigResponse, logger *zap.Logger) http.Handler {
+	t.Helper()
+	var limits config.Config
+	limits.Reader.Workers.Max = cfg.ReaderWorkersMax
+	limits.Sender.Workers.Max = cfg.SenderWorkersMax
+	limits.Throttler.RequestedTPS.Max = cfg.RequestedTpsMax
+	port.valid = control.New(limits, pipeline.Options{}, logger).ValidCommand
+	return NewHandler(port, Options{
+		Startup:     cfg,
+		Metrics:     promhttp.HandlerFor(prometheus.NewRegistry(), promhttp.HandlerOpts{}),
+		OpenAPISpec: readOpenAPISpec(t),
+		Logger:      logger,
+	})
+}
+
+func testStartupConfig(t *testing.T) api.ConfigResponse {
+	t.Helper()
+	file, err := os.Open("../../testdata/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = file.Close() }()
+	cfg, err := api.DecodeConfig(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }

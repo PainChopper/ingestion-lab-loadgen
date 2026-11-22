@@ -199,24 +199,34 @@ func (s *Controller) Run(
 	}
 }
 
-func (s *Controller) applyCommand(run *pipeline.Pipeline, command Command, requestedTPSChanged func(int)) bool {
+// ValidCommand reports whether a command is within the immutable startup limits.
+func (s *Controller) ValidCommand(command Command) bool {
 	switch command.Action {
 	case api.SetReaderWorkers:
-		if !s.config.Reader.Workers.Contains(command.Value) {
-			return false
-		}
+		return s.config.Reader.Workers.Contains(command.Value)
+	case api.SetSenderWorkers:
+		return s.config.Sender.Workers.Contains(command.Value)
+	case api.SetRequestedTPS:
+		return s.config.Throttler.RequestedTPS.Contains(command.Value)
+	case api.SetThrottlerInstalled:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Controller) applyCommand(run *pipeline.Pipeline, command Command, requestedTPSChanged func(int)) bool {
+	if !s.ValidCommand(command) {
+		return false
+	}
+	switch command.Action {
+	case api.SetReaderWorkers:
 		s.controls.readerWorkers = command.Value
 		run.SetReaders(command.Value)
 	case api.SetSenderWorkers:
-		if !s.config.Sender.Workers.Contains(command.Value) {
-			return false
-		}
 		s.controls.senderWorkers = command.Value
 		run.SetSenders(command.Value)
 	case api.SetRequestedTPS:
-		if !s.config.Throttler.RequestedTPS.Contains(command.Value) {
-			return false
-		}
 		if s.controls.requestedTPS != command.Value {
 			s.controls.requestedTPS = command.Value
 			if requestedTPSChanged != nil {
