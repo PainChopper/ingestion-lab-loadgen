@@ -16,6 +16,8 @@ import (
 	swaggerui "github.com/alexliesenfeld/go-swagger-ui"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 )
 
 const gracefulShutdownTimeout = 10 * time.Second
@@ -26,11 +28,11 @@ const configPath = "/api/loadgen/config"
 
 const commandsPath = "/api/loadgen/commands"
 
-func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, config config, logger *zap.Logger) *http.ServeMux {
+func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, cfg config.Config, logger *zap.Logger) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("GET "+snapshotPath, snapshotHandler(requests, logger))
-	mux.Handle("GET "+configPath, configHandler(newConfigResponse(config), logger))
-	mux.Handle("POST "+commandsPath, commandsHandler(requests, config))
+	mux.Handle("GET "+configPath, configHandler(newConfigResponse(cfg), logger))
+	mux.Handle("POST "+commandsPath, commandsHandler(requests, cfg))
 	registerDeveloperRoutes(mux)
 
 	mux.Handle("/metrics", promhttp.HandlerFor(metrics.registry, promhttp.HandlerOpts{}))
@@ -44,10 +46,10 @@ func newServeMux(requests runtimeRequests, metrics *prometheusMetrics, config co
 	return mux
 }
 
-func startHTTPServer(requests runtimeRequests, metrics *prometheusMetrics, config config, logger *zap.Logger) (*http.Server, <-chan error, error) {
+func startHTTPServer(requests runtimeRequests, metrics *prometheusMetrics, cfg config.Config, logger *zap.Logger) (*http.Server, <-chan error, error) {
 	server := &http.Server{
-		Addr:              config.HTTP.Addr,
-		Handler:           newServeMux(requests, metrics, config, logger),
+		Addr:              cfg.HTTP.Addr,
+		Handler:           newServeMux(requests, metrics, cfg, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       time.Minute,
@@ -89,7 +91,7 @@ type commandRequest struct {
 	Value  json.RawMessage `json:"value"`
 }
 
-func commandsHandler(requests runtimeRequests, cfg config) http.Handler {
+func commandsHandler(requests runtimeRequests, cfg config.Config) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCommandBodyBytes))
 		if err != nil {
@@ -129,17 +131,17 @@ func commandsHandler(requests runtimeRequests, cfg config) http.Handler {
 	})
 }
 
-func (r commandRequest) runtimeCommand(cfg config) (runtimeCommand, error) {
+func (r commandRequest) runtimeCommand(cfg config.Config) (runtimeCommand, error) {
 	var command runtimeCommand
 	var contains func(int) bool
 	var invalid string
 	switch r.Action {
 	case "set-reader-workers":
-		command.kind, contains, invalid = setReaderWorkers, cfg.Reader.Workers.contains, "invalid reader workers"
+		command.kind, contains, invalid = setReaderWorkers, cfg.Reader.Workers.Contains, "invalid reader workers"
 	case "set-sender-workers":
-		command.kind, contains, invalid = setSenderWorkers, cfg.Sender.Workers.contains, "invalid sender workers"
+		command.kind, contains, invalid = setSenderWorkers, cfg.Sender.Workers.Contains, "invalid sender workers"
 	case "set-requested-tps":
-		command.kind, contains, invalid = setRequestedTPS, cfg.Throttler.RequestedTPS.contains, "invalid requested tps"
+		command.kind, contains, invalid = setRequestedTPS, cfg.Throttler.RequestedTPS.Contains, "invalid requested tps"
 	case "set-throttler-installed":
 		var value *bool
 		if err := json.Unmarshal(r.Value, &value); err != nil || value == nil {
@@ -167,15 +169,15 @@ type configResponse struct {
 	SourcePath            string `json:"sourcePath"`
 }
 
-func newConfigResponse(config config) configResponse {
+func newConfigResponse(cfg config.Config) configResponse {
 	return configResponse{
-		ReaderWorkersMax:      config.Reader.Workers.Max,
-		SenderWorkersMax:      config.Sender.Workers.Max,
-		RequestedTpsMax:       config.Throttler.RequestedTPS.Max,
-		ReadBatchSize:         config.Reader.ReadBatchSize,
-		ReaderChannelCapacity: config.ReaderChannel.Capacity,
-		SenderChannelCapacity: config.SenderChannel.Capacity,
-		SourcePath:            config.Source.Path,
+		ReaderWorkersMax:      cfg.Reader.Workers.Max,
+		SenderWorkersMax:      cfg.Sender.Workers.Max,
+		RequestedTpsMax:       cfg.Throttler.RequestedTPS.Max,
+		ReadBatchSize:         cfg.Reader.ReadBatchSize,
+		ReaderChannelCapacity: cfg.ReaderChannel.Capacity,
+		SenderChannelCapacity: cfg.SenderChannel.Capacity,
+		SourcePath:            cfg.Source.Path,
 	}
 }
 

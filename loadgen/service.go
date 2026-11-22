@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	zaplogfmt "github.com/jsternberg/zap-logfmt"
@@ -18,7 +19,7 @@ import (
 )
 
 func runServe(appCtx context.Context, configPath string) error {
-	cfg, err := loadConfig(configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -79,7 +80,7 @@ func prepareSourceAsync(path string) <-chan sourceDiscovery {
 	return ready
 }
 
-func pipelineOptions(cfg config, logger *zap.Logger) pipeline.Options {
+func pipelineOptions(cfg config.Config, logger *zap.Logger) pipeline.Options {
 	delays := make([]time.Duration, len(cfg.Sender.Retry.DelaysMS))
 	for i, delay := range cfg.Sender.Retry.DelaysMS {
 		delays[i] = time.Duration(delay) * time.Millisecond

@@ -1,4 +1,5 @@
-package main
+// Package config loads and validates the LoadGen TOML configuration.
+package config
 
 import (
 	"errors"
@@ -19,77 +20,105 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Configuration location.
 const (
 	defaultConfigPath = "config.toml"
 	// Interoperable exact JSON integers: https://www.rfc-editor.org/rfc/rfc8259#section-6
 	maxExactJSONInteger = 1<<53 - 1
 )
 
-type config struct {
-	HTTP          httpConfig      `mapstructure:"http"`
-	Source        sourceConfig    `mapstructure:"source"`
-	Reader        readerConfig    `mapstructure:"reader"`
-	ReaderChannel channelConfig   `mapstructure:"readerChannel"`
-	SenderChannel channelConfig   `mapstructure:"senderChannel"`
-	Throttler     throttlerConfig `mapstructure:"throttler"`
-	Sender        senderConfig    `mapstructure:"sender"`
-	Logging       loggingConfig   `mapstructure:"logging"`
+// Config is the validated LoadGen startup configuration.
+type Config struct {
+	// HTTP sets the control server's listen address.
+	HTTP httpConfig `mapstructure:"http"`
+	// Source selects the input Parquet files.
+	Source sourceConfig `mapstructure:"source"`
+	// Reader configures Parquet reading.
+	Reader readerConfig `mapstructure:"reader"`
+	// ReaderChannel configures the queue after the Reader.
+	ReaderChannel channelConfig `mapstructure:"readerChannel"`
+	// SenderChannel configures the queue before the Sender.
+	SenderChannel channelConfig `mapstructure:"senderChannel"`
+	// Throttler configures transaction pacing.
+	Throttler throttlerConfig `mapstructure:"throttler"`
+	// Sender configures HTTP delivery.
+	Sender senderConfig `mapstructure:"sender"`
+	// Logging configures the service logger.
+	Logging loggingConfig `mapstructure:"logging"`
 }
 
 type httpConfig struct {
+	// Addr is the listener host and port.
 	Addr string `mapstructure:"addr"`
 }
 
 type sourceConfig struct {
+	// Path is the input Parquet path or glob.
 	Path string `mapstructure:"path"`
 }
 
 type readerConfig struct {
-	ReadBatchSize int           `mapstructure:"read_batch_size"`
-	Workers       workersConfig `mapstructure:"workers"`
+	// ReadBatchSize limits the number of transactions in each batch.
+	ReadBatchSize int `mapstructure:"read_batch_size"`
+	// Workers sets the initial and maximum worker counts.
+	Workers workersConfig `mapstructure:"workers"`
 }
 
 type channelConfig struct {
+	// Capacity sets the queue capacity in batches.
 	Capacity int `mapstructure:"capacity"`
 }
 
 type throttlerConfig struct {
+	// RequestedTPS sets the initial and maximum transaction rate.
 	RequestedTPS tpsConfig `mapstructure:"requested_tps"`
-	Installed    bool      `mapstructure:"installed"`
+	// Installed enables pacing when true.
+	Installed bool `mapstructure:"installed"`
 }
 
 type loggingConfig struct {
+	// Level sets the minimum log level.
 	Level string `mapstructure:"level"`
 }
 
 type senderConfig struct {
-	Workers workersConfig     `mapstructure:"workers"`
-	API     senderAPIConfig   `mapstructure:"api"`
-	Retry   senderRetryConfig `mapstructure:"retry"`
+	// Workers sets the initial and maximum worker counts.
+	Workers workersConfig `mapstructure:"workers"`
+	// API configures the HTTP Receiver endpoint.
+	API senderAPIConfig `mapstructure:"api"`
+	// Retry configures retry delays.
+	Retry senderRetryConfig `mapstructure:"retry"`
 }
 
 type senderAPIConfig struct {
-	URL       string `mapstructure:"url"`
-	TimeoutMS int64  `mapstructure:"timeout_ms"`
+	// URL is the Receiver ingestion URL.
+	URL string `mapstructure:"url"`
+	// TimeoutMS is the timeout for a delivery attempt in milliseconds.
+	TimeoutMS int64 `mapstructure:"timeout_ms"`
 }
 
 type senderRetryConfig struct {
-	DelaysMS      []int `mapstructure:"delays_ms"`
-	JitterPercent int   `mapstructure:"jitter_percent"`
+	// DelaysMS lists the retry delays in milliseconds.
+	DelaysMS []int `mapstructure:"delays_ms"`
+	// JitterPercent sets the maximum delay jitter as a percentage.
+	JitterPercent int `mapstructure:"jitter_percent"`
 }
 
 type workersConfig struct {
+	// Initial is the startup value.
 	Initial int `mapstructure:"initial"`
-	Max     int `mapstructure:"max"`
+	// Max is the inclusive upper bound.
+	Max int `mapstructure:"max"`
 }
 
 type tpsConfig struct {
+	// Initial is the startup value.
 	Initial int `mapstructure:"initial"`
-	Max     int `mapstructure:"max"`
+	// Max is the inclusive upper bound.
+	Max int `mapstructure:"max"`
 }
 
-func loadConfig(configPath string) (config, error) {
+// Load reads and validates the TOML file. An empty path selects config.toml.
+func Load(configPath string) (Config, error) {
 	path := defaultConfigPath
 	if configPath != "" {
 		path = configPath
@@ -97,36 +126,40 @@ func loadConfig(configPath string) (config, error) {
 
 	absConfigPath, err := filepath.Abs(path)
 	if err != nil {
-		return config{}, fmt.Errorf("make config path absolute: %w", err)
+		return Config{}, fmt.Errorf("make config path absolute: %w", err)
 	}
 
 	data, err := os.ReadFile(absConfigPath)
 	if err != nil {
-		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
+		return Config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
 	}
+	return decodeConfig(data, absConfigPath)
+}
+
+func decodeConfig(data []byte, absConfigPath string) (Config, error) {
 	// Decode the complete TOML tree: flattened settings discard empty tables,
 	// which would otherwise let unknown sections bypass strict decoding.
 	var values map[string]any
 	if err := toml.Unmarshal(data, &values); err != nil {
-		return config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
+		return Config{}, fmt.Errorf("read config %q: %w", absConfigPath, err)
 	}
-	var cfg config
+	var cfg Config
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result: &cfg, TagName: "mapstructure", ErrorUnused: true, ErrorUnset: true,
 		WeaklyTypedInput: false, DecodeHook: rejectFractionalInt,
 		MatchName: func(mapKey, fieldName string) bool { return mapKey == fieldName },
 	})
 	if err != nil {
-		return config{}, fmt.Errorf("create config decoder: %w", err)
+		return Config{}, fmt.Errorf("create config decoder: %w", err)
 	}
 	if err := decoder.Decode(values); err != nil {
 		if http, ok := values["http"].(map[string]any); !ok || http["addr"] == nil {
 			err = errors.Join(err, errors.New("http.addr is required"))
 		}
-		return config{}, fmt.Errorf("decode config %q: %w", absConfigPath, err)
+		return Config{}, fmt.Errorf("decode config %q: %w", absConfigPath, err)
 	}
 	if err := cfg.validate(); err != nil {
-		return config{}, fmt.Errorf("validate config %q: %w", absConfigPath, err)
+		return Config{}, fmt.Errorf("validate config %q: %w", absConfigPath, err)
 	}
 
 	return cfg, nil
@@ -152,7 +185,7 @@ func rejectFractionalInt(from, to reflect.Type, data any) (any, error) {
 	return data, nil
 }
 
-func (c config) validate() error {
+func (c Config) validate() error {
 	if err := c.HTTP.validate(); err != nil {
 		return fmt.Errorf("http.addr: %w", err)
 	}
@@ -279,13 +312,14 @@ func (c senderAPIConfig) validate() error {
 }
 
 func (c workersConfig) validateWorkers() error {
-	if c.Max < 1 || int64(c.Max) > maxExactJSONInteger || !c.contains(c.Initial) {
+	if c.Max < 1 || int64(c.Max) > maxExactJSONInteger || !c.Contains(c.Initial) {
 		return errors.New("initial and max must be positive safe JSON integers, with initial <= max")
 	}
 	return nil
 }
 
-func (c workersConfig) contains(value int) bool {
+// Contains reports whether value is within the configured worker bounds.
+func (c workersConfig) Contains(value int) bool {
 	return value >= 1 && value <= c.Max
 }
 
@@ -294,12 +328,13 @@ func (c tpsConfig) validateRequestedTPS() error {
 	if !validMax {
 		return errors.New("max must be a positive safe JSON integer")
 	}
-	if !c.contains(c.Initial) {
+	if !c.Contains(c.Initial) {
 		return fmt.Errorf("initial=%d must be within 0..%d", c.Initial, c.Max)
 	}
 	return nil
 }
 
-func (c tpsConfig) contains(value int) bool {
+// Contains reports whether value is within the configured TPS bounds.
+func (c tpsConfig) Contains(value int) bool {
 	return value >= 0 && value <= c.Max
 }

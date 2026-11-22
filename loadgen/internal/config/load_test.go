@@ -1,10 +1,9 @@
-package main
+package config
 
 import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,7 +11,7 @@ import (
 )
 
 func TestLoadConfigRejectsUnknownNames(t *testing.T) {
-	base := testConfigContents()
+	base := testConfigContents(t)
 	for _, test := range []struct{ name, contents, unknown string }{
 		{"empty section", base + "\n[unexpected]\n", "unexpected"},
 		{"wrong-case section", strings.Replace(base, "[http]", "[HTTP]", 1), "HTTP"},
@@ -21,7 +20,7 @@ func TestLoadConfigRejectsUnknownNames(t *testing.T) {
 		{"additional wrong-case key", strings.Replace(base, "[http]", "[http]\nAddr = \"127.0.0.1:8080\"", 1), "Addr"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := loadConfig(writeConfigInput(t, test.contents))
+			_, err := decodeConfig([]byte(test.contents), profileFixture)
 			if err == nil || !strings.Contains(err.Error(), "invalid keys: "+test.unknown) {
 				t.Fatalf("error = %v, want unknown key %q", err, test.unknown)
 			}
@@ -46,15 +45,11 @@ func TestLoadConfigRejectsWeakNumericTypes(t *testing.T) {
 		{"retry scalar string", "delays_ms = [250, 500, 1000, 2000, 5000]", "delays_ms = \"250,500\""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			contents := strings.Replace(testConfigContents(), test.old, test.replacement, 1)
-			if contents == testConfigContents() {
+			contents := strings.Replace(testConfigContents(t), test.old, test.replacement, 1)
+			if contents == testConfigContents(t) {
 				t.Fatal("replacement did not apply")
 			}
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := loadConfig(path); err == nil || !strings.Contains(err.Error(), "decode config") {
+			if _, err := decodeConfig([]byte(contents), profileFixture); err == nil || !strings.Contains(err.Error(), "decode config") {
 				t.Fatalf("expected a decoding error, got %v", err)
 			}
 		})
@@ -62,7 +57,7 @@ func TestLoadConfigRejectsWeakNumericTypes(t *testing.T) {
 }
 
 func TestLoadConfigValidatesSenderAPI(t *testing.T) {
-	contents := testConfigContents()
+	contents := testConfigContents(t)
 	tests := []struct {
 		name     string
 		contents string
@@ -81,19 +76,15 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte(test.contents), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			loaded, err := loadConfig(path)
+			loaded, err := decodeConfig([]byte(test.contents), profileFixture)
 			if test.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "sender: api:") {
-					t.Fatalf("loadConfig error = %v, want sender API error", err)
+					t.Fatalf("decodeConfig error = %v, want sender API error", err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("loadConfig: %v", err)
+				t.Fatalf("decodeConfig: %v", err)
 			}
 			if loaded.Sender.API.URL != test.wantURL {
 				t.Fatalf("sender API URL = %q, want %q", loaded.Sender.API.URL, test.wantURL)
@@ -105,11 +96,11 @@ func TestLoadConfigValidatesSenderAPI(t *testing.T) {
 func TestLoadConfigValidatesLoggingLevel(t *testing.T) {
 	for _, level := range []string{"debug", "info", "warn", "error", "verbose"} {
 		t.Run(level, func(t *testing.T) {
-			input := strings.Replace(testConfigContents(), `level = "info"`, fmt.Sprintf("level = %q", level), 1)
-			loaded, err := loadConfig(writeConfigInput(t, input))
+			input := strings.Replace(testConfigContents(t), `level = "info"`, fmt.Sprintf("level = %q", level), 1)
+			loaded, err := decodeConfig([]byte(input), profileFixture)
 			if level == "verbose" {
 				if err == nil || !strings.Contains(err.Error(), "logging: level must be debug, info, warn, or error") {
-					t.Fatalf("loadConfig error = %v, want logging level error", err)
+					t.Fatalf("decodeConfig error = %v, want logging level error", err)
 				}
 			} else if err != nil || loaded.Logging.Level != level {
 				t.Fatalf("logging level = %q, error = %v, want %q", loaded.Logging.Level, err, level)
@@ -120,7 +111,7 @@ func TestLoadConfigValidatesLoggingLevel(t *testing.T) {
 
 func TestLoadConfigValidatesSenderAPITimeout(t *testing.T) {
 	const maxMS = math.MaxInt64 / int64(time.Millisecond)
-	contents := strings.Replace(testConfigContents(), "timeout_ms = 30000\n", "", 1)
+	contents := strings.Replace(testConfigContents(t), "timeout_ms = 30000\n", "", 1)
 	tests := []struct {
 		name    string
 		line    string
@@ -139,17 +130,13 @@ func TestLoadConfigValidatesSenderAPITimeout(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			input := strings.Replace(contents, "[sender.api]\n", "[sender.api]\n"+test.line, 1)
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := loadConfig(path)
+			_, err := decodeConfig([]byte(input), profileFixture)
 			if test.wantErr == "" {
 				if err != nil {
-					t.Fatalf("loadConfig: %v", err)
+					t.Fatalf("decodeConfig: %v", err)
 				}
 			} else if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-				t.Fatalf("loadConfig error = %v, want error about %s", err, test.wantErr)
+				t.Fatalf("decodeConfig error = %v, want error about %s", err, test.wantErr)
 			}
 		})
 	}
@@ -193,15 +180,11 @@ func TestLoadConfigValidatesHTTPAddress(t *testing.T) {
 			} else if test.missingAddr {
 				replacement = "[http]\n"
 			}
-			contents := strings.Replace(testConfigContents(), section, replacement, 1)
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			loaded, err := loadConfig(path)
+			contents := strings.Replace(testConfigContents(t), section, replacement, 1)
+			loaded, err := decodeConfig([]byte(contents), profileFixture)
 			if test.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "http.addr") {
-					t.Fatalf("loadConfig error = %v, want http.addr error", err)
+					t.Fatalf("decodeConfig error = %v, want http.addr error", err)
 				}
 				return
 			}
@@ -216,7 +199,11 @@ func TestLoadConfigValidatesHTTPAddress(t *testing.T) {
 }
 
 func TestLoadConfigPreservesRetryDelays(t *testing.T) {
-	sender := testConfig(t).Sender
+	cfg, err := Load(profileFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := cfg.Sender
 	if got, want := sender.Retry.DelaysMS, []int{250, 500, 1000, 2000, 5000}; !slices.Equal(got, want) {
 		t.Fatalf("retry delays=%v,want %v", got, want)
 	}
@@ -230,16 +217,12 @@ func TestLoadConfigRejectsInvalidSenderConfig(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			contents := strings.Replace(testConfigContents(), test.old, test.replacement, 1)
-			if contents == testConfigContents() {
+			contents := strings.Replace(testConfigContents(t), test.old, test.replacement, 1)
+			if contents == testConfigContents(t) {
 				t.Fatal("test replacement did not apply")
 			}
-			path := filepath.Join(t.TempDir(), "config.toml")
-			if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := loadConfig(path); err == nil {
-				t.Fatal("loadConfig accepted invalid Sender config")
+			if _, err := decodeConfig([]byte(contents), profileFixture); err == nil {
+				t.Fatal("decodeConfig accepted invalid Sender config")
 			}
 		})
 	}
@@ -280,7 +263,7 @@ func TestSenderRetryConfigDurationBounds(t *testing.T) {
 
 func TestLoadConfigRequiredFields(t *testing.T) {
 	section := ""
-	for _, line := range strings.Split(testConfigContents(), "\n") {
+	for _, line := range strings.Split(testConfigContents(t), "\n") {
 		if strings.HasPrefix(line, "[") {
 			section = line
 			continue
@@ -290,8 +273,8 @@ func TestLoadConfigRequiredFields(t *testing.T) {
 		}
 		t.Run(section+"/"+strings.Split(line, " = ")[0], func(t *testing.T) {
 			// Remove precisely one key, preserving all other required fields.
-			input := strings.Replace(testConfigContents(), line+"\n", "", 1)
-			if _, err := loadConfig(writeConfigInput(t, input)); err == nil {
+			input := strings.Replace(testConfigContents(t), line+"\n", "", 1)
+			if _, err := decodeConfig([]byte(input), profileFixture); err == nil {
 				t.Fatalf("accepted missing %s %s", section, line)
 			}
 		})
@@ -310,11 +293,11 @@ func TestLoadConfigStrictShapeAndTypes(t *testing.T) {
 		{"bool number", "installed = true", "installed = 0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			input := strings.Replace(testConfigContents(), tc.old, tc.replacement, 1)
-			if input == testConfigContents() {
+			input := strings.Replace(testConfigContents(t), tc.old, tc.replacement, 1)
+			if input == testConfigContents(t) {
 				t.Fatal("mutation did not apply")
 			}
-			if _, err := loadConfig(writeConfigInput(t, input)); err == nil {
+			if _, err := decodeConfig([]byte(input), profileFixture); err == nil {
 				t.Fatal("invalid config accepted")
 			}
 		})
@@ -371,11 +354,11 @@ func TestLoadConfigScalarValuesAndBounds(t *testing.T) {
 		{"unsafe TPS", "max = 4000000", fmt.Sprintf("max = %d", maxExactJSONInteger+1), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			input := strings.Replace(testConfigContents(), tc.old, tc.replacement, 1)
-			if input == testConfigContents() {
+			input := strings.Replace(testConfigContents(t), tc.old, tc.replacement, 1)
+			if input == testConfigContents(t) {
 				t.Fatal("mutation did not apply")
 			}
-			_, err := loadConfig(writeConfigInput(t, input))
+			_, err := decodeConfig([]byte(input), profileFixture)
 			if (err == nil) != tc.valid {
 				t.Fatalf("valid=%t error=%v", tc.valid, err)
 			}
@@ -384,7 +367,7 @@ func TestLoadConfigScalarValuesAndBounds(t *testing.T) {
 }
 
 func TestLoadConfigProfileFixture(t *testing.T) {
-	cfg, err := loadConfig(filepath.Join("testdata", "profile.toml"))
+	cfg, err := Load(profileFixture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,4 +377,19 @@ func TestLoadConfigProfileFixture(t *testing.T) {
 		cfg.Source.Path != "../data/MBD-mini/trx/fold=*/*.parquet" {
 		t.Fatalf("example profile changed: %+v", cfg)
 	}
+}
+
+const (
+	profileFixture = "../../testdata/profile.toml"
+	testSenderURL  = "http://127.0.0.1:8081/internal/ingest"
+)
+
+func testConfigContents(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(profileFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := strings.ReplaceAll(string(data), "\r\n", "\n")
+	return strings.Replace(contents, `path = "../data/MBD-mini/trx/fold=*/*.parquet"`, `path = 'C:\dataset\*.parquet'`, 1)
 }

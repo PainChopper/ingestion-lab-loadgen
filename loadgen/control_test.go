@@ -19,6 +19,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"github.com/parquet-go/parquet-go"
@@ -417,24 +418,24 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 			defer unblock()
 
 			conf := strings.NewReplacer(
-				"C:\\dataset\\*.parquet", filepath.ToSlash(parquetPath),
+				"../data/MBD-mini/trx/fold=*/*.parquet", filepath.ToSlash(parquetPath),
 				testSenderURL, receiver.URL,
 				"[reader]\nread_batch_size = 1000", fmt.Sprintf("[reader]\nread_batch_size = %d", batchSize),
 				"[readerChannel]\ncapacity = 2", fmt.Sprintf("[readerChannel]\ncapacity = %d", tc.readerCapacity),
 				"[senderChannel]\ncapacity = 0", fmt.Sprintf("[senderChannel]\ncapacity = %d", tc.senderCapacity),
 				"[throttler]\ninstalled = true", "[throttler]\ninstalled = false",
-			).Replace(testConfigContents())
+			).Replace(testConfigContents(t))
 			configFilePath := filepath.Join(dir, "config.toml")
 			if err := os.WriteFile(configFilePath, []byte(conf), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			cfg, err := loadConfig(configFilePath)
+			cfg, err := config.Load(configFilePath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			cfg.Reader.Workers = workersConfig{Initial: 1, Max: 13}
-			cfg.Sender.Workers = workersConfig{Initial: 2, Max: 19}
-			cfg.Throttler.RequestedTPS = tpsConfig{Initial: 200_001, Max: 400_001}
+			cfg.Reader.Workers.Initial, cfg.Reader.Workers.Max = 1, 13
+			cfg.Sender.Workers.Initial, cfg.Sender.Workers.Max = 2, 19
+			cfg.Throttler.RequestedTPS.Initial, cfg.Throttler.RequestedTPS.Max = 200_001, 400_001
 			core, events := observer.New(zap.InfoLevel)
 			state := newControlState(cfg, zap.New(core))
 			loop := startTestEventLoop(t, &state, gracefulShutdownTimeout)

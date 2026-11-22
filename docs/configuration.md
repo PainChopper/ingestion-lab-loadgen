@@ -2,7 +2,7 @@
 
 ## LoadGen
 
-From `loadgen/`, run `go run .` to load [`config.toml`](../loadgen/config.toml) from the working directory. Use `go run . serve --config /path/to/loadgen.toml` for another file. One run starts automatically per process. Configuration is loaded before the HTTP server starts. Environment overrides, key-value overrides, and hot reload are unavailable. The [HTTP API](api.md) exposes live worker counts and rate controls.
+From `loadgen/`, run `go run .` to load [`config.toml`](../loadgen/config.toml) from the working directory. Use `go run . serve --config /path/to/loadgen.toml` for another file. One run starts automatically per process. [The configuration package](../loadgen/internal/config) loads and validates the TOML file before the HTTP server starts. Environment overrides, key-value overrides, and hot reload are unavailable. The [HTTP API](api.md) exposes live worker counts and rate controls.
 
 The TOML format is unversioned. All LoadGen keys shown in the example are required. Names are case-sensitive, and validation rejects unknown keys and sections, including empty tables. Explicit zero and false values are preserved where valid. Integer fields reject strings, booleans, fractions, NaN, and overflow, including elements of `sender.retry.delays_ms`. A change to the meaning, units, or allowed values of a key requires a new name. The old name then fails as unknown, even for optional keys.
 

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"github.com/parquet-go/parquet-go"
@@ -206,7 +207,7 @@ func startCLIServe(t *testing.T, binary, configPath string) string {
 		if err := listener.Close(); err != nil {
 			t.Fatal(err)
 		}
-		loaded, err := loadConfig(configPath)
+		loaded, err := config.Load(configPath)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -348,8 +349,8 @@ func writeBlackBoxConfig(t *testing.T, senderURL string) string {
 		t.Fatalf("write parquet fixture: %v", err)
 	}
 	config := strings.Replace(
-		testConfigContents(),
-		"C:\\dataset\\*.parquet",
+		testConfigContents(t),
+		"../data/MBD-mini/trx/fold=*/*.parquet",
 		filepath.ToSlash(filepath.Join(directory, "*.parquet")),
 		1,
 	)
