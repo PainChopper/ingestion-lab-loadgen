@@ -1,11 +1,14 @@
-package main
+package cli
 
 import (
-	"path/filepath"
+	"bytes"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func TestParseRemoteCLI(t *testing.T) {
@@ -145,18 +148,88 @@ func TestParseCLI(t *testing.T) {
 	}
 }
 
-func TestDefaultServeUsesCurrentDefaultConfig(t *testing.T) {
-	path := writeConfigInput(t, testConfigContents(t))
-	t.Chdir(filepath.Dir(path))
-	command, err := parseCLI(nil)
-	if err != nil {
-		t.Fatalf("parse default CLI: %v", err)
+func TestRunCLIExitCodes(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--help"}, &stdout, &stderr, nil); code != cliExitSuccess || stdout.String() != cliUsage+"\n" || stderr.Len() != 0 {
+		t.Fatalf("help exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	loaded, err := config.Load(command.configPath)
-	if err != nil {
-		t.Fatalf("load default serve config: %v", err)
+	stdout.Reset()
+	stderr.Reset()
+	code := Run([]string{"inspect"}, &stdout, &stderr, nil)
+	if code != cliExitUsage || stdout.Len() != 0 || stderr.String() != "unexpected command \"inspect\"\n"+cliUsage+"\n" {
+		t.Fatalf("unknown command exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	if loaded.Sender.API.URL != testSenderURL {
-		t.Fatalf("default Sender URL = %q, want %q", loaded.Sender.API.URL, testSenderURL)
+	stdout.Reset()
+	stderr.Reset()
+	if got := Run([]string{"status", "--url", "ftp://example.test"}, &stdout, &stderr, nil); got != cliExitUsage {
+		t.Fatalf("invalid URL exit = %d, want %d", got, cliExitUsage)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage: ingestion-lab-loadgen status [--url <url>]") {
+		t.Fatalf("invalid URL stdout/stderr = %q / %q", stdout.String(), stderr.String())
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Error(writer, "conflict", http.StatusConflict)
+	}))
+	defer server.Close()
+	for _, args := range [][]string{{"status", "--url", server.URL}, {"set", "tps", "0", "--url", server.URL}} {
+		t.Run(args[0]+" HTTP conflict", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := Run(args, &stdout, &stderr, nil); got != cliExitHTTP {
+				t.Fatalf("HTTP exit = %d, want %d", got, cliExitHTTP)
+			}
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "HTTP 409") {
+				t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
+			}
+		})
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if got := Run([]string{"set", "tps", "not-an-integer"}, &stdout, &stderr, nil); got != cliExitUsage {
+		t.Fatalf("invalid set value exit = %d, want %d", got, cliExitUsage)
+	}
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), cliSetUsage) {
+		t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
+	config := readTestConfigJSON(t)
+	malformedServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == api.ConfigPath {
+			if _, err := writer.Write(config); err != nil {
+				t.Errorf("write config: %v", err)
+			}
+			return
+		}
+		_, _ = writer.Write([]byte(`{"unexpected":true}`))
+	}))
+	defer malformedServer.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve transport test address: %v", err)
+	}
+	transportURL := "http://" + listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release transport test address: %v", err)
+	}
+
+	for _, test := range []struct {
+		name       string
+		url        string
+		wantStderr string
+	}{
+		{name: "malformed snapshot", url: malformedServer.URL, wantStderr: "decode snapshot"},
+		{name: "transport failure", url: transportURL, wantStderr: "GET /api/loadgen/config"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if got := Run([]string{"status", "--url", test.url}, &stdout, &stderr, nil); got != cliExitRemote {
+				t.Fatalf("exit = %d, want %d", got, cliExitRemote)
+			}
+			if stdout.Len() != 0 || !strings.Contains(stderr.String(), test.wantStderr) {
+				t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
+			}
+		})
 	}
 }

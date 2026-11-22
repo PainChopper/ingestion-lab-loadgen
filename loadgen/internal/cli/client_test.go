@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -9,11 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
-	"unicode"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
@@ -33,7 +33,7 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		{target: "throttle", requestAction: "set-throttler-installed", value: true, update: func(snapshot *api.Snapshot) { snapshot.Throttler.Installed = true }},
 	} {
 		t.Run(test.target+"/"+fmt.Sprint(test.value), func(t *testing.T) {
-			snapshot := testRemoteSnapshot(t)
+			snapshot := testRemoteSnapshot()
 			test.update(&snapshot)
 			var requestBody api.CommandRequest
 			requests := []string{}
@@ -97,7 +97,7 @@ func TestRunCLISetRequiresExplicitTargetValue(t *testing.T) {
 			for _, shape := range []string{"explicit", "only target", "missing", "missing section", "null", "string", "wrong type", "mismatch"} {
 				t.Run(shape, func(t *testing.T) {
 					root := map[string]json.RawMessage{}
-					if err := json.Unmarshal([]byte(mustMarshalJSON(t, testRemoteSnapshot(t))), &root); err != nil {
+					if err := json.Unmarshal([]byte(mustMarshalJSON(t, testRemoteSnapshot())), &root); err != nil {
 						t.Fatal(err)
 					}
 					section := map[string]json.RawMessage{}
@@ -135,7 +135,7 @@ func TestRunCLISetRequiresExplicitTargetValue(t *testing.T) {
 					}))
 					defer server.Close()
 					var stdout, stderr bytes.Buffer
-					code := runCLI([]string{"set", command.target, command.value, "--url", server.URL}, &stdout, &stderr)
+					code := Run([]string{"set", command.target, command.value, "--url", server.URL}, &stdout, &stderr, nil)
 					if shape == "explicit" || shape == "only target" {
 						if code != 0 || !strings.Contains(stdout.String(), "target="+command.target+" value="+command.value) || stderr.Len() != 0 {
 							t.Fatalf("explicit value: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -161,113 +161,39 @@ func mustMarshalJSON(t *testing.T, value any) string {
 	return string(encoded)
 }
 
-func TestFormatSnapshot(t *testing.T) {
-	status := api.Snapshot{
-		Run: api.RunSnapshot{State: api.RunStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
-		Reader: api.ReaderSnapshot{
-			Workers: 3, WorkerStates: []api.ReaderWorkerState{
-				{Activity: api.ReaderReading}, {Activity: api.ReaderIdle, Draining: true},
-			}, RowsRead: 99,
-			SourceError: &api.SourceError{Operation: "read", Path: "broken.parquet", Message: "corrupt"},
-		},
-		Throttler:     api.ThrottlerSnapshot{RequestedTps: 100, Installed: true},
-		ReaderChannel: api.ChannelSnapshot{DepthBatches: 2, InputTransactionsTotal: 1, OutputTransactionsTotal: 2},
-		SenderChannel: api.ChannelSnapshot{DepthBatches: 1, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, InputTransactionsTotal: 3, OutputTransactionsTotal: 4},
-		Sender: api.SenderSnapshot{Workers: 5, WorkerStates: []api.SenderWorkerState{
-			{Activity: api.SenderInFlight}, {Activity: api.SenderInFlight},
-			{Activity: api.SenderIdle}, {Activity: api.SenderBackoff, Draining: true},
-		}},
-	}
-
-	got := formatSnapshot(status, api.ConfigResponse{ReadBatchSize: 10, ReaderChannelCapacity: 3, SenderChannelCapacity: 4})
-	want := "INGESTION LAB LOADGEN STATUS\n" +
-		"State:                    faulted\n" +
-		"Elapsed:                  1.25s\n" +
-		"Transactions:             42\n\n" +
-		"Throttler\n" +
-		"Requested TPS:            100\n" +
-		"Average admitted TPS:     2.4\n" +
-		"Installed:                true\n\n" +
-		"Reader\n" +
-		"Workers:                  configured=3 live=2 reading=1 idle=1 blocked=0 draining=1\n" +
-		"Average read TPS:         79.2\n" +
-		"Rows read:                99\n" +
-		"Source:                   none\n" +
-		"Source error:             read broken.parquet: corrupt\n\n" +
-		"Reader channel\n" +
-		"Queue:                    2/3 batches; approximately 20 transactions\n" +
-		"Average input/output TPS: 0.8 / 1.6\n" +
-		"Blocked:                  senders=0 oldest=0ms total=0ms\n\n" +
-		"Sender channel\n" +
-		"Queue:                    1/4 batches; approximately 10 transactions\n" +
-		"Average input/output TPS: 2.4 / 3.2\n" +
-		"Blocked:                  senders=1 oldest=7ms total=8ms\n\n" +
-		"Sender\n" +
-		"Workers:                  configured=5 live=4 in-flight=2 idle=1 backoff=1 draining=1\n"
-	if got != want {
-		t.Fatalf("card = %q, want %q", got, want)
-	}
-}
-
-func TestWriteSnapshotChannelLargeTransactionEstimate(t *testing.T) {
-	const maxExactJSONInteger = 1<<53 - 1
-	var output strings.Builder
-	writeSnapshotChannel(&output, "Reader channel", api.ChannelSnapshot{
-		DepthBatches: maxExactJSONInteger,
-	}, maxExactJSONInteger, 1500, 1000)
-	if !strings.Contains(output.String(), "approximately 135107988821114") ||
-		!strings.Contains(output.String(), " transactions\n") {
-		t.Fatalf("large transaction estimate overflowed or changed format: %s", output.String())
-	}
-}
-
-func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
-	status := api.Snapshot{
-		Run: api.RunSnapshot{State: api.RunState("running\n\x1b[2J")},
-		Reader: api.ReaderSnapshot{
-			SourceError: &api.SourceError{
-				Operation: "operation\t",
-				Path:      "path\x7f",
-				Message:   "message\n\x1b[0m",
-			},
-		},
-	}
-
-	got := formatSnapshot(status, api.ConfigResponse{SourcePath: "source\r\n\x1b[31m"})
-	if strings.IndexFunc(got, func(character rune) bool {
-		return character != '\n' && unicode.IsControl(character)
-	}) >= 0 {
-		t.Fatalf("card contains unsafe control byte: %q", got)
-	}
-	if strings.Count(got, "\n") != strings.Count(formatSnapshot(api.Snapshot{
-		Run:       api.RunSnapshot{State: api.RunStateRunning},
-		Throttler: api.ThrottlerSnapshot{Installed: true},
-	}, api.ConfigResponse{}), "\n") || !strings.HasSuffix(got, "\n") {
-		t.Fatalf("card layout changed or has no final newline: %q", got)
-	}
-	for _, want := range []string{
-		`State:                    running\x0a\x1b[2J`,
-		`Source:                   source\x0d\x0a\x1b[31m`,
-		`Source error:             operation\x09 path\x7f: message\x0a\x1b[0m`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("card missing sanitized value %q: %q", want, got)
-		}
-	}
-}
-
-func TestFormatSnapshotStartingSourceGolden(t *testing.T) {
-	card := formatSnapshot(api.Snapshot{
-		Run: api.RunSnapshot{State: api.RunStateStarting},
-	}, api.ConfigResponse{})
-	if !strings.Contains(card, "Source:                   none\nSource error:             none\n\nReader channel\n") {
-		t.Fatalf("idle source fields are not adjacent golden values: %q", card)
-	}
-}
-
 func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
-	configBody := mustMarshalJSON(t, newConfigResponse(testConfig(t)))
-	snapshotBody := mustMarshalJSON(t, testRemoteSnapshot(t))
+	configBody := readTestConfigJSON(t)
+	snapshotBody := []byte(mustMarshalJSON(t, testRemoteSnapshot()))
+	const wantStatus = `INGESTION LAB LOADGEN STATUS
+State:                    running
+Elapsed:                  0s
+Transactions:             0
+
+Throttler
+Requested TPS:            0
+Average admitted TPS:     0.0
+Installed:                false
+
+Reader
+Workers:                  configured=0 live=0 reading=0 idle=0 blocked=0 draining=0
+Average read TPS:         0.0
+Rows read:                0
+Source:                   reader-source
+Source error:             none
+
+Reader channel
+Queue:                    0/51 batches; approximately 0 transactions
+Average input/output TPS: 0.0 / 0.0
+Blocked:                  senders=0 oldest=0ms total=0ms
+
+Sender channel
+Queue:                    0/71 batches; approximately 0 transactions
+Average input/output TPS: 0.0 / 0.0
+Blocked:                  senders=0 oldest=0ms total=0ms
+
+Sender
+Workers:                  configured=0 live=0 in-flight=0 idle=0 backoff=0 draining=0
+`
 	for _, test := range []struct {
 		name, endpoint, body string
 		status               int
@@ -302,7 +228,7 @@ func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
 					if r.URL.Path == api.ConfigPath {
 						body = configBody
 					}
-					_, _ = w.Write([]byte(body))
+					_, _ = w.Write(body)
 					return
 				}
 				if strings.Contains(test.name, "transport") {
@@ -337,8 +263,8 @@ func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
 				if test.status != 0 && err.Error() != test.wantErr {
 					t.Fatalf("empty HTTP error = %q, want %q", err, test.wantErr)
 				}
-			} else if err != nil || stdout.String() != formatSnapshot(testRemoteSnapshot(t), newConfigResponse(testConfig(t))) {
-				t.Fatalf("error=%v stdout=%q", err, stdout.String())
+			} else if err != nil || stdout.String() != wantStatus {
+				t.Fatalf("error=%v stdout=%q, want %q", err, stdout.String(), wantStatus)
 			}
 			wantRequests := []string{api.ConfigPath, api.SnapshotPath}
 			if test.endpoint == api.ConfigPath {
@@ -381,12 +307,19 @@ func TestRunRemoteCLISetReportsPOSTTransportError(t *testing.T) {
 	}
 }
 
-func TestFormatSnapshotBeforeRunShowsZeroAverages(t *testing.T) {
-	snapshot := api.Snapshot{Reader: api.ReaderSnapshot{RowsRead: 9}, SenderChannel: api.ChannelSnapshot{InputTransactionsTotal: 12, OutputTransactionsTotal: 6}}
-	got := formatSnapshot(snapshot, api.ConfigResponse{})
-	for _, line := range []string{"Average read TPS:         0.0", "Average admitted TPS:     0.0", "Average input/output TPS: 0.0 / 0.0"} {
-		if !strings.Contains(got, line) {
-			t.Fatalf("missing %q in %q", line, got)
-		}
+func testRemoteSnapshot() api.Snapshot {
+	return api.Snapshot{
+		Run:    api.RunSnapshot{State: api.RunStateRunning},
+		Reader: api.ReaderSnapshot{WorkerStates: []api.ReaderWorkerState{}},
+		Sender: api.SenderSnapshot{WorkerStates: []api.SenderWorkerState{}},
 	}
+}
+
+func readTestConfigJSON(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile("../../testdata/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }

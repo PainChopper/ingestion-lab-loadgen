@@ -48,7 +48,7 @@ Until current config is available, the connection remains `connecting` or `error
 
 ## CLI
 
-Run from `loadgen/` while the server is running. The default `--url` is `http://127.0.0.1:8080`. A custom URL must use HTTP or HTTPS with no user info, query, fragment, or base path.
+Run from `loadgen/` while the server is running. The [CLI package](../loadgen/internal/cli) parses subcommands and makes the HTTP requests. The default `--url` is `http://127.0.0.1:8080`. A custom URL must use HTTP or HTTPS with no user info, query, fragment, or base path.
 
 ```bash
 go run . status --url http://127.0.0.1:8080

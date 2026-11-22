@@ -18,12 +18,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/cli"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"github.com/parquet-go/parquet-go"
-
-	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 type blackBoxResult struct {
@@ -36,28 +36,33 @@ func TestCLIBinaryArgsAndHelp(t *testing.T) {
 	binary := buildCLIBinary(t)
 
 	for _, test := range []struct {
-		name       string
-		args       []string
-		wantStdout string
-		wantStderr string
-		wantExit   int
+		name            string
+		args            []string
+		wantErrorPrefix string
+		wantExit        int
 	}{
 		{
-			name:       "top-level help",
-			args:       []string{"--help"},
-			wantStdout: cliUsage + "\n",
-			wantExit:   cliExitSuccess,
+			name:     "top-level help",
+			args:     []string{"--help"},
+			wantExit: 0,
 		},
 		{
-			name:       "unknown command",
-			args:       []string{"inspect"},
-			wantStderr: "unexpected command \"inspect\"\n" + cliUsage + "\n",
-			wantExit:   cliExitUsage,
+			name:            "unknown command",
+			args:            []string{"inspect"},
+			wantErrorPrefix: "unexpected command \"inspect\"\n",
+			wantExit:        2,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := cli.Run(test.args, &stdout, &stderr, nil); code != test.wantExit {
+				t.Fatalf("CLI package exit = %d, want %d", code, test.wantExit)
+			}
+			if test.wantErrorPrefix != "" && !strings.HasPrefix(stderr.String(), test.wantErrorPrefix) {
+				t.Fatalf("stderr = %q, want prefix %q", stderr.String(), test.wantErrorPrefix)
+			}
 			result := runCLIBinary(t, binary, test.args...)
-			if result.exitCode != test.wantExit || result.stdout != test.wantStdout || result.stderr != test.wantStderr {
+			if result.exitCode != test.wantExit || result.stdout != stdout.String() || result.stderr != stderr.String() {
 				t.Fatalf("stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
 			}
 		})
@@ -66,7 +71,15 @@ func TestCLIBinaryArgsAndHelp(t *testing.T) {
 
 func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 	binary := buildCLIBinary(t)
-	snapshot := testRemoteSnapshot(t)
+	data, err := os.ReadFile("testdata/snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := api.DecodeSnapshot(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Run.State = api.RunStateRunning
 	config := newConfigResponse(testConfig(t))
 
 	snapshotServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -92,7 +105,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 
 	t.Run("success", func(t *testing.T) {
 		result := runCLIBinary(t, binary, "status", "--url", snapshotServer.URL)
-		if result.exitCode != cliExitSuccess || !strings.Contains(result.stdout, "State:                    running") || result.stderr != "" {
+		if result.exitCode != 0 || !strings.Contains(result.stdout, "State:                    running") || result.stderr != "" {
 			t.Fatalf("success stdout/stderr/exit = %q / %q / %d", result.stdout, result.stderr, result.exitCode)
 		}
 	})
@@ -102,7 +115,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 	}))
 	defer httpFailure.Close()
 	t.Run("HTTP conflict", func(t *testing.T) {
-		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", httpFailure.URL), cliExitHTTP, "HTTP 409", "")
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", httpFailure.URL), 3, "HTTP 409", "")
 	})
 
 	malformed := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -110,7 +123,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 	}))
 	defer malformed.Close()
 	t.Run("invalid schema", func(t *testing.T) {
-		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", malformed.URL), cliExitRemote, "GET "+api.ConfigPath+": decode config", "")
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", malformed.URL), 4, "GET "+api.ConfigPath+": decode config", "")
 	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -122,7 +135,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 		t.Fatalf("release network failure address: %v", err)
 	}
 	t.Run("network failure", func(t *testing.T) {
-		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", networkURL), cliExitRemote, "GET "+api.ConfigPath, "")
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", networkURL), 4, "GET "+api.ConfigPath, "")
 	})
 }
 
@@ -306,7 +319,7 @@ func isBindConflict(result blackBoxResult, addr string) bool {
 	if runtime.GOOS == "windows" {
 		message = syscall.Errno(10048).Error()
 	}
-	return result.exitCode == cliExitLocal && strings.Contains(result.stderr, "listen HTTP server") &&
+	return result.exitCode == 1 && strings.Contains(result.stderr, "listen HTTP server") &&
 		strings.Contains(result.stderr, addr) && strings.Contains(strings.ToLower(result.stderr), strings.ToLower(message))
 }
 
@@ -386,87 +399,26 @@ func occupyDefaultServePort(t *testing.T) {
 	t.Log("own test listener holds 8080 throughout serve startup and delivery")
 }
 
-func TestRunCLIExitCodes(t *testing.T) {
+func TestRunCLIReportsLocalStartupFailure(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := runCLI([]string{"--help"}, &stdout, &stderr); code != cliExitSuccess || stdout.String() != cliUsage+"\n" || stderr.Len() != 0 {
-		t.Fatalf("help exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if got := runCLI([]string{"status", "--url", "ftp://example.test"}, &stdout, &stderr); got != cliExitUsage {
-		t.Fatalf("invalid URL exit = %d, want %d", got, cliExitUsage)
-	}
-	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage: ingestion-lab-loadgen status [--url <url>]") {
-		t.Fatalf("invalid URL stdout/stderr = %q / %q", stdout.String(), stderr.String())
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		http.Error(writer, "conflict", http.StatusConflict)
-	}))
-	defer server.Close()
-	for _, args := range [][]string{{"status", "--url", server.URL}, {"set", "tps", "0", "--url", server.URL}} {
-		t.Run(args[0]+" HTTP conflict", func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if got := runCLI(args, &stdout, &stderr); got != cliExitHTTP {
-				t.Fatalf("HTTP exit = %d, want %d", got, cliExitHTTP)
-			}
-			if stdout.Len() != 0 || !strings.Contains(stderr.String(), "HTTP 409") {
-				t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
-			}
-		})
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if got := runCLI([]string{"set", "tps", "not-an-integer"}, &stdout, &stderr); got != cliExitUsage {
-		t.Fatalf("invalid set value exit = %d, want %d", got, cliExitUsage)
-	}
-	if stdout.Len() != 0 || !strings.Contains(stderr.String(), cliSetUsage) {
-		t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if got := runCLI([]string{"serve", "--config", "missing-config.toml"}, &stdout, &stderr); got != cliExitLocal {
-		t.Fatalf("local startup exit = %d, want %d", got, cliExitLocal)
+	args := []string{"serve", "--config", filepath.Join(t.TempDir(), "missing-config.toml")}
+	if got := cli.Run(args, &stdout, &stderr, serveWithSignals); got != 1 {
+		t.Fatalf("local startup exit = %d, want 1", got)
 	}
 }
 
-func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
-	config := newConfigResponse(testConfig(t))
-	malformedServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == api.ConfigPath {
-			if err := json.NewEncoder(writer).Encode(config); err != nil {
-				t.Errorf("encode config: %v", err)
-			}
-			return
-		}
-		_, _ = writer.Write([]byte(`{"unexpected":true}`))
-	}))
-	defer malformedServer.Close()
+func TestDefaultServeUsesCurrentDefaultConfig(t *testing.T) {
+	path := writeConfigInput(t, testConfigContents(t))
+	t.Chdir(filepath.Dir(path))
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve transport test address: %v", err)
-	}
-	transportURL := "http://" + listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatalf("release transport test address: %v", err)
-	}
-
-	for _, test := range []struct {
-		name       string
-		url        string
-		wantStderr string
-	}{
-		{name: "malformed snapshot", url: malformedServer.URL, wantStderr: "decode snapshot"},
-		{name: "transport failure", url: transportURL, wantStderr: "GET /api/loadgen/config"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			if got := runCLI([]string{"status", "--url", test.url}, &stdout, &stderr); got != cliExitRemote {
-				t.Fatalf("exit = %d, want %d", got, cliExitRemote)
-			}
-			if stdout.Len() != 0 || !strings.Contains(stderr.String(), test.wantStderr) {
-				t.Fatalf("stdout/stderr = %q / %q", stdout.String(), stderr.String())
-			}
-		})
+	var stdout, stderr bytes.Buffer
+	var loaded config.Config
+	code := cli.Run(nil, &stdout, &stderr, func(path string) error {
+		var err error
+		loaded, err = config.Load(path)
+		return err
+	})
+	if code != 0 || loaded.Sender.API.URL != testSenderURL {
+		t.Fatalf("default Sender URL = %q, want %q (exit=%d, stderr=%q)", loaded.Sender.API.URL, testSenderURL, code, stderr.String())
 	}
 }

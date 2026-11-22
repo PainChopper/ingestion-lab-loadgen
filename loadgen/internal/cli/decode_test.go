@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"bytes"
@@ -88,7 +88,7 @@ func TestRunCLIReportsExactJSONTypeErrors(t *testing.T) {
 			}))
 			defer server.Close()
 			var stdout, stderr bytes.Buffer
-			code := runCLI([]string{"status", "--url", server.URL}, &stdout, &stderr)
+			code := Run([]string{"status", "--url", server.URL}, &stdout, &stderr, nil)
 			want := "GET " + tc.endpoint + ": " + tc.want + "\n"
 			if code != cliExitRemote || stdout.Len() != 0 || stderr.String() != want {
 				t.Fatalf("exit = %d, stdout = %q, stderr = %q, want stderr %q", code, stdout.String(), stderr.String(), want)
