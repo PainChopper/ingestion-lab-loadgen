@@ -56,7 +56,7 @@ type channelSnapshot struct {
 	OutputTransactionsTotal int64 `json:"outputTransactionsTotal"`
 }
 
-type configSnapshot struct {
+type configResponse struct {
 	ReaderWorkersMax      int    `json:"readerWorkersMax"`
 	SenderWorkersMax      int    `json:"senderWorkersMax"`
 	RequestedTpsMax       int    `json:"requestedTpsMax"`
@@ -77,8 +77,8 @@ func snapshotChannel(measurements pipeline.QueueSnapshot) channelSnapshot {
 	}
 }
 
-func snapshotConfig(config config) configSnapshot {
-	return configSnapshot{
+func newConfigResponse(config config) configResponse {
+	return configResponse{
 		ReaderWorkersMax:      config.Reader.Workers.Max,
 		SenderWorkersMax:      config.Sender.Workers.Max,
 		RequestedTpsMax:       config.Throttler.RequestedTPS.Max,

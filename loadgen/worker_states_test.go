@@ -142,7 +142,7 @@ func TestWorkerCountsAndCLI(t *testing.T) {
 			card := formatSnapshot(runtimeSnapshot{
 				Reader: readerSnapshot{Workers: 1, WorkerStates: test.reader},
 				Sender: senderSnapshot{Workers: 2, WorkerStates: test.sender},
-			}, configSnapshot{})
+			}, configResponse{})
 			for _, line := range []string{test.lineR, test.lineS} {
 				if !strings.Contains(card, "Workers:                  "+line+"\n") {
 					t.Errorf("CLI missing %q: %s", line, card)
@@ -161,7 +161,7 @@ func TestCLIWorkerCountsFromSharedFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	card := formatSnapshot(snapshot, configSnapshot{})
+	card := formatSnapshot(snapshot, configResponse{})
 	for _, line := range []string{
 		"configured=11 live=4 reading=2 idle=1 blocked=1 draining=1",
 		"configured=41 live=5 in-flight=1 idle=1 backoff=3 draining=2",

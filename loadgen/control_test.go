@@ -495,15 +495,15 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
 				t.Fatal(err)
 			}
-			wantConfig := configSnapshot{
+			wantConfig := configResponse{
 				ReaderWorkersMax: 13, SenderWorkersMax: 19, RequestedTpsMax: 400_001,
 				ReadBatchSize: batchSize, ReaderChannelCapacity: tc.readerCapacity, SenderChannelCapacity: tc.senderCapacity,
 				SourcePath: cfg.Source.Path,
 			}
-			configResponse := httptest.NewRecorder()
-			mux.ServeHTTP(configResponse, httptest.NewRequest(http.MethodGet, configPath, nil))
-			var gotConfig configSnapshot
-			if err := json.Unmarshal(configResponse.Body.Bytes(), &gotConfig); err != nil {
+			configRecorder := httptest.NewRecorder()
+			mux.ServeHTTP(configRecorder, httptest.NewRequest(http.MethodGet, configPath, nil))
+			var gotConfig configResponse
+			if err := json.Unmarshal(configRecorder.Body.Bytes(), &gotConfig); err != nil {
 				t.Fatal(err)
 			}
 			if gotConfig != wantConfig || updated.Reader.Workers != 3 ||

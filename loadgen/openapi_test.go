@@ -397,7 +397,7 @@ func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 		"ThrottlerStatus":   reflect.TypeOf(throttlerSnapshot{}),
 		"SenderStatus":      reflect.TypeOf(senderSnapshot{}),
 		"ChannelStatus":     reflect.TypeOf(channelSnapshot{}),
-		"ConfigStatus":      reflect.TypeOf(configSnapshot{}),
+		"ConfigStatus":      reflect.TypeOf(configResponse{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
