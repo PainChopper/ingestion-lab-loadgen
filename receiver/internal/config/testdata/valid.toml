@@ -1,0 +1,14 @@
+[server]
+address = "127.0.0.1:18080"
+shutdown_timeout_ms = 2000
+
+[ingest]
+path = "/internal/ingest"
+max_body_bytes = 33554432
+
+[logging]
+level = "info"
+
+[lab]
+response_delay_ms = 25
+response_status = 204

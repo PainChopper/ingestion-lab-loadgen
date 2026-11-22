@@ -16,7 +16,8 @@ func TestConfigRejectsNonExactIngestPaths(t *testing.T) {
 		"/v1/batch?x=1", "/v1/batch#fragment", "/v1/a%20b", "/v1/a b", "/v1/%ZZ", "/v1/%00", "/v1/\u2003",
 	} {
 		t.Run(path, func(t *testing.T) {
-			config := Config{Path: path, MaxBodyBytes: 1024}
+			config := handlerConfig()
+			config.Path = path
 			if err := config.Validate(); err == nil {
 				t.Fatal("invalid path accepted by Validate")
 			}
@@ -42,7 +43,9 @@ func TestConfigBodyLimitAndDelay(t *testing.T) {
 		{name: "maximum values", maxBodyBytes: math.MaxInt64 - 1, delay: time.Duration(math.MaxInt64)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			config := Config{Path: "/internal/ingest", MaxBodyBytes: test.maxBodyBytes, ResponseDelay: test.delay}
+			config := handlerConfig()
+			config.MaxBodyBytes = test.maxBodyBytes
+			config.ResponseDelay = test.delay
 			if err := config.Validate(); (err != nil) != test.wantErr {
 				t.Fatalf("Validate() error = %v, wantErr %t", err, test.wantErr)
 			}
@@ -51,4 +54,8 @@ func TestConfigBodyLimitAndDelay(t *testing.T) {
 			}
 		})
 	}
+}
+
+func handlerConfig() Config {
+	return Config{Path: "/internal/ingest", MaxBodyBytes: 1024}
 }

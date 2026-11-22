@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
+func TestHandlerResolvesConfiguredResponseStatus(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   *int
@@ -23,14 +23,15 @@ func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
 	}{
 		{name: "absent", want: http.StatusNoContent},
 		{name: "explicit zero", input: new(0), wantErr: true},
-		{name: "success", input: new(204), want: http.StatusNoContent},
-		{name: "bad request", input: new(400), want: http.StatusBadRequest},
-		{name: "server error", input: new(500), want: http.StatusInternalServerError},
-		{name: "unsupported", input: new(201), wantErr: true},
+		{name: "success", input: new(http.StatusNoContent), want: http.StatusNoContent},
+		{name: "bad request", input: new(http.StatusBadRequest), want: http.StatusBadRequest},
+		{name: "server error", input: new(http.StatusInternalServerError), want: http.StatusInternalServerError},
+		{name: "unsupported", input: new(http.StatusCreated), wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			config := Config{Path: "/internal/ingest", MaxBodyBytes: 1024, ResponseStatus: test.input}
+			config := handlerConfig()
+			config.ResponseStatus = test.input
 			if err := config.Validate(); (err != nil) != test.wantErr {
 				t.Fatalf("Validate() error = %v, wantErr %t", err, test.wantErr)
 			}
@@ -46,11 +47,11 @@ func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
 			}
 			assertStatus(t, server, 0, 0, false, 0, test.want)
 			if test.input != nil {
-				*test.input = 201
+				*test.input = http.StatusCreated
 			}
 			recorder := performRequest(
 				server,
-				httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()),
+				httpRequest(http.MethodPost, config.Path, "application/json", validBatch()),
 			)
 			if recorder.Code != test.want {
 				t.Fatalf("ingest status = %d, want %d", recorder.Code, test.want)
@@ -72,10 +73,9 @@ func TestHandlerExactConfiguredPaths(t *testing.T) {
 		{path: "/status/batches", other: "/status/batches/extra"},
 	} {
 		t.Run(test.path, func(t *testing.T) {
-			handler, err := NewHandler(Config{Path: test.path, MaxBodyBytes: 1024})
-			if err != nil {
-				t.Fatal(err)
-			}
+			config := handlerConfig()
+			config.Path = test.path
+			handler := newTestHandler(t, config)
 			if rec := performRequest(handler, httpRequest(http.MethodPost, test.path, "application/json", `[{}]`)); rec.Code != http.StatusNoContent {
 				t.Fatalf("configured exact path status=%d", rec.Code)
 			}
@@ -88,7 +88,7 @@ func TestHandlerExactConfiguredPaths(t *testing.T) {
 }
 
 func TestHandlerHEADAndMethodResponses(t *testing.T) {
-	handler := newTestHandler(t, 1024, Config{})
+	handler := newTestHandler(t, handlerConfig())
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	for _, test := range []struct {
@@ -127,7 +127,7 @@ func TestHandlerHEADAndMethodResponses(t *testing.T) {
 }
 
 func TestHandlerStatusWireShape(t *testing.T) {
-	handler := newTestHandler(t, 1024, Config{})
+	handler := newTestHandler(t, handlerConfig())
 	recorder := performRequest(handler, httpRequest(http.MethodGet, "/status", "", ""))
 	if recorder.Header().Get("Content-Type") != "application/json" {
 		t.Fatalf("status Content-Type=%q", recorder.Header().Get("Content-Type"))
@@ -161,101 +161,83 @@ func TestHandlerStatusWireShape(t *testing.T) {
 func TestHandlerIngest(t *testing.T) {
 	tests := []struct {
 		name        string
-		method      string
 		contentType string
 		body        string
 		maxBody     int64
 		wantStatus  int
-		wantAllow   string
 	}{
-		{name: "accepts empty transaction object", method: http.MethodPost, contentType: "application/json", body: `[{}]`, maxBody: 1024, wantStatus: http.StatusNoContent},
-		{name: "accepts unknown fields", method: http.MethodPost, contentType: "application/json", body: `[{"extra":true}]`, maxBody: 1024, wantStatus: http.StatusNoContent},
-		{name: "rejects null element", method: http.MethodPost, contentType: "application/json", body: `[null]`, maxBody: 1024, wantStatus: http.StatusBadRequest},
-		{name: "rejects mixed null element", method: http.MethodPost, contentType: "application/json", body: `[{},null]`, maxBody: 1024, wantStatus: http.StatusBadRequest},
-		{name: "oversized malformed JSON", method: http.MethodPost, contentType: "application/json", body: "!" + strings.Repeat("x", 1024), maxBody: 1024, wantStatus: http.StatusRequestEntityTooLarge},
-		{name: "MIME checked before oversized body", method: http.MethodPost, contentType: "text/plain", body: strings.Repeat("x", 1025), maxBody: 1024, wantStatus: http.StatusBadRequest},
+		{name: "accepts empty transaction object", contentType: "application/json", body: `[{}]`, wantStatus: http.StatusNoContent},
+		{name: "accepts unknown fields", contentType: "application/json", body: `[{"extra":true}]`, wantStatus: http.StatusNoContent},
+		{name: "rejects null element", contentType: "application/json", body: `[null]`, wantStatus: http.StatusBadRequest},
+		{name: "rejects mixed null element", contentType: "application/json", body: `[{},null]`, wantStatus: http.StatusBadRequest},
+		{
+			name:        "oversized malformed JSON",
+			contentType: "application/json",
+			body:        "!" + strings.Repeat("x", 8),
+			maxBody:     8,
+			wantStatus:  http.StatusRequestEntityTooLarge,
+		},
+		{
+			name:        "MIME checked before oversized body",
+			contentType: "text/plain",
+			body:        strings.Repeat("x", 9),
+			maxBody:     8,
+			wantStatus:  http.StatusBadRequest,
+		},
 		{
 			name:        "accepts non empty transaction array",
-			method:      http.MethodPost,
 			contentType: "application/json",
 			body:        validBatch(),
-			maxBody:     1024,
 			wantStatus:  http.StatusNoContent,
 		},
 		{
 			name:        "accepts content type parameters",
-			method:      http.MethodPost,
 			contentType: "application/json; charset=utf-8",
 			body:        validBatch(),
-			maxBody:     1024,
 			wantStatus:  http.StatusNoContent,
 		},
 		{
-			name:        "rejects wrong method with allow post",
-			method:      http.MethodGet,
-			contentType: "application/json",
-			body:        validBatch(),
-			maxBody:     1024,
-			wantStatus:  http.StatusMethodNotAllowed,
-			wantAllow:   http.MethodPost,
-		},
-		{
 			name:       "rejects missing content type",
-			method:     http.MethodPost,
 			body:       validBatch(),
-			maxBody:    1024,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:        "rejects non json content type",
-			method:      http.MethodPost,
 			contentType: "text/plain",
 			body:        validBatch(),
-			maxBody:     1024,
 			wantStatus:  http.StatusBadRequest,
 		},
 		{
 			name:        "rejects malformed json",
-			method:      http.MethodPost,
 			contentType: "application/json",
 			body:        "[",
-			maxBody:     1024,
 			wantStatus:  http.StatusBadRequest,
 		},
 		{
 			name:        "rejects empty body",
-			method:      http.MethodPost,
 			contentType: "application/json",
-			maxBody:     1024,
 			wantStatus:  http.StatusBadRequest,
 		},
 		{
 			name:        "rejects empty array",
-			method:      http.MethodPost,
 			contentType: "application/json",
 			body:        "[]",
-			maxBody:     1024,
 			wantStatus:  http.StatusBadRequest,
 		},
 		{
 			name:        "rejects non array document",
-			method:      http.MethodPost,
 			contentType: "application/json",
 			body:        "{}",
-			maxBody:     1024,
 			wantStatus:  http.StatusBadRequest,
 		},
 		{
 			name:        "rejects second json document",
-			method:      http.MethodPost,
 			contentType: "application/json",
 			body:        validBatch() + " []",
-			maxBody:     1024,
 			wantStatus:  http.StatusBadRequest,
 		},
 		{
 			name:        "accepts body at configured limit",
-			method:      http.MethodPost,
 			contentType: "application/json",
 			body:        validBatch() + " ",
 			maxBody:     int64(len(validBatch()) + 1),
@@ -263,7 +245,6 @@ func TestHandlerIngest(t *testing.T) {
 		},
 		{
 			name:        "rejects body one byte over configured limit",
-			method:      http.MethodPost,
 			contentType: "application/json",
 			body:        validBatch() + " ",
 			maxBody:     int64(len(validBatch())),
@@ -273,17 +254,21 @@ func TestHandlerIngest(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := newTestHandler(t, test.maxBody, Config{})
+			config := handlerConfig()
+			if test.maxBody != 0 {
+				config.MaxBodyBytes = test.maxBody
+			}
+			server := newTestHandler(t, config)
 			recorder := performRequest(
 				server,
-				httpRequest(test.method, "/internal/ingest", test.contentType, test.body),
+				httpRequest(http.MethodPost, config.Path, test.contentType, test.body),
 			)
 
 			if recorder.Code != test.wantStatus {
 				t.Fatalf("status = %d, want %d", recorder.Code, test.wantStatus)
 			}
-			if allow := recorder.Header().Get("Allow"); allow != test.wantAllow {
-				t.Fatalf("Allow = %q, want %q", allow, test.wantAllow)
+			if allow := recorder.Header().Get("Allow"); allow != "" {
+				t.Fatalf("Allow = %q, want no Allow header", allow)
 			}
 			if test.wantStatus == http.StatusNoContent && recorder.Body.Len() != 0 {
 				t.Fatalf("204 response body length = %d, want 0", recorder.Body.Len())
@@ -312,7 +297,6 @@ func TestHandlerLabModes(t *testing.T) {
 			method:      http.MethodGet,
 			contentType: "application/json",
 			body:        validBatch(),
-			maxBody:     1024,
 			wantStatus:  http.StatusMethodNotAllowed,
 			wantAllow:   http.MethodPost,
 		},
@@ -320,7 +304,6 @@ func TestHandlerLabModes(t *testing.T) {
 			name:       "missing content type keeps content type validation status",
 			method:     http.MethodPost,
 			body:       validBatch(),
-			maxBody:    1024,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
@@ -328,7 +311,6 @@ func TestHandlerLabModes(t *testing.T) {
 			method:      http.MethodPost,
 			contentType: "text/plain",
 			body:        validBatch(),
-			maxBody:     1024,
 			wantStatus:  http.StatusBadRequest,
 		},
 		{
@@ -336,7 +318,6 @@ func TestHandlerLabModes(t *testing.T) {
 			method:      http.MethodPost,
 			contentType: "application/json",
 			body:        "[",
-			maxBody:     1024,
 			wantStatus:  http.StatusBadRequest,
 		},
 		{
@@ -344,7 +325,6 @@ func TestHandlerLabModes(t *testing.T) {
 			method:      http.MethodPost,
 			contentType: "application/json",
 			body:        "[null]",
-			maxBody:     1024,
 			wantStatus:  http.StatusBadRequest,
 		},
 		{
@@ -360,15 +340,18 @@ func TestHandlerLabModes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				server := newTestHandler(t, test.maxBody, Config{
-					ResponseDelay:  250 * time.Millisecond,
-					ResponseStatus: new(http.StatusInternalServerError),
-				})
+				config := handlerConfig()
+				config.ResponseDelay = 250 * time.Millisecond
+				config.ResponseStatus = new(http.StatusInternalServerError)
+				if test.maxBody != 0 {
+					config.MaxBodyBytes = test.maxBody
+				}
+				server := newTestHandler(t, config)
 
 				startedAt := time.Now()
 				recorder := performRequest(
 					server,
-					httpRequest(test.method, "/internal/ingest", test.contentType, test.body),
+					httpRequest(test.method, config.Path, test.contentType, test.body),
 				)
 				if elapsed := time.Since(startedAt); elapsed != 0 {
 					t.Fatalf("invalid request took %s, want zero virtual delay", elapsed)
@@ -386,64 +369,94 @@ func TestHandlerLabModes(t *testing.T) {
 
 	t.Run("delays validated success before acknowledgement", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			handler := newTestHandler(t, 1024, Config{ResponseDelay: 25 * time.Millisecond, ResponseStatus: new(http.StatusNoContent)})
+			const delay = 25 * time.Millisecond
+			config := handlerConfig()
+			config.ResponseDelay = delay
+			config.ResponseStatus = new(http.StatusNoContent)
+			handler := newTestHandler(t, config)
 			returned := make(chan *httptest.ResponseRecorder, 1)
 			started := time.Now()
 			go func() {
-				returned <- performRequest(handler, httpRequest(http.MethodPost, "/internal/ingest", "application/json", validBatch()))
+				request := httpRequest(http.MethodPost, config.Path, "application/json", validBatch())
+				returned <- performRequest(handler, request)
 			}()
 			synctest.Wait()
-			time.Sleep(25*time.Millisecond - time.Nanosecond)
-			synctest.Wait()
+			synctest.Sleep(delay - time.Nanosecond)
 			select {
 			case <-returned:
 				t.Fatal("acknowledged before delay elapsed")
 			default:
 			}
 			assertStatus(t, handler, 0, 0, false, 25, http.StatusNoContent)
-			time.Sleep(time.Nanosecond)
+			synctest.Sleep(time.Nanosecond)
 			recorder := <-returned
-			if recorder.Code != http.StatusNoContent || time.Since(started) != 25*time.Millisecond {
+			if recorder.Code != http.StatusNoContent || time.Since(started) != delay {
 				t.Fatalf("status=%d elapsed=%s", recorder.Code, time.Since(started))
 			}
 			assertStatus(t, handler, 1, 1, true, 25, http.StatusNoContent)
 		})
 	})
+}
 
-	for _, when := range []string{"already canceled", "during delay"} {
-		t.Run(when, func(t *testing.T) {
+func TestHandlerCanceledRequestDoesNotAcknowledge(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		delay    time.Duration
+		cancelAt time.Duration
+	}{
+		{name: "already canceled with no delay"},
+		{name: "already canceled with delay", delay: time.Second},
+		{name: "canceled during delay", delay: time.Second, cancelAt: 100 * time.Millisecond},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				handler := newTestHandler(t, 1024, Config{ResponseDelay: time.Second})
+				config := handlerConfig()
+				config.ResponseDelay = test.delay
+				handler := newTestHandler(t, config)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				if when == "already canceled" {
+				if test.cancelAt == 0 {
 					cancel()
 				}
-				returned := make(chan struct{})
+				returned := make(chan *httptest.ResponseRecorder, 1)
 				started := time.Now()
 				go func() {
-					performRequest(handler, httpRequestWithContext(ctx, http.MethodPost, "/internal/ingest", "application/json", validBatch()))
-					close(returned)
+					request := httpRequestWithContext(
+						ctx,
+						http.MethodPost,
+						config.Path,
+						"application/json",
+						validBatch(),
+					)
+					returned <- performRequest(handler, request)
 				}()
 				synctest.Wait()
-				wantElapsed := time.Duration(0)
-				if when == "during delay" {
-					time.Sleep(100 * time.Millisecond)
-					wantElapsed = 100 * time.Millisecond
+				if test.cancelAt > 0 {
+					synctest.Sleep(test.cancelAt)
+					select {
+					case <-returned:
+						t.Fatal("handler returned before cancellation")
+					default:
+					}
 					cancel()
 				}
-				<-returned
-				if time.Since(started) != wantElapsed {
-					t.Fatalf("cancel delay=%s,want %s", time.Since(started), wantElapsed)
+				recorder := <-returned
+				if recorder.Code == http.StatusNoContent || time.Since(started) != test.cancelAt {
+					t.Fatalf(
+						"canceled request status=%d elapsed=%s, want no acknowledgement at %s",
+						recorder.Code,
+						time.Since(started),
+						test.cancelAt,
+					)
 				}
-				assertStatus(t, handler, 0, 0, false, 1000, http.StatusNoContent)
+				assertStatus(t, handler, 0, 0, false, int(test.delay.Milliseconds()), http.StatusNoContent)
 			})
 		})
 	}
 }
 
 func TestHandlerIngestMultiTransactionBatch(t *testing.T) {
-	server := newTestHandler(t, 2048, Config{})
+	server := newTestHandler(t, handlerConfig())
 
 	recorder := performRequest(server, httpRequest(
 		http.MethodPost,
@@ -459,8 +472,11 @@ func TestHandlerIngestMultiTransactionBatch(t *testing.T) {
 
 func TestHandlerReadFailurePrecedesLabSettings(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		handler := newTestHandler(t, 1024, Config{ResponseDelay: 250 * time.Millisecond, ResponseStatus: new(500)})
-		request := httpRequest(http.MethodPost, "/internal/ingest", "application/json", "")
+		config := handlerConfig()
+		config.ResponseDelay = 250 * time.Millisecond
+		config.ResponseStatus = new(http.StatusInternalServerError)
+		handler := newTestHandler(t, config)
+		request := httpRequest(http.MethodPost, config.Path, "application/json", "")
 		request.Body = io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF))
 		started := time.Now()
 		recorder := performRequest(handler, request)
@@ -471,24 +487,10 @@ func TestHandlerReadFailurePrecedesLabSettings(t *testing.T) {
 	})
 }
 
-func TestHandlerCanceledRequestWithZeroDelayDoesNotAcknowledge(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		handler := newTestHandler(t, 1024, Config{})
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		started := time.Now()
-		recorder := performRequest(handler, httpRequestWithContext(ctx, http.MethodPost, "/internal/ingest", "application/json", validBatch()))
-		if recorder.Code == http.StatusNoContent || time.Since(started) != 0 {
-			t.Fatalf("canceled request status=%d elapsed=%s", recorder.Code, time.Since(started))
-		}
-		assertStatus(t, handler, 0, 0, false, 0, http.StatusNoContent)
-	})
-}
-
 func TestHandlerIngestConcurrent(t *testing.T) {
 	const requestCount = 16
 
-	server := newTestHandler(t, 1024, Config{})
+	server := newTestHandler(t, handlerConfig())
 	statuses := make(chan int, requestCount)
 
 	var requests sync.WaitGroup
@@ -515,11 +517,9 @@ func TestHandlerIngestConcurrent(t *testing.T) {
 	assertStatus(t, server, requestCount, requestCount, true, 0, http.StatusNoContent)
 }
 
-func newTestHandler(t *testing.T, maxBodyBytes int64, config Config) *Handler {
+func newTestHandler(t *testing.T, config Config) *Handler {
 	t.Helper()
 
-	config.Path = "/internal/ingest"
-	config.MaxBodyBytes = maxBodyBytes
 	server, err := NewHandler(config)
 	if err != nil {
 		t.Fatalf("NewHandler() error = %v", err)

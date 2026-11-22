@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -11,20 +12,27 @@ import (
 	"time"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/receiver/internal/config"
+	"github.com/go-viper/mapstructure/v2"
 )
 
+const validConfigPath = "testdata/valid.toml"
+
 func TestLoadConfigRejectsUnknownNames(t *testing.T) {
-	base := validTOMLConfig()
+	base := readValidTOML(t)
 	for _, test := range []struct{ name, contents, unknown string }{
 		{"empty section", base + "\n[unexpected]\n", "unexpected"},
-		{"wrong-case section", strings.Replace(base, "[server]", "[Server]", 1), "Server"},
-		{"wrong-case key", strings.Replace(base, "address =", "Address =", 1), "Address"},
+		{"unknown section", base + "\n[unexpected]\nenabled = true\n", "unexpected"},
+		{"unknown nested field", replaceTOML(t, base, "[server]", "[server]\nunexpected = true"), "unexpected"},
+		{"wrong-case section", replaceTOML(t, base, "[server]", "[Server]"), "Server"},
+		{"wrong-case key", replaceTOML(t, base, "address =", "Address ="), "Address"},
 		{"additional wrong-case section", base + "\n[Server]\naddress = \"127.0.0.1:18080\"\nshutdown_timeout_ms = 2000\n", "Server"},
 		{"additional wrong-case key", strings.Replace(base, "[server]", "[server]\nAddress = \"127.0.0.1:18080\"", 1), "Address"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := config.Load(writeConfig(t, test.contents))
-			if err == nil || !strings.Contains(err.Error(), "invalid keys: "+test.unknown) {
+			var decodeErr *mapstructure.DecodeError
+			// For case mismatches both unknown and missing fields may be reported.
+			if !errors.As(err, &decodeErr) || !strings.Contains(err.Error(), "invalid keys: "+test.unknown) {
 				t.Fatalf("error = %v, want unknown key %q", err, test.unknown)
 			}
 		})
@@ -32,6 +40,7 @@ func TestLoadConfigRejectsUnknownNames(t *testing.T) {
 }
 
 func TestLoadConfigStrictRequiredTypes(t *testing.T) {
+	base := readValidTOML(t)
 	for _, test := range []struct{ name, old, replacement string }{
 		{"string delay", "response_delay_ms = 25", `response_delay_ms = "25"`},
 		{"bool delay", "response_delay_ms = 25", "response_delay_ms = true"},
@@ -50,11 +59,10 @@ func TestLoadConfigStrictRequiredTypes(t *testing.T) {
 		{"fractional delay", "response_delay_ms = 25", "response_delay_ms = 1.9"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			content := strings.Replace(validTOMLConfig(), test.old, test.replacement, 1)
-			if content == validTOMLConfig() {
-				t.Fatal("replacement did not apply")
-			}
-			if _, err := config.Load(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "decode config") {
+			content := replaceTOML(t, base, test.old, test.replacement)
+			_, err := config.Load(writeConfig(t, content))
+			var decodeErr *mapstructure.DecodeError
+			if !errors.As(err, &decodeErr) {
 				t.Fatalf("expected strict decode error, got %v", err)
 			}
 		})
@@ -62,6 +70,7 @@ func TestLoadConfigStrictRequiredTypes(t *testing.T) {
 }
 
 func TestLoadConfigDurationBounds(t *testing.T) {
+	base := readValidTOML(t)
 	maximum := int64(math.MaxInt64 / time.Millisecond)
 	for _, field := range []struct {
 		line    string
@@ -73,7 +82,7 @@ func TestLoadConfigDurationBounds(t *testing.T) {
 		for _, value := range []int64{-1, field.minimum, maximum, maximum + 1} {
 			t.Run(fmt.Sprintf("%s/%d", field.line, value), func(t *testing.T) {
 				key := strings.Split(field.line, " = ")[0]
-				content := strings.Replace(validTOMLConfig(), field.line, fmt.Sprintf("%s = %d", key, value), 1)
+				content := replaceTOML(t, base, field.line, fmt.Sprintf("%s = %d", key, value))
 				_, err := config.Load(writeConfig(t, content))
 				if (err != nil) != (value < field.minimum || value > maximum) {
 					t.Fatalf("duration error=%v value=%d", err, value)
@@ -83,16 +92,9 @@ func TestLoadConfigDurationBounds(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsInvalidIngestPath(t *testing.T) {
-	content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, `path = "/v1/a!b"`, 1)
-	if _, err := config.Load(writeConfig(t, content)); err == nil || !strings.Contains(err.Error(), "ingest.path") {
-		t.Fatalf("invalid path error=%v", err)
-	}
-}
-
 func TestLoadConfigMapsExactPath(t *testing.T) {
 	const path = "/AZaz09._~-/.hidden/..."
-	content := strings.Replace(validTOMLConfig(), `path = "/internal/ingest"`, fmt.Sprintf("path = %q", path), 1)
+	content := replaceTOML(t, readValidTOML(t), `path = "/internal/ingest"`, fmt.Sprintf("path = %q", path))
 	config, err := config.Load(writeConfig(t, content))
 	if err != nil {
 		t.Fatal(err)
@@ -102,119 +104,86 @@ func TestLoadConfigMapsExactPath(t *testing.T) {
 	}
 }
 
-func TestLoadConfig(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		wantErr bool
-		check   func(*testing.T, config.Config)
-	}{
-		{
-			name:    "accepts complete strict configuration",
-			content: validTOMLConfig(),
-			check: func(t *testing.T, config config.Config) {
-				t.Helper()
-				if config.Logging.Level != "info" {
-					t.Fatalf("logging level=%q, want info", config.Logging.Level)
-				}
-				if config.Server.Address != "127.0.0.1:18080" {
-					t.Fatalf("Server.Address = %q, want loopback address", config.Server.Address)
-				}
-				if config.Server.ShutdownTimeout != 2*time.Second {
-					t.Fatalf("Server.ShutdownTimeout = %s, want 2s", config.Server.ShutdownTimeout)
-				}
-				if config.Ingest.Path != "/internal/ingest" {
-					t.Fatalf("Ingest.Path = %q, want /internal/ingest", config.Ingest.Path)
-				}
-				if config.Ingest.MaxBodyBytes != 32*1024*1024 {
-					t.Fatalf("Ingest.MaxBodyBytes = %d, want 33554432", config.Ingest.MaxBodyBytes)
-				}
-				if config.Ingest.ResponseDelay != 25*time.Millisecond {
-					t.Fatalf("Ingest.ResponseDelay = %s, want 25ms", config.Ingest.ResponseDelay)
-				}
-				if config.Ingest.ResponseStatus == nil || *config.Ingest.ResponseStatus != 204 {
-					t.Fatalf("Ingest.ResponseStatus = %v, want pointer to 204", config.Ingest.ResponseStatus)
-				}
-			},
-		},
-		{
-			name:    "rejects unknown field",
-			content: validTOMLConfig() + "\n[unexpected]\nenabled = true\n",
-			wantErr: true,
-		},
-		{
-			name: "rejects unknown nested field",
-			content: strings.Replace(
-				validTOMLConfig(),
-				"shutdown_timeout_ms = 2000",
-				"shutdown_timeout_ms = 2000\nunexpected = true",
-				1,
-			),
-			wantErr: true,
-		},
-		{
-			name:    "rejects empty address",
-			content: strings.Replace(validTOMLConfig(), `address = "127.0.0.1:18080"`, `address = ""`, 1),
-			wantErr: true,
-		},
-		{
-			name:    "rejects non positive body limit",
-			content: strings.Replace(validTOMLConfig(), "max_body_bytes = 33554432", "max_body_bytes = 0", 1),
-			wantErr: true,
-		},
-		{
-			name:    "rejects non positive shutdown timeout",
-			content: strings.Replace(validTOMLConfig(), "shutdown_timeout_ms = 2000", "shutdown_timeout_ms = 0", 1),
-			wantErr: true,
-		},
-		{
-			name:    "rejects unsupported logging level",
-			content: strings.Replace(validTOMLConfig(), "level = \"info\"", "level = \"trace\"", 1),
-			wantErr: true,
-		},
+func TestLoadConfigMapsTOML(t *testing.T) {
+	cfg, err := config.Load(validConfigPath)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if cfg.Logging.Level != "info" {
+		t.Fatalf("logging level = %q, want info", cfg.Logging.Level)
+	}
+	if cfg.Server.Address != "127.0.0.1:18080" {
+		t.Fatalf("Server.Address = %q, want loopback address", cfg.Server.Address)
+	}
+	if cfg.Server.ShutdownTimeout != 2*time.Second {
+		t.Fatalf("Server.ShutdownTimeout = %s, want 2s", cfg.Server.ShutdownTimeout)
+	}
+	if cfg.Ingest.Path != "/internal/ingest" {
+		t.Fatalf("Ingest.Path = %q, want /internal/ingest", cfg.Ingest.Path)
+	}
+	if cfg.Ingest.MaxBodyBytes != 32*1024*1024 {
+		t.Fatalf("Ingest.MaxBodyBytes = %d, want 33554432", cfg.Ingest.MaxBodyBytes)
+	}
+	if cfg.Ingest.ResponseDelay != 25*time.Millisecond {
+		t.Fatalf("Ingest.ResponseDelay = %s, want 25ms", cfg.Ingest.ResponseDelay)
+	}
+	if cfg.Ingest.ResponseStatus == nil || *cfg.Ingest.ResponseStatus != http.StatusNoContent {
+		t.Fatalf("Ingest.ResponseStatus = %v, want pointer to 204", cfg.Ingest.ResponseStatus)
+	}
+}
 
-	for _, test := range tests {
+func TestLoadConfigRejectsInvalidValues(t *testing.T) {
+	base := readValidTOML(t)
+	for _, test := range []struct {
+		name        string
+		old         string
+		replacement string
+		wantField   string
+	}{
+		{name: "empty address", old: `address = "127.0.0.1:18080"`, replacement: `address = ""`},
+		{name: "nonpositive body limit", old: "max_body_bytes = 33554432", replacement: "max_body_bytes = 0"},
+		{name: "nonpositive shutdown timeout", old: "shutdown_timeout_ms = 2000", replacement: "shutdown_timeout_ms = 0"},
+		{name: "unsupported logging level", old: `level = "info"`, replacement: `level = "trace"`},
+		{name: "invalid ingest path", old: `path = "/internal/ingest"`, replacement: `path = "/v1/a!b"`, wantField: "ingest.path"},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			path := writeConfig(t, test.content)
-
-			config, err := config.Load(path)
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("config.Load() error = nil, want validation error")
-				}
-				return
+			content := replaceTOML(t, base, test.old, test.replacement)
+			_, err := config.Load(writeConfig(t, content))
+			if err == nil {
+				t.Fatal("invalid value accepted")
 			}
-			if err != nil {
-				t.Fatalf("config.Load() error = %v", err)
+			var decodeErr *mapstructure.DecodeError
+			if errors.As(err, &decodeErr) {
+				t.Fatalf("got decode error %v, want validation error", err)
 			}
-			test.check(t, config)
+			if test.wantField != "" && !strings.Contains(err.Error(), test.wantField) {
+				t.Fatalf("error = %v, want it to identify %s", err, test.wantField)
+			}
 		})
 	}
 }
 
-func validTOMLConfig() string {
-	return `[server]
-address = "127.0.0.1:18080"
-shutdown_timeout_ms = 2000
+func readValidTOML(t *testing.T) string {
+	t.Helper()
+	content, err := os.ReadFile(validConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
+}
 
-[ingest]
-path = "/internal/ingest"
-max_body_bytes = 33554432
-
-[logging]
-level = "info"
-
-[lab]
-response_delay_ms = 25
-response_status = 204
-`
+func replaceTOML(t *testing.T, content, old, replacement string) string {
+	t.Helper()
+	if !strings.Contains(content, old) {
+		t.Fatalf("fixture does not contain %q", old)
+	}
+	return strings.Replace(content, old, replacement, 1)
 }
 
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "sink.toml")
+	path := filepath.Join(t.TempDir(), "receiver.toml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -222,24 +191,24 @@ func writeConfig(t *testing.T, content string) string {
 	return path
 }
 
-func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
+func TestLoadConfigDecodesOptionalResponseStatus(t *testing.T) {
+	base := readValidTOML(t)
 	tests := []struct {
-		name    string
-		line    string
-		input   *int
-		want    int
-		wantErr bool
+		name        string
+		line        string
+		want        int
+		wantOmitted bool
+		wantErr     bool
 	}{
-		{name: "absent", want: http.StatusNoContent},
-		{name: "explicit zero", line: "response_status = 0", input: new(0), wantErr: true},
-		{name: "success", line: "response_status = 204", input: new(204), want: http.StatusNoContent},
-		{name: "bad request", line: "response_status = 400", input: new(400), want: http.StatusBadRequest},
-		{name: "server error", line: "response_status = 500", input: new(500), want: http.StatusInternalServerError},
-		{name: "unsupported", line: "response_status = 201", input: new(201), wantErr: true},
+		{name: "absent", wantOmitted: true},
+		{name: "explicit zero", line: "response_status = 0", wantErr: true},
+		{name: "bad request", line: "response_status = 400", want: http.StatusBadRequest},
+		{name: "server error", line: "response_status = 500", want: http.StatusInternalServerError},
+		{name: "unsupported", line: "response_status = 201", wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			content := strings.Replace(validTOMLConfig(), "response_status = 204", test.line, 1)
+			content := replaceTOML(t, base, "response_status = 204", test.line)
 			config, err := config.Load(writeConfig(t, content))
 			if test.wantErr {
 				if err == nil {
@@ -250,7 +219,7 @@ func TestConfigResolvesOptionalResponseStatus(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if (config.Ingest.ResponseStatus == nil) != (test.input == nil) {
+			if (config.Ingest.ResponseStatus == nil) != test.wantOmitted {
 				t.Fatal("toml input presence changed")
 			}
 			if config.Ingest.ResponseStatus != nil && *config.Ingest.ResponseStatus != test.want {

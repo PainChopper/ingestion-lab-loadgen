@@ -12,11 +12,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/receiver/internal/config"
+	"github.com/PainChopper/ingestion-lab-loadgen/receiver/internal/ingest"
+	"github.com/pelletier/go-toml/v2"
 )
 
 type logWriterFunc func([]byte) (int, error)
 
 func (f logWriterFunc) Write(data []byte) (int, error) { return f(data) }
+
+func TestSampleConfigLoads(t *testing.T) {
+	if _, err := config.Load("config.toml"); err != nil {
+		t.Fatalf("load sample config: %v", err)
+	}
+}
 
 func TestRunPreservesMissingConfigCause(t *testing.T) {
 	var output bytes.Buffer
@@ -27,7 +37,7 @@ func TestRunPreservesMissingConfigCause(t *testing.T) {
 }
 
 func TestRunLogsLifecycleAndReleasesListener(t *testing.T) {
-	configPath := receiverConfigAt(t, "127.0.0.1:0")
+	configPath := writeRunConfig(t, testConfig())
 	var output bytes.Buffer
 	started := make(chan string, 1)
 	writer := logWriterFunc(func(data []byte) (int, error) {
@@ -48,6 +58,8 @@ func TestRunLogsLifecycleAndReleasesListener(t *testing.T) {
 	var addr string
 	select {
 	case addr = <-started:
+	case err := <-done:
+		t.Fatalf("receiver exited before startup: %v", err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("receiver did not report startup")
 	}
@@ -90,8 +102,14 @@ func TestRunLogsBindFailureWithoutStartedEvent(t *testing.T) {
 		}
 	})
 	var output bytes.Buffer
-	err = run(t.Context(), receiverConfigAt(t, listener.Addr().String()), &output)
-	if err == nil || !strings.Contains(output.String(), "event=http_server_failed") || strings.Contains(output.String(), "event=service_started") {
+	cfg := testConfig()
+	cfg.Server.Address = listener.Addr().String()
+	err = run(t.Context(), writeRunConfig(t, cfg), &output)
+	var bindErr *net.OpError
+	if !errors.As(err, &bindErr) || bindErr.Op != "listen" {
+		t.Fatalf("run error=%v, want listener error", err)
+	}
+	if !strings.Contains(output.String(), "event=http_server_failed") || strings.Contains(output.String(), "event=service_started") {
 		t.Fatalf("bind error=%v logs=%s", err, output.String())
 	}
 }
@@ -137,7 +155,11 @@ func TestShutdownHTTPServerDrainsOrForceClosesActiveRequest(t *testing.T) {
 				}
 				clientDone <- err
 			}()
-			<-entered
+			select {
+			case <-entered:
+			case err := <-clientDone:
+				t.Fatalf("client finished before handler entry: %v", err)
+			}
 			var logs bytes.Buffer
 			logger, err := newApplicationLogger("info", &logs)
 			if err != nil {
@@ -180,18 +202,36 @@ func TestApplicationLoggerHonorsConfiguredLevel(t *testing.T) {
 	}
 }
 
-func receiverConfigAt(t *testing.T, addr string) string {
+func testConfig() config.Config {
+	return config.Config{
+		Server:  config.Server{Address: "127.0.0.1:0", ShutdownTimeout: 2 * time.Second},
+		Ingest:  ingest.Config{Path: "/internal/ingest", MaxBodyBytes: 1024},
+		Logging: config.Logging{Level: "info"},
+	}
+}
+
+func writeRunConfig(t *testing.T, cfg config.Config) string {
 	t.Helper()
-	content, err := os.ReadFile("config.toml")
+
+	// run takes a TOML path, so write the test settings using the file schema.
+	lab := map[string]any{"response_delay_ms": cfg.Ingest.ResponseDelay.Milliseconds()}
+	if cfg.Ingest.ResponseStatus != nil {
+		lab["response_status"] = *cfg.Ingest.ResponseStatus
+	}
+	content, err := toml.Marshal(map[string]any{
+		"server": map[string]any{
+			"address":             cfg.Server.Address,
+			"shutdown_timeout_ms": cfg.Server.ShutdownTimeout.Milliseconds(),
+		},
+		"ingest":  map[string]any{"path": cfg.Ingest.Path, "max_body_bytes": cfg.Ingest.MaxBodyBytes},
+		"logging": map[string]any{"level": cfg.Logging.Level},
+		"lab":     lab,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated := strings.Replace(string(content), `address = "127.0.0.1:8081"`, `address = "`+addr+`"`, 1)
-	if updated == string(content) {
-		t.Fatal("configured address replacement did not apply")
-	}
 	path := filepath.Join(t.TempDir(), "receiver.toml")
-	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
+	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
