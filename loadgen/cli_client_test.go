@@ -9,12 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"unicode"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
@@ -22,24 +23,24 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 		target        string
 		requestAction string
 		value         any
-		update        func(*runtimeSnapshot)
+		update        func(*api.Snapshot)
 	}{
-		{target: "readers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *runtimeSnapshot) { snapshot.Reader.Workers = 3 }},
-		{target: "senders", requestAction: "set-sender-workers", value: 4, update: func(snapshot *runtimeSnapshot) { snapshot.Sender.Workers = 4 }},
-		{target: "tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.RequestedTps = 0 }},
-		{target: "tps", requestAction: "set-requested-tps", value: 2000001, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.RequestedTps = 2000001 }},
-		{target: "throttle", requestAction: "set-throttler-installed", value: false, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.Installed = false }},
-		{target: "throttle", requestAction: "set-throttler-installed", value: true, update: func(snapshot *runtimeSnapshot) { snapshot.Throttler.Installed = true }},
+		{target: "readers", requestAction: "set-reader-workers", value: 3, update: func(snapshot *api.Snapshot) { snapshot.Reader.Workers = 3 }},
+		{target: "senders", requestAction: "set-sender-workers", value: 4, update: func(snapshot *api.Snapshot) { snapshot.Sender.Workers = 4 }},
+		{target: "tps", requestAction: "set-requested-tps", value: 0, update: func(snapshot *api.Snapshot) { snapshot.Throttler.RequestedTps = 0 }},
+		{target: "tps", requestAction: "set-requested-tps", value: 2000001, update: func(snapshot *api.Snapshot) { snapshot.Throttler.RequestedTps = 2000001 }},
+		{target: "throttle", requestAction: "set-throttler-installed", value: false, update: func(snapshot *api.Snapshot) { snapshot.Throttler.Installed = false }},
+		{target: "throttle", requestAction: "set-throttler-installed", value: true, update: func(snapshot *api.Snapshot) { snapshot.Throttler.Installed = true }},
 	} {
 		t.Run(test.target+"/"+fmt.Sprint(test.value), func(t *testing.T) {
 			snapshot := testRemoteSnapshot(t)
 			test.update(&snapshot)
-			var requestBody commandRequest
+			var requestBody api.CommandRequest
 			requests := []string{}
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 				requests = append(requests, request.Method+" "+request.URL.Path)
 				switch request.URL.Path {
-				case commandsPath:
+				case api.CommandsPath:
 					if request.Method != http.MethodPost {
 						t.Errorf("method = %s, want POST", request.Method)
 						http.Error(writer, "unexpected method", http.StatusInternalServerError)
@@ -50,7 +51,7 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 						http.Error(writer, "invalid command", http.StatusInternalServerError)
 						return
 					}
-				case snapshotPath:
+				case api.SnapshotPath:
 					if err := json.NewEncoder(writer).Encode(snapshot); err != nil {
 						t.Errorf("encode snapshot: %v", err)
 					}
@@ -75,7 +76,7 @@ func TestRunRemoteCLIMapsSetActionsAndConfirmsSnapshot(t *testing.T) {
 			if output.String() != wantOutput {
 				t.Fatalf("stdout = %q, want %q", output.String(), wantOutput)
 			}
-			if !reflect.DeepEqual(requests, []string{"POST " + commandsPath, "GET " + snapshotPath}) {
+			if !reflect.DeepEqual(requests, []string{"POST " + api.CommandsPath, "GET " + api.SnapshotPath}) {
 				t.Fatalf("set requests = %v", requests)
 			}
 		})
@@ -128,7 +129,7 @@ func TestRunCLISetRequiresExplicitTargetValue(t *testing.T) {
 					}
 					body := mustMarshalJSON(t, root)
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-						if r.URL.Path == snapshotPath {
+						if r.URL.Path == api.SnapshotPath {
 							_, _ = w.Write([]byte(body))
 						}
 					}))
@@ -151,51 +152,6 @@ func TestRunCLISetRequiresExplicitTargetValue(t *testing.T) {
 	}
 }
 
-func TestDecodeStrictSnapshotValidatesJSONAndState(t *testing.T) {
-	for _, test := range []struct {
-		name, body string
-		wantErr    bool
-	}{
-		{name: "partial status", body: `{"run":{"state":"running"}}`},
-		{name: "starting", body: `{"run":{"state":"starting"}}`},
-		{name: "stopping", body: `{"run":{"state":"stopping"}}`},
-		{name: "faulted", body: `{"run":{"state":"faulted"}}`},
-		{name: "missing and null unrelated values", body: `{"run":{"state":"running"},"reader":null,"throttler":{"requestedTps":null,"installed":null}}`},
-		{name: "missing state", body: `{"run":{}}`, wantErr: true},
-		{name: "null state", body: `{"run":{"state":null}}`, wantErr: true},
-		{name: "invalid state", body: `{"run":{"state":"invalid"}}`, wantErr: true},
-		{name: "old reader rate", body: `{"run":{"state":"running"},"reader":{"readTps":1}}`, wantErr: true},
-		{name: "old throttler rate", body: `{"run":{"state":"running"},"throttler":{"admittedTps":1}}`, wantErr: true},
-		{name: "old input rate", body: `{"run":{"state":"running"},"readerChannel":{"inputTransactionsPerSecond":1}}`, wantErr: true},
-		{name: "old output rate", body: `{"run":{"state":"running"},"senderChannel":{"outputTransactionsPerSecond":1}}`, wantErr: true},
-		{name: "reader batch size", body: `{"run":{"state":"running"},"reader":{"readBatchSize":1}}`, wantErr: true},
-		{name: "source directory", body: `{"run":{"state":"running"},"reader":{"sourceDirectory":"data"}}`, wantErr: true},
-		{name: "reader capacity", body: `{"run":{"state":"running"},"readerChannel":{"capacity":1}}`, wantErr: true},
-		{name: "sender capacity", body: `{"run":{"state":"running"},"senderChannel":{"capacity":1}}`, wantErr: true},
-		{name: "reader buffered transactions", body: `{"run":{"state":"running"},"readerChannel":{"bufferedTransactions":1}}`, wantErr: true},
-		{name: "sender buffered transactions", body: `{"run":{"state":"running"},"senderChannel":{"bufferedTransactions":1}}`, wantErr: true},
-		{name: "source error category", body: `{"run":{"state":"running"},"reader":{"sourceError":{"category":"source"}}}`, wantErr: true},
-		{name: "source error relative path", body: `{"run":{"state":"running"},"reader":{"sourceError":{"relativePath":"a.parquet"}}}`, wantErr: true},
-		{name: "embedded config", body: `{"run":{"state":"running"},"config":{}}`, wantErr: true},
-		{name: "unknown root field", body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: true},
-		{name: "unknown nested field", body: `{"run":{"state":"running"},"reader":{"unexpected":true}}`, wantErr: true},
-		{name: "wrong known type", body: `{"run":{"state":"running"},"throttler":{"requestedTps":"0"}}`, wantErr: true},
-		{name: "array root", body: `[]`, wantErr: true},
-		{name: "null root", body: `null`, wantErr: true},
-		{name: "two objects", body: `{"run":{"state":"running"}} {}`, wantErr: true},
-		{name: "trailing null", body: `{"run":{"state":"running"}} null`, wantErr: true},
-		{name: "trailing garbage", body: `{"run":{"state":"running"}} broken`, wantErr: true},
-		{name: "malformed JSON", body: `{"run":`, wantErr: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := decodeStrictSnapshot(strings.NewReader(test.body))
-			if (err != nil) != test.wantErr {
-				t.Fatalf("decode error=%v, wantErr=%v", err, test.wantErr)
-			}
-		})
-	}
-}
-
 func mustMarshalJSON(t *testing.T, value any) string {
 	t.Helper()
 	encoded, err := json.Marshal(value)
@@ -205,66 +161,25 @@ func mustMarshalJSON(t *testing.T, value any) string {
 	return string(encoded)
 }
 
-func TestDecodeStrictConfig(t *testing.T) {
-	data, err := os.ReadFile("testdata/config.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := decodeStrictConfig(bytes.NewReader(data))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := configResponse{
-		ReaderWorkersMax: 7, SenderWorkersMax: 32, RequestedTpsMax: 4000000,
-		ReadBatchSize: 20, ReaderChannelCapacity: 51, SenderChannelCapacity: 71, SourcePath: "reader-source",
-	}
-	if got != want {
-		t.Fatalf("decoded config = %+v, want %+v", got, want)
-	}
-	for _, test := range []struct{ name, body string }{
-		{name: "unknown field", body: `{"initial":1}`},
-		{name: "wrong type", body: `{"readBatchSize":"20"}`},
-		{name: "array", body: `[]`},
-		{name: "null", body: `null`},
-		{name: "malformed", body: `{`},
-		{name: "second object", body: string(data) + `{}`},
-		{name: "trailing null", body: string(data) + `null`},
-		{name: "trailing garbage", body: string(data) + `broken`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := decodeStrictConfig(strings.NewReader(test.body)); err == nil {
-				t.Fatal("invalid config accepted")
-			}
-		})
-	}
-}
-
-func TestDecodeStrictJSONRejectsNullSnapshot(t *testing.T) {
-	_, err := decodeStrictJSON[runtimeSnapshot](strings.NewReader(`null`), "snapshot")
-	if err == nil || err.Error() != "decode snapshot: expected object" {
-		t.Fatalf("decode error = %v, want expected object", err)
-	}
-}
-
 func TestFormatSnapshot(t *testing.T) {
-	status := runtimeSnapshot{
-		Run: runSnapshot{State: runStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
-		Reader: readerSnapshot{
-			Workers: 3, WorkerStates: []readerWorkerState{
-				{Activity: readerWireReading}, {Activity: readerWireIdle, Draining: true},
+	status := api.Snapshot{
+		Run: api.RunSnapshot{State: api.RunStateFaulted, ElapsedMs: 1250, TotalTransactions: 42},
+		Reader: api.ReaderSnapshot{
+			Workers: 3, WorkerStates: []api.ReaderWorkerState{
+				{Activity: api.ReaderReading}, {Activity: api.ReaderIdle, Draining: true},
 			}, RowsRead: 99,
-			SourceError: &readerSourceError{Operation: "read", Path: "broken.parquet", Message: "corrupt"},
+			SourceError: &api.SourceError{Operation: "read", Path: "broken.parquet", Message: "corrupt"},
 		},
-		Throttler:     throttlerSnapshot{RequestedTps: 100, Installed: true},
-		ReaderChannel: channelSnapshot{DepthBatches: 2, InputTransactionsTotal: 1, OutputTransactionsTotal: 2},
-		SenderChannel: channelSnapshot{DepthBatches: 1, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, InputTransactionsTotal: 3, OutputTransactionsTotal: 4},
-		Sender: senderSnapshot{Workers: 5, WorkerStates: []senderWorkerState{
-			{Activity: senderWireInFlight}, {Activity: senderWireInFlight},
-			{Activity: senderWireIdle}, {Activity: senderWireBackoff, Draining: true},
+		Throttler:     api.ThrottlerSnapshot{RequestedTps: 100, Installed: true},
+		ReaderChannel: api.ChannelSnapshot{DepthBatches: 2, InputTransactionsTotal: 1, OutputTransactionsTotal: 2},
+		SenderChannel: api.ChannelSnapshot{DepthBatches: 1, BlockedSenders: 1, OldestBlockedSenderMs: 7, BlockedMs: 8, InputTransactionsTotal: 3, OutputTransactionsTotal: 4},
+		Sender: api.SenderSnapshot{Workers: 5, WorkerStates: []api.SenderWorkerState{
+			{Activity: api.SenderInFlight}, {Activity: api.SenderInFlight},
+			{Activity: api.SenderIdle}, {Activity: api.SenderBackoff, Draining: true},
 		}},
 	}
 
-	got := formatSnapshot(status, configResponse{ReadBatchSize: 10, ReaderChannelCapacity: 3, SenderChannelCapacity: 4})
+	got := formatSnapshot(status, api.ConfigResponse{ReadBatchSize: 10, ReaderChannelCapacity: 3, SenderChannelCapacity: 4})
 	want := "INGESTION LAB LOADGEN STATUS\n" +
 		"State:                    faulted\n" +
 		"Elapsed:                  1.25s\n" +
@@ -297,7 +212,7 @@ func TestFormatSnapshot(t *testing.T) {
 func TestWriteSnapshotChannelLargeTransactionEstimate(t *testing.T) {
 	const maxExactJSONInteger = 1<<53 - 1
 	var output strings.Builder
-	writeSnapshotChannel(&output, "Reader channel", channelSnapshot{
+	writeSnapshotChannel(&output, "Reader channel", api.ChannelSnapshot{
 		DepthBatches: maxExactJSONInteger,
 	}, maxExactJSONInteger, 1500, 1000)
 	if !strings.Contains(output.String(), "approximately 135107988821114") ||
@@ -307,10 +222,10 @@ func TestWriteSnapshotChannelLargeTransactionEstimate(t *testing.T) {
 }
 
 func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
-	status := runtimeSnapshot{
-		Run: runSnapshot{State: runState("running\n\x1b[2J")},
-		Reader: readerSnapshot{
-			SourceError: &readerSourceError{
+	status := api.Snapshot{
+		Run: api.RunSnapshot{State: api.RunState("running\n\x1b[2J")},
+		Reader: api.ReaderSnapshot{
+			SourceError: &api.SourceError{
 				Operation: "operation\t",
 				Path:      "path\x7f",
 				Message:   "message\n\x1b[0m",
@@ -318,16 +233,16 @@ func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 		},
 	}
 
-	got := formatSnapshot(status, configResponse{SourcePath: "source\r\n\x1b[31m"})
+	got := formatSnapshot(status, api.ConfigResponse{SourcePath: "source\r\n\x1b[31m"})
 	if strings.IndexFunc(got, func(character rune) bool {
 		return character != '\n' && unicode.IsControl(character)
 	}) >= 0 {
 		t.Fatalf("card contains unsafe control byte: %q", got)
 	}
-	if strings.Count(got, "\n") != strings.Count(formatSnapshot(runtimeSnapshot{
-		Run:       runSnapshot{State: runStateRunning},
-		Throttler: throttlerSnapshot{Installed: true},
-	}, configResponse{}), "\n") || !strings.HasSuffix(got, "\n") {
+	if strings.Count(got, "\n") != strings.Count(formatSnapshot(api.Snapshot{
+		Run:       api.RunSnapshot{State: api.RunStateRunning},
+		Throttler: api.ThrottlerSnapshot{Installed: true},
+	}, api.ConfigResponse{}), "\n") || !strings.HasSuffix(got, "\n") {
 		t.Fatalf("card layout changed or has no final newline: %q", got)
 	}
 	for _, want := range []string{
@@ -342,9 +257,9 @@ func TestFormatSnapshotSanitizesSnapshotStrings(t *testing.T) {
 }
 
 func TestFormatSnapshotStartingSourceGolden(t *testing.T) {
-	card := formatSnapshot(runtimeSnapshot{
-		Run: runSnapshot{State: runStateStarting},
-	}, configResponse{})
+	card := formatSnapshot(api.Snapshot{
+		Run: api.RunSnapshot{State: api.RunStateStarting},
+	}, api.ConfigResponse{})
 	if !strings.Contains(card, "Source:                   none\nSource error:             none\n\nReader channel\n") {
 		t.Fatalf("idle source fields are not adjacent golden values: %q", card)
 	}
@@ -360,14 +275,14 @@ func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
 		shortBody            bool
 	}{
 		{name: "success"},
-		{name: "invalid snapshot", endpoint: snapshotPath, body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: "GET " + snapshotPath + ": decode snapshot"},
-		{name: "invalid config", endpoint: configPath, body: `{"unexpected":true}`, wantErr: "GET " + configPath + ": decode config"},
-		{name: "snapshot HTTP error", endpoint: snapshotPath, status: http.StatusServiceUnavailable, wantErr: "HTTP 503 Service Unavailable GET " + snapshotPath},
-		{name: "config HTTP error", endpoint: configPath, status: http.StatusServiceUnavailable, wantErr: "HTTP 503 Service Unavailable GET " + configPath},
-		{name: "truncated snapshot", endpoint: snapshotPath, body: `{`, shortBody: true, wantErr: "read GET " + snapshotPath},
-		{name: "truncated config", endpoint: configPath, body: `{`, shortBody: true, wantErr: "read GET " + configPath},
-		{name: "snapshot transport error", endpoint: snapshotPath, wantErr: "GET " + snapshotPath},
-		{name: "config transport error", endpoint: configPath, wantErr: "GET " + configPath},
+		{name: "invalid snapshot", endpoint: api.SnapshotPath, body: `{"run":{"state":"running"},"unexpected":true}`, wantErr: "GET " + api.SnapshotPath + ": decode snapshot"},
+		{name: "invalid config", endpoint: api.ConfigPath, body: `{"unexpected":true}`, wantErr: "GET " + api.ConfigPath + ": decode config"},
+		{name: "snapshot HTTP error", endpoint: api.SnapshotPath, status: http.StatusServiceUnavailable, wantErr: "HTTP 503 Service Unavailable GET " + api.SnapshotPath},
+		{name: "config HTTP error", endpoint: api.ConfigPath, status: http.StatusServiceUnavailable, wantErr: "HTTP 503 Service Unavailable GET " + api.ConfigPath},
+		{name: "truncated snapshot", endpoint: api.SnapshotPath, body: `{`, shortBody: true, wantErr: "read GET " + api.SnapshotPath},
+		{name: "truncated config", endpoint: api.ConfigPath, body: `{`, shortBody: true, wantErr: "read GET " + api.ConfigPath},
+		{name: "snapshot transport error", endpoint: api.SnapshotPath, wantErr: "GET " + api.SnapshotPath},
+		{name: "config transport error", endpoint: api.ConfigPath, wantErr: "GET " + api.ConfigPath},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var requestsMu sync.Mutex
@@ -377,14 +292,14 @@ func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
 				requests = append(requests, r.URL.Path)
 				requestsMu.Unlock()
 				w.Header().Set("Connection", "close")
-				if r.Method != http.MethodGet || (r.URL.Path != snapshotPath && r.URL.Path != configPath) {
+				if r.Method != http.MethodGet || (r.URL.Path != api.SnapshotPath && r.URL.Path != api.ConfigPath) {
 					t.Errorf("unexpected request = %s %s", r.Method, r.URL.Path)
 					http.Error(w, "unexpected request", http.StatusInternalServerError)
 					return
 				}
 				if r.URL.Path != test.endpoint {
 					body := snapshotBody
-					if r.URL.Path == configPath {
+					if r.URL.Path == api.ConfigPath {
 						body = configBody
 					}
 					_, _ = w.Write([]byte(body))
@@ -425,9 +340,9 @@ func TestRunRemoteCLIStatusFetchesConfigAndSnapshot(t *testing.T) {
 			} else if err != nil || stdout.String() != formatSnapshot(testRemoteSnapshot(t), newConfigResponse(testConfig(t))) {
 				t.Fatalf("error=%v stdout=%q", err, stdout.String())
 			}
-			wantRequests := []string{configPath, snapshotPath}
-			if test.endpoint == configPath {
-				wantRequests = []string{configPath}
+			wantRequests := []string{api.ConfigPath, api.SnapshotPath}
+			if test.endpoint == api.ConfigPath {
+				wantRequests = []string{api.ConfigPath}
 			}
 			requestsMu.Lock()
 			defer requestsMu.Unlock()
@@ -458,17 +373,17 @@ func TestRunRemoteCLISetReportsPOSTTransportError(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	err = runRemoteCLI(t.Context(), command, &stdout)
-	if !errors.Is(err, io.EOF) || !strings.Contains(err.Error(), "POST "+commandsPath) || stdout.Len() != 0 {
+	if !errors.Is(err, io.EOF) || !strings.Contains(err.Error(), "POST "+api.CommandsPath) || stdout.Len() != 0 {
 		t.Fatalf("error=%v stdout=%q, want POST transport failure", err, stdout.String())
 	}
-	if got := <-received; got != "POST "+commandsPath {
-		t.Fatalf("request = %q, want POST %s", got, commandsPath)
+	if got := <-received; got != "POST "+api.CommandsPath {
+		t.Fatalf("request = %q, want POST %s", got, api.CommandsPath)
 	}
 }
 
 func TestFormatSnapshotBeforeRunShowsZeroAverages(t *testing.T) {
-	snapshot := runtimeSnapshot{Reader: readerSnapshot{RowsRead: 9}, SenderChannel: channelSnapshot{InputTransactionsTotal: 12, OutputTransactionsTotal: 6}}
-	got := formatSnapshot(snapshot, configResponse{})
+	snapshot := api.Snapshot{Reader: api.ReaderSnapshot{RowsRead: 9}, SenderChannel: api.ChannelSnapshot{InputTransactionsTotal: 12, OutputTransactionsTotal: 6}}
+	got := formatSnapshot(snapshot, api.ConfigResponse{})
 	for _, line := range []string{"Average read TPS:         0.0", "Average admitted TPS:     0.0", "Average input/output TPS: 0.0 / 0.0"} {
 		if !strings.Contains(got, line) {
 			t.Fatalf("missing %q in %q", line, got)

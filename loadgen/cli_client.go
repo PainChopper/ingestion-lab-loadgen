@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 type remoteHTTPError struct {
@@ -30,16 +31,16 @@ func (err remoteHTTPError) Error() string {
 
 func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) error {
 	client := remoteCLIClient{baseURL: command.remoteURL, httpClient: &http.Client{Timeout: remoteClientTimeout}}
-	var config configResponse
+	var config api.ConfigResponse
 	switch command.remoteAction {
 	case "status":
-		data, err := client.getData(ctx, configPath)
+		data, err := client.getData(ctx, api.ConfigPath)
 		if err != nil {
 			return err
 		}
-		config, err = decodeStrictConfig(bytes.NewReader(data))
+		config, err = api.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
-			return fmt.Errorf("GET %s: %w", configPath, err)
+			return fmt.Errorf("GET %s: %w", api.ConfigPath, restoreJSONTypeDiagnostic(err))
 		}
 	case "set":
 		if err := client.commandWithValue(ctx, command.remoteSet.requestAction, command.remoteSet.value); err != nil {
@@ -48,13 +49,13 @@ func runRemoteCLI(ctx context.Context, command cliCommand, stdout io.Writer) err
 	default:
 		return fmt.Errorf("unknown remote action %q", command.remoteAction)
 	}
-	data, err := client.getData(ctx, snapshotPath)
+	data, err := client.getData(ctx, api.SnapshotPath)
 	if err != nil {
 		return err
 	}
-	snapshot, err := decodeStrictSnapshot(bytes.NewReader(data))
+	snapshot, err := api.DecodeSnapshot(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", snapshotPath, err)
+		return fmt.Errorf("GET %s: %w", api.SnapshotPath, restoreJSONTypeDiagnostic(err))
 	}
 	if command.remoteAction == "set" {
 		if err := command.remoteSet.confirm(data); err != nil {
@@ -90,21 +91,22 @@ func (c remoteCLIClient) getData(ctx context.Context, endpoint string) ([]byte, 
 }
 
 func (c remoteCLIClient) commandWithValue(ctx context.Context, action string, value any) error {
-	body, err := json.Marshal(struct {
-		Action string `json:"action"`
-		Value  any    `json:"value,omitempty"`
-	}{Action: action, Value: value})
+	encodedValue, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode command: %w", err)
 	}
-	response, err := c.do(ctx, http.MethodPost, commandsPath, body)
+	body, err := json.Marshal(api.CommandRequest{Action: action, Value: encodedValue})
+	if err != nil {
+		return fmt.Errorf("encode command: %w", err)
+	}
+	response, err := c.do(ctx, http.MethodPost, api.CommandsPath, body)
 	if err != nil {
 		return err
 	}
 	// The command outcome comes from the HTTP status.
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return newRemoteHTTPError(response, http.MethodPost, commandsPath)
+		return newRemoteHTTPError(response, http.MethodPost, api.CommandsPath)
 	}
 	return nil
 }
@@ -159,41 +161,7 @@ func newRemoteHTTPError(response *http.Response, method, endpoint string) remote
 	return remoteHTTPError{status: response.Status, method: method, endpoint: endpoint, detail: detail}
 }
 
-func decodeStrictSnapshot(body io.Reader) (runtimeSnapshot, error) {
-	snapshot, err := decodeStrictJSON[runtimeSnapshot](body, "snapshot")
-	if err != nil {
-		return runtimeSnapshot{}, err
-	}
-	switch snapshot.Run.State {
-	case runStateStarting, runStateRunning, runStateStopping, runStateFaulted:
-	default:
-		return runtimeSnapshot{}, fmt.Errorf("decode snapshot: invalid run state %q", snapshot.Run.State)
-	}
-	return snapshot, nil
-}
-
-func decodeStrictConfig(body io.Reader) (configResponse, error) {
-	return decodeStrictJSON[configResponse](body, "config")
-}
-
-func decodeStrictJSON[T any](body io.Reader, name string) (T, error) {
-	decoder := json.NewDecoder(body)
-	decoder.DisallowUnknownFields()
-	var value *T
-	var zero T
-	if err := decoder.Decode(&value); err != nil {
-		return zero, fmt.Errorf("decode %s: %w", name, err)
-	}
-	if value == nil {
-		return zero, fmt.Errorf("decode %s: expected object", name)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return zero, fmt.Errorf("decode %s: trailing JSON", name)
-	}
-	return *value, nil
-}
-
-func formatSnapshot(snapshot runtimeSnapshot, config configResponse) string {
+func formatSnapshot(snapshot api.Snapshot, config api.ConfigResponse) string {
 	reader := countReaderWorkers(snapshot.Reader.WorkerStates)
 	sender := countSenderWorkers(snapshot.Sender.WorkerStates)
 	sourcePath := sanitizeSnapshotValue(config.SourcePath)
@@ -284,7 +252,7 @@ func sanitizeSnapshotValue(value string) string {
 func writeSnapshotChannel(
 	output *strings.Builder,
 	title string,
-	channel channelSnapshot,
+	channel api.ChannelSnapshot,
 	capacity int,
 	batchSize int,
 	elapsedMs int64,

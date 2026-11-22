@@ -7,58 +7,12 @@ import (
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"go.uber.org/zap"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
-type runtimeSnapshot struct {
-	CapturedAtMs  int64             `json:"capturedAtMs"`
-	Run           runSnapshot       `json:"run"`
-	Reader        readerSnapshot    `json:"reader"`
-	Throttler     throttlerSnapshot `json:"throttler"`
-	Sender        senderSnapshot    `json:"sender"`
-	ReaderChannel channelSnapshot   `json:"readerChannel"`
-	SenderChannel channelSnapshot   `json:"senderChannel"`
-}
-
-type runSnapshot struct {
-	State             runState `json:"state"`
-	TotalTransactions int64    `json:"totalTransactions"`
-	ElapsedMs         int64    `json:"elapsedMs"`
-}
-
-type readerSnapshot struct {
-	Workers      int                `json:"workers"`
-	WorkerStates readerWorkerStates `json:"workerStates"`
-	RowsRead     int64              `json:"rowsRead"`
-	SourceError  *readerSourceError `json:"sourceError"`
-}
-
-type readerSourceError struct {
-	Operation string `json:"operation"`
-	Path      string `json:"path"`
-	Message   string `json:"message"`
-}
-
-type throttlerSnapshot struct {
-	RequestedTps int  `json:"requestedTps"`
-	Installed    bool `json:"installed"`
-}
-
-type senderSnapshot struct {
-	Workers      int                `json:"workers"`
-	WorkerStates senderWorkerStates `json:"workerStates"`
-}
-
-type channelSnapshot struct {
-	DepthBatches            int   `json:"depthBatches"`
-	BlockedSenders          int   `json:"blockedSenders"`
-	OldestBlockedSenderMs   int64 `json:"oldestBlockedSenderMs"`
-	BlockedMs               int64 `json:"blockedMs"`
-	InputTransactionsTotal  int64 `json:"inputTransactionsTotal"`
-	OutputTransactionsTotal int64 `json:"outputTransactionsTotal"`
-}
-
-func snapshotChannel(measurements pipeline.QueueSnapshot) channelSnapshot {
-	return channelSnapshot{
+func snapshotChannel(measurements pipeline.QueueSnapshot) api.ChannelSnapshot {
+	return api.ChannelSnapshot{
 		DepthBatches:            measurements.DepthBatches,
 		BlockedSenders:          measurements.BlockedSenders,
 		OldestBlockedSenderMs:   measurements.OldestBlockedSenderMS,
@@ -70,7 +24,7 @@ func snapshotChannel(measurements pipeline.QueueSnapshot) channelSnapshot {
 
 const snapshotLogInterval = time.Minute
 
-func snapshotLogFields(snapshot runtimeSnapshot, cfg config.Config) []zap.Field {
+func snapshotLogFields(snapshot api.Snapshot, cfg config.Config) []zap.Field {
 	sourceErrorOperation := ""
 	sourceErrorPath := ""
 	if snapshot.Reader.SourceError != nil {

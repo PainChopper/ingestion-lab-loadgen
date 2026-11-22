@@ -22,6 +22,8 @@ import (
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/pipeline"
 
 	"github.com/parquet-go/parquet-go"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 type blackBoxResult struct {
@@ -72,13 +74,13 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 			http.NotFound(writer, request)
 			return
 		}
-		if request.URL.Path == configPath {
+		if request.URL.Path == api.ConfigPath {
 			if err := json.NewEncoder(writer).Encode(config); err != nil {
 				t.Errorf("encode config: %v", err)
 			}
 			return
 		}
-		if request.URL.Path != snapshotPath {
+		if request.URL.Path != api.SnapshotPath {
 			http.NotFound(writer, request)
 			return
 		}
@@ -108,7 +110,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 	}))
 	defer malformed.Close()
 	t.Run("invalid schema", func(t *testing.T) {
-		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", malformed.URL), cliExitRemote, "GET "+configPath+": decode config", "")
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", malformed.URL), cliExitRemote, "GET "+api.ConfigPath+": decode config", "")
 	})
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -120,7 +122,7 @@ func TestCLIBinaryRemoteStatusAndErrors(t *testing.T) {
 		t.Fatalf("release network failure address: %v", err)
 	}
 	t.Run("network failure", func(t *testing.T) {
-		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", networkURL), cliExitRemote, "GET "+configPath, "")
+		assertCLIBinaryFailure(t, runCLIBinary(t, binary, "status", "--url", networkURL), cliExitRemote, "GET "+api.ConfigPath, "")
 	})
 }
 
@@ -144,7 +146,7 @@ func TestCLIBinaryServeStartsDeliveryAutomatically(t *testing.T) {
 
 	configPath := writeBlackBoxConfig(t, receiver.URL+"/internal/ingest")
 	baseURL := startCLIServe(t, binary, configPath)
-	waitForHTTPSnapshotState(t, baseURL, runStateRunning)
+	waitForHTTPSnapshotState(t, baseURL, api.RunStateRunning)
 
 	select {
 	case <-received:
@@ -276,12 +278,12 @@ func startCLIServe(t *testing.T, binary, configPath string) string {
 			if retry {
 				break
 			}
-			response, err := client.Get(baseURL + snapshotPath)
+			response, err := client.Get(baseURL + api.SnapshotPath)
 			if err == nil {
-				var snapshot runtimeSnapshot
+				var snapshot api.Snapshot
 				decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
 				closeErr := response.Body.Close()
-				if response.StatusCode == http.StatusOK && decodeErr == nil && closeErr == nil && snapshot.Run.State == runStateRunning {
+				if response.StatusCode == http.StatusOK && decodeErr == nil && closeErr == nil && snapshot.Run.State == api.RunStateRunning {
 					ready = true
 					t.Logf("serve attempt %d ready at %s", attempt+1, baseURL)
 					return baseURL
@@ -337,7 +339,7 @@ func TestCLIBinaryServeReportsRealBindConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	baseURL := startCLIServe(t, binary, configPath)
-	waitForHTTPSnapshotState(t, baseURL, runStateRunning)
+	waitForHTTPSnapshotState(t, baseURL, api.RunStateRunning)
 	t.Logf("real bind conflict at %s detected; ordinary helper restarted at %s", addr, baseURL)
 }
 
@@ -430,7 +432,7 @@ func TestRunCLIExitCodes(t *testing.T) {
 func TestRunCLIReportsRemoteProtocolAndTransportErrors(t *testing.T) {
 	config := newConfigResponse(testConfig(t))
 	malformedServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == configPath {
+		if request.URL.Path == api.ConfigPath {
 			if err := json.NewEncoder(writer).Encode(config); err != nil {
 				t.Errorf("encode config: %v", err)
 			}

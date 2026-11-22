@@ -11,19 +11,21 @@ import (
 	"time"
 
 	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/config"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 const blackBoxTimeout = 10 * time.Second
 
-func waitForHTTPSnapshotState(t *testing.T, baseURL string, want runState) {
+func waitForHTTPSnapshotState(t *testing.T, baseURL string, want api.RunState) {
 	t.Helper()
 	deadline := time.Now().Add(blackBoxTimeout)
 	client := &http.Client{Timeout: time.Second}
 	var lastError error
 	for time.Now().Before(deadline) {
-		response, err := client.Get(baseURL + snapshotPath)
+		response, err := client.Get(baseURL + api.SnapshotPath)
 		if err == nil {
-			var snapshot runtimeSnapshot
+			var snapshot api.Snapshot
 			decodeErr := json.NewDecoder(response.Body).Decode(&snapshot)
 			closeErr := response.Body.Close()
 			if decodeErr == nil && closeErr == nil && snapshot.Run.State == want {
@@ -38,12 +40,12 @@ func waitForHTTPSnapshotState(t *testing.T, baseURL string, want runState) {
 	t.Fatalf("wait for service state %q: %v", want, lastError)
 }
 
-func testRemoteSnapshot(t *testing.T) runtimeSnapshot {
+func testRemoteSnapshot(t *testing.T) api.Snapshot {
 	t.Helper()
-	return runtimeSnapshot{
-		Run:    runSnapshot{State: runStateRunning},
-		Reader: readerSnapshot{WorkerStates: []readerWorkerState{}},
-		Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
+	return api.Snapshot{
+		Run:    api.RunSnapshot{State: api.RunStateRunning},
+		Reader: api.ReaderSnapshot{WorkerStates: []api.ReaderWorkerState{}},
+		Sender: api.SenderSnapshot{WorkerStates: []api.SenderWorkerState{}},
 	}
 }
 

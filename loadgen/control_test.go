@@ -26,6 +26,8 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func TestNewControlStateInitializesControls(t *testing.T) {
@@ -43,8 +45,8 @@ func TestNewControlStateInitializesControls(t *testing.T) {
 				loaded.Throttler.RequestedTPS.Initial = 0
 			}
 			state := newControlState(loaded, zap.NewNop())
-			if got := state.run.state; got != runStateStarting {
-				t.Fatalf("initial run state = %q, want %q", got, runStateStarting)
+			if got := state.run.state; got != api.RunStateStarting {
+				t.Fatalf("initial run state = %q, want %q", got, api.RunStateStarting)
 			}
 			snapshot := state.snapshotAt(nil, time.Now())
 			if snapshot.Reader.WorkerStates == nil || len(snapshot.Reader.WorkerStates) != 0 ||
@@ -122,7 +124,7 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("autostarted Sender did not reach receiver")
 	}
-	status := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateRunning })
+	status := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateRunning })
 	if status.ReaderChannel.DepthBatches != 0 || status.SenderChannel.DepthBatches != 0 || countSenderWorkers(status.Sender.WorkerStates).InFlightWorkers != 1 {
 		t.Fatalf("wanted two empty queues with an in-flight Sender: %+v", status)
 	}
@@ -135,24 +137,24 @@ func TestSignalDrainsPartialBatchAndKeepsHTTPSnapshotAvailable(t *testing.T) {
 	for _, body := range updates {
 		assertCommandHTTP(t, mux, body, http.StatusOK)
 	}
-	status = loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateRunning })
+	status = loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateRunning })
 	if status.Reader.Workers != 2 || status.Sender.Workers != 2 || status.Throttler.RequestedTps != 2_400_000 || !status.Throttler.Installed {
 		t.Fatalf("live controls not applied: %+v", status)
 	}
 
 	loop.cancel()
-	stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
+	stopping := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
 	if countSenderWorkers(stopping.Sender.WorkerStates).InFlightWorkers == 0 {
 		t.Fatal("stopping prematurely canceled the HTTP attempt")
 	}
 	response := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, snapshotPath, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, api.SnapshotPath, nil)
 	mux.ServeHTTP(response, req)
 	if response.Code != http.StatusOK {
 		t.Fatalf("stopping snapshot HTTP = %d", response.Code)
 	}
-	var snapshot runtimeSnapshot
-	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil || snapshot.Run.State != runStateStopping {
+	var snapshot api.Snapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil || snapshot.Run.State != api.RunStateStopping {
 		t.Fatalf("stopping snapshot = %q, err = %v", response.Body.String(), err)
 	}
 	for _, body := range updates {
@@ -178,12 +180,12 @@ func TestSignalKeepsZeroTPSUntilGraceExpires(t *testing.T) {
 		state := newControlState(cfg, zap.New(core))
 		loop := startTestEventLoop(t, &state, gracefulShutdownTimeout)
 		// Each batch has one row; rows beyond the queue and active Readers have reached the Throttler.
-		loop.awaitSnapshot(t, func(s runtimeSnapshot) bool {
+		loop.awaitSnapshot(t, func(s api.Snapshot) bool {
 			return s.Reader.RowsRead > int64(cfg.ReaderChannel.Capacity+cfg.Reader.Workers.Initial)
 		})
 		loop.cancel()
 		synctest.Wait()
-		stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
+		stopping := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
 		throttlerChanged := !stopping.Throttler.Installed || stopping.Throttler.RequestedTps != 0
 		senderHasWork := stopping.SenderChannel.DepthBatches != 0 ||
 			countSenderWorkers(stopping.Sender.WorkerStates).InFlightWorkers != 0 || countSenderWorkers(stopping.Sender.WorkerStates).BackoffWorkers != 0
@@ -241,8 +243,8 @@ func TestSignalDeadlineCancelsInFlightHTTP(t *testing.T) {
 		t.Fatal("Sender did not enter HTTP")
 	}
 	loop.cancel()
-	stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool {
-		return s.Run.State == runStateStopping && countReaderWorkers(s.Reader.WorkerStates).ReadingWorkers == 0
+	stopping := loop.awaitSnapshot(t, func(s api.Snapshot) bool {
+		return s.Run.State == api.RunStateStopping && countReaderWorkers(s.Reader.WorkerStates).ReadingWorkers == 0
 	})
 	if err := loop.awaitExit(t); err != nil {
 		t.Fatal(err)
@@ -275,14 +277,14 @@ func TestSignalDuringSourceDiscoveryPreventsReaderStart(t *testing.T) {
 					return nil, errors.New("unexpected open after stop")
 				}
 				loop := startTestEventLoopWithSource(t, &state, gracefulShutdownTimeout, ready)
-				starting := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStarting })
+				starting := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStarting })
 				if starting.Reader.SourceError != nil {
 					t.Fatalf("initial source error before Start: %+v", starting.Reader)
 				}
 
 				loop.cancel()
 				synctest.Wait()
-				stopping := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
+				stopping := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
 				if countReaderWorkers(stopping.Reader.WorkerStates).LiveWorkers != 0 {
 					t.Fatal("Reader started during source discovery")
 				}
@@ -342,11 +344,11 @@ func TestSignalDeadlineDoesNotWaitForBlockedReader(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("Reader did not enter blocking read")
 		}
-		loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateRunning })
+		loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateRunning })
 
 		loop.cancel()
 		synctest.Wait()
-		loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
+		loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
 		assertExitAtDeadline(t, loop)
 		if final := assertFinalTransactions(t, events, 0, 1); final["partial"] != true {
 			t.Fatalf("blocked Reader must produce a partial final log: %v", final)
@@ -448,13 +450,13 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("Sender received no full batch")
 			}
-			status := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool {
+			status := loop.awaitSnapshot(t, func(s api.Snapshot) bool {
 				return s.ReaderChannel.BlockedSenders > 0 && s.SenderChannel.BlockedSenders > 0
 			})
 
 			for _, queue := range []struct {
 				name     string
-				snapshot channelSnapshot
+				snapshot api.ChannelSnapshot
 				capacity int
 			}{
 				{name: "Reader", snapshot: status.ReaderChannel, capacity: tc.readerCapacity},
@@ -476,19 +478,19 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 				assertCommandHTTP(t, mux, body, http.StatusOK)
 			}
 			response := httptest.NewRecorder()
-			mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, snapshotPath, nil))
-			var updated runtimeSnapshot
+			mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, api.SnapshotPath, nil))
+			var updated api.Snapshot
 			if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
 				t.Fatal(err)
 			}
-			wantConfig := configResponse{
+			wantConfig := api.ConfigResponse{
 				ReaderWorkersMax: 13, SenderWorkersMax: 19, RequestedTpsMax: 400_001,
 				ReadBatchSize: batchSize, ReaderChannelCapacity: tc.readerCapacity, SenderChannelCapacity: tc.senderCapacity,
 				SourcePath: cfg.Source.Path,
 			}
 			configRecorder := httptest.NewRecorder()
-			mux.ServeHTTP(configRecorder, httptest.NewRequest(http.MethodGet, configPath, nil))
-			var gotConfig configResponse
+			mux.ServeHTTP(configRecorder, httptest.NewRequest(http.MethodGet, api.ConfigPath, nil))
+			var gotConfig api.ConfigResponse
 			if err := json.Unmarshal(configRecorder.Body.Bytes(), &gotConfig); err != nil {
 				t.Fatal(err)
 			}
@@ -501,7 +503,7 @@ func TestRuntimeControlsPreserveStartupConfiguration(t *testing.T) {
 			assertCommandHTTP(t, mux, `{"action":"set-throttler-installed","value":false}`, http.StatusOK)
 
 			loop.cancel()
-			loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateStopping })
+			loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateStopping })
 			unblock()
 			if err := loop.awaitExit(t); err != nil {
 				t.Fatal(err)
@@ -524,7 +526,7 @@ func TestRunStartupSourceErrorReturnsWithoutSignal(t *testing.T) {
 	if err := loop.awaitExit(t); !errors.As(err, &sourceError) || sourceError.Op != "glob" {
 		t.Fatalf("run error = %v, want missing source diagnostic", err)
 	}
-	if state.run.state != runStateFaulted || state.run.sourceError == nil {
+	if state.run.state != api.RunStateFaulted || state.run.sourceError == nil {
 		t.Fatalf("startup fault state = %+v", state.run)
 	}
 	if got := state.run.sourceError; got.Operation != "glob" || got.Path != cfg.Source.Path || got.Message != sourceError.Error() {
@@ -629,14 +631,14 @@ func TestEventLoopDrainsAfterUnexpectedHTTPServerExit(t *testing.T) {
 				synctest.Wait()
 				requests := runtimeRequests{queue: queue, done: done}
 				before, err := requestSnapshot(t.Context(), requests)
-				if err != nil || before.Run.State != runStateRunning || countSenderWorkers(before.Sender.WorkerStates).InFlightWorkers != 1 || reads != 2 {
+				if err != nil || before.Run.State != api.RunStateRunning || countSenderWorkers(before.Sender.WorkerStates).InFlightWorkers != 1 || reads != 2 {
 					t.Fatalf("pipeline not held in delivery/read: snapshot=%+v reads=%d error=%v", before, reads, err)
 				}
 				failedAt := time.Now()
 				serverDone <- test.err
 				synctest.Wait()
 				faulted, err := requestSnapshot(t.Context(), requests)
-				if err != nil || faulted.Run.State != runStateFaulted || countSenderWorkers(faulted.Sender.WorkerStates).InFlightWorkers != 1 {
+				if err != nil || faulted.Run.State != api.RunStateFaulted || countSenderWorkers(faulted.Sender.WorkerStates).InFlightWorkers != 1 {
 					t.Fatalf("fault lost in-flight batch: snapshot=%+v error=%v", faulted, err)
 				}
 				unblockRead()
@@ -666,7 +668,7 @@ func TestEventLoopDrainsAfterUnexpectedHTTPServerExit(t *testing.T) {
 					(test.err == nil && !strings.Contains(runErr.Error(), "http server stopped unexpectedly")) {
 					t.Fatalf("server exit error=%v, want cause %v", runErr, test.err)
 				}
-				if state.run.state != runStateFaulted || deadline != failedAt.Add(grace) || !time.Now().Before(deadline) || delivered != 1 {
+				if state.run.state != api.RunStateFaulted || deadline != failedAt.Add(grace) || !time.Now().Before(deadline) || delivered != 1 {
 					t.Fatalf("state=%s deadline=%s now=%s delivered=%d", state.run.state, deadline, time.Now(), delivered)
 				}
 				if final := assertFinalTransactions(t, logs, 1, 0); final["partial"] != false {
@@ -711,7 +713,7 @@ func TestRuntimeSourceFaultCollectsLateSuccessExactlyOnce(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("valid source never reached receiver")
 	}
-	faulted := loop.awaitSnapshot(t, func(s runtimeSnapshot) bool { return s.Run.State == runStateFaulted })
+	faulted := loop.awaitSnapshot(t, func(s api.Snapshot) bool { return s.Run.State == api.RunStateFaulted })
 	if faulted.Reader.SourceError == nil || faulted.Reader.SourceError.Path != filepath.Join(directory, "b.parquet") || countSenderWorkers(faulted.Sender.WorkerStates).InFlightWorkers != 1 {
 		t.Fatalf("runtime fault lost source or in-flight diagnostic: %+v", faulted)
 	}
@@ -759,20 +761,20 @@ func TestSnapshotRetainsLiveStatesAboveTargetsDuringShrink(t *testing.T) {
 		run.SetSenders(1)
 		state.controls.readerWorkers, state.controls.senderWorkers = 1, 1
 		snapshot := state.snapshotAt(run, time.Now())
-		readers, senders := make(map[readerWorkerState]int), make(map[senderWorkerState]int)
+		readers, senders := make(map[api.ReaderWorkerState]int), make(map[api.SenderWorkerState]int)
 		for _, worker := range snapshot.Reader.WorkerStates {
 			readers[worker]++
 		}
 		for _, worker := range snapshot.Sender.WorkerStates {
 			senders[worker]++
 		}
-		if snapshot.Reader.Workers != 1 || !maps.Equal(readers, map[readerWorkerState]int{
-			{Activity: readerWireBlocked}: 1, {Activity: readerWireBlocked, Draining: true}: 1,
+		if snapshot.Reader.Workers != 1 || !maps.Equal(readers, map[api.ReaderWorkerState]int{
+			{Activity: api.ReaderBlocked}: 1, {Activity: api.ReaderBlocked, Draining: true}: 1,
 		}) {
 			t.Errorf("Reader shrink target/states = %+v", snapshot.Reader)
 		}
-		if snapshot.Sender.Workers != 1 || !maps.Equal(senders, map[senderWorkerState]int{
-			{Activity: senderWireBackoff}: 1, {Activity: senderWireBackoff, Draining: true}: 1,
+		if snapshot.Sender.Workers != 1 || !maps.Equal(senders, map[api.SenderWorkerState]int{
+			{Activity: api.SenderBackoff}: 1, {Activity: api.SenderBackoff, Draining: true}: 1,
 		}) {
 			t.Errorf("Sender shrink target/states = %+v", snapshot.Sender)
 		}
@@ -869,7 +871,7 @@ func startTestEventLoopWithSource(
 	return testEventLoop{requests: runtimeRequests{queue: queue, done: done}, metrics: metrics, cancel: cancel, result: result}
 }
 
-func (h testEventLoop) awaitSnapshot(t *testing.T, ready func(runtimeSnapshot) bool) runtimeSnapshot {
+func (h testEventLoop) awaitSnapshot(t *testing.T, ready func(api.Snapshot) bool) api.Snapshot {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
@@ -884,7 +886,7 @@ func (h testEventLoop) awaitSnapshot(t *testing.T, ready func(runtimeSnapshot) b
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("runtime snapshot did not reach expected state")
-	return runtimeSnapshot{}
+	return api.Snapshot{}
 }
 
 func (h testEventLoop) awaitExit(t *testing.T) error {
@@ -903,7 +905,7 @@ func assertCommandHTTP(t *testing.T, mux http.Handler, body string, want int) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	response := httptest.NewRecorder()
-	mux.ServeHTTP(response, httptest.NewRequestWithContext(ctx, http.MethodPost, commandsPath, strings.NewReader(body)))
+	mux.ServeHTTP(response, httptest.NewRequestWithContext(ctx, http.MethodPost, api.CommandsPath, strings.NewReader(body)))
 	if response.Code != want || ctx.Err() != nil {
 		t.Fatalf("POST %s: HTTP %d, context %v, body %q, want HTTP %d", body, response.Code, ctx.Err(), response.Body.String(), want)
 	}
@@ -973,7 +975,7 @@ func TestExecuteRuntimeCommandForwardsCommandAndReceipt(t *testing.T) {
 
 func TestRequestSnapshotForwardsReply(t *testing.T) {
 	control := make(chan runtimeRequest, 10)
-	want := runtimeSnapshot{Run: runSnapshot{State: runStateStopping}}
+	want := api.Snapshot{Run: api.RunSnapshot{State: api.RunStateStopping}}
 	done := make(chan struct{})
 
 	go func() {
@@ -1027,7 +1029,7 @@ func TestRuntimeRequestsUnblockAtBothWaits(t *testing.T) {
 					for _, request := range pending {
 						switch request := request.(type) {
 						case snapshotRequest:
-							request.reply <- runtimeSnapshot{}
+							request.reply <- api.Snapshot{}
 						case controlRequest:
 							request.reply <- true
 						}

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 const cliUsage = `usage: ingestion-lab-loadgen <command> [arguments]
@@ -185,19 +187,19 @@ type remoteSetTarget struct {
 func remoteSetTargets() map[string]remoteSetTarget {
 	return map[string]remoteSetTarget{
 		"readers": {
-			action: "set-reader-workers", field: "reader.workers", parse: parseRemoteInteger,
+			action: api.SetReaderWorkers, field: "reader.workers", parse: parseRemoteInteger,
 			actual: func(s remoteSetSnapshot) any { return verificationValue(s.Reader.Workers) },
 		},
 		"senders": {
-			action: "set-sender-workers", field: "sender.workers", parse: parseRemoteInteger,
+			action: api.SetSenderWorkers, field: "sender.workers", parse: parseRemoteInteger,
 			actual: func(s remoteSetSnapshot) any { return verificationValue(s.Sender.Workers) },
 		},
 		"tps": {
-			action: "set-requested-tps", field: "throttler.requestedTps", parse: parseRemoteInteger,
+			action: api.SetRequestedTPS, field: "throttler.requestedTps", parse: parseRemoteInteger,
 			actual: func(s remoteSetSnapshot) any { return verificationValue(s.Throttler.RequestedTps) },
 		},
 		"throttle": {
-			action: "set-throttler-installed", field: "throttler.installed", parse: parseRemoteBool,
+			action: api.SetThrottlerInstalled, field: "throttler.installed", parse: parseRemoteBool,
 			actual: func(s remoteSetSnapshot) any { return verificationValue(s.Throttler.Installed) },
 		},
 	}

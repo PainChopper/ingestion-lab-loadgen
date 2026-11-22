@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/PainChopper/ingestion-lab-loadgen/loadgen/internal/api"
 )
 
 func TestOpenAPIContract(t *testing.T) {
@@ -30,12 +32,12 @@ func TestOpenAPIContract(t *testing.T) {
 		t.Errorf("servers = %v, want one same-origin root", servers)
 	}
 	paths := document["paths"].(map[string]any)
-	if !reflect.DeepEqual(stringSet(mapKeys(paths)), stringSet([]string{snapshotPath, configPath, commandsPath})) {
+	if !reflect.DeepEqual(stringSet(mapKeys(paths)), stringSet([]string{api.SnapshotPath, api.ConfigPath, api.CommandsPath})) {
 		t.Errorf("paths = %v", mapKeys(paths))
 	}
-	if !reflect.DeepEqual(mapKeys(paths[snapshotPath].(map[string]any)), []string{"get", "head"}) ||
-		!reflect.DeepEqual(mapKeys(paths[configPath].(map[string]any)), []string{"get", "head"}) ||
-		!reflect.DeepEqual(mapKeys(paths[commandsPath].(map[string]any)), []string{"post"}) {
+	if !reflect.DeepEqual(mapKeys(paths[api.SnapshotPath].(map[string]any)), []string{"get", "head"}) ||
+		!reflect.DeepEqual(mapKeys(paths[api.ConfigPath].(map[string]any)), []string{"get", "head"}) ||
+		!reflect.DeepEqual(mapKeys(paths[api.CommandsPath].(map[string]any)), []string{"post"}) {
 		t.Errorf("methods do not match GET/HEAD snapshot and POST commands")
 	}
 	components := document["components"].(map[string]any)
@@ -49,7 +51,7 @@ func TestOpenAPIContract(t *testing.T) {
 	}
 	responses := components["responses"].(map[string]any)
 	checkLocalReferences(t, document, schemas, responses)
-	checkCommandsSchema(t, paths[commandsPath].(map[string]any)["post"].(map[string]any), schemas)
+	checkCommandsSchema(t, paths[api.CommandsPath].(map[string]any)["post"].(map[string]any), schemas)
 	checkSnapshotSchema(t, schemas)
 	checkResponseSemantics(t, paths, responses, schemas)
 }
@@ -205,7 +207,7 @@ func assertExampleDispatches(t *testing.T, body map[string]any, want runtimeComm
 	}
 	requests := make(chan runtimeRequest, 1)
 	commandConfig := testConfig(t)
-	request := httptest.NewRequest(http.MethodPost, commandsPath, bytes.NewReader(encoded))
+	request := httptest.NewRequest(http.MethodPost, api.CommandsPath, bytes.NewReader(encoded))
 	recorder := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -388,16 +390,16 @@ func anyStringsOrEmpty(value any) []string {
 func checkSnapshotSchema(t *testing.T, schemas map[string]any) {
 	t.Helper()
 	models := map[string]reflect.Type{
-		"Snapshot":          reflect.TypeOf(runtimeSnapshot{}),
-		"RunStatus":         reflect.TypeOf(runSnapshot{}),
-		"ReaderStatus":      reflect.TypeOf(readerSnapshot{}),
-		"ReaderWorkerState": reflect.TypeOf(readerWorkerState{}),
-		"SenderWorkerState": reflect.TypeOf(senderWorkerState{}),
-		"ReaderSourceError": reflect.TypeOf(readerSourceError{}),
-		"ThrottlerStatus":   reflect.TypeOf(throttlerSnapshot{}),
-		"SenderStatus":      reflect.TypeOf(senderSnapshot{}),
-		"ChannelStatus":     reflect.TypeOf(channelSnapshot{}),
-		"ConfigStatus":      reflect.TypeOf(configResponse{}),
+		"Snapshot":          reflect.TypeOf(api.Snapshot{}),
+		"RunStatus":         reflect.TypeOf(api.RunSnapshot{}),
+		"ReaderStatus":      reflect.TypeOf(api.ReaderSnapshot{}),
+		"ReaderWorkerState": reflect.TypeOf(api.ReaderWorkerState{}),
+		"SenderWorkerState": reflect.TypeOf(api.SenderWorkerState{}),
+		"ReaderSourceError": reflect.TypeOf(api.SourceError{}),
+		"ThrottlerStatus":   reflect.TypeOf(api.ThrottlerSnapshot{}),
+		"SenderStatus":      reflect.TypeOf(api.SenderSnapshot{}),
+		"ChannelStatus":     reflect.TypeOf(api.ChannelSnapshot{}),
+		"ConfigStatus":      reflect.TypeOf(api.ConfigResponse{}),
 	}
 	for name, model := range models {
 		schema := schemas[name].(map[string]any)
@@ -478,7 +480,7 @@ func checkFieldSchema(t *testing.T, name string, field reflect.Type, property ma
 
 func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[string]any, schemas map[string]any) {
 	t.Helper()
-	config := paths[configPath].(map[string]any)
+	config := paths[api.ConfigPath].(map[string]any)
 	for _, method := range []string{"get", "head"} {
 		operation := config[method].(map[string]any)["responses"].(map[string]any)
 		if !reflect.DeepEqual(stringSet(mapKeys(operation)), stringSet([]string{"200", "405"})) {
@@ -508,7 +510,7 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 	if err := validateSchema(fixture, schemas["ConfigStatus"].(map[string]any), schemas); err != nil {
 		t.Errorf("shared config fixture violates ConfigStatus: %v", err)
 	}
-	head := paths[snapshotPath].(map[string]any)["head"].(map[string]any)["responses"].(map[string]any)
+	head := paths[api.SnapshotPath].(map[string]any)["head"].(map[string]any)["responses"].(map[string]any)
 	if !reflect.DeepEqual(stringSet(mapKeys(head)), stringSet([]string{"200", "405", "503"})) {
 		t.Errorf("HEAD response codes=%v", mapKeys(head))
 	}
@@ -517,8 +519,8 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 			t.Errorf("HEAD %s must have no body", code)
 		}
 	}
-	snapshot := paths[snapshotPath].(map[string]any)["get"].(map[string]any)["responses"].(map[string]any)
-	commands := paths[commandsPath].(map[string]any)["post"].(map[string]any)["responses"].(map[string]any)
+	snapshot := paths[api.SnapshotPath].(map[string]any)["get"].(map[string]any)["responses"].(map[string]any)
+	commands := paths[api.CommandsPath].(map[string]any)["post"].(map[string]any)["responses"].(map[string]any)
 	if !reflect.DeepEqual(stringSet(mapKeys(snapshot)), stringSet([]string{"200", "405", "503"})) ||
 		!reflect.DeepEqual(stringSet(mapKeys(commands)), stringSet([]string{"200", "400", "405", "409", "413", "503"})) {
 		t.Errorf("snapshot/commands response codes = %v / %v", mapKeys(snapshot), mapKeys(commands))
@@ -527,21 +529,21 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 	if !ok || snapshotContent["schema"].(map[string]any)["$ref"] != "#/components/schemas/Snapshot" {
 		t.Error("snapshot 200 must reference the handler's Snapshot DTO")
 	} else {
-		fixtures := map[string]runtimeSnapshot{
+		fixtures := map[string]api.Snapshot{
 			"zero": {
-				Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
-				Run:    runSnapshot{State: runStateStarting}, Reader: readerSnapshot{WorkerStates: []readerWorkerState{}},
+				Sender: api.SenderSnapshot{WorkerStates: []api.SenderWorkerState{}},
+				Run:    api.RunSnapshot{State: api.RunStateStarting}, Reader: api.ReaderSnapshot{WorkerStates: []api.ReaderWorkerState{}},
 			},
 			"populated": {
-				Run:       runSnapshot{State: runStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
-				Reader:    readerSnapshot{Workers: 1, WorkerStates: []readerWorkerState{{Activity: readerWireReading}, {Activity: readerWireBlocked, Draining: true}}, RowsRead: 47},
-				Throttler: throttlerSnapshot{RequestedTps: 200, Installed: true},
-				Sender:    senderSnapshot{Workers: 32, WorkerStates: []senderWorkerState{}},
+				Run:       api.RunSnapshot{State: api.RunStateStopping, TotalTransactions: 46, ElapsedMs: 1234},
+				Reader:    api.ReaderSnapshot{Workers: 1, WorkerStates: []api.ReaderWorkerState{{Activity: api.ReaderReading}, {Activity: api.ReaderBlocked, Draining: true}}, RowsRead: 47},
+				Throttler: api.ThrottlerSnapshot{RequestedTps: 200, Installed: true},
+				Sender:    api.SenderSnapshot{Workers: 32, WorkerStates: []api.SenderWorkerState{}},
 			},
 			"source error": {
-				Sender: senderSnapshot{WorkerStates: []senderWorkerState{}},
-				Run:    runSnapshot{State: runStateFaulted},
-				Reader: readerSnapshot{WorkerStates: []readerWorkerState{}, SourceError: &readerSourceError{Operation: "read", Path: "input.parquet", Message: "corrupt parquet"}},
+				Sender: api.SenderSnapshot{WorkerStates: []api.SenderWorkerState{}},
+				Run:    api.RunSnapshot{State: api.RunStateFaulted},
+				Reader: api.ReaderSnapshot{WorkerStates: []api.ReaderWorkerState{}, SourceError: &api.SourceError{Operation: "read", Path: "input.parquet", Message: "corrupt parquet"}},
 			},
 		}
 		for name, fixture := range fixtures {
@@ -569,7 +571,7 @@ func checkResponseSemantics(t *testing.T, paths map[string]any, responses map[st
 		}
 	}
 	runSchema := schemas["RunStatus"].(map[string]any)["properties"].(map[string]any)["state"].(map[string]any)
-	wantStates := []string{string(runStateStarting), string(runStateRunning), string(runStateStopping), string(runStateFaulted)}
+	wantStates := []string{string(api.RunStateStarting), string(api.RunStateRunning), string(api.RunStateStopping), string(api.RunStateFaulted)}
 	if got := anyStrings(runSchema["enum"].([]any)); !reflect.DeepEqual(stringSet(got), stringSet(wantStates)) {
 		t.Errorf("run state enum = %v, want %v", got, wantStates)
 	}
@@ -628,8 +630,8 @@ func TestOpenAPIWorkerStates(t *testing.T) {
 		name       string
 		activities []string
 	}{
-		{name: "Reader", activities: []string{string(readerWireIdle), string(readerWireReading), string(readerWireBlocked)}},
-		{name: "Sender", activities: []string{string(senderWireIdle), string(senderWireInFlight), string(senderWireBackoff)}},
+		{name: "Reader", activities: []string{string(api.ReaderIdle), string(api.ReaderReading), string(api.ReaderBlocked)}},
+		{name: "Sender", activities: []string{string(api.SenderIdle), string(api.SenderInFlight), string(api.SenderBackoff)}},
 	} {
 		t.Run(pool.name, func(t *testing.T) {
 			item := schemas[pool.name+"WorkerState"].(map[string]any)
