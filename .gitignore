@@ -29,3 +29,6 @@ data/
 
 # Local Compose credentials
 /infra/.env
+
+# Local owner preferences for AI agents, referenced from AGENTS.md
+/PERSONAL.md
